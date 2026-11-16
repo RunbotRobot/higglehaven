@@ -9,6 +9,7 @@ import { json, HttpError, htmlResponse } from './http.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
 import { currentUser, requireAdmin } from './auth.js';
+import { tellShopperWhatBecameOfCard } from './assistant-chat.js';
 
 // N31 (owner, Control Room, 2026-09-11): "I must insist that we move this
 // page to a proper server-based format. That will enable a structured API
@@ -350,22 +351,22 @@ function imageUrlValue(value, field) {
 // shopper's terms, with nothing that could carry internals. The card's own
 // title and note stay private.
 export const PUBLIC_LINE_MAX_LENGTH = 140;
-export function publicLineValue(value) {
-  const text = stringValue(value, 'publicLine').trim();
+export function publicLineValue(value, field = 'publicLine') {
+  const text = stringValue(value, field).trim();
   if (text.length > PUBLIC_LINE_MAX_LENGTH) {
-    throw new HttpError(`publicLine must be ${PUBLIC_LINE_MAX_LENGTH} characters or fewer`, 400);
+    throw new HttpError(`${field} must be ${PUBLIC_LINE_MAX_LENGTH} characters or fewer`, 400);
   }
   if (/[\r\n]/.test(text) || /[.!?]\s+\S/.test(text)) {
-    throw new HttpError('publicLine must be a single sentence', 400);
+    throw new HttpError(`${field} must be a single sentence`, 400);
   }
   if (/#\s*\d/.test(text) || /\b(issue|pr|pull request|ticket)\s*#?\d/i.test(text)) {
-    throw new HttpError('publicLine must not mention an issue or pull request number', 400);
+    throw new HttpError(`${field} must not mention an issue or pull request number`, 400);
   }
   if (/[\\/`]/.test(text) || /\w\.(js|mjs|ts|css|html|json|sql|md|yml|yaml)\b/i.test(text)) {
-    throw new HttpError('publicLine must not contain a file path, file name or route', 400);
+    throw new HttpError(`${field} must not contain a file path, file name or route`, 400);
   }
   if (/:\/\/|\bwww\.|\b[a-z0-9-]+\.(com|net|org|io|dev|app)\b/i.test(text)) {
-    throw new HttpError('publicLine must not contain a URL', 400);
+    throw new HttpError(`${field} must not contain a URL`, 400);
   }
   return text;
 }
@@ -597,6 +598,14 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
     setIfPresent('sub_issue_summaries', body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')));
   }
 
+  // #3532 part 2: a sentence for the shopper who passed this on, sent when the
+  // card becomes done. Same discipline as publicLine; it reaches a person.
+  let shopperLine = null;
+  if (body.shopperLine !== undefined && body.shopperLine !== null && body.shopperLine !== '') {
+    if (body.status !== 'done') throw new HttpError('shopperLine is only accepted together with status "done"', 400);
+    shopperLine = publicLineValue(body.shopperLine, 'shopperLine');
+  }
+
   const now = new Date().toISOString();
   setIfPresent('updated_at', now);
   // #2254: settingWaitingOnOwner inserts a real linked reply below (the
@@ -614,8 +623,11 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   }
   await db.batch(statements);
 
+  const shopperTold = shopperLine && existing.status !== 'done'
+    ? await tellShopperWhatBecameOfCard(db, taskId, shopperLine) : false;
+
   const row = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
-  return json({ task: controlRoomTaskFromRow(row) });
+  return json({ task: controlRoomTaskFromRow(row), shopperTold });
 }
 
 async function handleControlRoomRepliesList(request, env, db, taskId) {
