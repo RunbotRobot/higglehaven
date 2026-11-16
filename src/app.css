@@ -856,12 +856,17 @@
         position: relative;
       }
       #account-menu-toggle {
+        /* #3569: it is the only way to Notices, Friends, My Purchases and Settings, so it
+           reads on any ground: a near-solid backing, an ink outline, a larger glyph and a
+           44x36 touch target (it was a 55%-clear pill with a 12px emoji). */
+        min-width: 44px;
+        min-height: 36px;
         padding: 5px 14px;
         border-radius: 999px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
+        border: 1px solid rgb(var(--ink-rgb) / 0.35);
+        background: rgb(var(--pill-rgb) / 0.95);
+        color: var(--pill-text);
+        font: 17px/1.4 sans-serif;
         position: relative;
       }
       #account-menu-toggle.active {
