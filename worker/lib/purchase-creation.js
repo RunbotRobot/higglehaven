@@ -1262,7 +1262,7 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
   for (const [builderId, count] of deletedCountByBuilder) {
     const plural = count === 1 ? 'instance has' : 'instances have';
     await fireNotification(db, builderId,
-      `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`);
+      `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`);
     const preference = preferenceByBuilder.get(builderId);
     if (preference?.notifySoldOutEmail && preference.builderEmail) {
       // #2212: template.name is free-text/seller-supplied -- escape it
@@ -1272,8 +1272,8 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       await sendEmail(env, {
         to: preference.builderEmail,
         subject: `"${template.name}" just sold out`,
-        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
-        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`,
+        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your lándlet.</p>`,
+        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`,
       });
     }
   }

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Direction A: fog and glass</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="a.css" />
+  <script src="strip.js" defer></script>
+</head>
+<body>
+  <!-- Design direction A for #3540 (leaf #3600). A picture, not the app: the three
+       moments over real views of the world, with the interface drawn as soft
+       translucent shapes that condense out of the world's own fog. -->
+  <header class="intro">
+    <h1>A &middot; Fog and glass</h1>
+    <p>Surfaces are soft translucent shapes that condense out of the world's own fog and thin away again. Almost no borders; controls fade when idle.</p>
+  </header>
+
+  <section class="moment" aria-labelledby="m1">
+    <h2 id="m1">1 &middot; Walking, nothing open</h2>
+    <div class="scene scene-walk" role="img" aria-label="The meadow at phone size. The interface has thinned to a faint wordmark, a faint gear, a faint mode name and two ghost rings where the thumbs go.">
+      <img class="wordmark ghost" src="/wordmark.png" alt="" />
+      <div class="dot gear ghost">&#9881;</div>
+      <div class="pill mode ghost">Shop</div>
+      <div class="ring ring-l ghost"><i></i></div>
+      <div class="ring ring-r ghost"><i></i></div>
+    </div>
+  </section>
+
+  <section class="moment" aria-labelledby="m2">
+    <h2 id="m2">2 &middot; Looking at one product</h2>
+    <div class="scene scene-product" role="img" aria-label="A wooden crate on the grass. A soft glass card has condensed out of the fog beside it with the name, price, seller and a Buy button.">
+      <div class="crate">
+        <div class="crate-shadow"></div>
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <polygon points="50,8 92,26 50,44 8,26" fill="#e0bf86" stroke="#6d4f27" stroke-width="1.5" stroke-linejoin="round" />
+          <polygon points="8,26 50,44 50,92 8,72" fill="#bf8e55" stroke="#6d4f27" stroke-width="1.5" stroke-linejoin="round" />
+          <polygon points="50,44 92,26 92,72 50,92" fill="#9d6f3a" stroke="#6d4f27" stroke-width="1.5" stroke-linejoin="round" />
+          <g stroke="#6d4f27" stroke-opacity="0.45" stroke-width="1.2" fill="none">
+            <line x1="8" y1="40" x2="50" y2="58" /><line x1="8" y1="55" x2="50" y2="73" />
+            <line x1="50" y1="58" x2="92" y2="40" /><line x1="50" y1="73" x2="92" y2="55" />
+            <line x1="29" y1="17" x2="71" y2="35" /><line x1="71" y1="17" x2="29" y2="35" />
+          </g>
+        </svg>
+      </div>
+      <div class="wisp wisp-1"></div>
+      <div class="wisp wisp-2"></div>
+      <div class="card glass">
+        <div class="name">Wooden crate</div>
+        <div class="price">$12</div>
+        <div class="seller">by Fern Woodworks</div>
+        <div class="buy">Buy</div>
+      </div>
+      <img class="wordmark ghost" src="/wordmark.png" alt="" />
+      <div class="dot gear ghost">&#9881;</div>
+    </div>
+  </section>
+
+  <section class="moment" aria-labelledby="m3">
+    <h2 id="m3">3 &middot; Settings</h2>
+    <div class="scene scene-settings" role="img" aria-label="A large soft glass panel has condensed over the lower half of the view, listing Sound, Controls, Account and Help.">
+      <div class="wisp wisp-3"></div>
+      <div class="sheet glass">
+        <div class="title">Settings</div>
+        <div class="row"><span>Sound</span><i>&rsaquo;</i></div>
+        <div class="row"><span>Controls</span><i>&rsaquo;</i></div>
+        <div class="row"><span>Account</span><i>&rsaquo;</i></div>
+        <div class="row"><span>Help</span><i>&rsaquo;</i></div>
+        <div class="close">&times;</div>
+      </div>
+      <img class="wordmark ghost" src="/wordmark.png" alt="" />
+    </div>
+  </section>
+
+  <section class="verdict">
+    <h2>In three sentences</h2>
+    <p><strong>What it is.</strong> The interface is made of soft, frosted shapes that condense out of the world's own fog when you need them and thin away when you do not, with a glow where a border would be, and idle controls ghosting down to a faint outline.</p>
+    <p><strong>What it costs.</strong> Text on a translucent surface is only as legible as the view behind it (a bright or busy scene lowers the contrast), ghosted controls are harder for a first-time person to spot, and the blur costs graphics work on older phones.</p>
+    <p><strong>How a first-time person finds Buy and Settings.</strong> Buy is the glowing green button on the card that condenses beside whatever they are looking at, and Settings is the faint gear at the top left, which brightens as soon as a thumb comes near it.</p>
+  </section>
+</body>
+</html>

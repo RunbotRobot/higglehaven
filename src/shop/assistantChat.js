@@ -16,8 +16,8 @@ import {
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
-  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
-  keyboardInset,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
+  keyboardInset, threadRows,
 } from './assistantChatLogic.js';
 
 // A left question is not a live chat, so it is checked less often.
@@ -42,6 +42,7 @@ const sendEl = document.getElementById('assistant-chat-send');
 let assistant = null; // { userId, builderId, name } of whoever the panel is for
 let conversation = null; // the server's open conversation, or null
 let messages = [];
+let history = []; // #3624: the earlier part of the thread, from the server's first load
 let replyWaitSeconds = 90; // replaced by the server's number on every reply
 let assistantOnShift = true;
 let endedText = null; // why the last conversation ended, shown until the next send
@@ -115,27 +116,30 @@ function renderStatus() {
   statusEl.classList.toggle('error', isError);
 }
 
+function appendRow(name, body, sender) {
+  const row = document.createElement('div');
+  row.className = `assistant-chat-message ${sender}`;
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = name;
+  const text = document.createElement('span');
+  text.textContent = body;
+  row.append(who, text);
+  logEl.append(row);
+}
+
 function renderLog() {
   logEl.replaceChildren();
+  // #3624: one thread. What was said before comes first, oldest at the top.
+  for (const row of threadRows(history, question, assistant?.name)) appendRow(row.name, row.text, row.sender);
   if (question) {
-    const rows = [['You', question.text, 'shopper']];
-    if (question.answer) rows.push([question.answer.assistantName || 'An assistant', question.answer.text, 'assistant']);
-    for (const [name, body, sender] of rows) {
-      const row = document.createElement('div');
-      row.className = `assistant-chat-message ${sender}`;
-      const who = document.createElement('span');
-      who.className = 'who';
-      who.textContent = name;
-      const text = document.createElement('span');
-      text.textContent = body;
-      row.append(who, text);
-      logEl.append(row);
-    }
+    appendRow('You', question.text, 'shopper');
+    if (question.answer) appendRow(question.answer.assistantName || 'An assistant', question.answer.text, 'assistant');
     logEl.scrollTop = logEl.scrollHeight;
     return;
   }
   if (!assistant) return;
-  if (messages.length === 0 && !conversationOpen()) {
+  if (messages.length === 0 && history.length === 0 && !conversationOpen()) {
     const note = document.createElement('div');
     note.className = 'assistant-chat-note';
     note.textContent = disclosureText(assistant.name);
@@ -150,31 +154,23 @@ function renderLog() {
     logEl.append(note);
   }
   for (const message of messages) {
-    const row = document.createElement('div');
-    row.className = `assistant-chat-message ${message.sender}`;
-    const who = document.createElement('span');
-    who.className = 'who';
     // A reply names the assistant who wrote it (a conversation can pass between
     // assistants); older rows fall back to the one in the panel.
-    who.textContent = message.sender === 'shopper' ? 'You' : (message.authorName || assistant.name);
-    const text = document.createElement('span');
-    text.textContent = message.text;
-    row.append(who, text);
-    logEl.append(row);
+    appendRow(message.sender === 'shopper' ? 'You' : (message.authorName || assistant.name), message.text, message.sender);
   }
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 function render() {
   // #3612: her name once, and the role badge only beside a name.
-  const title = assistantTitle({ assistant, question });
+  const title = assistantTitle({ assistant, question, history });
   nameEl.textContent = title.text;
   badgeEl.hidden = !title.showBadge;
   formEl.hidden = question !== null;
   leaveEl.hidden = !(canLeave && question === null);
   leaveEl.textContent = leaveLabel;
-  withdrawEl.hidden = question === null;
-  withdrawEl.textContent = question && questionInLine(question) ? withdrawLabel : doneLabel;
+  withdrawEl.hidden = !(question && questionInLine(question));
+  withdrawEl.textContent = withdrawLabel;
   blockEl.hidden = !assistant?.builderId;
   panelEl.classList.toggle('minimized', minimized);
   pillEl.hidden = !(isOpen() && minimized);
@@ -191,6 +187,7 @@ function render() {
     conversationStatus: conversation?.status ?? null,
     handoverNotice: conversationOpen() ? handoverNotice(conversation) : null, // added for #3448
     messages: messages.map((message) => ({ sender: message.sender, text: message.text })),
+    history: threadRows(history, question, assistant?.name).map((row) => ({ sender: row.sender, text: row.text })), // added for #3624
     status: statusEl.textContent,
     offer: offer ? { userId: offer.userId, name: offer.name } : null,
     canLeaveQuestion: !leaveEl.hidden,
@@ -219,9 +216,26 @@ function stopQuestionPolling() {
 function adoptQuestion(reply) {
   if (reply.keptDays) keptDays = reply.keptDays;
   if (typeof reply.assistantsOnShift === 'number') assistantsOnShift = reply.assistantsOnShift;
-  const hadAnswer = Boolean(question?.answer);
   question = reply.question ?? null;
-  if (minimized && question?.answer && !hadAnswer) unread = true; // #3529
+  // #3624: an answered or expired question is not a card to close: it becomes
+  // part of the thread (the server keeps it there) and the box is free again.
+  if (question && !questionInLine(question)) {
+    const finished = question;
+    const hadAnswer = history.some((item) => item.questionId === finished.questionId && item.sender === 'assistant');
+    history = history.filter((item) => item.questionId !== finished.questionId);
+    history.push({ sender: 'shopper', text: finished.text, createdAt: finished.createdAt, questionId: finished.questionId });
+    if (finished.answer) {
+      history.push({
+        sender: 'assistant', text: finished.answer.text, createdAt: finished.answer.answeredAt, questionId: finished.questionId,
+        ...(finished.answer.assistantName ? { authorName: finished.answer.assistantName } : {}),
+      });
+      if (minimized && !hadAnswer) unread = true; // #3529
+    } else if (finished.status === 'expired') {
+      endedText = questionNotice(finished, { keptDays, assistantsOnShift });
+    }
+    question = null;
+    closeAssistantQuestion().catch(() => { /* the server keeps it; shown once, folded in on the next open */ });
+  }
   if (question && questionInLine(question)) startQuestionPolling();
   else stopQuestionPolling();
 }
@@ -309,6 +323,7 @@ export async function openAssistantChat(target) {
   assistant = target ? { userId: target.userId, builderId: target.builderId ?? null, name: target.name } : null;
   conversation = null;
   messages = [];
+  history = [];
   endedText = null;
   errorText = null;
   offer = null;
@@ -323,6 +338,7 @@ export async function openAssistantChat(target) {
   try {
     const reply = await fetchAssistantChat();
     if (token !== openToken) return;
+    history = reply.history || []; // #3624
     if (reply.conversation && reply.conversation.status === 'open') {
       adopt(reply);
       startPolling();
@@ -361,6 +377,7 @@ export async function closeAssistantChat() {
   assistant = null;
   conversation = null;
   messages = [];
+  history = [];
   endedText = null;
   errorText = null;
   offer = null;

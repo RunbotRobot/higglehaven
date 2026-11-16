@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS, assistantTitle, keyboardInset } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS,
+  keyboardInset, threadRows,
+} from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -142,6 +144,10 @@ describe('assistantTitle (#3612)', () => {
     const question = { answer: { assistantName: 'Juniper', text: 'Hi' } };
     expect(assistantTitle({ assistant: null, question })).toEqual({ name: 'Juniper', text: 'Juniper', showBadge: true });
   });
+  it('uses the latest assistant who wrote in the thread once the answer has moved there', () => {
+    const history = [{ sender: 'shopper', text: 'Q' }, { sender: 'assistant', text: 'A', authorName: 'Juniper' }];
+    expect(assistantTitle({ assistant: null, question: null, history })).toEqual({ name: 'Juniper', text: 'Juniper', showBadge: true });
+  });
   it('prefers the attached assistant over a question answer', () => {
     expect(assistantTitle({ assistant: { name: 'Clover' }, question: { answer: { assistantName: 'Juniper' } } }).name).toBe('Clover');
   });
@@ -170,5 +176,30 @@ describe('keyboardInset (#3608)', () => {
   it('is never negative and ignores numbers that are not', () => {
     expect(keyboardInset({ innerHeight: 500, visualHeight: 520, visualOffsetTop: 0 })).toBe(0);
     expect(keyboardInset({ innerHeight: 844, visualHeight: undefined, visualOffsetTop: 0 })).toBe(0);
+  });
+});
+
+describe('threadRows (#3624)', () => {
+  const history = [
+    { sender: 'shopper', text: 'Earlier question', createdAt: 'a' },
+    { sender: 'assistant', text: 'Earlier answer', createdAt: 'b', authorName: 'Clover' },
+    { sender: 'shopper', text: 'Left question', createdAt: 'c', questionId: 'q1' },
+  ];
+  it('names who spoke and keeps the order', () => {
+    expect(threadRows(history.slice(0, 2), null, 'Juniper')).toEqual([
+      { sender: 'shopper', name: 'You', text: 'Earlier question' },
+      { sender: 'assistant', name: 'Clover', text: 'Earlier answer' },
+    ]);
+  });
+  it('falls back to the assistant in the panel, then to a plain word', () => {
+    expect(threadRows([{ sender: 'assistant', text: 'hi' }], null, 'Juniper')[0].name).toBe('Juniper');
+    expect(threadRows([{ sender: 'assistant', text: 'hi' }], null, null)[0].name).toBe('An assistant');
+  });
+  it('leaves out the left question that is being shown on its own', () => {
+    expect(threadRows(history, { questionId: 'q1' }, 'Juniper').map((row) => row.text)).toEqual(['Earlier question', 'Earlier answer']);
+    expect(threadRows(history, null, 'Juniper')).toHaveLength(3);
+  });
+  it('is empty with no history', () => {
+    expect(threadRows(undefined, null, 'x')).toEqual([]);
   });
 });

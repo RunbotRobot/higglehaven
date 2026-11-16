@@ -2463,12 +2463,12 @@ async function resolveAuction(db, auction) {
   } else if (candidates.length > 0) {
     pendingNotifications.push({
       builderId: auction.seller_builder_id,
-      message: `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the land.`,
+      message: `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the lándlet.`,
     });
   } else {
     pendingNotifications.push({
       builderId: auction.seller_builder_id,
-      message: `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`,
+      message: `Your auction for ${auction.landlet_id} ended with no bids — you keep the lándlet.`,
     });
   }
   if (winner) {

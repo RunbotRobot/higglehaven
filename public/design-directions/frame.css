@@ -1,0 +1,18 @@
+/* The frame for #3540 (leaf #3600). */
+:root { --ink: 22 36 10; --pill: 214 232 190; --panel: 250 240 199; --green: #6ca42e; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #eef3e2; color: rgb(var(--ink)); font: 15px/1.5 sans-serif; }
+.top { max-width: 560px; margin: 0 auto; padding: 22px 16px 8px; }
+.top h1 { margin: 0 0 8px; font-size: 22px; line-height: 1.25; }
+.top p { margin: 0; color: rgb(var(--ink) / 0.8); }
+.directions { max-width: 560px; margin: 0 auto; padding: 8px 16px 48px; display: grid; gap: 16px; }
+.direction { display: block; color: inherit; text-decoration: none; background: rgb(var(--panel)); border-radius: 18px; padding: 14px; box-shadow: 0 2px 0 rgb(var(--ink) / 0.08); }
+.direction h2 { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 18px; }
+.letter { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--green); color: rgb(var(--panel)); font-weight: 700; }
+.thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.thumbs img { width: 100%; height: auto; aspect-ratio: 390 / 844; object-fit: cover; border-radius: 10px; background: rgb(var(--pill)); }
+.direction p { margin: 10px 0 8px; }
+.open { display: inline-block; padding: 8px 16px; border-radius: 999px; background: var(--green); color: rgb(var(--panel)); font-weight: 700; }
+.direction.coming { opacity: 0.6; pointer-events: none; }
+.direction.coming .thumbs { display: none; }
+.direction.coming .open { background: rgb(var(--ink) / 0.3); }
