@@ -4074,7 +4074,9 @@
         align-items: center;
         justify-content: center;
         background: rgb(0 0 0 / 0.22);
-        padding: 16px;
+        /* #3625: the top reserves room below the Shop/Build/Sell buttons
+           (fixed, over every modal), so the panel can never start under them. */
+        padding: 52px 16px 16px;
       }
       #settings-modal.visible {
         display: flex;
@@ -4083,7 +4085,14 @@
         position: relative;
         width: 100%;
         max-width: 360px;
-        max-height: 90vh;
+        /* #3625: border-box, so the 18px padding is inside the cap (it used to
+           be added on top of 90vh, pushing the panel's top under the mode
+           switch), and the cap is the visible height (dvh: a phone with its
+           browser bars showing is shorter than vh) minus the room above and
+           below; what does not fit scrolls inside the panel. */
+        box-sizing: border-box;
+        max-height: calc(100vh - 68px);
+        max-height: calc(100dvh - 68px);
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
