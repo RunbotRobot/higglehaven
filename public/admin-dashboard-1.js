@@ -834,12 +834,17 @@
       return;
     }
     // #3607: what the check found about the vendor's domain whitelisting, in plain words.
+    // #3643: when a probe could not be read, say what the service answered instead.
+    const answered = (a) => (a ? ' It answered ' + (a.status === null ? 'nothing' : String(a.status)) + (a.message ? ' (' + a.message + ')' : '') + '.' : '');
     if (result && result.whitelisting === 'enforced') {
       const caseNote = result.referenceIdCase === 'insensitive' ? ' Capital and small letters in the id do not matter.'
-        : result.referenceIdCase === 'sensitive' ? ' Capital and small letters in the id DO matter, so type it exactly as the service shows it.' : '';
+        : result.referenceIdCase === 'sensitive' ? ' Capital and small letters in the id DO matter, so type it exactly as the service shows it.'
+        : result.referenceIdCase === 'unknown' ? ' Could not tell whether capital and small letters matter.' + answered(result.caseAnswer) : '';
       showOk('Connected. The service refuses calls without our id, and accepts ours.' + caseNote);
     } else if (result && result.whitelisting === 'not_enforced') {
       showOk('Connected, but the test service is not checking the id yet.');
+    } else if (result && result.whitelisting === 'unknown') {
+      showOk('Connected. Could not tell whether the service checks our id.' + answered(result.answer) + ' Press the button again in a minute.');
     } else {
       showOk('Connected.');
     }
