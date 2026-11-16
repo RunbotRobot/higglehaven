@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Direction C: one bud</title>
+  <link rel="stylesheet" href="c.css" />
+</head>
+<body>
+  <!-- Design direction C for interface week (#3539, #3540, #3602). A mock-up, not the app:
+       the three pictures are real views of the world; the bud, petals and cards are drawn here. -->
+  <header class="page-head">
+    <img class="wordmark" src="/wordmark.png" alt="higglehaven" />
+    <h1>Direction C: one bud</h1>
+    <p class="lede">The whole interface folds into one small living thing in a corner. Tap it, tap the product, try the three moments below. Names and prices are examples.</p>
+  </header>
+
+  <nav class="moments" aria-label="Moments">
+    <button type="button" class="moment-btn" data-moment="walk" aria-pressed="true">1 Walking</button>
+    <button type="button" class="moment-btn" data-moment="product" aria-pressed="false">2 A product</button>
+    <button type="button" class="moment-btn" data-moment="settings" aria-pressed="false">3 Settings</button>
+  </nav>
+
+  <div class="stage-fit" id="stage-fit">
+    <div class="stage" id="stage" data-moment="walk" data-open="false" data-idle="false">
+      <img class="world" id="world" src="c-walk.jpg" alt="The world: a green hill, an avatar standing on it, a placed product at the right edge." width="390" height="844" />
+
+      <p class="hint" id="hint" data-ui>Drag to walk &middot; double-tap to fly</p>
+
+      <button type="button" class="hotspot" id="product-hotspot" aria-label="Look at the toilet"></button>
+
+      <section class="bloom" id="product-bloom" data-ui aria-label="Product" hidden>
+        <span class="stem" aria-hidden="true"></span>
+        <h2>Toilet</h2>
+        <p class="meta">$14 &middot; Example Shop</p>
+        <button type="button" class="buy" id="buy-btn">Buy</button>
+      </section>
+
+      <section class="leaf-sheet" id="settings-leaf" data-ui aria-label="Settings" hidden>
+        <h2>Settings</h2>
+        <div class="row"><span>Units</span>
+          <span class="seg" role="group" aria-label="Units">
+            <button type="button" class="seg-btn" aria-pressed="true">Meters</button>
+            <button type="button" class="seg-btn" aria-pressed="false">Feet</button>
+          </span>
+        </div>
+        <div class="row"><span>Ease the camera back</span>
+          <button type="button" class="switch" id="ease-switch" role="switch" aria-checked="false" aria-label="Ease the camera back"><span></span></button>
+        </div>
+        <div class="row soft"><span>Tax paperwork</span><span>not needed yet</span></div>
+        <div class="row actions">
+          <button type="button" class="pill">Ask an assistant</button>
+          <button type="button" class="pill">Send feedback</button>
+        </div>
+      </section>
+
+      <div class="bud-wrap" id="bud-wrap">
+        <ul class="petals" id="petals">
+          <li style="--i:0"><button type="button" class="petal" data-go="settings" data-ui>Settings</button></li>
+          <li style="--i:1"><button type="button" class="petal" data-ui>Friends</button></li>
+          <li style="--i:2"><button type="button" class="petal" data-ui>Chat</button></li>
+          <li style="--i:3"><button type="button" class="petal" data-ui>Purchases</button></li>
+          <li style="--i:4"><button type="button" class="petal" data-ui>Build &middot; Sell</button></li>
+        </ul>
+        <button type="button" class="bud" id="bud" data-ui aria-expanded="false" aria-controls="petals" aria-label="Menu">
+          <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
+            <g class="bud-back"><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(-28 32 52)" /><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(28 32 52)" /></g>
+            <g class="bud-mid"><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(-12 32 52)" /><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(12 32 52)" /></g>
+            <ellipse class="bud-front" cx="32" cy="34" rx="11" ry="21" fill="#8fdc6f" />
+            <circle class="bud-tip" cx="32" cy="20" r="5" fill="#f6d65c" />
+          </svg>
+          <span class="bud-word">Menu</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <p class="cover" id="cover" role="status" aria-live="polite"></p>
+
+  <section class="three">
+    <h2>What it is</h2>
+    <p>The whole interface folds into one small bud in the corner of the screen; tapping it unfolds a few petals (Settings, Friends, Chat, Purchases, Build and Sell), and everything else is done by touching the world itself: drag to walk, drag with a second finger to look, double-tap to fly, tap a product to have its card bloom beside it.</p>
+    <h2>What it costs</h2>
+    <p>It is the quietest of the three, but it gives up the visible joysticks and fly button for gestures that nobody can see until they have been taught once, and a petal's label is only readable while the bud is open, so tools get harder to find at a glance.</p>
+    <h2>How a first-time person finds Buy and Settings</h2>
+    <p>They tap the one visible thing on the screen, the bud, which pulses and carries the word Menu until it has been opened once, and they tap a product itself, where a yellow Buy petal blooms beside its name and price.</p>
+  </section>
+
+  <script src="c.js"></script>
+</body>
+</html>
