@@ -119,7 +119,9 @@ let tapped = false;
 scan: for (const fy of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7]) {
   for (const fx of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]) {
     await page.mouse.click(420 * fx, 860 * fy);
-    await page.waitForTimeout(250);
+    // Slower than a double-tap (320 ms, #3650): two clicks this close together
+    // are a double-tap, which flies, so the scan would never land on a product.
+    await page.waitForTimeout(420);
     if (await page.locator('#seller-modal.visible').isVisible()) { tapped = true; break scan; }
   }
 }
