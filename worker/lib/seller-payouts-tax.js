@@ -22,6 +22,7 @@ import { readJson, stringValue, labelValue } from './validation.js';
 import { requireCurrentUser, sha256Hex } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { assertNotFleetAccount } from './fleet.js';
 import { countryNameToCode, usStateNameToCode } from './country-codes.js';
 import {
   encryptTaxIdPayload, decryptTaxIdPayload, stripeAccountStatusJson,
@@ -277,6 +278,11 @@ export async function handleBuilderRedeem(request, env, db) {
     // this test suite since Stripe is never configured there, but not in a
     // real deployment) need the identical guard, same placement precedent
     // as #948.
+    // #3597: the fleet's own lándlet earns higgles like any builder's, and
+    // they are never spent: a fleet account cannot turn them into cash (owner,
+    // 2026-11-16, AGENTS.md "The fleet has a lándlet of its own"). Refused
+    // before anything is read or claimed.
+    assertNotFleetAccount(user, 'redeem higgles for cash');
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     // #3067: a redemption this builder already claimed (balance debited, Stripe
     // call(s) started, payout not yet confirmed) is finished by

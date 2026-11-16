@@ -506,6 +506,14 @@
         opacity: 1;
         pointer-events: auto;
       }
+      /* #3570: the account menu opens over this button, whose label then
+         showed through the menu's edge. Two surfaces never overlap: the
+         button steps aside (same fade) while the menu is open and returns
+         when it closes, with its own countdown untouched. */
+      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible {
+        opacity: 0;
+        pointer-events: none;
+      }
       /* #1995: a brief "+1 free model-generation credit!" confirmation on
          collecting a credit orb — same opacity-fade-in/out shape as
          #shop-last-location-btn just above (a non-jarring fade, not an
@@ -3538,12 +3546,17 @@
         flex: 1 1 140px;
         min-width: 0;
       }
+      /* #3583: one scroll, not two. The list used to cap itself at 55vh and
+         scroll inside the modal, which scrolls too, so an opened product's
+         block ended in a hard cut and its Save button sat under the fold.
+         The list now grows to its content and #seller-modal-content is the
+         only scroll area. flex-shrink: 0 keeps the flex column of the modal
+         from squeezing it back into a clipped box. */
       #seller-list {
         display: flex;
         flex-direction: column;
+        flex-shrink: 0;
         gap: 10px;
-        max-height: 55vh;
-        overflow-y: auto;
       }
       #seller-list[hidden],
       #seller-list-view[hidden] {
@@ -3575,8 +3588,8 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         gap: 10px;
-        max-height: 55vh;
-        overflow-y: auto;
+        /* #3583: same one-scroll rule as #seller-list above. */
+        flex-shrink: 0;
       }
       .seller-card {
         display: flex;
@@ -4093,10 +4106,15 @@
       #settings-utilities {
         flex-shrink: 0;
         display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
         justify-content: flex-start;
         border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
         padding-top: 10px;
       }
+      /* #3567: both utilities share one pill style (the assistant button used
+         to fall back to the browser's square default). */
+      #settings-assistant-btn,
       #settings-feedback-btn {
         padding: 8px 16px;
         border-radius: 999px;
@@ -4112,6 +4130,9 @@
         gap: 6px;
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .settings-field[hidden] {
+        display: none;
       }
       .settings-radio-row {
         display: flex;

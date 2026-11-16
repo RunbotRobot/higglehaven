@@ -37,6 +37,7 @@ import { adminActionLogStatement } from './admin-log.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import { assertNotProhibitedContent } from './prohibited-content.js';
 import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from './land-cap.js';
+import { assertNotFleetAccount } from './fleet.js';
 import {
   requireLandlet, recomputeLandCap, resolveAuctionIfDue, resolveDueAuctions,
   nonnegativeInteger, validateCropShape, validateScale, formatCents,
@@ -620,6 +621,14 @@ export async function handleAuctionBids(request, db, route) {
     // bidding "as" someone else isn't a feature.
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderId = sessionBuilder.builder_id;
+    // #3597: higgles earned on the fleet's own lándlet are never spent, and a
+    // winning bid is the one place higgles leave a builder on purpose, so a
+    // fleet account cannot bid (owner, 2026-11-16, AGENTS.md "The fleet has a
+    // lándlet of its own"). It can still sell land; selling only credits.
+    assertNotFleetAccount(
+      await db.prepare('SELECT is_fleet FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first(),
+      'bid on a land auction',
+    );
     await checkRateLimit(db, `auction-bid:${builderId}`, AUCTION_BID_RATE_LIMIT_MAX);
     if (builderId === resolved.seller_builder_id) {
       throw new HttpError('The seller cannot bid on their own auction', 400);
