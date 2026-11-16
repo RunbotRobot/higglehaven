@@ -970,6 +970,19 @@ most likely to come up again.
   conduct rules in "Looking at the live site as a person" still hold, and
   a session never touches anyone else's content.)
 
+- **A place outside the world still looks like the world.** (2026-11-16,
+  #3502.) Sell mode's showroom is not a real spot on the map, so it drew
+  a floor and a flat sky. Offered the real horizon, scenery of its own, or
+  leaving it bare, the owner chose its own scenery and reached for what
+  already exists: "How easy would it be to reuse the code for the
+  real-world's dome? I do like keeping the standard grass." So the
+  showroom is a small, empty piece of the world: the standard grass, the
+  same hazy wall and dome and drifting sky, and no real lándlets, because
+  it is not among them. When a view needs a setting, mount the world's own
+  ground and sky there rather than designing a second look; and never show
+  real places from somewhere that is not a real place. This is "One model,
+  not a hybrid" applied to scenery.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
