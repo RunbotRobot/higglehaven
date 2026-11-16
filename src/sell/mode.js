@@ -1093,7 +1093,7 @@ function renderSellerList() {
     actions.appendChild(previewBtn);
 
     const renameBtn = document.createElement('button');
-    renameBtn.className = 'seller-row-action-btn';
+    renameBtn.className = 'seller-row-action-btn seller-rename-btn'; // #3617: the handbook test finds Rename by this class
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
     renameBtn.addEventListener('click', async () => {
