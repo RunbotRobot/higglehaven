@@ -4091,10 +4091,15 @@
       #settings-utilities {
         flex-shrink: 0;
         display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
         justify-content: flex-start;
         border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
         padding-top: 10px;
       }
+      /* #3567: both utilities share one pill style (the assistant button used
+         to fall back to the browser's square default). */
+      #settings-assistant-btn,
       #settings-feedback-btn {
         padding: 8px 16px;
         border-radius: 999px;
