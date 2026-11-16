@@ -2394,6 +2394,9 @@ function endSceneMutation() {
 function updateUndoRedoButtons() {
   undoBtn.disabled = sceneMutationBusy || undoStack.length === 0;
   redoBtn.disabled = sceneMutationBusy || redoStack.length === 0;
+  // #3574 -- Redo has nothing to offer until something was undone; hide it
+  // on the stack alone (not the busy flag) so it doesn't flicker mid-save.
+  redoBtn.hidden = redoStack.length === 0;
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -3539,6 +3542,8 @@ export function updateSelectionUI() {
   // own expansion above, so this always targets a whole group).
   groupBtn.disabled = count < 2;
   ungroupBtn.disabled = ![...selectedMeshes].some((mesh) => mesh.userData.groupId);
+  // #3574 -- nothing to unbundle in the selection: leave the control out.
+  ungroupBtn.hidden = ungroupBtn.disabled;
   syncBundleEditUI();
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
@@ -3824,11 +3829,13 @@ function syncBundleEditUI() {
     : (isSingleBundleSelection() ? selectedBundleInfo() : null);
   if (!info) {
     editBundleBtn.disabled = true;
+    editBundleBtn.hidden = true; // #3574 -- no bundle selected, nothing to edit
     editBundleBtn.textContent = 'Edit';
     editBundleReasonEl.hidden = true;
     editBundleReasonEl.textContent = '';
     return;
   }
+  editBundleBtn.hidden = false;
   if (editingGroupId) {
     editBundleBtn.disabled = false;
     editBundleBtn.textContent = 'Done';
@@ -4000,6 +4007,7 @@ function copySelection() {
   const meshes = [...selectedMeshes];
   clipboard = relativeItemsForMeshes(meshes);
   pasteBtn.disabled = false;
+  pasteBtn.hidden = false; // #3574 -- Paste appears once something is copied
   // There's nothing left to multi-select once the copy is captured, and
   // multi-select repurposes a one-finger drag into a selection swipe —
   // leaving it on would strand the builder without the ability to rotate
