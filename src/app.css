@@ -732,6 +732,11 @@
         --shop-fly-bottom: 78px;
         --shop-fly-size: 56px;
         --shop-fly-stack-gap: 12px;
+        /* #3553: the up/down arrows and the gap between them; the assistant
+           panel lifts above the stack while it is showing. */
+        --shop-vertical-button-height: 40px;
+        --shop-vertical-gap: 8px;
+        --shop-vertical-stack-height: calc(2 * var(--shop-vertical-button-height) + var(--shop-vertical-gap));
       }
       #shop-fly-btn {
         bottom: var(--shop-fly-bottom);
@@ -776,14 +781,14 @@
         left: 50%;
         transform: translateX(-50%);
         flex-direction: column;
-        gap: 8px;
+        gap: var(--shop-vertical-gap);
       }
       body.shop-flying #shop-vertical-controls.visible {
         display: flex;
       }
       #shop-vertical-controls button {
         width: 52px;
-        height: 40px;
+        height: var(--shop-vertical-button-height);
         border-radius: 12px;
         border: none;
         background: rgb(var(--spring-green-rgb) / 0.85);
@@ -1190,6 +1195,18 @@
       #assistant-chat-panel[hidden],
       #assistant-chat-panel.minimized {
         display: none;
+      }
+      /* #3553: in Shop the panel never sits over the movement controls. The
+         joysticks (top at 132px) and the fly button (top at 134px) fill the
+         bottom 134px, so the panel starts above them; while flying, the
+         up/down arrows stack above the fly button and the panel starts above
+         those too. Build and Sell have none of these controls (no visible fly
+         button), so the panel keeps its place at the bottom there. */
+      body:has(#shop-fly-btn.visible) #assistant-chat-panel {
+        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + 8px);
+      }
+      body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
+        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
       }
       /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
          clear of the joysticks (bottom corners), the fly button (bottom centre)
