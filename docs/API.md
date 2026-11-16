@@ -10103,13 +10103,18 @@ shape problem, not a local validation gap). Side-effect-free and safe to
 call repeatedly — no filing, no form, no user data touched, just the
 stateless token exchange every real filing call would also need to make
 first. When `TAX_1099_EFILING_DOMAIN_REFERENCE_ID` is set it also makes up to
-two more handshakes (#3607): one with the id's last character changed, which
-sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal` is
-`{ status, message }`, the vendor's own, with any echo of an id replaced by
+two more handshakes (#3607), a second apart: one with the id's last character
+changed, which sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal`
+is `{ status, message }`, the vendor's own, with any echo of an id replaced by
 `[id]`) or `"not_enforced"` (accepted); and, when enforced and the id has letters,
 one with every letter's case flipped, which sets `referenceIdCase` to
-`"insensitive"` or `"sensitive"`. A vendor 5xx, a 429 or no answer on a probe is
-not read as a refusal: the route answers 502 instead. The ids themselves are never
+`"insensitive"` or `"sensitive"`. The first, real handshake is the connection (#3643):
+once it succeeds the route always answers `200` with `connected: true`. A probe the
+vendor answers with a 5xx or a 429, or not at all, is "could not tell", never a
+refusal and never a failure: `whitelisting` (or `referenceIdCase`) is `"unknown"`, and
+`answer` (or `caseAnswer`) is `{ status, message }` for what the vendor said (`status`
+is `null` when it said nothing). If the real handshake itself fails the route is still
+`502` with the vendor's message and no probe is made. The ids themselves are never
 returned. The admin page turns this into one plain sentence under the button.
 Without an id configured the answer is still just `{ "connected": true }`. This is the "confirm the first real Sandbox call" step
 `fetchTax1099EfilingToken`'s own comment and the "Unverified against a live
@@ -10349,6 +10354,17 @@ against one budget per client IP.
   purpose). There is no transfer between builders. A refund's clawback also
   debits, but it reverses a credit rather than spending, so it stays. Selling
   land (starting an auction) only credits, so it is allowed.
+- **Selling side and rankings (#3597).** A sale of a product placed on a fleet
+  account's lándlet goes through the ordinary purchase path: the builder's share
+  (`builderShareCents`) is credited to `builders.higgles_balance_cents` with a
+  `higgles_earnings_events` row, and the commission caps, holds and refund
+  clawbacks key on `builder_id` and never read `users.is_fleet`, so nothing
+  refuses or miscounts for a fleet builder (`worker/fleet-lot-sales.test.js`
+  pins the credit). The only fleet checks on the money path are on the buyer
+  (`createPurchaseCheckout` refuses a fleet buyer while payments are live) and on
+  the two debits above. No ranking, leaderboard or top-builders surface exists
+  today (reviews and seller feedback are per seller and a fleet account cannot
+  leave them); a new one must filter `users.is_fleet = 0`.
 - **Visibility.** Fleet avatars are visible to everyone like any other avatar
   until a launch decision says otherwise; there is no search by name in the
   app, so there is nothing to exclude from one.
@@ -10435,9 +10451,13 @@ Rules the endpoints keep:
   - `POST /api/assistant-chat/question/close`: withdraws a question still in line,
     or closes an answered or expired one once read. Idempotent.
   - An answer is stored, so a shopper who left reads it when they next open the
-    panel, and a notification ("<Name> answered the question you left.") tells
-    them. An answer nobody came back for is deleted after `keptDays` days, as are
-    finished questions.
+    panel, and one quiet notification ("<Name> replied.", #3624) tells them: never
+    one per answer (an unread one from the same assistant is that one), and
+    `GET /api/assistant-chat/question` returning an answered question marks it
+    read, since the shopper is looking at the answer. The panel folds an answered
+    or expired question into the thread and closes it itself. Unanswered questions
+    expire after `keptDays` days; the thread (answered ones included) is kept 30
+    days.
 
 ### Assistant side (assistant accounts only; others get `403`)
 

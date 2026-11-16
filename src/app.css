@@ -683,6 +683,12 @@
          own bottom + size + gap instead of a second hand-tuned number that
          could drift into it (it overlapped by 2px at 390x844). */
       :root {
+        /* Set from script by the assistant panel while the phone keyboard is
+           open (src/shop/assistantChat.js); these are the keyboard-closed
+           values, so check-design-tokens sees them declared. Same two lines as
+           #3642/#3637 (main's pretest is red without them); drops out on merge. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         --shop-fly-bottom: 78px;
         --shop-fly-size: 56px;
         --shop-fly-stack-gap: 12px;
@@ -802,12 +808,17 @@
         position: relative;
       }
       #account-menu-toggle {
+        /* #3569: it is the only way to Notices, Friends, My Purchases and Settings, so it
+           reads on any ground: a near-solid backing, an ink outline, a larger glyph and a
+           44x36 touch target (it was a 55%-clear pill with a 12px emoji). */
+        min-width: 44px;
+        min-height: 36px;
         padding: 5px var(--space-xl);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / 0.35);
+        background: rgb(var(--pill-rgb) / 0.95);
+        color: var(--pill-text);
+        font: 17px/var(--leading-normal) var(--font-sans);
         position: relative;
       }
       #account-menu-toggle.active {
@@ -1137,11 +1148,19 @@
          it. Text is selectable and errors stay until the next action ("Any
          text a user can read, they can copy"). */
       #assistant-chat-panel {
+        /* Set from assistantChat.js while the phone keyboard is open (#3621); these are the resting values. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         position: fixed;
         z-index: 32;
         left: 8px;
         right: 8px;
         --assistant-bottom: 8px;
+        /* #3608: defaults for what syncVisibleArea (src/shop/assistantChat.js)
+           sets from visualViewport while the keyboard is up: how much of the
+           bottom it covers, and the height that is left. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         bottom: var(--assistant-bottom);
         /* #3608: never taller than the visible area above its own bottom
            offset, so its header can never be pushed off the top; the log is
@@ -1168,12 +1187,11 @@
          doing, and is never taller than the visible area. The two custom
          properties come from visualViewport (see syncVisibleArea in
          src/shop/assistantChat.js). */
-      #assistant-chat-panel {
-        /* set from script while typing; declared here so the stylesheet knows them */
+      #assistant-chat-panel.typing {
+        /* Defaults only; syncVisibleArea sets both inline, which wins. Declared here so the
+           token check sees them as defined (main failed it after #3621). */
         --assistant-kb-inset: 0px;
         --assistant-visible-height: 100dvh;
-      }
-      #assistant-chat-panel.typing {
         bottom: calc(var(--assistant-kb-inset, 0px) + 8px);
         max-height: calc(var(--assistant-visible-height, 100dvh) - 16px);
       }
@@ -1771,7 +1789,20 @@
         /* Reversed so the catalog picker opens upward, above the button,
            since the panel is anchored to the bottom of the screen. */
         flex-direction: column-reverse;
+        /* #3639: not the default stretch. With Multi-Select on, the Brush row
+           (about 205px) set the panel's width and stretch made every button
+           that wide, so "+ Add Item" lay over the left two thirds of the
+           Ground pill and a tap there did nothing. Buttons keep their own
+           width; only the Brush row is wide, and it sits above the pill's row. */
+        align-items: flex-start;
         gap: var(--space-sm);
+        /* ...and the container's own box (as wide as the Brush row, in every
+           row) must not catch taps in the empty space beside a narrower
+           button; its children take them instead. */
+        pointer-events: none;
+      }
+      #add-item-panel > * {
+        pointer-events: auto;
       }
       /* Vertical construction (issue #169) — bottom-center, clear of
          #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
@@ -3488,6 +3519,17 @@
       #seller-modal.visible {
         display: flex;
       }
+      /* #3586 (interface week): one sheet at a time. Upload Model, Sell This
+         Too, the delete confirmation and Settings all open from My products,
+         and each used to leave it drawn underneath a translucent sheet, so
+         its heading, rows and buttons read through the new one. While any of
+         them is open My products is hidden (visibility, not display, so its
+         scroll position and any open product block are still there when the
+         upper sheet closes). A browser without :has() keeps the old stacking
+         and loses nothing else. */
+      body:has(#upload-modal.visible, #sell-this-too-modal.visible, #confirm-modal.visible, #settings-modal.visible) #seller-modal.visible {
+        visibility: hidden;
+      }
       #seller-modal-content {
         position: relative;
         width: 100%;
@@ -3543,7 +3585,14 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #seller-search-input.seller-filter-control {
-        flex: 1 1 140px;
+        flex: 1 1 100%;
+        min-width: 0;
+      }
+      /* #3588: sort sits beside the category filter on the row under the
+         search box, instead of on a row of its own. */
+      #seller-category-filter.seller-filter-control,
+      #seller-sort-select.seller-filter-control {
+        flex: 1 1 0;
         min-width: 0;
       }
       /* #3583: one scroll, not two. The list used to cap itself at 55vh and
@@ -4048,7 +4097,11 @@
         align-items: center;
         justify-content: center;
         background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        /* #3625: the top reserves room below the Shop/Build/Sell buttons
+           (fixed, over every modal), so the panel can never start under them.
+           52px on top plus --space-2xl (16px) below is the 68px the content's
+           max-height subtracts. */
+        padding: 52px var(--space-2xl) var(--space-2xl);
       }
       #settings-modal.visible {
         display: flex;
@@ -4057,7 +4110,14 @@
         position: relative;
         width: 100%;
         max-width: 360px;
-        max-height: 90vh;
+        /* #3625: border-box, so the 18px padding is inside the cap (it used to
+           be added on top of 90vh, pushing the panel's top under the mode
+           switch), and the cap is the visible height (dvh: a phone with its
+           browser bars showing is shorter than vh) minus the room above and
+           below; what does not fit scrolls inside the panel. */
+        box-sizing: border-box;
+        max-height: calc(100vh - 68px);
+        max-height: calc(100dvh - 68px);
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: var(--radius-2xl);

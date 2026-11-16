@@ -270,6 +270,9 @@ async function callersCurrentLandletId(db, userId) {
   return ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
 }
 
+// #3597 piece 3 (AGENTS.md, "The fleet has a lándlet of its own in the live world and may use it
+// freely; it is never used to steer people"): "Go to Last Location" is the caller's own last position only; nothing here suggests anyone else's lándlet. Never add a branch that favours the
+// fleet's lot here; scripts/fleet-lot-never-steers.test.mjs pins it.
 export async function handlePresence(request, db, route, url) {
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
   // the caller's own last-reported row, unfiltered by staleness or

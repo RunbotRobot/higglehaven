@@ -606,6 +606,9 @@ function isShopLocationOnWater(worldX, worldY) {
 // #1816: the radius draw itself must be sqrt-corrected (sampleUniformDiskRadiusM),
 // not sampled directly from Math.random() -- see that function's own header
 // for why a direct draw statistically biases spawns toward the center.
+// #3597 piece 3 (AGENTS.md, "The fleet has a lándlet of its own in the live world and may use it
+// freely; it is never used to steer people"): A new Shop spawn is a uniform draw over the whole world disk (no landlet is chosen or weighted). Never add a branch that favours the
+// fleet's lot here; scripts/fleet-lot-never-steers.test.mjs pins it.
 export function pickShopSpawnLocation() {
   let radiusM = 0;
   let yaw = 0;
