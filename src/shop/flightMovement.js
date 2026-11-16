@@ -954,6 +954,12 @@ export function setShopFlyBtnFlying(flying) {
   // state — a standing bird (press to take off) while grounded, a flying
   // bird (press to land) while flying, i.e. the inverse of `flying`.
   shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
+  // #3530: Settings > Shop > Controls draws this same picture in its
+  // instruction text (src/shop/mode.js); keep every copy on the button's
+  // current one so the words never name a different bird than the screen shows.
+  for (const el of document.querySelectorAll('.settings-fly-icon')) {
+    el.setAttribute('src', shopFlyBtnIcon.getAttribute('src'));
+  }
 }
 
 // Toggling mid-takeoff is ignored — let it finish, then the next press
