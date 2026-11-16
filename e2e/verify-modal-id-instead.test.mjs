@@ -51,6 +51,17 @@ await page.waitForSelector('#verify-id-instead-btn:visible', { timeout: 10000 })
 const idBtnVisibleDuringCardStep = await page.locator('#verify-id-instead-btn').isVisible();
 console.log('ID-instead button visible once in the card step (should be true):', idBtnVisibleDuringCardStep);
 
+// #3565: the modal gives the reason for the card rule and offers the ID route
+// as a plain, equal alternative.
+const reasonCopy = await page.evaluate(() => ({
+  intro: document.getElementById('verify-modal-intro').textContent,
+  cardLine: document.getElementById('verify-card-intro').textContent,
+  idLabel: document.getElementById('verify-id-instead-btn').textContent,
+}));
+const reasonGiven = /only issued to adults/.test(reasonCopy.cardLine) && /Apple Cash/.test(reasonCopy.cardLine)
+  && /never charged/.test(reasonCopy.intro) && /government ID/.test(reasonCopy.idLabel);
+console.log('the modal says why debit, prepaid and gift cards are refused, and offers the ID route (should be true):', reasonGiven);
+
 await page.click('#verify-id-instead-btn');
 const statusAfterClick = await page.waitForFunction(
   () => document.getElementById('verify-status').textContent.includes('available right now'),
@@ -76,7 +87,7 @@ const clearedViaCardPathAfterward = (await page.locator('#shop-status.visible').
 console.log('Gate still clearable via the normal card path after trying ID-instead (should be true):', clearedViaCardPathAfterward);
 
 const pass = idBtnHiddenDuringAgeStep &&
-  idBtnVisibleDuringCardStep &&
+  idBtnVisibleDuringCardStep && reasonGiven &&
   statusAfterClick.includes('available right now') && !statusAfterClick.includes('not configured') &&
   stillGatedAfterFailedIdAttempt &&
   clearedViaCardPathAfterward &&

@@ -83,7 +83,13 @@ put both numbers in the PR.
 Rules of conduct on the live site:
 
 - Look at anything. Change only your own fleet account's data and the
-  landlets set aside for the fleet.
+  fleet's own landlet: `central-mosaic-012`, owned by the shared fleet
+  account `higglehaven0` (sign in as that account to build or sell there;
+  your own account is for looking around). See "The fleet has a lándlet of
+  its own in the live world" under "Standing owner decisions" for what it
+  is for and what it must never become. (Claimed 2026-11-16 on the
+  owner's typed instruction, #3431. It starts empty. Until #3597's guards
+  are in, place nothing there that a shopper could buy.)
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.
@@ -92,7 +98,7 @@ Rules of conduct on the live site:
   that talk to shoppers, and only through
   the assistant inbox (`/api/assistant-inbox`, docs/API.md "Assistant chat").
 - No load testing on the live site; stay inside the normal rate limits.
-- Clean up what you place outside your sandbox landlet.
+- Clean up what you place anywhere other than the fleet's own landlet.
 - After a change of yours deploys, look at it on the live site at phone size
   before calling it done, and say what you saw.
 
@@ -925,6 +931,44 @@ most likely to come up again.
   only what moving through and acting on the world needs" from the HUD
   to every surface. The owner said they do not know how to get there:
   bring options that can be looked at, not descriptions.
+
+- **The fleet has a lándlet of its own in the live world and may use it
+  freely; it is never used to steer people.** (2026-11-16, #3431.)
+  Asked for one empty, out-of-the-way test lot, the owner gave more: "I'd
+  actually like to give them more freedom to use it however they want.
+  Build with real products from the database that people in the world can
+  see. When people purchase, it goes through the same normal buying
+  avenues. higgles are paid to the higglehaven0 builder account, but we
+  just won't spend them." They named the tension with the earlier
+  decision against a central higglehaven-owned lándlet and drew the line
+  themselves: "we aren't controlling users via our lándlet, like
+  showcasing featured products, staging it as the hub for the world,
+  making it the initial spawn point for either new or returning users, or
+  using it to show new users a tutorial. Instead, it's just a space where
+  the higglehaven agents play around for their own testing and playing
+  around. It would read as kind of a look behind the curtain, embracing
+  the AI-coded nature of the app. I like the idea that higglehaven works
+  to bridge the seeming gap between 'warm, cozy, and playful higglehaven'
+  and 'evil AI is going to destroy humanity'." So: the lot is
+  `central-mosaic-012`, owned by the shared fleet account `higglehaven0`.
+  Any session may build on it with real catalog products, leave things
+  standing, and try Build and Sell changes there. Shoppers see it and buy
+  from it like any other lándlet; the seller is paid as usual; the
+  builder's share accrues to `higglehaven0` and is never redeemed, spent
+  or transferred (a guard in code, not a habit). What it must never
+  become: featured, promoted, a hub, a spawn point, a tutorial, or
+  anything the product routes people to. It gets no treatment another
+  builder's lándlet could not get. The principle: the platform having a
+  place is not the problem; the platform using a place to direct people
+  is. Something that exists on the same terms as everyone else's and says
+  honestly what it is fits the brand; something that uses the platform's
+  position to pull attention does not. (higglehaven1's working rules,
+  open to correction: it is on public view, so keep it on-brand and
+  something a visitor would enjoy finding; a sign-post may say plainly
+  that the AI sessions who build higglehaven made it; nothing there
+  imitates a real seller or person; do not design it to earn higgles; the
+  conduct rules in "Looking at the live site as a person" still hold, and
+  a session never touches anyone else's content.)
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 

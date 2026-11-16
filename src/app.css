@@ -678,6 +678,11 @@
         --shop-fly-bottom: 78px;
         --shop-fly-size: 56px;
         --shop-fly-stack-gap: 12px;
+        /* #3553: the up/down arrows and the gap between them; the assistant
+           panel lifts above the stack while it is showing. */
+        --shop-vertical-button-height: 40px;
+        --shop-vertical-gap: 8px;
+        --shop-vertical-stack-height: calc(2 * var(--shop-vertical-button-height) + var(--shop-vertical-gap));
       }
       #shop-fly-btn {
         bottom: var(--shop-fly-bottom);
@@ -722,14 +727,14 @@
         left: 50%;
         transform: translateX(-50%);
         flex-direction: column;
-        gap: var(--space-sm);
+        gap: var(--shop-vertical-gap);
       }
       body.shop-flying #shop-vertical-controls.visible {
         display: flex;
       }
       #shop-vertical-controls button {
         width: 52px;
-        height: 40px;
+        height: var(--shop-vertical-button-height);
         border-radius: var(--radius-xl);
         border: none;
         background: rgb(var(--spring-green-rgb) / 0.85);
@@ -1010,8 +1015,9 @@
       .shop-nearby-chat-message {
         word-break: break-word;
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: var(--space-xs);
+        gap: var(--space-3xs) var(--space-xs);
       }
       /* #3445: "Juniper · assistant" ahead of an assistant's line. */
       .shop-nearby-chat-message-speaker {
@@ -1020,6 +1026,10 @@
       }
       .shop-nearby-chat-message-text {
         flex: 1 1 auto;
+      }
+      /* #3551: a line with actions is tappable; the text keeps the full width. */
+      .shop-nearby-chat-message-text[role="button"] {
+        cursor: pointer;
       }
       /* Right-aligned/dimmed for the sender's own sent messages -- same
          "which side is mine" convention a chat UI almost always uses,
@@ -1035,7 +1045,10 @@
       .shop-nearby-chat-message-actions {
         display: flex;
         gap: 3px;
-        flex: 0 0 auto;
+        flex: 1 0 100%;
+      }
+      .shop-nearby-chat-message-actions[hidden] {
+        display: none;
       }
       .shop-nearby-chat-message-actions button {
         padding: 1px 5px;
@@ -1128,6 +1141,18 @@
       #assistant-chat-panel[hidden],
       #assistant-chat-panel.minimized {
         display: none;
+      }
+      /* #3553: in Shop the panel never sits over the movement controls. The
+         joysticks (top at 132px) and the fly button (top at 134px) fill the
+         bottom 134px, so the panel starts above them; while flying, the
+         up/down arrows stack above the fly button and the panel starts above
+         those too. Build and Sell have none of these controls (no visible fly
+         button), so the panel keeps its place at the bottom there. */
+      body:has(#shop-fly-btn.visible) #assistant-chat-panel {
+        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + 8px);
+      }
+      body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
+        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
       }
       /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
          clear of the joysticks (bottom corners), the fly button (bottom centre)
@@ -1753,9 +1778,11 @@
         gap: var(--space-xs);
         position: absolute;
         bottom: calc(100% + 6px);
-        left: 50%;
-        transform: translateX(-50%);
-        min-width: 220px;
+        /* #3572: anchored at the pill's left edge, not centred on it. Centred, a
+           220 px panel on a phone reached back over the bottom-left stack
+           (Paste, Measure, Multi-Select) and printed its labels over theirs. */
+        left: 0;
+        min-width: min(220px, calc(100vw - 140px));
       }
       #level-menu-panel.expanded {
         display: flex;
@@ -3310,6 +3337,11 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-lg);
+        /* #3565: the copy is longer now (the reason, and a refusal that says
+           what happened), so on a short phone the modal scrolls rather than
+           push Continue off screen. */
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
       }
       #verify-modal-content h2 {
         margin: 0;
