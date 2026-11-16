@@ -160,10 +160,58 @@ describe('what the connection test learns about whitelisting (#3607)', () => {
     expect(body.refusal).toEqual({ status: 403, message: 'Domain [id] is not allowed' });
   });
 
-  it('does not call a vendor outage a refusal', async () => {
+  // #3643: the real handshake is the connection. A probe the vendor answers with a
+  // 5xx or a 429, or not at all, is "could not tell", never a failed test.
+  it('still says connected when the wrong-id probe gets a 5xx, and says what the vendor answered', async () => {
     tokenBehaviour = (referer) => (referer === REFERENCE_ID ? accept() : new Response('bad gateway', { status: 502 }));
-    const { response } = await test();
+    const { response, body } = await test();
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ connected: true, whitelisting: 'unknown', answer: { status: 502, message: '1099 e-filing authentication failed' } });
+    expect(vendorCalls).toHaveLength(2);
+  });
+
+  it('still says connected when the wrong-id probe is rate-limited (429), with the vendor\'s own message', async () => {
+    tokenBehaviour = (referer) => (referer === REFERENCE_ID ? accept()
+      : new Response(JSON.stringify({ StatusMessage: `Too many requests from ${referer}` }), { status: 429 }));
+    const { response, body } = await test();
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ connected: true, whitelisting: 'unknown', answer: { status: 429, message: 'Too many requests from [id]' } });
+    expect(JSON.stringify(body)).not.toContain(REFERENCE_ID);
+  });
+
+  it('still says connected when the wrong-id probe gets no answer at all', async () => {
+    tokenBehaviour = (referer) => { if (referer === REFERENCE_ID) return accept(); throw new TypeError('network connection lost'); };
+    const { response, body } = await test();
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ connected: true, whitelisting: 'unknown', answer: { status: null, message: 'No answer from the vendor.' } });
+  });
+
+  it('keeps what it learned when only the letter-case probe cannot be read', async () => {
+    tokenBehaviour = (referer) => {
+      if (referer === REFERENCE_ID) return accept();
+      if (referer === REFERENCE_ID.toUpperCase()) return new Response(JSON.stringify({ StatusMessage: 'Slow down' }), { status: 429 });
+      return refuse();
+    };
+    const { response, body } = await test();
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ connected: true, whitelisting: 'enforced', referenceIdCase: 'unknown', caseAnswer: { status: 429, message: 'Slow down' } });
+    expect(body.refusal).toEqual({ status: 401, message: 'Unauthorized domain reference' });
+  });
+
+  it('fails the test, and makes no probe, when the real handshake itself fails', async () => {
+    tokenBehaviour = () => new Response(JSON.stringify({ StatusMessage: 'Invalid credentials' }), { status: 401 });
+    const { response, body } = await test();
     expect(response.status).toBe(502);
+    expect(body.error).toBe('Invalid credentials');
+    expect(vendorCalls).toHaveLength(1);
+  });
+
+  it('does not change a real call: it carries the configured id, not an override', async () => {
+    tokenBehaviour = accept;
+    env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID = REFERENCE_ID;
+    vendorCalls = [];
+    await api('/tax/efiling-connection-test', adminSession());
+    expect(vendorCalls[0].referer).toBe(REFERENCE_ID);
   });
 
   it('skips the probes when no id is configured', async () => {

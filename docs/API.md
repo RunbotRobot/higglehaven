@@ -10103,13 +10103,18 @@ shape problem, not a local validation gap). Side-effect-free and safe to
 call repeatedly — no filing, no form, no user data touched, just the
 stateless token exchange every real filing call would also need to make
 first. When `TAX_1099_EFILING_DOMAIN_REFERENCE_ID` is set it also makes up to
-two more handshakes (#3607): one with the id's last character changed, which
-sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal` is
-`{ status, message }`, the vendor's own, with any echo of an id replaced by
+two more handshakes (#3607), a second apart: one with the id's last character
+changed, which sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal`
+is `{ status, message }`, the vendor's own, with any echo of an id replaced by
 `[id]`) or `"not_enforced"` (accepted); and, when enforced and the id has letters,
 one with every letter's case flipped, which sets `referenceIdCase` to
-`"insensitive"` or `"sensitive"`. A vendor 5xx, a 429 or no answer on a probe is
-not read as a refusal: the route answers 502 instead. The ids themselves are never
+`"insensitive"` or `"sensitive"`. The first, real handshake is the connection (#3643):
+once it succeeds the route always answers `200` with `connected: true`. A probe the
+vendor answers with a 5xx or a 429, or not at all, is "could not tell", never a
+refusal and never a failure: `whitelisting` (or `referenceIdCase`) is `"unknown"`, and
+`answer` (or `caseAnswer`) is `{ status, message }` for what the vendor said (`status`
+is `null` when it said nothing). If the real handshake itself fails the route is still
+`502` with the vendor's message and no probe is made. The ids themselves are never
 returned. The admin page turns this into one plain sentence under the button.
 Without an id configured the answer is still just `{ "connected": true }`. This is the "confirm the first real Sandbox call" step
 `fetchTax1099EfilingToken`'s own comment and the "Unverified against a live
