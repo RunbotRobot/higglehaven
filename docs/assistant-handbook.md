@@ -32,7 +32,9 @@ from this one and a test can check them:
   checks that the entry's text names each one, and
   `e2e/assistant-handbook-controls.test.mjs` opens the real app at 390x844 and
   fails when a listed control is gone or no longer carries those words. The mode
-  is where the control lives: `any`, `shop`, `build` or `sell`.
+  is where the control lives: `any`, `shop`, `build` or `sell`, or `sell-row` for a
+  button that only exists once one of the seller's own products is opened in "My
+  products" (the test uploads one and opens it).
 
 - **Screens built while the app runs** (a button that appears next to each friend,
   say) cannot be listed, because they are not on the page until someone opens them.
@@ -744,6 +746,12 @@ price and stock. The original maker's listing is not changed.
 #seller-search-input | Search products
 ```
 
+```controls sell-row
+.seller-rename-btn | Rename
+.seller-price-toggle | Edit Price
+.seller-price-save-btn | Save Price
+```
+
 ### How do I take a product off sale, and what do buyers keep?
 
 1. In "My products", in the "Manage" view, tap the product to open it, then tap
@@ -770,6 +778,10 @@ nobody owns and nothing uses is removed completely.
 
 ```controls sell
 .seller-view-btn[data-view="manage"] | Manage
+```
+
+```controls sell-row
+.seller-row-action-btn.danger | Delete
 ```
 
 ### Where do I set up payouts and tax forms?
