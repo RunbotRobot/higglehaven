@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { hideLoadingScreen } from '../ui/loadingScreen.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fetchWorld, fetchAllLandlets, claimLandlet } from '../api.js';
 import { formatArea } from '../settings.js';
@@ -33,6 +34,10 @@ const claimConfirmBtn = document.getElementById('claim-confirm-btn');
 export function runClaimFlow() {
   return new Promise((resolve) => {
     claimModalEl.classList.add('visible');
+    // #3562: bootstrap() is waiting on this very promise, so its own
+    // hideLoadingScreen would only run after a claim; lift the splash now so
+    // the sheet sits over the world it tells the person to fly around.
+    hideLoadingScreen();
     // No closeFn: this flow has no cancel action (claimBackBtn reloads the
     // page rather than dismissing the modal in place — see its own comment
     // below), so Escape intentionally does nothing here rather than

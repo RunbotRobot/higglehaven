@@ -27,6 +27,21 @@ const iconLoaded = await page.evaluate(() => {
   return img.complete && img.naturalWidth > 0;
 });
 const box = await page.locator('.settings-fly-icon').boundingBox();
+// The button's picture changes with the flight state (the avatar spawns
+// airborne, so a tap lands it): the text's picture must follow the button
+// while Settings stays open, not just match at the moment it was built.
+const beforeTap = await page.getAttribute('#shop-fly-btn-icon', 'src');
+await page.evaluate(() => {
+  document.getElementById('shop-fly-btn').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+});
+await page.waitForFunction(
+  (was) => document.getElementById('shop-fly-btn-icon').getAttribute('src') !== was,
+  beforeTap,
+  { timeout: 5000 },
+);
+const hudSrcAfterTap = await page.getAttribute('#shop-fly-btn-icon', 'src');
+const iconSrcAfterTap = await page.getAttribute('.settings-fly-icon', 'src');
+console.log('after a fly-button tap, HUD icon / Controls picture (should be the same new file):', hudSrcAfterTap, iconSrcAfterTap);
 console.log('fly button icon on the HUD:', hudSrc);
 console.log('picture in the Controls line (should be the same file):', iconSrc);
 console.log('Controls text (should have no emoji dove):', noteText);
@@ -34,6 +49,6 @@ console.log('picture loaded (should be true):', iconLoaded, 'size', box && Math.
 
 await finish(browser, {
   label: '#3530: Settings Controls shows the fly button\'s own bird',
-  pass: hudSrc === iconSrc && !noteText.includes('🕊') && iconLoaded && !!box && box.width > 12 && box.width < 40,
+  pass: hudSrc === iconSrc && hudSrcAfterTap !== hudSrc && hudSrcAfterTap === iconSrcAfterTap && !noteText.includes('🕊') && iconLoaded && !!box && box.width > 12 && box.width < 40,
   errors,
 });

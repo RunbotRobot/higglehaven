@@ -40,17 +40,12 @@ const rowCount = () => bobPage.locator('#notifications-list .notification-row').
 const serverCount = () => bobPage.evaluate(async () => (await (await fetch('/api/notifications')).json()).notifications.length);
 const confirmVisible = () => bobPage.locator('#confirm-modal.visible').count();
 
-// 1. Unread notice: Clear read confirms, then removes nothing.
+// 1. Unread notice: Clear read has nothing to act on, so it is not shown (#3554),
+// while Mark all read is.
 const initial = await rowCount();
-await bobPage.click('#notifications-clear-read-btn');
-await bobPage.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
-const titleText = await bobPage.textContent('#confirm-modal-title');
-const messageText = await bobPage.textContent('#confirm-modal-message');
-console.log('confirm modal title/message:', titleText, '|', messageText);
-await bobPage.click('#confirm-modal-confirm-btn');
-await bobPage.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
-const afterUnreadClear = await rowCount();
-console.log('rows before/after clearing while all unread (should match):', initial, afterUnreadClear);
+const clearHiddenWhileUnread = await bobPage.locator('#notifications-clear-read-btn').isHidden();
+const markAllShownWhileUnread = await bobPage.locator('#notifications-mark-all-btn').isVisible();
+console.log('Clear read hidden / Mark all read shown while all unread (should both be true):', clearHiddenWhileUnread, markAllShownWhileUnread);
 
 // 2. Mark it read (click the row), then Never mind keeps it.
 await bobPage.locator('#notifications-list .notification-row.unread').first().click();
@@ -59,8 +54,13 @@ await bobPage.waitForFunction(
   null,
   { timeout: 10000 },
 );
+await bobPage.waitForSelector('#notifications-clear-read-btn:not([hidden])', { timeout: 5000 });
+const markAllHiddenWhenAllRead = await bobPage.locator('#notifications-mark-all-btn').isHidden();
 await bobPage.click('#notifications-clear-read-btn');
 await bobPage.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+const titleText = await bobPage.textContent('#confirm-modal-title');
+const messageText = await bobPage.textContent('#confirm-modal-message');
+console.log('confirm modal title/message:', titleText, '|', messageText);
 await bobPage.click('#confirm-modal-cancel-btn');
 await bobPage.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
 const afterCancel = await rowCount();
@@ -87,13 +87,17 @@ await bobPage.waitForFunction(
 const emptyShown = await bobPage.locator('#notifications-empty').isVisible();
 const serverAfterClear = await serverCount();
 const modalGone = (await confirmVisible()) === 0;
+const actionsGoneWhenEmpty = await bobPage.locator('#notifications-actions').isHidden();
 console.log('clear-read status / empty message / server rows / modal closed:', clearStatus, emptyShown, serverAfterClear, modalGone);
 
 const errors = [...aliceSession.errors, ...bobSession.errors];
 const pass = initial >= 1
   && /clear/i.test(titleText)
   && /unread/i.test(messageText)
-  && afterUnreadClear === initial
+  && clearHiddenWhileUnread
+  && markAllShownWhileUnread
+  && markAllHiddenWhenAllRead
+  && actionsGoneWhenEmpty
   && afterCancel === initial
   && serverAfterCancel === initial
   && clearStatus === 200

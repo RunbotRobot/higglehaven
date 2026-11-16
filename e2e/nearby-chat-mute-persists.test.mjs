@@ -49,6 +49,7 @@ const mutedVisibleBefore = (await page.locator(msg(MUTED_BUILDER_ID)).count()) =
 const controlHiddenBefore = await page.locator('#shop-nearby-chat-muted').isHidden();
 console.log('muted-to-be sender visible and the Muted control hidden before muting (should be true):', mutedVisibleBefore, controlHiddenBefore);
 
+await page.click(`${msg(MUTED_BUILDER_ID)} .shop-nearby-chat-message-text`); // #3551: tap the line to show its actions
 await page.click(`${msg(MUTED_BUILDER_ID)} button[data-action="mute"]`);
 await page.waitForFunction((sel) => !document.querySelector(sel), msg(MUTED_BUILDER_ID), { timeout: 5000 });
 await page.waitForSelector('#shop-nearby-chat-muted:not([hidden])', { timeout: 5000 });

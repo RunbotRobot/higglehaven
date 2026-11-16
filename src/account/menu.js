@@ -71,6 +71,7 @@ const notificationsModalEl = document.getElementById('notifications-modal');
 const notificationsCloseBtn = document.getElementById('notifications-close-btn');
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
+const notificationsActionsEl = document.getElementById('notifications-actions');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
 const notificationsClearReadBtn = document.getElementById('notifications-clear-read-btn');
 const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
@@ -117,6 +118,16 @@ let notificationsLoadToken = 0;
 // loadMoreNotifications as later pages come in.
 let notificationsNextCursor = null;
 
+// #3554: actions with nothing to act on are not shown -- Mark all read needs an
+// unread notice, Clear read needs a read one, and the row of both needs a row.
+function updateNotificationActions() {
+  const rows = notificationsListEl.children.length;
+  const unread = notificationsListEl.querySelectorAll('.notification-row.unread').length;
+  notificationsMarkAllBtn.hidden = unread === 0;
+  notificationsClearReadBtn.hidden = rows - unread === 0;
+  notificationsActionsEl.hidden = rows === 0 || (unread === 0 && rows - unread === 0);
+}
+
 function appendNotificationRow(notification) {
   const row = document.createElement('div');
   row.className = 'notification-row';
@@ -153,6 +164,7 @@ function appendNotificationRow(notification) {
     }
     row.remove();
     notificationsEmptyEl.hidden = notificationsListEl.children.length > 0;
+    updateNotificationActions();
     refreshNotificationsBadge();
   });
   footer.appendChild(deleteBtn);
@@ -170,6 +182,7 @@ function appendNotificationRow(notification) {
         row.removeAttribute('role');
         row.removeAttribute('tabindex');
         row.removeAttribute('aria-label');
+        updateNotificationActions();
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
@@ -190,11 +203,13 @@ function appendNotificationRow(notification) {
     row.addEventListener('keydown', markReadOnKeydown);
   }
   notificationsListEl.appendChild(row);
+  updateNotificationActions();
 }
 
 async function renderNotifications() {
   const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
+  updateNotificationActions();
   notificationsLoadMoreBtn.hidden = true;
   notificationsNextCursor = null;
   if (!builderId) return;
@@ -365,13 +380,23 @@ const friendsCloseBtn = document.getElementById('friends-close-btn');
 const friendsAddBtn = document.getElementById('friends-add-btn');
 const friendsStatusEl = document.getElementById('friends-status');
 const friendsIncomingListEl = document.getElementById('friends-incoming-list');
-const friendsIncomingEmptyEl = document.getElementById('friends-incoming-empty');
+const friendsIncomingHeadingEl = document.getElementById('friends-incoming-heading');
 const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
-const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
+const friendsOutgoingHeadingEl = document.getElementById('friends-outgoing-heading');
 const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
-const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+const friendsAcceptedHeadingEl = document.getElementById('friends-accepted-heading');
 const friendsBlockedListEl = document.getElementById('friends-blocked-list');
-const friendsBlockedEmptyEl = document.getElementById('friends-blocked-empty');
+const friendsBlockedHeadingEl = document.getElementById('friends-blocked-heading');
+const friendsPanelEmptyEl = document.getElementById('friends-panel-empty');
+// #3554: a section with nothing in it is not drawn, and one friendly line
+// stands in only when all four are empty (standing decision: "The world is
+// the product; every piece of interface has to earn the space it takes").
+const friendsSectionCounts = { incoming: 0, outgoing: 0, accepted: 0, blocked: 0 };
+function setFriendsSectionCount(key, headingEl, count) {
+  friendsSectionCounts[key] = count;
+  headingEl.hidden = count === 0;
+  friendsPanelEmptyEl.hidden = Object.values(friendsSectionCounts).some((n) => n > 0);
+}
 // #2781: the caller's own current friend-voice-channel membership status
 // line, rendered above the Requests/Friends sections -- see index.html's
 // own comment on this element.
@@ -702,7 +727,7 @@ async function renderFriends() {
   if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
   renderFriendVoiceChannelStatus(friendVoiceChannels, accepted);
 
-  friendsIncomingEmptyEl.hidden = incoming.length > 0;
+  setFriendsSectionCount('incoming', friendsIncomingHeadingEl, incoming.length);
   for (const friendship of incoming) {
     const row = document.createElement('div');
     row.className = 'friend-row';
@@ -752,7 +777,7 @@ async function renderFriends() {
     friendsIncomingListEl.appendChild(row);
   }
 
-  friendsOutgoingEmptyEl.hidden = outgoing.length > 0;
+  setFriendsSectionCount('outgoing', friendsOutgoingHeadingEl, outgoing.length);
   for (const friendship of outgoing) {
     const row = document.createElement('div');
     row.className = 'friend-row';
@@ -785,7 +810,7 @@ async function renderFriends() {
     friendsOutgoingListEl.appendChild(row);
   }
 
-  friendsAcceptedEmptyEl.hidden = accepted.length > 0;
+  setFriendsSectionCount('accepted', friendsAcceptedHeadingEl, accepted.length);
   for (const friendship of accepted) {
     const row = document.createElement('div');
     row.className = 'friend-row';
@@ -916,7 +941,7 @@ async function renderBlockedPeople(myLoadToken) {
   }
   if (myLoadToken !== friendsLoadToken) return;
   friendsBlockedListEl.innerHTML = '';
-  friendsBlockedEmptyEl.hidden = blocks.length > 0;
+  setFriendsSectionCount('blocked', friendsBlockedHeadingEl, blocks.length);
   for (const block of blocks) {
     const row = document.createElement('div');
     row.className = 'friend-row';
