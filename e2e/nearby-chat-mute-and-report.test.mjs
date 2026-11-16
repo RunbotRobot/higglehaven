@@ -76,6 +76,14 @@ await page.waitForSelector(`.shop-nearby-chat-message[data-builder-id="${REPORTE
 const bothMessagesVisibleBeforeMute = (await page.locator('.shop-nearby-chat-message').count()) === 2;
 console.log('both messages visible before muting (should be true):', bothMessagesVisibleBeforeMute);
 
+// #3551: the actions are hidden until a line is tapped, one line at a time.
+const actionsHiddenAtFirst = (await page.locator('.shop-nearby-chat-message-actions:visible').count()) === 0;
+console.log('no line shows its actions until tapped (should be true):', actionsHiddenAtFirst);
+await page.click(`.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_ID}"] .shop-nearby-chat-message-text`);
+await page.click(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"] .shop-nearby-chat-message-text`);
+const onlyOneLineOpen = (await page.locator('.shop-nearby-chat-message-actions:visible').count()) === 1
+  && (await page.locator(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"] .shop-nearby-chat-message-actions:visible`).count()) === 1;
+console.log('tapping a second line hides the first line\'s actions (should be true):', onlyOneLineOpen);
 await page.click(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"] button[data-action="mute"]`);
 
 const mutedMessageRemoved = await page.waitForFunction(
@@ -94,6 +102,7 @@ await page.waitForTimeout(2200); // > NEARBY_CHAT_POLL_INTERVAL_MS, so the next 
 const laterMessageFromMutedSuppressed = (await page.locator(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"]`).count()) === 0;
 console.log('a later message from the muted sender is never rendered (should be true):', laterMessageFromMutedSuppressed);
 
+await page.click(`.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_ID}"] .shop-nearby-chat-message-text`);
 await page.click(`.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_ID}"] button[data-action="report"]`);
 await page.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
 await page.fill('#report-reason-input', REPORT_REASON);
@@ -112,6 +121,8 @@ const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resour
 
 const pass =
   bothMessagesVisibleBeforeMute &&
+  actionsHiddenAtFirst &&
+  onlyOneLineOpen &&
   mutedMessageRemoved &&
   reportedMessageStillVisible &&
   laterMessageFromMutedSuppressed &&
