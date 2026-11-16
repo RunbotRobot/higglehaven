@@ -627,3 +627,168 @@ top of the screen.
 ```controls build
 #toggle-measure | Measure
 ```
+
+## Sell
+
+### What does Sell mode show, and where is my showroom?
+
+1. Tap "Sell" at the top right.
+2. Your showroom opens: a small, empty piece of the world with your products
+   standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
+   and "Next page" (the two small arrows) when you have more than one page.
+3. The "My products" window opens by itself. Tap "Close" (the × at its top right)
+   to put it away and look at the showroom. Tap "Products" at the bottom right to bring it back.
+
+**You will see:** your own products only. Nobody else's products and no real
+lándlets are shown here.
+
+**If something goes wrong:**
+- "My products" says "No custom products yet — use "+ Upload Model" to add one."
+  You have not uploaded anything yet. The next entry shows how.
+- The window seems to be missing: tap "Products" at the bottom right.
+
+```controls sell
+.mode-nav-btn[data-mode="sell"] | Sell
+#seller-showcase-manage-btn | Products
+#seller-showcase-prev-btn | Previous page
+#seller-showcase-next-btn | Next page
+#seller-close-btn | Close
+```
+
+### How do I put my own product up for sale?
+
+1. In Sell, in the "My products" window, tap "+ Upload Model". A window opens
+   called "Upload Model".
+2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
+   in dollars, or 0 for a free product.
+3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
+   20MB. Tick "This is a digital good" only for things like an avatar or an art
+   file that is delivered, not placed.
+4. Tap "Add Product". The app shrinks the model and shows a preview; this can take
+   a moment.
+5. The window is now called "Confirm Dimensions". Set the product's real size with
+   "Width (X)", "Depth (Y)" and "Height (Z)" in metres; changing one changes the
+   other two so the proportions stay the same.
+6. Tap "Create Product".
+
+**You will see:** the window closes and the product is in your "My products" list
+and on your showroom shelf.
+
+**If something goes wrong:**
+- The window says "Name is required.", "Enter a price — use 0 for a free product."
+  or "Choose a .glb or .fbx file first." Fill in the one it names and tap "Add
+  Product" again. The app checks the price on this first step, not later.
+- You have no model file: tap "Or generate a model from a video instead" at the
+  bottom of the first step. It takes a short video of one object and uses one of
+  your video credits, which that part of the window shows. "Back to manual file upload" returns.
+- The window shows an error after "Add Product" that is not one of those: ask the
+  person to read it out, and offer to pass it to the team.
+- You already have a product with that name: the app asks you to confirm before it
+  makes a second one.
+
+```controls sell
+#upload-model-btn | Upload Model
+#upload-submit-btn | Add Product
+#upload-mode-video-btn | generate a model from a video
+```
+
+### How do I sell a product someone else already made?
+
+1. In "My products", tap "Sell This Too".
+2. Look through the products, or type in "Search products". Tap the one you want to
+   sell.
+3. Fill in "Your price" (0 for free). "Stock quantity (optional)" is how many you
+   have; leave it blank for unlimited.
+4. Tap "Add listing". Tap "Back" instead to choose a different product.
+
+**You will see:** the product appears in your "My products" list with your own
+price and stock. The original maker's listing is not changed.
+
+**If something goes wrong:**
+- "Stock must be a whole number of 0 or more, or left blank." Type digits only, or
+  clear the box.
+- The price is refused: it must be a number, 0 or more.
+
+```controls sell
+#sell-this-too-btn | Sell This Too
+#sell-this-too-search-input | Search products
+#sell-this-too-add-btn | Add listing
+#sell-this-too-back-btn | Back
+```
+
+### How do I find, change the price of, or rename one of my products?
+
+1. In "My products", tap the product's name to open it. "Manage" is the view that
+   shows each product with its buttons; "List view" is a plainer list.
+2. To find one quickly, type in "Search products" above the list, or use the
+   category and sort boxes beside it.
+3. To rename it, tap "Rename", type the new name in the window that opens and
+   confirm.
+4. To change its price, tap "Edit Price", type the new price and tap "Save Price".
+   The other "Edit" lines (size, shipping, returns) work the same way: open it,
+   change it, tap its own Save button.
+
+**You will see:** the new name or price on the product straight away, and the word
+"Saved." beside the button.
+
+**If something goes wrong:**
+- "You already have another product named ... Rename anyway?" You can keep the
+  name or choose another.
+- A price above the limit is refused with a message naming the limit.
+- Something changed does not show up: close "My products" and open it again with
+  "Products"; if it is still wrong, ask what they see and offer to pass it on.
+
+```controls sell
+.seller-view-btn[data-view="manage"] | Manage
+.seller-view-btn[data-view="list"] | List view
+#seller-search-input | Search products
+```
+
+### How do I take a product off sale, and what do buyers keep?
+
+1. In "My products", in the "Manage" view, tap the product to open it, then tap
+   "Delete".
+2. A window called "Delete this product?" names it and says it cannot be undone.
+   Tap "Delete" in that window to go ahead, or the cancel button to keep it.
+
+**You will see:** the product leaves your list and the showroom.
+
+**What buyers keep:** a digital good such as an avatar or an animation that
+someone has already bought is taken off sale but stays with the people who own it,
+exactly as it was; it keeps working for them and they are not told. A product that
+nobody owns and nothing uses is removed completely.
+
+**If something goes wrong:**
+- The window says "Still placed somewhere — remove those instances first, or
+  Duplicate to edit a copy instead." Someone has it placed on a lándlet. It cannot
+  be deleted while that is so.
+- It says the product is still saved in someone's layout library, or was used in a
+  lándlet's past published version. It cannot be deleted while that is so; do not
+  promise when it will be possible, and offer to pass it to the team.
+- They only want a quiet copy to change: "Duplicate" makes a copy to edit without
+  touching the original.
+
+```controls sell
+.seller-view-btn[data-view="manage"] | Manage
+```
+
+### Where do I set up payouts and tax forms?
+
+1. Tap the gear at the top left, then "Settings", then the "Sell" tab.
+2. "Payout Account" says whether one is set up. "Set up payout account" (or "Update
+   payout account" if there already is one) opens the steps for it.
+3. Tax forms and identity checks, where they are asked for, are filled in by the
+   person themselves on those screens.
+
+**You will see:** the payout account's status at the top of the "Sell" tab.
+
+**If something goes wrong:**
+- Anything about an amount, whether they are eligible, a payout that is late or
+  wrong, a tax figure or a refund is not for the assistant to answer: say so
+  plainly and use the runbook's hand-off.
+- The fields look different from what is described here: ask what they see, and
+  offer to pass it to the team.
+
+```controls any
+#settings-btn | Settings
+```
