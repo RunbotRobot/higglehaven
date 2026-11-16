@@ -3483,6 +3483,17 @@
       #seller-modal.visible {
         display: flex;
       }
+      /* #3586 (interface week): one sheet at a time. Upload Model, Sell This
+         Too, the delete confirmation and Settings all open from My products,
+         and each used to leave it drawn underneath a translucent sheet, so
+         its heading, rows and buttons read through the new one. While any of
+         them is open My products is hidden (visibility, not display, so its
+         scroll position and any open product block are still there when the
+         upper sheet closes). A browser without :has() keeps the old stacking
+         and loses nothing else. */
+      body:has(#upload-modal.visible, #sell-this-too-modal.visible, #confirm-modal.visible, #settings-modal.visible) #seller-modal.visible {
+        visibility: hidden;
+      }
       #seller-modal-content {
         position: relative;
         width: 100%;
