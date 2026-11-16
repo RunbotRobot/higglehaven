@@ -11,6 +11,20 @@ export function mergeMessages(existing, incoming) {
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
+// #3624: the rows of the thread above the live conversation, in order: the
+// server's earlier history, without the left question being shown separately
+// (its own rows carry its status and the line under it). Each row is
+// { sender, name, text }; `name` is the assistant who wrote it, if known.
+export function threadRows(history, question, fallbackName) {
+  return (history || [])
+    .filter((item) => !(question && item.questionId && item.questionId === question.questionId))
+    .map((item) => ({
+      sender: item.sender,
+      name: item.sender === 'shopper' ? 'You' : (item.authorName || fallbackName || 'An assistant'),
+      text: item.text,
+    }));
+}
+
 // Where the latest question stands: 'none' when the assistant has answered it
 // (or nothing was asked), 'reading' while the assistant has it, 'slow' once it
 // has waited `replyWaitSeconds` with no reply.
@@ -93,7 +107,6 @@ export function canLeaveQuestion(body) {
 
 export const leaveLabel = 'Leave my question for the assistants';
 export const withdrawLabel = 'Take my question back';
-export const doneLabel = 'Done';
 
 const isInLine = (question) => question.status === 'waiting' || question.status === 'claimed';
 export const questionInLine = isInLine;
