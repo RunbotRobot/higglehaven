@@ -2288,6 +2288,13 @@
       #paste-btn:disabled {
         opacity: 0.4;
       }
+      /* #3574: controls that cannot be used yet are left out, not greyed. */
+      #paste-btn[hidden],
+      #redo-btn[hidden],
+      #ungroup-item[hidden],
+      #edit-bundle-item[hidden] {
+        display: none !important;
+      }
       #upload-modal {
         position: fixed;
         inset: 0;
