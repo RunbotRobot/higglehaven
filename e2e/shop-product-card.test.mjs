@@ -179,6 +179,7 @@ const rect1 = await cardRect();
 const anchor1 = await page.evaluate(() => window.__testProductCardAnchor());
 console.log('card:', JSON.stringify(rect1), 'anchor:', JSON.stringify(anchor1), 'product point:', JSON.stringify(aPoint));
 await shot('middle-of-screen');
+console.log(`card covers ${(100 * (rect1.width * rect1.height) / (VIEWPORT.width * VIEWPORT.height)).toFixed(1)}% of the 390x844 screen`);
 check(!inside(rect1, aPoint), 'the card does not cover the product it describes');
 check(rect1.left >= 0 && rect1.top >= 0 && rect1.right <= VIEWPORT.width && rect1.bottom <= VIEWPORT.height, 'the card is fully on screen');
 check(rect1.edge === 'false', 'a product in the middle of the screen gets a card with a pointer to it');
@@ -193,8 +194,11 @@ const selectable = await page.evaluate(() => {
 });
 check(selectable.cardSelect === 'text' && selectable.nameSelect === 'text' && selectable.namePointer !== 'none', `the card's text can be selected (${JSON.stringify(selectable)})`);
 
-// The card follows the product when the view moves.
+// The card follows the product when the view moves. It is per-frame work, so the
+// longest frame while it follows is measured ("Moving, looking and drawing never
+// wait on loading": the same ceiling the other Shop e2es use).
 const before = await cardRect();
+await page.evaluate(() => window.__frameMonitor.reset());
 await moveTo([cx - (view.dx / heading) * 3.6 + (-view.dy / heading) * 0.9, cy - (view.dy / heading) * 3.6 + (view.dx / heading) * 0.9]);
 await page.waitForTimeout(600);
 const aMoved = await screenPoint(FOR_SALE_ID);
@@ -207,6 +211,9 @@ if (after && aMoved) {
   const anchor2 = await page.evaluate(() => window.__testProductCardAnchor());
   check(Math.abs(anchor2.x - aMoved.x) < 4 && Math.abs(anchor2.y - aMoved.y) < 4, 'and it is still anchored to the product');
 }
+const followFrame = await page.evaluate(() => ({ longestGapMs: window.__frameMonitor.longestFrameGapMs() }));
+console.log(`longest frame gap while the card followed the product: ${Math.round(followFrame.longestGapMs)} ms`);
+check(followFrame.longestGapMs < Number(process.env.E2E_MAX_FRAME_GAP_MS || 250), `the card following the product never holds a frame back (longest gap ${Math.round(followFrame.longestGapMs)} ms)`);
 // Back to a framing where both are tappable.
 await moveTo([cx - (view.dx / heading) * 2.5, cy - (view.dy / heading) * 2.5]);
 await page.waitForTimeout(800);
