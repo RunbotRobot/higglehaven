@@ -918,6 +918,9 @@ function renderMyAvatarsField(onEquipped) {
   const list = document.createElement('div');
   list.className = 'version-list';
   field.appendChild(list);
+  // #3568: a shopper who owns nothing has nothing to pick, so the section is
+  // not drawn until there is something to act on (or an error to show).
+  field.hidden = true;
   settingsSectionEl.appendChild(field);
 
   let myAvatarsLoadToken = 0;
@@ -939,6 +942,7 @@ function renderMyAvatarsField(onEquipped) {
       errNote.className = 'settings-empty-note';
       errNote.textContent = err.message || 'Could not load your avatars.';
       list.appendChild(errNote);
+      field.hidden = false;
       return;
     }
     if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
@@ -946,6 +950,9 @@ function renderMyAvatarsField(onEquipped) {
     // #1132: appended pages redraw the whole list from the accumulated rows.
     const drawRows = () => {
     list.innerHTML = '';
+    // #3568: shown once an avatar is owned or one is equipped (so the person
+    // can still go back to the default); a shopper with neither sees nothing.
+    field.hidden = avatars.length === 0 && equipped.equippedTemplateId == null;
 
     // The default (no template equipped) is always offered as its own row,
     // even with zero owned avatars — it's a real, equippable choice (the
@@ -1045,6 +1052,8 @@ function renderMyAnimationsField() {
   const list = document.createElement('div');
   list.className = 'version-list';
   field.appendChild(list);
+  // #3568: not drawn until the shopper owns an animation (or an error shows).
+  field.hidden = true;
   settingsSectionEl.appendChild(field);
 
   let myAnimationsLoadToken = 0;
@@ -1069,6 +1078,7 @@ function renderMyAnimationsField() {
       errNote.className = 'settings-empty-note';
       errNote.textContent = err.message || 'Could not load your animations.';
       list.appendChild(errNote);
+      field.hidden = false;
       return;
     }
     if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
@@ -1077,13 +1087,10 @@ function renderMyAnimationsField() {
     const drawRows = () => {
     list.innerHTML = '';
 
-    if (animations.length === 0) {
-      const emptyNote = document.createElement('div');
-      emptyNote.className = 'settings-empty-note';
-      emptyNote.textContent = "You don't own any standalone animations yet.";
-      list.appendChild(emptyNote);
-      return;
-    }
+    // #3568: nothing owned means nothing to apply, so the whole section stays
+    // out of sight instead of explaining that it is empty.
+    field.hidden = animations.length === 0;
+    if (animations.length === 0) return;
 
     // Unlike My Avatars, "None applied" is only a meaningful choice once
     // you own at least one animation — an empty list above already covers

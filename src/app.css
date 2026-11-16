@@ -4111,6 +4111,9 @@
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.85);
       }
+      .settings-field[hidden] {
+        display: none;
+      }
       .settings-radio-row {
         display: flex;
         gap: 14px;
