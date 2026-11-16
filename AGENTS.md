@@ -1013,6 +1013,27 @@ most likely to come up again.
   do when the handbook has no answer. A stronger model is a later
   question for the owner, since it draws on the same weekly allowance.
 
+- **Talking to an assistant is a conversation, not a support ticket,
+  and help sits on top of what the person needs help with.**
+  (2026-11-16, #3624, #3626.) A message left while no assistant was free
+  came back as its own question-and-answer card with a notification. The
+  owner: "I don't want assistant communication to feel like this big,
+  long process. It currently reads like an email support question and
+  response. I'd rather it read like an ongoing conversation... it's also
+  strange for a separate notice for each response. I also want the chat
+  history to show in the assistant window." So there is one thread per
+  person: earlier messages show when the window opens, a left message is
+  the next message in it, the answer appears under it, nothing has to be
+  closed, and replies do not each raise a notice. The same day: opened
+  from Sell, the assistant window was covered by My Products. "The 'My
+  Products' window should stay open, in case the user's assistance
+  request has something to do with that interface, but the assistant
+  modal should always show on top." The assistant window sits above
+  every panel in every mode, and what was open stays open behind it.
+  This is "One model, not a hybrid" applied to help. (higglehaven1's
+  choice, told to the owner: the thread is kept 30 days after its last
+  message.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
