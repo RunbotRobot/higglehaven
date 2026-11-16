@@ -24,7 +24,7 @@
 // never paste their words into the summary. docs/API.md "Assistant chat".
 // --text is refused unless it is one plain line (checkCommandText, #3523).
 import { spawnSync } from 'node:child_process';
-import { parseArgs, loginNameFor, needsProxyRelaunch, resolveBaseUrl, createClient, checkCommandText } from './assistant-lib.mjs';
+import { parseArgs, loginNameFor, needsProxyRelaunch, resolveBaseUrl, createClient, checkCommandText, accentLandlets } from './assistant-lib.mjs';
 
 const fail = (message) => {
   console.error(`assistant-reply: ${message}`);
@@ -69,7 +69,9 @@ try {
     'answer-question': `/api/assistant-inbox/questions/${id}/answer`,
     'escalate-question': `/api/assistant-inbox/questions/${id}/escalate`,
   }[action];
-  const body = { reply: { text: options.text }, 'answer-question': { text: options.text }, escalate: { summary: options.text, kind: options.kind }, 'escalate-question': { summary: options.text, kind: options.kind } }[action];
+  // #3613: what a shopper will read gets the lándlet accent restored if the model dropped it.
+  const shopperText = options.text === undefined ? undefined : accentLandlets(options.text);
+  const body = { reply: { text: shopperText }, 'answer-question': { text: shopperText }, escalate: { summary: options.text, kind: options.kind }, 'escalate-question': { summary: options.text, kind: options.kind } }[action];
   const result = await client.call('POST', path, body);
   process.stdout.write(`${JSON.stringify(result ?? { ok: true })}\n`);
 } catch (error) {

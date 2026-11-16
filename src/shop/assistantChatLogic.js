@@ -136,3 +136,15 @@ export function assistantTitle({ assistant, question }) {
   const name = assistant?.name || question?.answer?.assistantName || null;
   return { name, text: name || 'Assistants', showBadge: Boolean(name) };
 }
+
+// #3608: how much of the bottom of the layout viewport an on-screen keyboard
+// covers. Android Chrome (default) and iOS Safari shrink only the *visual*
+// viewport when the keyboard opens, so a fixed, bottom-anchored panel has to be
+// lifted by this much to stay in view; a browser that shrinks the layout
+// viewport instead (interactive-widget=resizes-content) gives 0. Never negative,
+// and 0 for anything that is not a number, so a missing visualViewport is
+// harmless.
+export function keyboardInset({ innerHeight, visualHeight, visualOffsetTop }) {
+  const inset = innerHeight - visualOffsetTop - visualHeight;
+  return Number.isFinite(inset) && inset > 0 ? Math.round(inset) : 0;
+}

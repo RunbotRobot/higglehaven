@@ -17,6 +17,7 @@ import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
   canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
+  keyboardInset,
 } from './assistantChatLogic.js';
 
 // A left question is not a live chat, so it is checked less often.
@@ -56,6 +57,40 @@ let pollTimer = null;
 let questionTimer = null;
 let inFlight = false;
 let openToken = 0; // a stale open() must not write into a newer one
+
+// #3608: with the phone keyboard up, the panel drops to just above it and is
+// never taller than what is visible, so its header (title, minimise, close)
+// stays on screen. Android Chrome and iOS Safari shrink only the *visual*
+// viewport for the keyboard, and report it through visualViewport; the CSS
+// reads the two numbers set here. "Typing" means the text box is focused AND
+// the visible area really is smaller than the page (a focused box with no
+// keyboard, as on a desktop, changes nothing). Moving and looking do not happen
+// while typing, so the panel need not clear the Shop controls then. A browser
+// that resizes the page itself for the keyboard needs none of this: the CSS
+// height cap (dvh) already keeps the header in view.
+let inputFocused = false;
+function syncVisibleArea() {
+  const vv = window.visualViewport;
+  const inset = vv ? keyboardInset({ innerHeight: window.innerHeight, visualHeight: vv.height, visualOffsetTop: vv.offsetTop }) : 0;
+  const visible = vv ? Math.round(vv.height) : window.innerHeight;
+  panelEl.style.setProperty('--assistant-kb-inset', `${inset}px`);
+  panelEl.style.setProperty('--assistant-visible-height', `${visible}px`);
+  panelEl.classList.toggle('typing', inputFocused && inset > 0);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncVisibleArea);
+  window.visualViewport.addEventListener('scroll', syncVisibleArea);
+}
+inputEl.addEventListener('focus', () => {
+  inputFocused = true;
+  syncVisibleArea();
+});
+inputEl.addEventListener('blur', (event) => {
+  // Tapping Send or another control in the panel keeps the panel where it is.
+  if (event.relatedTarget && panelEl.contains(event.relatedTarget)) return;
+  inputFocused = false;
+  syncVisibleArea();
+});
 
 const isOpen = () => !panelEl.hidden;
 const conversationOpen = () => conversation !== null && conversation.status === 'open';
