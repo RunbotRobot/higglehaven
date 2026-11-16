@@ -86,8 +86,22 @@ await pageA.waitForFunction(
 const seenUserId = await pageA.evaluate((id) => window.__shopOtherAvatars.find((a) => a.builderId === id).userId, builderB.builderId);
 console.log('A sees the assistant by its account id (should be true):', seenUserId === assistantUserId);
 
+// A tap needs the assistant to be drawn in the world at that moment, and the world
+// only knows her while her shift is fresh. This test runs for minutes on a slow
+// machine, so each tap first keeps her on shift and then waits until she is
+// drawn, instead of assuming she still is (the shift goes stale after 90 s).
+async function tapAssistant() {
+  await postJson(pageB, '/api/assistant-inbox/heartbeat');
+  let tappedNow = false;
+  for (let i = 0; i < 40 && !tappedNow; i++) {
+    tappedNow = await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+    if (!tappedNow) await pageA.waitForTimeout(500);
+  }
+  return tappedNow;
+}
+
 // Tap the assistant: the panel opens with the disclosure and no conversation.
-const tapped = await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+const tapped = await tapAssistant();
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 const opened = await pageA.evaluate(() => ({
   name: document.getElementById('assistant-chat-name').textContent,
@@ -188,7 +202,7 @@ for (let i = 0; i < 20; i++) {
 console.log('assistant told after the shopper closed the panel:', JSON.stringify(told.body));
 
 // #3624: it is one ongoing conversation: reopening the panel shows what was said before.
-await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await tapAssistant();
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await pageA.waitForFunction(() => window.__assistantChat?.history?.length > 0, null, { timeout: 5000 });
 const reopened = await pageA.evaluate(() => ({
@@ -202,7 +216,7 @@ await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached'
 // #3448: when the assistant asked is busy, the server names one who is free and
 // the panel offers a tap to go to them. The server's answer is faked here (the
 // real one is covered by worker/assistant-chat.test.js); the panel is real.
-await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await tapAssistant();
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await pageA.route('**/api/assistant-chat/start', (route) => route.fulfill({
   status: 409,
@@ -236,7 +250,7 @@ await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached'
 // #3448: when nobody is free, leave the question. The refusal is faked (the real
 // ones are in worker/assistant-chat.test.js); the leave, the place in line, the
 // answer and the Settings entry are all real.
-await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await tapAssistant();
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await pageA.route('**/api/assistant-chat/start', (route) => route.fulfill({
   status: 409,
@@ -301,7 +315,7 @@ await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached'
 // Blocking an assistant is blocking anyone: reopen the panel, press Block, confirm
 // in the in-app dialog. The panel closes and a new question is refused with the
 // same plain message a stranger would get.
-await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await tapAssistant();
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 const blockShown = await pageA.evaluate(() => !document.getElementById('assistant-chat-block').hidden);
 await pageA.click('#assistant-chat-block');
