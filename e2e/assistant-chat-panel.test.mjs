@@ -136,7 +136,7 @@ const minimised = await pageA.evaluate(() => {
   const pill = document.getElementById('assistant-chat-pill');
   const pillBox = rect(pill);
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  const controls = ['#shop-vertical-controls', '#mode-nav'];
+  const controls = ['#mode-nav']; // #3650: the sticks and the fly button were the world's other controls; the world itself is the control now
   return {
     panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
     pillShown: !pill.hidden && pillBox.width > 0,
