@@ -22,6 +22,15 @@ const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', {
   type, touchPoints: points.map((p) => ({ x: p.x, y: p.y, id: p.id })),
 });
 const wait = (ms) => page.waitForTimeout(ms);
+// Both taps are sent without waiting for a reply in between, so the gap between
+// them is the page's, not the test machine's (a slow CI runner can take longer
+// than the double-tap window to answer each of four round trips).
+const doubleTap = () => Promise.all([
+  touch('touchStart', [{ id: 1, x: 200, y: 300 }]),
+  touch('touchEnd', []),
+  touch('touchStart', [{ id: 1, x: 202, y: 301 }]),
+  touch('touchEnd', []),
+]);
 const pos = () => page.evaluate(() => window.__testShopAvatarPosition());
 const flying = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
 const view = () => page.evaluate(() => window.__testShopCameraView());
@@ -75,19 +84,11 @@ console.log('fingers still tracked after the look gesture (should be 0):', await
 check((await page.evaluate(() => window.__testWorldGestureFingers())) === 0, 'every finger is released after the gestures');
 
 // A double-tap takes off, and another lands.
-await touch('touchStart', [{ id: 1, x: 200, y: 300 }]);
-await touch('touchEnd', []);
-
-await touch('touchStart', [{ id: 1, x: 202, y: 301 }]);
-await touch('touchEnd', []);
+await doubleTap();
 await wait(400);
 check(await flying(), 'a double-tap takes off');
 await wait(1500);
-await touch('touchStart', [{ id: 1, x: 200, y: 300 }]);
-await touch('touchEnd', []);
-
-await touch('touchStart', [{ id: 1, x: 202, y: 301 }]);
-await touch('touchEnd', []);
+await doubleTap();
 await wait(400);
 check(!(await flying()), 'another double-tap lands');
 

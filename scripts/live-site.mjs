@@ -251,10 +251,13 @@ async function holdLook(direction, ms) {
 async function doubleTapWorld() {
   const x = device.width / 2;
   const y = device.height * 0.3;
-  for (let i = 0; i < 2; i += 1) {
-    await sendTouch('touchStart', [{ id: 1, x, y }]);
-    await sendTouch('touchEnd', []);
-  }
+  touchSession ||= await page.context().newCDPSession(page);
+  // Sent back to back, not awaited one by one, so the gap is the page's and a
+  // slow round trip cannot stretch it past the double-tap window.
+  await Promise.all([
+    sendTouch('touchStart', [{ id: 1, x, y }]), sendTouch('touchEnd', []),
+    sendTouch('touchStart', [{ id: 1, x, y }]), sendTouch('touchEnd', []),
+  ]);
 }
 
 async function runStep(step, index) {
