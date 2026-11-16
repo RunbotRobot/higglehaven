@@ -33,9 +33,9 @@ html, body { margin: 0; background: #eef3e2; color: rgb(var(--ink)); font: 15px/
   background-position: center;
 }
 .scene * { position: absolute; }
-.scene-walk { background-image: url("b-base-walk.jpg"); }
-.scene-product { background-image: url("b-base-product.jpg"); }
-.scene-settings { background-image: url("b-base-settings.jpg"); }
+.scene-walk { background-image: url("world-walk.jpg"); }
+.scene-product { background-image: url("world-product.jpg"); }
+.scene-settings { background-image: url("world-settings.jpg"); }
 
 /* Light comes from the upper left in all three views, so every shadow falls to the lower right. */
 .shadow, .crate-shadow { background: rgb(var(--ink) / 0.28); border-radius: 50%; filter: blur(calc(var(--u) * 3)); }

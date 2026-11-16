@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Design directions</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="frame.css" />
+  <script src="frame.js" defer></script>
+</head>
+<body>
+  <!-- The frame for #3540 (leaf #3600): one page that puts the three interface
+       directions side by side at phone width. Each direction is its own page (a.html,
+       b.html, c.html); the site does not allow one page inside another, so the frame
+       shows each as a card with its three moments and opens it in full. No link to this
+       page from the app. -->
+  <header class="top">
+    <h1>Three ways the interface could feel</h1>
+    <p>The same three moments in each: walking with nothing open, looking at one product, and Settings. These are pictures over real views of the world, not the app. Open one, and swipe or scroll through its three moments and the three sentences under them.</p>
+  </header>
+
+  <main class="directions">
+    <a class="direction" id="dir-a" href="a.html" data-page="a.html">
+      <h2><span class="letter">A</span> Fog and glass</h2>
+      <div class="thumbs">
+        <img src="a-walk.jpg" alt="Direction A, walking" width="390" height="844" />
+        <img src="a-product.jpg" alt="Direction A, one product" width="390" height="844" />
+        <img src="a-settings.jpg" alt="Direction A, Settings" width="390" height="844" />
+      </div>
+      <p>Soft translucent shapes condense out of the world's own fog and thin away again; almost no borders; controls fade when idle.</p>
+      <span class="open">Open A</span>
+    </a>
+
+    <a class="direction" id="dir-b" href="b.html" data-page="b.html">
+      <h2><span class="letter">B</span> Signs in the world</h2>
+      <div class="thumbs">
+        <img src="b-walk.jpg" alt="Direction B, walking" width="390" height="844" />
+        <img src="b-product.jpg" alt="Direction B, one product" width="390" height="844" />
+        <img src="b-settings.jpg" alt="Direction B, Settings" width="390" height="844" />
+      </div>
+      <p>Information lives in the scene: a sign on a stake by the product, a board you walk up to for settings, words laid on the ground. The screen stays nearly empty.</p>
+      <span class="open">Open B</span>
+    </a>
+
+    <a class="direction" id="dir-c" href="c.html" data-page="c.html">
+      <h2><span class="letter">C</span> One bud</h2>
+      <div class="thumbs">
+        <img src="c-walk.jpg" alt="Direction C, walking" width="390" height="844" />
+        <img src="c-product.jpg" alt="Direction C, one product" width="390" height="844" />
+        <img src="c-settings.jpg" alt="Direction C, Settings" width="390" height="844" />
+      </div>
+      <p>The whole interface folds into one small living thing in a corner that opens into a few petals when tapped; everything else is gestures on the world.</p>
+      <span class="open">Open C</span>
+    </a>
+  </main>
+</body>
+</html>

@@ -186,6 +186,18 @@ for (let i = 0; i < 20; i++) {
 }
 console.log('assistant told after the shopper closed the panel:', JSON.stringify(told.body));
 
+// #3624: it is one ongoing conversation: reopening the panel shows what was said before.
+await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+await pageA.waitForFunction(() => window.__assistantChat?.history?.length > 0, null, { timeout: 5000 });
+const reopened = await pageA.evaluate(() => ({
+  history: window.__assistantChat.history.map((row) => row.text),
+  log: document.getElementById('assistant-chat-log').textContent,
+}));
+console.log('after reopening:', JSON.stringify(reopened));
+await pageA.click('#assistant-chat-close');
+await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
+
 // #3448: when the assistant asked is busy, the server names one who is free and
 // the panel offers a tap to go to them. The server's answer is faked here (the
 // real one is covered by worker/assistant-chat.test.js); the panel is real.
@@ -268,16 +280,17 @@ await pageA.click('#settings-btn');
 await pageA.waitForSelector('#settings-assistant-btn', { state: 'visible', timeout: 5000 });
 await pageA.click('#settings-assistant-btn');
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
-await pageA.waitForFunction(() => window.__assistantChat?.question?.status === 'answered', null, { timeout: 5000 });
+// #3624: the answer is part of the thread, not a card to close.
+await pageA.waitForFunction(() => window.__assistantChat?.history?.some((row) => row.text === 'Yes! Open Sell mode and add it.'), null, { timeout: 5000 });
 const readAnswer = await pageA.evaluate(() => ({
   log: document.getElementById('assistant-chat-log').textContent,
   name: window.__assistantChat.assistantName,
-  withdraw: document.getElementById('assistant-chat-withdraw').textContent,
+  withdrawHidden: document.getElementById('assistant-chat-withdraw').hidden,
+  formHidden: document.getElementById('assistant-chat-form').hidden,
+  question: window.__assistantChat.question,
   settingsOpen: document.getElementById('settings-modal').classList.contains('visible'),
 }));
 console.log('answer read after coming back:', JSON.stringify(readAnswer));
-await pageA.click('#assistant-chat-withdraw');
-await pageA.waitForFunction(() => window.__assistantChat?.question === null, null, { timeout: 5000 });
 await pageA.click('#assistant-chat-close');
 await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
 
@@ -319,7 +332,8 @@ const pass = tapped === true
   && inLine.formHidden && inLine.withdraw === 'Take my question back' && questionPanelFits
   && handedQuestion.body.question?.text === 'Can I sell a hat?' && answerPosted.status === 201
   && readAnswer.log.includes('Yes! Open Sell mode and add it.') && readAnswer.log.includes('Can I sell a hat?')
-  && readAnswer.withdraw === 'Done' && !readAnswer.settingsOpen
+  && readAnswer.withdrawHidden && !readAnswer.formHidden && readAnswer.question === null && !readAnswer.settingsOpen
+  && reopened.history.includes('One more thing.') && reopened.history.includes('Did that work for you?') && reopened.log.includes('Head north past the fountain!')
   && blockShown && afterBlock.status === 403 && afterBlock.body.error === "You can't message this person."
   && unexpectedErrors.length === 0;
 await finish(sessionA.browser, {

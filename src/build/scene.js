@@ -1637,7 +1637,7 @@ async function handleRejectedSingleSync(err, action) {
   const reverted = isServerRejection(err) && await revertSceneToServer();
   if (!reverted) noteSyncFailure(err);
   if (isSuspendedSellerSyncError(err)) {
-    tellBuilder("Taken off your land", "That item was taken off your land because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
+    tellBuilder("Taken off your lándlet", "That item was taken off your lándlet because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
     return;
   }
   const what = action === 'delete' ? "Couldn't delete that item" : action === 'create' ? "Couldn't save that new item" : "Couldn't save that change";
@@ -1768,7 +1768,7 @@ async function reconcileAfterSellerSuspension(meshes) {
 // seller's items left their land (failed save, batch update, tab focus, and
 // the general refocus reconcile).
 function suspendedSellerRemovalNotice(count) {
-  return `${count} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`;
+  return `${count} item(s) were taken off your lándlet because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`;
 }
 
 // #3095 (second half): the tab-focus counterpart to the failed-save
@@ -1796,7 +1796,7 @@ async function reconcileOpenTabOnFocus() {
   clearSelection();
   updateSelectionUI();
   for (const mesh of gone) deleteInstance(mesh, { sync: false });
-  tellBuilder("Taken off your land", suspendedSellerRemovalNotice(gone.length));
+  tellBuilder("Taken off your lándlet", suspendedSellerRemovalNotice(gone.length));
 }
 document.addEventListener('visibilitychange', reconcileOpenTabOnFocus);
 
@@ -1812,7 +1812,7 @@ async function syncBatchCreate(meshes) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        tellBuilder("Taken off your land", suspendedSellerRemovalNotice(removed));
+        tellBuilder("Taken off your lándlet", suspendedSellerRemovalNotice(removed));
         if (remaining.length > 0) await syncBatchCreate(remaining);
         return;
       }
@@ -1903,7 +1903,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
         sentences.push(suspendedSellerRemovalNotice(suspended.size));
       }
       const elsewhere = missing.size - suspended.size;
-      if (elsewhere > 0) sentences.push(`${elsewhere} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
+      if (elsewhere > 0) sentences.push(`${elsewhere} item(s) you changed here had already been removed from your lándlet in another tab or window, so they were not put back.`);
       tellBuilder("Changed elsewhere", sentences.join(' '));
     }
   } catch (err) {
@@ -1912,7 +1912,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        tellBuilder("Taken off your land", suspendedSellerRemovalNotice(removed));
+        tellBuilder("Taken off your lándlet", suspendedSellerRemovalNotice(removed));
         // The rejected batch also held items that are fine; save those now.
         if (remaining.length > 0) {
           // Already inside the update chain, so run directly (queueing behind
@@ -2327,7 +2327,7 @@ levelRemoveBtn.addEventListener('click', async () => {
       ].filter(Boolean).join(' and ')} come back with them.`
       : '';
     setLevelStatus(sweptCount > 0
-      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your land. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
+      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your lándlet. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
       : '');
     renderLevelControls();
   } catch (err) {
@@ -2658,7 +2658,7 @@ async function reconcileOnRefocus() {
     if (deletedIds.length > 0) {
       const restorable = new Set((slots || []).map((slot) => slot.removedInstanceId).filter(Boolean));
       const suspendedCount = deletedIds.filter((id) => restorable.has(id)).length;
-      if (suspendedCount > 0) tellBuilder("Taken off your land", suspendedSellerRemovalNotice(suspendedCount));
+      if (suspendedCount > 0) tellBuilder("Taken off your lándlet", suspendedSellerRemovalNotice(suspendedCount));
     }
   } catch (err) {
     console.warn('Reconciling with the server on refocus failed:', err);
@@ -3521,8 +3521,10 @@ export function updateSelectionUI() {
   // Once flagged, this same button opens the Manage Posts panel instead of
   // un-flagging directly (see its own click handler) — the label makes
   // that click destination explicit rather than reading like a second
-  // identical toggle.
-  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓ (Manage)' : 'Community Sign';
+  // identical toggle. #3576: the on-label is deliberately no wider than
+  // the off-label (index.html's data-width-sizer reserves the off-label's
+  // width), so flipping the toggle never re-wraps the selection toolbar.
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community Sign';
   // Community Calendar (docs/API.md's "Community calendar") — same
   // reasoning and same toggle-then-manage button design as Community Sign
   // just above, independent of it.
@@ -3530,7 +3532,7 @@ export function updateSelectionUI() {
   const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
-  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
+  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community Calendar';
   // Backup Chain (#2050/#2051): every placed instance can have one, not
   // just flagged ones, so this is a plain "open the manage panel" button —
   // same single-selection-only gating as Trim/Community Sign/Calendar
@@ -4946,7 +4948,7 @@ async function renderLandCapField() {
   field.id = 'land-cap-field';
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
-  fieldLabel.textContent = 'Land Cap';
+  fieldLabel.textContent = 'Lándlet Cap';
   field.appendChild(fieldLabel);
   const status = document.createElement('div');
   status.className = 'settings-empty-note';
@@ -4972,7 +4974,7 @@ async function renderLandCapField() {
     status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
       'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
   } catch (err) {
-    status.textContent = err.message || 'Could not load your land cap.';
+    status.textContent = err.message || 'Could not load your lándlet cap.';
   }
 }
 
@@ -6281,7 +6283,7 @@ async function renderSoldOutMarkersSection() {
   setSoldOutMarkers(markers);
   applySoldOutMarkerVisibility();
   empty.hidden = markers.length > 0;
-  empty.textContent = 'Nothing sold out on this land yet.';
+  empty.textContent = 'Nothing sold out on this lándlet yet.';
 
   for (const marker of markers) {
     const row = document.createElement('div');
