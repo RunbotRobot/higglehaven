@@ -1034,6 +1034,36 @@ most likely to come up again.
   choice, told to the owner: the thread is kept 30 days after its last
   message.)
 
+- **The interface is one bud: everything folds into one small living
+  thing in a corner, and the rest is done by touching the world.**
+  (2026-11-16, #3540, built under #3648.) Shown three directions as
+  pages to look at (fog and glass, signs in the world, one bud), the
+  owner chose the third: "Direction C is real nice. It gives a great
+  combination of aesthetic and functionality. We expect users to use
+  gestures with no visible controls, but instructions would be quick and
+  easy to find in the bud (at least, that's our goal). Let's go
+  full-force into the bud plan. The bud could have the higglehaven
+  logo." So one bud in a corner, carrying the logo, is the only standing
+  piece of interface. It unfolds into a few petals (Settings, Friends,
+  Chat, Purchases, Build and Sell, how to move); a petal opens a leaf
+  that grows from the bud; moving, looking, flying and choosing a
+  product are gestures on the world itself; and a product's card blooms
+  beside the product. The cost was named on the page and accepted:
+  gestures cannot be seen until taught once, so the bud teaches (it
+  pulses and says Menu until first opened) and the instructions live in
+  it, one tap away. "Full-force" means no half-way: when a surface moves
+  into the bud, the old control for it goes in the same change ("One
+  model, not a hybrid"), and directions A and B are not built. A session
+  that finds something that cannot be done by gesture, or cannot fit a
+  petal, says so on #3648; it does not quietly keep the old control.
+  `public/design-directions/c.html` is the reference until
+  docs/DESIGN.md describes the bud. The principle: when the world is the
+  product, the interface's resting state is absent; one small, alive,
+  branded thing is the door to everything else, and findability is paid
+  for by teaching, not by permanent controls. It also shows how to bring
+  the owner a design question: three things to look at on a phone, each
+  with its cost stated, got an answer in three hours.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
