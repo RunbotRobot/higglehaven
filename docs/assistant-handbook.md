@@ -278,28 +278,36 @@ ground.
 ### How do I look at a product and read about it?
 
 1. Walk or fly to a product somewhere in the world and tap it.
-2. A card opens with a picture of it you can turn, and its details.
-3. The card has three buttons: "Rate this Product", "Purchase" and "Return Policy".
-4. Tap the cross at the top right of the card when you are done.
+2. A small card blooms beside the product with its name, its price and any notes
+   about it (for example that it ships to the United States only, or that it has no
+   returns).
+3. When the product is for sale and you are standing near it, the card has a yellow
+   "Buy" button. "More" opens "Rate this Product" and "Return Policy".
+4. Tap anywhere else in the world, or the cross at the top right of the card, when
+   you are done.
 
-**You will see:** a card over the world with the product's picture and its price
-and details.
+**You will see:** a small card next to the product, with the world still moving
+behind it.
 
 **If something goes wrong:**
 - Nothing opens when tapping: you may have tapped the ground beside it. Tap the
   product itself, or move closer.
+- The card has no "Buy" button: it says why in a line of its own. "Walk closer to buy
+  this." means to go up to the product. "Out of stock." and "Not for sale." mean it
+  cannot be bought right now.
 - "Return Policy" tells the person what the seller says about returns, which can
   differ by product. Read it with them, and do not promise more than it says.
 
 ```controls any
-#shop-product-preview-review-btn | Rate this Product
-#shop-product-preview-buy-btn | Purchase
-#shop-product-preview-return-policy-btn | Return Policy
+#product-card-more-btn | More
+#product-card-review-btn | Rate this Product
+#product-card-buy-btn | Buy
+#product-card-return-policy-btn | Return Policy
 ```
 
 ### How do I buy something?
 
-1. Open the product's card (see the entry above) and tap "Purchase".
+1. Open the product's card (see the entry above) and tap "Buy".
 2. A sheet titled "Checkout" shows what you are buying. Enter your card in the card
    box.
 3. Tap "Pay".
@@ -317,7 +325,7 @@ shows under "My Purchases".
   team, and use the runbook's hand-off.
 
 ```controls any
-#shop-product-preview-buy-btn | Purchase
+#product-card-buy-btn | Buy
 #checkout-modal-title | Checkout
 #checkout-pay-btn | Pay
 #verify-modal h2 | Verify to continue
@@ -366,7 +374,7 @@ label:has(#verify-age-attest) | at least 18
 - To back out, tap "Cancel".
 
 ```controls any
-#shop-product-preview-review-btn | Rate this Product
+#product-card-review-btn | Rate this Product
 #product-review-modal-title | Review this product
 #product-review-save-btn | Post review
 #product-review-cancel-btn | Cancel

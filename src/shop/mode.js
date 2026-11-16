@@ -102,7 +102,8 @@ import {
   shopHighlightedProduct, setShopHighlightedProduct,
   disposeSignSprites, disposeCalendarSprites, disposeReviewSprites,
 } from './worldSprites.js';
-import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
+import { confettiBursts, disposeConfettiBurst } from './productCheckout.js';
+import { closeProductCard } from './productCard.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
@@ -356,9 +357,10 @@ export function unloadShopLandletInstances(entry) {
       setShopTappedProduct(null);
       setShopReviewHintsVisible(false);
       setShopReviewHintsProduct(null);
-      // #1811: the preview modal's own template/model would otherwise keep
-      // pointing at a mesh that's about to be disposed.
-      closeShopProductPreviewModal();
+      // #1811: the preview's own template/model would otherwise keep
+      // pointing at a mesh that's about to be disposed (#3651: now the card,
+      // which reads the mesh every frame to stay beside it).
+      closeProductCard();
     }
     // #1810: same reasoning as the hints just above -- the highlight's own
     // BoxHelper/fill reference this review's mesh directly, which is about

@@ -6,7 +6,7 @@
 // afterward via a product's own "Edit Price" panel (same collapsed-panel-
 // with-a-Save-step idiom as "Edit Size", see e2e/seller-upload-and-
 // resize.test.mjs). The Shop-mode "name — price" readout in the tapped-
-// product preview modal (#shop-product-preview-info) isn't covered here
+// product card (#product-card-price, #product-card-notes) isn't covered here
 // for the same reason real camera movement never is in this suite — see
 // docs/API.md's own testing note for this feature; that's verified
 // manually instead.

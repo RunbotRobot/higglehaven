@@ -1,19 +1,21 @@
 // #2628 (leaf of #2563, itself part of #2504/#2500's src/main.js module
 // split -- see #2503's design comment and #2563's own breakdown comment
-// for the full dependency map): Shop mode's tap-to-inspect product-preview
-// modal, the Stripe checkout flow, post-purchase confetti, and the
-// buy/review-button and refund-policy click handlers.
+// for the full dependency map): Shop mode's Stripe checkout flow,
+// post-purchase confetti, and the buy/review-button and refund-policy click
+// handlers. (The tap-to-inspect product-preview modal that used to be first
+// in this list is gone: #3651 replaced it with the product card in
+// src/shop/productCard.js, which blooms beside the product. Buy still ends
+// here, in handleShopProductBuyClick, unchanged.)
 //
 // Depends on shop/worldSprites.js (#2627, already landed) -- reads
 // shopTappedProduct (the tap-to-inspect listener's own state, still owned
 // by main.js's click listener and worldSprites.js's updateReviewFade) and
-// shopReviews, calls rebuildReviewSprites/productInfoText back.
+// shopReviews, calls rebuildReviewSprites back.
 //
 // Deliberately NOT included here, even though main.js's own tap-to-inspect
-// click listener (which sets shopTappedProduct and calls
-// openShopProductPreviewModal/closeShopProductPreviewModal, both below)
+// click listener (which sets shopTappedProduct and opens the product card)
 // lives right alongside this module's own code -- that listener itself
-// stays in main.js, which imports those two functions back from here.
+// stays in main.js.
 // spawnConfettiBurst/updateConfettiBursts are called forward from
 // worldSprites.js's checkScheduledCalendarEvents and
 // shop/flightMovement.js's per-frame loop respectively -- both of those
@@ -25,12 +27,10 @@
 // formatPriceCents also stays in main.js (shared well beyond Shop mode),
 // imported back the same way.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { openProductReviewModal } from '../ui/productReviewModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
-import { createMeshForInstance, disposeObject } from '../world/models.js';
 import {
   createProductReview, editProductReview, deleteProductReview,
   purchaseInstance, clearPurchaseIdempotencyKey, finalizePurchase,
@@ -39,13 +39,10 @@ import { ensureBuilderIdentity } from '../account/identity.js';
 import { currentAuthUser } from '../account/auth.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
-import { shopTappedProduct, shopReviews, rebuildReviewSprites, productInfoText, invalidateProductReviews } from './worldSprites.js';
+import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
+// #3651: the card's own buttons (Buy, Rate this Product), for focus return after a notice.
+import { productCardBuyButton, productCardReviewButton } from './productCard.js';
 
-const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
-const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
-const shopProductPreviewInfoEl = document.getElementById('shop-product-preview-info');
-const shopProductPreviewReviewBtn = document.getElementById('shop-product-preview-review-btn');
-const shopProductPreviewBuyBtn = document.getElementById('shop-product-preview-buy-btn');
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const checkoutModalEl = document.getElementById('checkout-modal');
 const checkoutSummaryEl = document.getElementById('checkout-summary');
@@ -53,119 +50,6 @@ const checkoutCardElementEl = document.getElementById('checkout-card-element');
 const checkoutStatusEl = document.getElementById('checkout-status');
 const checkoutPayBtn = document.getElementById('checkout-pay-btn');
 const checkoutCancelBtn = document.getElementById('checkout-cancel-btn');
-
-// #1811 (sub-issue of #1809): isolated 3D preview for a tapped product,
-// replacing the old #shop-product-info pill (removed in #1813). Same
-// self-contained-scene technique as Sell mode's own showAxisPreview/
-// disposeAxisPreview -- a dedicated scene/camera/renderer/controls bound
-// to this modal's own canvas, built via createMeshForInstance so a real
-// scanned model (or placeholder box) renders exactly as it would in the
-// world, not a simplified stand-in. No axis arrows here (this modal is
-// read-only "what is this," not the Extensibility editor those arrows
-// serve), and no shared-canvas reparenting (this canvas always lives in
-// this one modal's own markup, unlike the seller preview's single canvas
-// moved between row panels).
-let shopProductPreview = null;
-// Same reopen-before-the-previous-load-finishes guard as
-// axisPreviewLoadToken -- a quick double-tap, or tapping a second product
-// before createMeshForInstance's await on the first resolves, would
-// otherwise race two calls into building their own renderer bound to the
-// same canvas.
-let shopProductPreviewLoadToken = 0;
-
-function disposeShopProductPreview() {
-  if (!shopProductPreview) return;
-  shopProductPreview.controls.dispose();
-  shopProductPreview.renderer.dispose();
-  disposeObject(shopProductPreview.previewObject);
-  shopProductPreview = null;
-}
-
-async function showShopProductPreview(template) {
-  const myLoadToken = ++shopProductPreviewLoadToken;
-  disposeShopProductPreview();
-
-  const scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-  sun.position.set(2, -3, 4);
-  scene.add(sun);
-
-  // #1876: lets an e2e test simulate a slow load deterministically, same
-  // reasoning as window.__testUploadPreviewLoadDelayMs (#1465). Always
-  // undefined outside of that one test.
-  if (window.__testShopProductPreviewLoadDelayMs) {
-    await new Promise((resolve) => setTimeout(resolve, window.__testShopProductPreviewLoadDelayMs));
-  }
-  // At the origin and with no crop, same as showAxisPreview -- shows the
-  // product's real full-size geometry, not the specific crop any one
-  // placed instance of it happens to have in the world.
-  const previewObject = await createMeshForInstance({
-    templateId: template.templateId,
-    x: 0, y: 0, z: 0,
-    rotationX: 0, rotationY: 0, rotationZ: 0,
-    crop: {},
-  });
-  if (myLoadToken !== shopProductPreviewLoadToken) {
-    // A newer call owns the preview now -- same superseded-load leak guard
-    // showAxisPreview uses: this object was never added to any scene the
-    // dispose function above knows about.
-    if (previewObject) disposeObject(previewObject);
-    // Exposed purely so an e2e test can confirm the dispose above actually
-    // ran, same reasoning as window.__supersededUploadPreviewDisposals (#1465).
-    window.__supersededShopProductPreviewDisposals = (window.__supersededShopProductPreviewDisposals ?? 0) + 1;
-    return;
-  }
-  if (!previewObject) return;
-  scene.add(previewObject);
-
-  const box = new THREE.Box3().setFromObject(previewObject);
-  const sphere = box.getBoundingSphere(new THREE.Sphere());
-  const radius = Math.max(sphere.radius, 0.05);
-
-  const rect = shopProductPreviewCanvas.getBoundingClientRect();
-  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
-  camera.up.set(0, 0, 1);
-  const dist = radius * 2.6;
-  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
-  camera.lookAt(0, 0, 0);
-
-  const renderer = new THREE.WebGLRenderer({ canvas: shopProductPreviewCanvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(rect.width, rect.height, false);
-
-  const controls = new OrbitControls(camera, shopProductPreviewCanvas);
-  controls.target.set(0, 0, 0);
-  controls.enableDamping = false;
-  controls.enablePan = false;
-  controls.minDistance = dist * 0.35;
-  controls.maxDistance = dist * 3;
-  const render = () => renderer.render(scene, camera);
-  controls.addEventListener('change', render);
-
-  render();
-  shopProductPreview = { renderer, scene, camera, controls, previewObject };
-}
-
-export function openShopProductPreviewModal(review) {
-  shopProductPreviewModalEl.classList.add('visible');
-  shopProductPreviewInfoEl.textContent = productInfoText(review.mesh.userData.template);
-  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
-  showShopProductPreview(review.mesh.userData.template);
-}
-
-export function closeShopProductPreviewModal() {
-  shopProductPreviewModalEl.classList.remove('visible');
-  // #1876: bump the token even though there's nothing to dispose yet if a
-  // showShopProductPreview() call is still in flight -- without this, that
-  // call's own stale-load check (myLoadToken !== shopProductPreviewLoadToken)
-  // never fires, so it finishes building a full scene/renderer/controls
-  // after the modal is already closed and assigns it as the live
-  // shopProductPreview, leaking a WebGL context until the next preview open.
-  shopProductPreviewLoadToken++;
-  disposeShopProductPreview();
-  closeModalA11y(shopProductPreviewModalEl);
-}
 
 // A lightweight, dependency-free particle burst -- small flat tumbling
 // squares with an outward+upward launch velocity and simple downward
@@ -250,11 +134,11 @@ export async function handleShopProductReviewClick() {
   // prompt()/alert() calls (a suppressed native dialog answered each with
   // "cancel", so Rate this Product did nothing and said nothing). Failures
   // are thrown out of these callbacks and shown inside the modal.
-  shopProductPreviewReviewBtn.disabled = true;
+  productCardReviewButton().disabled = true;
   try {
     await openProductReviewModal({
       existing: myReview ? { rating: myReview.rating, text: myReview.text || '' } : null,
-      returnFocusEl: shopProductPreviewReviewBtn,
+      returnFocusEl: productCardReviewButton(),
       onSubmit: async ({ rating, text }) => {
         if (myReview) {
           // An empty string clears the comment, same as before: the server's
@@ -284,7 +168,7 @@ export async function handleShopProductReviewClick() {
       },
     });
   } finally {
-    shopProductPreviewReviewBtn.disabled = false;
+    productCardReviewButton().disabled = false;
   }
 }
 
@@ -427,11 +311,9 @@ window.__testRunCheckoutFlow = (intent, summary) => runCheckoutFlow(intent, summ
 export function closeRefundPolicyModal() {
   refundPolicyModalEl.classList.remove('visible');
   closeModalA11y(refundPolicyModalEl);
-  // #2515: same gap as closeUploadModal's own #2515 fix -- this modal only
-  // ever opens stacked on top of the still-visible Shop Product Preview
-  // modal, so re-arm its trap rather than leaving it on screen untrapped.
-  shopProductPreviewModalEl.classList.add('visible');
-  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
+  // (#2515 used to re-arm the product-preview modal's focus trap here; the
+  // product card that replaced it (#3651) is not a modal, so there is no trap
+  // to re-arm and focus returns to the petal that opened this.)
 }
 export function handleShopReturnPolicyClick() {
   refundPolicyModalEl.classList.add('visible');
@@ -450,7 +332,7 @@ export async function handleShopProductBuyClick() {
   if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
   // full Return Policy button this same tapped product already surfaces
-  // (#shop-product-preview-return-policy-btn) -- a plain sentence, the fact
+  // (#product-card-return-policy-btn) -- a plain sentence, the fact
   // worth knowing before saying yes.
   // #3278: its own in-app modal, not window.confirm(): a browser that
   // suppresses native dialogs answers false at once, so Buy did nothing and
@@ -460,12 +342,10 @@ export async function handleShopProductBuyClick() {
     message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`,
     confirmLabel: 'Buy',
     variant: 'primary',
-    returnFocusEl: shopProductPreviewBuyBtn,
-    restoreModalEl: shopProductPreviewModalEl,
-    restoreCloseFn: closeShopProductPreviewModal,
+    returnFocusEl: productCardBuyButton(),
   });
   if (!confirmed) return;
-  shopProductPreviewBuyBtn.disabled = true;
+  productCardBuyButton().disabled = true;
   const instanceId = review.mesh.userData.instanceId;
   try {
     const result = await purchaseInstance(instanceId);
@@ -489,15 +369,15 @@ export async function handleShopProductBuyClick() {
           title: 'Purchase complete',
           message: 'Thank you! Once you receive it, confirm delivery with this link so the seller gets paid. It is shown only once, so copy it now.',
           copyText: finalized.deliveryConfirmUrl,
-          returnFocusEl: shopProductPreviewBuyBtn,
+          returnFocusEl: productCardBuyButton(),
         }
-        : { title: 'Purchase complete', message: 'Thank you!', returnFocusEl: shopProductPreviewBuyBtn });
+        : { title: 'Purchase complete', message: 'Thank you!', returnFocusEl: productCardBuyButton() });
     } else {
       clearPurchaseIdempotencyKey(instanceId);
       // #3255: real payments are live, so this branch (free / zero-price items
       // and any path that returns the purchase directly) reads the same as the
       // paid branch above rather than the dev-era "simulated" wording.
-      await showNotice({ title: 'Purchase complete', message: 'Thank you!', returnFocusEl: shopProductPreviewBuyBtn });
+      await showNotice({ title: 'Purchase complete', message: 'Thank you!', returnFocusEl: productCardBuyButton() });
     }
     // #3256 (owner report): no immediate "Leave feedback for the seller?"
     // prompt here. Right after buying is too early to judge accuracy,
@@ -509,10 +389,10 @@ export async function handleShopProductBuyClick() {
       await showNotice({
         title: "Purchase didn't go through",
         message: err.message || 'Could not complete this purchase.',
-        returnFocusEl: shopProductPreviewBuyBtn,
+        returnFocusEl: productCardBuyButton(),
       });
     }
   } finally {
-    shopProductPreviewBuyBtn.disabled = false;
+    productCardBuyButton().disabled = false;
   }
 }
