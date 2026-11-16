@@ -7,23 +7,23 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PROGRAM_FILES, buildSetupScript } from '../scripts/assistant-environment-lib.mjs';
+import { PROGRAM_FILES, INSTALLED_FILES, buildSetupScript } from '../scripts/assistant-environment-lib.mjs';
 import { finish } from './helpers.mjs';
 
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const COMMIT = 'b'.repeat(40);
-const CONTENT = Object.fromEntries(PROGRAM_FILES.map((name) => [name, `// ${name}\nconsole.log('${name}');\n`]));
-const SUMS = Object.fromEntries(PROGRAM_FILES.map((name) => [name, sha(CONTENT[name])]));
+const CONTENT = Object.fromEntries(INSTALLED_FILES.map((name) => [name, `// ${name}\nconsole.log('${name}');\n`]));
+const SUMS = Object.fromEntries(INSTALLED_FILES.map((name) => [name, sha(CONTENT[name])]));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-env-'));
 const script = path.join(tmp, 'setup.sh');
 fs.writeFileSync(script, buildSetupScript({ commit: COMMIT, files: SUMS }));
 
-const run = (source, install) => spawnSync('bash', [script], { encoding: 'utf8', env: { ...process.env, ASSISTANT_PROGRAMS_BASE: `file://${source}`, ASSISTANT_DIR: install } });
+const run = (source, install) => spawnSync('bash', [script], { encoding: 'utf8', env: { ...process.env, ASSISTANT_PROGRAMS_BASE: `file://${source}`, ASSISTANT_DOCS_BASE: `file://${source}`, ASSISTANT_DIR: install } });
 const makeSource = (overrides = {}) => {
   const dir = fs.mkdtempSync(path.join(tmp, 'src-'));
-  for (const name of PROGRAM_FILES) fs.writeFileSync(path.join(dir, name), overrides[name] ?? CONTENT[name]);
+  for (const name of INSTALLED_FILES) fs.writeFileSync(path.join(dir, name), overrides[name] ?? CONTENT[name]);
   return dir;
 };
 const freshInstall = () => path.join(fs.mkdtempSync(path.join(tmp, 'dst-')), 'assistant');
@@ -36,7 +36,8 @@ check(spawnSync('bash', ['-n', script]).status === 0, 'bash accepts the generate
   const install = freshInstall();
   const first = run(source, install);
   check(first.status === 0, `first run succeeds (${first.stderr.trim().slice(0, 200)})`);
-  check(JSON.stringify(fs.readdirSync(install).sort()) === JSON.stringify(['.commit', ...PROGRAM_FILES].sort()), 'the install holds the commit marker and exactly the programs');
+  check(JSON.stringify(fs.readdirSync(install).sort()) === JSON.stringify(['.commit', ...INSTALLED_FILES].sort()), 'the install holds the commit marker, the programs and the handbook');
+  check((fs.statSync(path.join(install, 'assistant-handbook.md')).mode & 0o222) === 0, 'the handbook is installed read-only too');
   check(fs.readFileSync(path.join(install, '.commit'), 'utf8').trim() === COMMIT, 'the commit marker names the pinned commit');
   check((fs.statSync(path.join(install, 'assistant-shift.mjs')).mode & 0o222) === 0, 'installed files are read-only');
   const second = run(source, install);
@@ -50,6 +51,14 @@ check(spawnSync('bash', ['-n', script]).status === 0, 'bash accepts the generate
   const result = run(source, install);
   check(result.status !== 0 && /checksum mismatch/.test(result.stderr), `a tampered file fails with a checksum message (${result.stderr.trim().slice(0, 200)})`);
   check(!fs.existsSync(install), 'nothing is installed after a tampered download');
+}
+
+// Tampered handbook: fail closed, like a program.
+{
+  const source = makeSource({ 'assistant-handbook.md': '# changed after review\n' });
+  const install = freshInstall();
+  const result = run(source, install);
+  check(result.status !== 0 && /checksum mismatch/.test(result.stderr) && !fs.existsSync(install), 'a tampered handbook fails the checksum and installs nothing');
 }
 
 // Missing file: fail closed.
