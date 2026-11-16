@@ -1,0 +1,5 @@
+/* The strip across the top of every direction page (#3600): Overview, A, B, C. */
+.dd-strip { position: sticky; top: 0; z-index: 10; display: flex; gap: 6px; justify-content: center; padding: 8px 10px; background: rgb(238 243 226 / 0.92); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font: 14px/1 sans-serif; }
+.dd-strip a, .dd-strip span { padding: 8px 14px; border-radius: 999px; color: #16240a; text-decoration: none; background: rgb(214 232 190 / 0.7); }
+.dd-strip a.here { background: #6ca42e; color: #fafac7; font-weight: 700; }
+.dd-strip span.coming { opacity: 0.5; }
