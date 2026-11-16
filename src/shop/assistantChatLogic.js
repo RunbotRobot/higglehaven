@@ -140,6 +140,19 @@ export function hasNewAssistantMessage(before, after) {
   return after.some((message) => message.sender === 'assistant' && !seen.has(message.seq));
 }
 
+// #3612: whose name the window and the pill carry. The assistant attached to the
+// panel, else whoever answered a left question (a question has no assistant
+// attached, but its answer names one), else nobody: then the general word is
+// shown, and without the "assistant" badge beside it (a badge repeating the
+// word read as two labels).
+export function assistantTitle({ assistant, question, history }) {
+  // #3624: an answered question moves into the thread, so the latest assistant
+  // who wrote there names the window when nobody is attached.
+  const lastWriter = [...(history || [])].reverse().find((item) => item.sender === 'assistant' && item.authorName)?.authorName;
+  const name = assistant?.name || question?.answer?.assistantName || lastWriter || null;
+  return { name, text: name || 'Assistants', showBadge: Boolean(name) };
+}
+
 // #3608: how much of the bottom of the layout viewport an on-screen keyboard
 // covers. Android Chrome (default) and iOS Safari shrink only the *visual*
 // viewport when the keyboard opens, so a fixed, bottom-anchored panel has to be
