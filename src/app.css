@@ -2448,14 +2448,28 @@
         cursor: pointer;
         padding: 0;
       }
+      /* #3585: a help note, not a paragraph inside the form -- one or two
+         short lines set off by a thin rule, so it reads as a note beside the
+         field above it and not as another field. */
       .info-tooltip-popup {
         font-size: 12px;
+        line-height: 1.4;
         color: rgb(var(--ink-rgb) / 0.65);
+        margin: -2px 0 0;
+        padding-left: 8px;
+        border-left: 2px solid rgb(var(--ink-rgb) / 0.2);
+        user-select: text;
       }
       .field-with-tooltip {
         display: flex;
         align-items: flex-start;
         gap: 6px;
+      }
+      /* #3585: display:flex above outranks the browser's own [hidden] rule, so
+         setUploadFileMode's `.hidden = true` left the model-file picker on
+         screen beside the video picker. */
+      .field-with-tooltip[hidden] {
+        display: none;
       }
       .field-with-tooltip > label {
         flex: 1 1 auto;
