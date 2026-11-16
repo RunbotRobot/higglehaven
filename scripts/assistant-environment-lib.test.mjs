@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import runbook from '../docs/assistant-runbook.md?raw';
 import {
-  PROGRAM_FILES, buildSetupScript, permissionRules, INSTALL_DIR, REPLY_ACTIONS, commandsSection, buildBriefing, COMMANDS_MARKER, SHIFT_BACKGROUND_LIMIT_MS,
+  PROGRAM_FILES, INSTALLED_FILES, HANDBOOK_FILE, HANDBOOK_PATH, buildSetupScript, permissionRules, INSTALL_DIR, REPLY_ACTIONS, commandsSection, buildBriefing, COMMANDS_MARKER, SHIFT_BACKGROUND_LIMIT_MS,
 } from './assistant-environment-lib.mjs';
 import { resolveBaseUrl, LIVE_SITE_URL, checkCommandText, accentLandlets, TEXT_MAX } from './assistant-lib.mjs';
 
 // #3458: the generated setup script and the permission rules.
 const COMMIT = 'a'.repeat(40);
 // Any 64-hex values do: the unit tests check the text, e2e/assistant-environment-setup.test.mjs runs it.
-const SUMS = Object.fromEntries(PROGRAM_FILES.map((name, i) => [name, String(i + 1).repeat(64).slice(0, 64)]));
+const SUMS = Object.fromEntries(INSTALLED_FILES.map((name, i) => [name, String(i + 1).repeat(64).slice(0, 64)]));
 
 describe('buildSetupScript', () => {
   it('names the pinned commit, the public host and every checksum, and fits the environment field', () => {
     const script = buildSetupScript({ commit: COMMIT, files: SUMS });
     expect(script).toContain(`COMMIT=${COMMIT}`);
     expect(script).toContain('https://raw.githubusercontent.com/RunbotRobot/higglehaven/$COMMIT/scripts');
-    for (const name of PROGRAM_FILES) expect(script).toContain(`${SUMS[name]}  ${name}`);
+    for (const name of INSTALLED_FILES) expect(script).toContain(`${SUMS[name]}  ${name}`);
+    // #3615: the handbook comes from docs/ at the same commit, from the same host.
+    expect(script).toContain('https://raw.githubusercontent.com/RunbotRobot/higglehaven/$COMMIT/docs');
+    expect(script).toContain(`"$DOCS/${HANDBOOK_FILE}"`);
     const lines = script.split('\n');
     expect(lines.length).toBeLessThanOrEqual(100);
     expect(Math.max(...lines.map((l) => new TextEncoder().encode(l).length))).toBeLessThanOrEqual(200);
@@ -29,6 +32,8 @@ describe('buildSetupScript', () => {
     expect(() => buildSetupScript({ commit: COMMIT, files: { ...SUMS, 'assistant-lib.mjs': 'zz' } })).toThrow(/assistant-lib\.mjs/);
     const { 'assistant-reply.mjs': _dropped, ...partial } = SUMS;
     expect(() => buildSetupScript({ commit: COMMIT, files: partial })).toThrow(/assistant-reply\.mjs/);
+    const { [HANDBOOK_FILE]: _noHandbook, ...withoutHandbook } = SUMS;
+    expect(() => buildSetupScript({ commit: COMMIT, files: withoutHandbook })).toThrow(/assistant-handbook\.md/);
   });
 });
 
@@ -38,8 +43,12 @@ describe('permissionRules', () => {
     expect(permissions.defaultMode).toBe('default');
     expect(permissions.allow).toContain(`Bash(node ${INSTALL_DIR}/assistant-shift.mjs --name juniper)`);
     for (const action of REPLY_ACTIONS) expect(permissions.allow).toContain(`Bash(node ${INSTALL_DIR}/assistant-reply.mjs --name juniper ${action}:*)`);
-    expect(permissions.allow).toHaveLength(1 + REPLY_ACTIONS.length);
-    expect(permissions.allow.every((rule) => rule.startsWith(`Bash(node ${INSTALL_DIR}/`))).toBe(true);
+    // #3615: and, read-only, the one handbook file (not a directory, not a pattern).
+    expect(permissions.allow).toContain(`Read(/${HANDBOOK_PATH})`);
+    expect(permissions.allow).toHaveLength(1 + REPLY_ACTIONS.length + 1);
+    expect(permissions.allow.filter((rule) => rule.startsWith('Read(')).length).toBe(1);
+    expect(permissions.allow.filter((rule) => !rule.startsWith('Read(')).every((rule) => rule.startsWith(`Bash(node ${INSTALL_DIR}/`))).toBe(true);
+    expect(permissions.allow.some((rule) => /Read\([^)]*[*?]/.test(rule))).toBe(false);
   });
 
   it('accepts the long login form and refuses anything that is not an assistant name', () => {
@@ -71,7 +80,7 @@ describe('commandsSection and buildBriefing', () => {
   const bare = (line) => line.replace(/ --kind KIND$/, '').replace(/ ID --text "TEXT"$/, '').replace(/ ID$/, '');
 
   it('prints every pre-approved command, and only those, for the one assistant', () => {
-    const rules = permissionRules('juniper').permissions.allow;
+    const rules = permissionRules('juniper').permissions.allow.filter((rule) => rule.startsWith('Bash('));
     const commands = commandLines(commandsSection('juniper'));
     const approved = (command) => rules.some((rule) => {
       const inner = rule.slice('Bash('.length, -1);
@@ -84,6 +93,9 @@ describe('commandsSection and buildBriefing', () => {
       expect(commands.some((command) => bare(command) === inner), inner).toBe(true);
     }
     expect(commandsSection('juniper')).not.toContain('clover');
+    // #3615: the briefing tells the assistant where its handbook is, and that it is the one file it may read.
+    expect(commandsSection('juniper')).toContain(HANDBOOK_PATH);
+    expect(commandsSection('juniper').replace(/\s+/g, ' ')).toContain('that one file with the file-read tool, and no other file');
     expect(commandsSection('Assistant-Clover')).toContain('--name clover');
   });
 
