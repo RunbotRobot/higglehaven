@@ -12,7 +12,7 @@ const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: $
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 const history = Array.from({ length: 40 }, (_, i) => ({
   sender: i % 2 === 0 ? 'shopper' : 'assistant',

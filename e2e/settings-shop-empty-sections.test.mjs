@@ -13,7 +13,7 @@ async function patch(route) {
 await page.route('**/api/auth/me', patch);
 await page.route('**/api/auth/signup', patch);
 await chooseIdentity(page, { mode: 'shop', label: 'EmptyShop' + (Date.now() % 100000), isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 
 await openAccountMenu(page);
 await page.click('#settings-btn');

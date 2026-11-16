@@ -96,7 +96,7 @@ await sendFeedbackFromSettings('build');
 
 await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 await sendFeedbackFromSettings('shop');
 
 await page.click('.mode-nav-btn[data-mode="sell"]');

@@ -18,7 +18,7 @@
 // short wait, since updateSignFade runs unconditionally every frame,
 // unlike the throttled window.__testForceShopProximityCheck) picks up the
 // proximity and flips #shop-sign-hint to .visible on its own.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Sign Edit Char Limit Tester';
 const ORIGINAL_TEXT = 'Original note left on this sign.';
@@ -68,12 +68,12 @@ await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
 });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1445: a brief real joystick deflection breaks Shop mode's own hands-off
 // spawn orbit, freeing shopAvatarPosition for the teleport hook to drive.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

@@ -36,8 +36,11 @@ await page.waitForTimeout(500);
 const worldViewActive = await page.evaluate(() => window.__sellWorldViewActive?.() === true);
 console.log('Sell world view is live (should be true):', worldViewActive);
 
-const hudSelectors = ['#shop-move-joystick', '#shop-look-joystick', '#shop-fly-btn'];
-const hudVisibleWhileModalOpen = await Promise.all(hudSelectors.map((s) => page.locator(s).isVisible()));
+// #3650: the sticks and the fly button are gone; what is left of "the HUD" is the
+// flying arrows (hidden unless flying) and the body.shop-ready flag.
+const hudSelectors = ['#shop-vertical-controls'];
+const hudIsUp = async () => [await page.evaluate(() => document.body.classList.contains('shop-ready'))];
+const hudVisibleWhileModalOpen = await hudIsUp();
 console.log('Shop movement HUD visible while the modal is open (should be all false):', hudVisibleWhileModalOpen);
 
 // Movement keys do nothing while the modal is up (typing in it must never walk the avatar).
@@ -55,7 +58,7 @@ console.log('avatar moved on a movement key while the modal is open (should be f
 await page.click('#seller-close-btn');
 await page.waitForTimeout(800);
 
-const hudVisibleAfterClose = await Promise.all(hudSelectors.map((s) => page.locator(s).isVisible()));
+const hudVisibleAfterClose = await hudIsUp();
 console.log('Shop movement HUD visible once the modal is closed (should be all true):', hudVisibleAfterClose);
 
 const bounds = await page.evaluate(() => window.__sellWorldGroundBounds());
@@ -115,7 +118,7 @@ console.log('avatar stopped at the far edge of the page (should be true):', farO
 await page.click('#seller-showcase-manage-btn');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
-const hudAfterReopen = await Promise.all(hudSelectors.map((s) => page.locator(s).isVisible()));
+const hudAfterReopen = await hudIsUp();
 console.log('HUD hidden again after reopening the modal (should be all false):', hudAfterReopen);
 
 const pass = worldViewActive &&

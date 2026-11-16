@@ -67,7 +67,7 @@ import {
 import { curvatureDropM, relativeCurvatureDropM } from '../../worker/earthCurvature.js';
 import {
   SHOP_HIDDEN_BUILDER_UI_IDS, showShopAccessGate,
-  shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl,
+  shopStatusEl, setShopControlsVisible,
   shopSignHintEl, shopCalendarHintEl,
   SHOP_WALL_HEIGHT_M, SHOP_PLOT_COLORS, plotColorKeyForLandlet, shapeForLandlet, pointInPolygonXY,
   shopAvatarPosition, shopAvatarFacing,
@@ -752,13 +752,9 @@ export async function enterShopMode() {
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
-  // #3442: the joysticks join the fly button and vertical controls here, so
-  // the whole control cluster arrives together rather than the joysticks
-  // leading (they used to be marked visible at the top of this function).
-  shopMoveJoystickEl.classList.add('visible');
-  shopLookJoystickEl.classList.add('visible');
-  shopFlyBtn.classList.add('visible');
-  shopVerticalControlsEl.classList.add('visible');
+  // #3442/#3650: the Shop controls (the flying arrows, and the flag the voice
+  // button and the assistant panel read) arrive together, here.
+  setShopControlsVisible(true);
   // Not just clearing the text — an empty .visible pill still shows its
   // own padding/background as a small blank rectangle, which sat directly
   // on top of the wordmark (both anchored at the same top:10/left:12 spot)
@@ -845,18 +841,8 @@ export function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  // #3530: the fly button's own picture, copied from the button as it is right
-  // now (the HUD swaps it between a perched and a flying robin with the flight
-  // state, src/shop/flightMovement.js), not an emoji dove, so the words
-  // describe what is actually on screen and cannot drift from it.
-  note.appendChild(document.createTextNode('Left stick to walk (push further to run) — right stick to look — double-tap '));
-  const flyIcon = document.createElement('img');
-  flyIcon.className = 'settings-fly-icon';
-  const hudFlyIcon = document.getElementById('shop-fly-btn-icon');
-  flyIcon.src = (hudFlyIcon && hudFlyIcon.getAttribute('src')) || '/bird-standing.png';
-  flyIcon.alt = 'the bird button';
-  note.appendChild(flyIcon);
-  note.appendChild(document.createTextNode(' (or double-press space) to fly.'));
+  // #3650: moving is done by touching the world (no sticks, no fly button).
+  note.textContent = 'Drag anywhere on the world to walk (drag further to run). Put a second finger down and drag it to look. Double-tap to take off or land (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, and double-press space to fly).';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 

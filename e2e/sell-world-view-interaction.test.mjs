@@ -93,7 +93,10 @@ const pageLabel = await page.textContent('#seller-showcase-page-label');
 const multiPage = /Page 1 of [2-9]/.test(pageLabel || '');
 console.log('showcase has at least two pages (should be true):', multiPage, pageLabel);
 
-const hudSelectors = ['#shop-move-joystick', '#shop-look-joystick', '#shop-fly-btn'];
+// #3650: the sticks and the fly button are gone; what is left of "the HUD" is the
+// flying arrows (hidden unless flying) and the body.shop-ready flag.
+const hudSelectors = ['#shop-vertical-controls'];
+const hudIsUp = async () => [await page.evaluate(() => document.body.classList.contains('shop-ready'))];
 const overlaps = (a, b) => a && b && a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 async function pagerClearOfHud(label) {
   const pager = await page.locator('#seller-showcase-pager').boundingBox();
@@ -124,7 +127,7 @@ console.log('tapping a product after walking opened Manage (should be true):', t
 const rowExpanded = (await page.locator('.seller-row.expanded').count()) >= 1;
 console.log('the tapped product row is expanded (should be true):', rowExpanded);
 await page.waitForTimeout(200);
-const hudUnderTapModal = await Promise.all(hudSelectors.map((s) => page.locator(s).isVisible()));
+const hudUnderTapModal = await hudIsUp();
 console.log('movement HUD hidden under the modal opened by a tap (should be all false):', hudUnderTapModal);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);

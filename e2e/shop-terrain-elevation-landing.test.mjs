@@ -22,7 +22,7 @@
 // (updateShopFlight), the actual path that broke, via the real fly button
 // rather than the test-only teleport hook's grounded shortcut.
 import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Terrain Elevation Landing Builder';
 const TEST_ELEVATION_M = 8;
@@ -66,14 +66,14 @@ execSync(
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForTimeout(500);
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1445: break the hands-off spawn orbit (shopSpawnRotating), which
 // otherwise overwrites shopAvatarPosition.x/y every frame and fights the
 // teleports below -- same convention this file's siblings already use.
 async function stopSpawnOrbit() {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
@@ -95,7 +95,7 @@ async function clickUntilLanding() {
     const state = await page.evaluate(() => window.__testShopFlightState());
     if (state === 'landing') return;
     if (state === 'grounded' || state === 'flying') {
-      await page.locator('#shop-fly-btn').click();
+      await page.evaluate(() => window.__testToggleShopFlight());
     }
     await page.waitForTimeout(1200);
   }
@@ -111,7 +111,7 @@ const groundLandingPos = await page.evaluate(() => window.__testShopAvatarPositi
 console.log(`bare-ground landing on elevationM=${TEST_ELEVATION_M} landlet (z should be ~${TEST_ELEVATION_M}, not ~${2 * TEST_ELEVATION_M}):`, groundLandingPos);
 
 // Take off again, then land directly on top of the placed tree.
-await page.locator('#shop-fly-btn').click(); // grounded -> takingOff
+await page.evaluate(() => window.__testToggleShopFlight()); // grounded -> takingOff
 await page.waitForFunction(() => window.__testShopFlightState() === 'flying', { timeout: 10000 });
 await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y), [treeWorldX, treeWorldY]);
 await page.waitForTimeout(200);
@@ -119,7 +119,7 @@ const expectedItemTopZ = await page.evaluate(
   ([x, y]) => window.__testShopLandingObstructionTopZ(x, y),
   [treeWorldX, treeWorldY],
 );
-await page.locator('#shop-fly-btn').click(); // flying -> landing
+await page.evaluate(() => window.__testToggleShopFlight()); // flying -> landing
 await page.waitForFunction(() => window.__testShopFlightState() === 'grounded', { timeout: 15000 });
 await page.waitForTimeout(300);
 const itemLandingPos = await page.evaluate(() => window.__testShopAvatarPosition());

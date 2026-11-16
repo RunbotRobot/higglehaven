@@ -101,7 +101,7 @@ console.log('avatar + animation purchase responses (both should be 201):', avata
 // --- Enter Shop mode with nothing equipped/applied yet ---
 await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 const sourceOnFreshEntry = await page.evaluate(() => window.__shopAvatarAnimationSource);
 console.log('animation source on fresh Shop-mode entry, nothing equipped (should be null):', sourceOnFreshEntry);

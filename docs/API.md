@@ -10733,16 +10733,25 @@ sphere head, cylinder limbs — rather than loading a GLTF. Reskinning it
 with a real asset later is a `createShopAvatar` rewrite, not a redesign of
 anything below.
 
-Movement is real ground-based walking, not free flight: the move joystick
-changes `shopAvatarPosition` (the avatar's own feet position, clamped to
+Movement is real ground-based walking, not free flight: the move input (a
+drag on the world, #3650; the keyboard on a desktop) changes `shopAvatarPosition` (the avatar's own feet position, clamped to
 the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/4.4704
 m/s, docs/SPEC.md §2's confirmed speeds) rather than moving the camera
-directly. There's no separate run input — the joystick's own deflection
+directly. There's no separate run input — the drag's own deflection
 (0..1) doubles as intensity, linearly interpolating between the two
 speeds, so a full push runs and a gentle nudge walks. The same deflection
 drives `updateShopAvatarPose`'s walk-cycle: swing amplitude and cycle speed
 both scale with it and ease back to a neutral standing pose (rather than
-snapping) once the joystick releases.
+snapping) once the finger lifts.
+
+Input is touching the world (#3650, `src/shop/worldGestures.js`): a finger that
+drags walks (a stick placed wherever it lands, full speed at
+`FULL_DEFLECTION_PX` of travel), a second finger dragging looks, and a
+double-tap takes off or lands. A tap that does not move stays a click, read by
+the world's tap handler. The first use of each gesture dispatches a
+`higglehaven:world-gesture` event on `window` (`detail.kind` is `walk`, `look`
+or `fly`) for the bud's first-visit hint. Touch and pen only; a mouse keeps the
+keyboard and wheel.
 
 The camera is no longer the player — it's a third-person rig that orbits a
 fixed `SHOP_CAMERA_FOLLOW_DISTANCE_M` around a point roughly at the
@@ -10767,18 +10776,13 @@ avatar's own altitude (mirrored onto `shopAvatarPosition.z` every frame in
 `updateShopMovement`, which the existing camera-follow logic already tracks
 for free since it's relative to the avatar's position).
 
-Trigger matches the spec's own wording — a single tap on `#shop-fly-btn`
-(`bindShopFlyToggle`), or a double-press of `Space` (desktop, via a
+Trigger: a double-tap on the world (#3650, `bindWorldGestures`; the bird
+button it replaced is gone), or a double-press of `Space` (desktop, via a
 `keydown` listener requiring two presses within
-`SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than one). The two
-gestures are deliberately asymmetric: `Space` is an overloaded key an
-ordinary press could trigger by accident while just moving around, so it
-needs the double-press guard against launching the player unintentionally;
-the bird button is a dedicated, visible control with no such accidental-
-trigger risk, so it toggles on a single tap (owner feedback,
-`u7rvtz1jn1wchfsz6c1o`, 2026-09-10 — it originally mirrored `Space`'s own
-double-tap requirement, which just added friction with nothing to guard
-against). Takeoff ramps `shopFlightAltitudeM` from 0 to
+`SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than one). Both are
+double gestures because a single press or tap does other things (a tap
+inspects a product; `Space` is an ordinary key) and must never launch the
+player by accident. Takeoff ramps `shopFlightAltitudeM` from 0 to
 `SHOP_FLIGHT_HOVER_START_ALTITUDE_M` over `SHOP_FLIGHT_TAKEOFF_DURATION_S`
 (spec's "~1s lift"); landing reverses that over
 `SHOP_FLIGHT_LANDING_DURATION_S` (spec's "~2s reverse") from whatever

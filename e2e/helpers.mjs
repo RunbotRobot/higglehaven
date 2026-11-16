@@ -754,3 +754,17 @@ export async function captureNotices(page) {
     }).observe(modal, { attributes: true, attributeFilter: ['class'] });
   });
 }
+
+// #3650: the on-screen sticks the e2e suite used to find by id are gone; moving is
+// a drag on the world. These boxes are where a stick used to sit, in the lower
+// left (walk) and lower right (look) of the page, so a test that held a mouse
+// drag there to give navigation input still does (the canvas is under both; an
+// automated browser's mouse counts as a finger, see bindWorldGestures).
+export async function shopStickBox(page) {
+  const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  return { x: 20, y: height - 24 - 108, width: 108, height: 108, pageWidth: width };
+}
+export async function shopLookStickBox(page) {
+  const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  return { x: width - 20 - 108, y: height - 24 - 108, width: 108, height: 108 };
+}

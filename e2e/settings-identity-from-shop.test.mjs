@@ -41,7 +41,7 @@ await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', tim
 // here is what actually lets enterShopMode finish loading the world below,
 // same as chooseIdentity's own post-signup step in helpers.mjs.
 await clearVerifyModalIfShown(page);
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 const btnLabelAfterSignup = await waitForText(page, '#account-auth-btn', 'Settings Identity Suite');
 console.log('account button after signup, in Shop mode (should be "Settings Identity Suite"):', btnLabelAfterSignup);
 

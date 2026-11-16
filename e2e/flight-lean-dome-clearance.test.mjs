@@ -20,13 +20,13 @@
 // leaning mesh's own real farthest world-space point independent of
 // whatever clamp formula ends up guarding it.
 import * as THREE from 'three';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Flight Lean Clearance Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688/#1175: spawn state isn't settled until enterShopMode's post-fetch
 // tail finishes (same wait flight.test.mjs/flight-dome-ceiling.test.mjs rely on).
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
@@ -36,7 +36,7 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 // bug reproduces at low altitude, unlike #1828/#1839's near-ceiling case.
 // Hold full forward deflection long enough to reach the wall's own flat
 // radius on a freshly-seeded dev world.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveOriginX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveOriginY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveOriginX, moveOriginY);

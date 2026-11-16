@@ -10,7 +10,7 @@
 // fully-blended values, then that a brief joystick deflection hard-cuts it
 // back to 0 on the very next frame (the same instant-ease-out discipline
 // every other idle blend in this file already follows).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Idle Lean Pose Builder';
 const LANDLET_ID = 'idle-lean-pose-landlet';
@@ -40,7 +40,7 @@ async function fetchJson(p, path, options) {
 // below (after the lean pose engages) to drive the hard-cut-on-movement
 // assertion.
 async function deflectMoveJoystick(p) {
-  const moveJoystickBox = await p.locator('#shop-move-joystick').boundingBox();
+  const moveJoystickBox = await shopStickBox(p);
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
   await p.mouse.move(moveCenterX, moveCenterY);
@@ -120,7 +120,7 @@ const LEAN_TARGET_WORLD_FACING_RAD = Math.PI;
 const SHOP_LEAN_PITCH_RAD = (12 * Math.PI) / 180;
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 await deflectMoveJoystick(page);

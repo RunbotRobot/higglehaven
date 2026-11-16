@@ -7,17 +7,17 @@
 // Flying (above the ground, below the wall's rim): fly out facing outward and note where the avatar rests, turn the
 // camera to face the centre (the pair slides in, the turn is never blocked),
 // then back outward for longer than it takes to reach the edge.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Rigid Pair Dome Tester';
 const FOLLOW_M = 4.2;
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await page.setViewportSize({ width: 1100, height: 800 });
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 20000 });
 
-const joystick = await page.locator('#shop-move-joystick').boundingBox();
+const joystick = await shopStickBox(page);
 const originX = joystick.x + joystick.width / 2;
 const originY = joystick.y + joystick.height / 2;
 

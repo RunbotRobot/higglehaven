@@ -99,7 +99,7 @@ console.log('purchase response (status should be 201):', purchased.status);
 // --- Enter Shop mode fresh (the default avatar, nothing equipped yet) ---
 await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 // A marker surviving to the end of this test is this test's own proof that
 // none of the steps below ever reload the page — a real risk given

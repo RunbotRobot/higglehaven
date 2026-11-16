@@ -15,7 +15,7 @@
 // confirm look-only input never trips it, once to actually get an AFK state
 // to then clear) -- there's no faster deterministic way to exercise this
 // specific timer from outside the module.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, shopLookStickBox } from './helpers.mjs';
 
 const LABEL = 'AFK Look-Only Tester';
 const SHOP_AFK_DELAY_S = 90;
@@ -26,7 +26,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 async function afkOpacity() {
   return page.evaluate(() => window.__shopAfkOpacity ?? null);
@@ -37,7 +37,7 @@ async function afkOpacity() {
 // is genuinely stationary (not auto-orbiting) for the rest of this test.
 // Mirrors e2e/compass.test.mjs's own dragMoveJoystick idiom.
 async function tapMoveJoystick() {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const originX = box.x + box.width / 2;
   const originY = box.y + box.height / 2;
   await page.mouse.move(originX, originY);
@@ -56,7 +56,7 @@ console.log('AFK opacity right after stopping the spawn orbit (should be ~0):', 
 // it: shopLookX/shopLookY latch to the deflected value from that one move
 // event and stay there every frame until release, same as a player holding
 // the stick to keep panning the camera.
-const lookBox = await page.locator('#shop-look-joystick').boundingBox();
+const lookBox = await shopLookStickBox(page);
 const lookOriginX = lookBox.x + lookBox.width / 2;
 const lookOriginY = lookBox.y + lookBox.height / 2;
 await page.mouse.move(lookOriginX, lookOriginY);

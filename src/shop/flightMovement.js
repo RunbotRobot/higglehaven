@@ -79,9 +79,10 @@ import {
   shopWorldRadiusM, shopDomeMesh, SHOP_MAX_PITCH,
   SHOP_WALL_HEIGHT_M, SHOP_DOME_CLEARANCE_MARGIN_M,
   SHOP_AVATAR_COLLISION_HALF_M,
-  shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
-  shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
+  shopLastLocationBtn, shopVerticalControlsEl,
+  shopUpBtn, shopDownBtn,
 } from '../main.js';
+import { createWorldGestures } from './worldGestures.js';
 // #2628: updateConfettiBursts now lives in src/shop/productCheckout.js.
 import { updateConfettiBursts } from './productCheckout.js';
 // #2625: shopDomeRiseM now lives in ./sky.js (this leaf's own
@@ -144,7 +145,7 @@ const SHOP_RUN_SPEED_M_S = 4.4704; // docs/SPEC.md §2 (v17): 10 mph
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
 
-// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.
+// Flight (docs/SPEC.md §2) — see updateShopFlight and bindWorldGestures.
 // "Occupied landing spots offset to nearest open space" is now built
 // (#2044, nearestOpenLandingSpot below) now that real multiplayer presence
 // (#1095) gives it another avatar to actually collide with. "Flying
@@ -299,9 +300,6 @@ const SHOP_AVATAR_ANIM_WALK_THRESHOLD = 0.05;
 // from whatever it's leaning against).
 const SHOP_LEAN_PITCH_RAD = (12 * Math.PI) / 180;
 
-const SHOP_JOYSTICK_MAX_PX = 46;
-const SHOP_JOYSTICK_DEADZONE_PX = 6;
-
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
 
 // How far the camera must stay from the wall's own radius. Separate from
@@ -331,7 +329,6 @@ const SHOP_CAMERA_DOME_MARGIN_M = 0.3;
 const SHOP_MIN_FOV_DEG = 6;
 const SHOP_MAX_FOV_DEG = 100;
 const SHOP_WHEEL_ZOOM_SENSITIVITY = 0.05;
-const SHOP_PINCH_ZOOM_SENSITIVITY = 0.05;
 
 let shopYaw = 0;
 // #3295: the grounded look pitch (shopPitch's own default), named so
@@ -374,6 +371,7 @@ export function releaseShopMovementInput() {
   shopJoystickMove.y = 0;
   shopJoystickLook.x = 0;
   shopJoystickLook.y = 0;
+  if (worldGestures) worldGestures.cancel();
   applyShopStickInput();
 }
 
@@ -449,63 +447,68 @@ export function applyShopCameraOrientation() {
   camera.quaternion.copy(yawQuat).multiply(pitchQuat).multiply(SHOP_BASE_QUAT);
 }
 
-// A standard dual-joystick mobile scheme: the left stick walks (forward/
-// back/strafe, relative to the camera's current facing), the right stick
-// looks (yaw/pitch). Each joystick tracks its own pointer via
-// setPointerCapture so both thumbs work at once regardless of where the
-// finger wanders once it's down — and each calls stopPropagation() so the
-// builder scene's own product-drag/multi-select/gizmo listeners (registered
-// on the canvas and on window) never see these events, without needing
-// every one of those individually guarded against firing during Shop mode.
-function bindShopJoystick(baseEl, knobEl, onChange) {
-  let pointerId = null;
-  let originX = 0;
-  let originY = 0;
-
-  function setKnob(x, y) {
-    knobEl.style.transform = `translate(${x}px, ${y}px)`;
-  }
-
-  function update(clientX, clientY) {
-    const dx = clientX - originX;
-    const dy = clientY - originY;
-    const dist = Math.hypot(dx, dy);
-    if (dist < SHOP_JOYSTICK_DEADZONE_PX) {
-      setKnob(0, 0);
-      onChange(0, 0);
-      return;
-    }
-    const clamped = Math.min(dist, SHOP_JOYSTICK_MAX_PX);
-    const knobX = (dx / dist) * clamped;
-    const knobY = (dy / dist) * clamped;
-    setKnob(knobX, knobY);
-    onChange(knobX / SHOP_JOYSTICK_MAX_PX, knobY / SHOP_JOYSTICK_MAX_PX);
-  }
-
-  function end(event) {
-    if (event.pointerId !== pointerId) return;
-    event.stopPropagation();
-    pointerId = null;
-    setKnob(0, 0);
-    onChange(0, 0);
-  }
-
-  baseEl.addEventListener('pointerdown', (event) => {
-    if (!shopActive || pointerId !== null) return;
-    event.stopPropagation();
-    event.preventDefault();
-    pointerId = event.pointerId;
-    originX = event.clientX;
-    originY = event.clientY;
-    baseEl.setPointerCapture(pointerId);
+// #3650 (part of #3648, the bud): moving through the world by touching it, in
+// place of the two on-screen sticks and the fly button. A drag anywhere on the
+// world walks (a stick placed wherever the finger lands), a second finger
+// dragging looks, and a double-tap takes off or lands; the recogniser is
+// src/shop/worldGestures.js and it feeds the same two raw stick states the
+// keyboard feeds, so everything downstream is unchanged. Touch and pen only:
+// a mouse keeps the keyboard and wheel. Each finger is captured on the canvas so
+// a drag that wanders over a panel still steers. A tap that does not move stays
+// the browser's click, read by the world's own tap handler (inspect a product,
+// open an assistant); the dead zone and the tap slop are the same size so a touch
+// is never both.
+// Hooks other code can listen to (the bud's first-visit hint, #3657): each fires
+// once per kind of gesture the first time it is used.
+export const WORLD_GESTURE_EVENT = 'higglehaven:world-gesture';
+const worldGestureSeen = new Set();
+function announceWorldGesture(kind) {
+  if (worldGestureSeen.has(kind)) return;
+  worldGestureSeen.add(kind);
+  window.dispatchEvent(new CustomEvent(WORLD_GESTURE_EVENT, { detail: { kind } }));
+}
+let worldGestures = null;
+function bindWorldGestures(canvas) {
+  worldGestures = createWorldGestures({
+    onMove: (x, y) => {
+      shopJoystickMove.x = x;
+      shopJoystickMove.y = y;
+      applyShopStickInput();
+      if (x !== 0 || y !== 0) announceWorldGesture('walk');
+    },
+    onLook: (x, y) => {
+      shopJoystickLook.x = x;
+      shopJoystickLook.y = y;
+      applyShopStickInput();
+      if (x !== 0 || y !== 0) announceWorldGesture('look');
+    },
+    onDoubleTap: () => {
+      toggleShopFlight();
+      announceWorldGesture('fly');
+    },
   });
-  baseEl.addEventListener('pointermove', (event) => {
-    if (event.pointerId !== pointerId) return;
-    event.stopPropagation();
-    update(event.clientX, event.clientY);
+  // A mouse is not a gesture on a real device (it keeps the keyboard and wheel);
+  // an automated browser (the e2e suite, scripts/live-site.mjs) has only a mouse
+  // to drive a drag with, so there it counts, and nobody else is affected.
+  const touching = (event) => event.pointerType === 'touch' || event.pointerType === 'pen'
+    || (event.pointerType === 'mouse' && navigator.webdriver === true);
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!shopActive || !touching(event)) return;
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
+    worldGestures.down(event.pointerId, event.clientX, event.clientY, performance.now());
   });
-  baseEl.addEventListener('pointerup', end);
-  baseEl.addEventListener('pointercancel', end);
+  canvas.addEventListener('pointermove', (event) => {
+    if (!shopActive || !touching(event)) return;
+    worldGestures.move(event.pointerId, event.clientX, event.clientY);
+  });
+  canvas.addEventListener('pointerup', (event) => {
+    if (!touching(event)) return;
+    worldGestures.up(event.pointerId, performance.now(), event.clientX, event.clientY);
+  });
+  canvas.addEventListener('pointercancel', (event) => {
+    if (!touching(event)) return;
+    worldGestures.cancel();
+  });
 }
 // Flight (docs/SPEC.md §2): double-tap the fly button, or double-press
 // space on desktop, toggles takeoff/landing (toggleShopFlight). Ascend/
@@ -552,22 +555,6 @@ function bindShopVerticalButton(el, direction) {
   el.addEventListener('pointercancel', end);
 }
 
-// Owner (u7rvtz1jn1wchfsz6c1o): "The bird icon should be a single tap
-// instead of a double-tap." The double-press requirement below (spacebar/
-// mobile jump) exists to protect an overloaded gesture — spacebar/jump
-// does other things too, so a stray press needs guarding against launching
-// flight unintentionally. The bird button has no such risk: it's a
-// dedicated, visible control the player has to deliberately aim for and
-// tap, so requiring a double-tap there was just friction, not protection.
-function bindShopFlyToggle(el) {
-  el.addEventListener('pointerdown', (event) => {
-    if (!shopActive) return;
-    event.preventDefault();
-    event.stopPropagation();
-    toggleShopFlight();
-  });
-}
-
 // #1176: "Go to Last Location" — see startGoToLastLocation's own comment.
 // A plain click, not pointerdown like the fly button above: this one has
 // no in-air-vs-grounded ambiguity to resolve quickly, and it's only ever
@@ -586,19 +573,9 @@ function bindShopFlyToggle(el) {
 // Bundled into one function main.js calls once its own DOM consts are
 // ready, rather than left as top-level side effects here.
 export function initShopFlightInputBindings() {
-  bindShopJoystick(shopMoveJoystickEl, shopMoveKnobEl, (x, y) => {
-    shopJoystickMove.x = x;
-    shopJoystickMove.y = y;
-    applyShopStickInput();
-  });
-  bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
-    shopJoystickLook.x = x;
-    shopJoystickLook.y = y;
-    applyShopStickInput();
-  });
+  bindWorldGestures(renderer.domElement);
   bindShopVerticalButton(shopUpBtn, 1);
   bindShopVerticalButton(shopDownBtn, -1);
-  bindShopFlyToggle(shopFlyBtn);
   shopLastLocationBtn.addEventListener('click', () => {
     if (!shopActive) return;
     startGoToLastLocation();
@@ -654,11 +631,8 @@ window.addEventListener('keydown', (event) => {
 // Zoom: narrows/widens the camera's own field of view rather than moving
 // it — the camera's own position is derived every frame from the avatar it
 // follows (positionShopCamera), not something a dolly could move
-// independently, so a lens-zoom is the natural equivalent. Wheel for
-// desktop, pinch for touch. Both live on the canvas itself
-// rather than the joysticks, so a thumb already on either stick never
-// fights with a zoom gesture — pinching needs both fingers on open canvas,
-// exactly where a joystick drag isn't.
+// independently, so a lens-zoom is the natural equivalent. Wheel on
+// desktop. (Pinch for touch went when a second finger began to look, #3650.)
 export function setShopFov(fov) {
   camera.fov = THREE.MathUtils.clamp(fov, SHOP_MIN_FOV_DEG, SHOP_MAX_FOV_DEG);
   camera.updateProjectionMatrix();
@@ -668,37 +642,6 @@ renderer.domElement.addEventListener('wheel', (event) => {
   event.preventDefault();
   setShopFov(camera.fov + event.deltaY * SHOP_WHEEL_ZOOM_SENSITIVITY);
 }, { passive: false });
-
-const shopPinchPointers = new Map(); // pointerId -> {x, y}
-let shopPinchStartDistance = null;
-let shopPinchStartFov = null;
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (!shopActive) return;
-  shopPinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (shopPinchPointers.size === 2) {
-    const [a, b] = [...shopPinchPointers.values()];
-    shopPinchStartDistance = Math.hypot(a.x - b.x, a.y - b.y);
-    shopPinchStartFov = camera.fov;
-  }
-});
-renderer.domElement.addEventListener('pointermove', (event) => {
-  if (!shopActive || !shopPinchPointers.has(event.pointerId)) return;
-  shopPinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (shopPinchPointers.size === 2 && shopPinchStartDistance !== null) {
-    const [a, b] = [...shopPinchPointers.values()];
-    const distance = Math.hypot(a.x - b.x, a.y - b.y);
-    setShopFov(shopPinchStartFov - (distance - shopPinchStartDistance) * SHOP_PINCH_ZOOM_SENSITIVITY);
-  }
-});
-function shopPinchEnd(event) {
-  shopPinchPointers.delete(event.pointerId);
-  if (shopPinchPointers.size < 2) {
-    shopPinchStartDistance = null;
-    shopPinchStartFov = null;
-  }
-}
-renderer.domElement.addEventListener('pointerup', shopPinchEnd);
-renderer.domElement.addEventListener('pointercancel', shopPinchEnd);
 
 const shopForward = new THREE.Vector3();
 const shopRight = new THREE.Vector3();
@@ -755,6 +698,11 @@ window.__testTeleportShopAvatar = (x, y, z) => {
 // the simulated duration is never actually guaranteed to be enough. Polling
 // this instead of guessing a bigger timeout is the robust fix.
 window.__testShopFlightState = () => shopFlightState;
+// #3650: the fly button the e2e suite used to click is gone; a double-tap is the
+// real input (covered by e2e/shop-world-gestures.test.mjs), this is the same
+// toggle without needing two taps in a row.
+window.__testToggleShopFlight = () => toggleShopFlight();
+window.__testWorldGestureFingers = () => (worldGestures ? worldGestures.activeFingers() : 0);
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -923,43 +871,11 @@ function shopFlightSpeedMultiplier(altitudeM) {
   });
 }
 
-// N45 (Control Room, 2026-09-11): originally swapped the icon to a
-// standing bird (🐦) for the whole takingOff/flying span so it read as
-// "you're up — tap to land," distinct from the grounded dove's "tap to
-// fly." Owner follow-up (2026-09-12): "make the in-flight bird and the
-// standing bird look like the same bird" — 🕊️ and 🐦 render as visibly
-// different species/colors across platforms (white dove vs. a often-blue
-// generic bird), which read as a mismatch rather than a state change. That
-// problem was specific to native emoji glyphs, not to having two icons —
-// owner-supplied custom artwork (Control Room, 2026-10-01, a matching
-// flying/standing pair of the same bird) fixes it at the source, so the
-// icon itself can carry the state again, same as before N45, with no CSS
-// tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
-const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
-const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
-// #3369: the PNGs are the bird alone on a transparent background, sized so
-// the farthest pixel of the bird sits inside the button's inscribed circle
-// (scripts/cut-bird-icons.mjs; art/ keeps the owner's originals). They used
-// to bake in a cream card and ring that were hidden by zooming the icon in
-// (#1815, retuned in #2750), and because the standing bird overlaps its own
-// ring no zoom could hide the ring without clipping the bird -- the clipped
-// bird kept coming back. There is no zoom, origin or clip any more: the icon
-// is object-fit: contain, and src/shop/flyButtonIcons.test.js pins the
-// artwork inside the circle.
 export function setShopFlyBtnFlying(flying) {
+  // #3650: the fly button is gone (a double-tap on the world flies); what is
+  // left of it is the flag the rest of the interface reads (body.shop-flying
+  // shows the up/down arrows).
   document.body.classList.toggle('shop-flying', flying);
-  shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtn.setAttribute('aria-pressed', String(flying));
-  // #1589: the icon shows the action a press performs, not the current
-  // state — a standing bird (press to take off) while grounded, a flying
-  // bird (press to land) while flying, i.e. the inverse of `flying`.
-  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
-  // #3530: Settings > Shop > Controls draws this same picture in its
-  // instruction text (src/shop/mode.js); keep every copy on the button's
-  // current one so the words never name a different bird than the screen shows.
-  for (const el of document.querySelectorAll('.settings-fly-icon')) {
-    el.setAttribute('src', shopFlyBtnIcon.getAttribute('src'));
-  }
 }
 
 // Toggling mid-takeoff is ignored — let it finish, then the next press

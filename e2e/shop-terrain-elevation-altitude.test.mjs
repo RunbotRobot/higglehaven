@@ -8,7 +8,7 @@
 // elevationM and confirm z rises to meet it -- the exact "walking across a
 // landlet boundary with a different elevation" case the per-frame sync (not
 // a one-shot landing-floor calculation) has to get right.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Terrain Elevation Altitude Builder';
 const LOW_LANDLET_ID = 'terrain-elevation-low-landlet';
@@ -64,7 +64,7 @@ const highCreated = await fetchJson('/api/landlets', {
 console.log('landlets created (both 201 expected):', { low: lowCreated.status, high: highCreated.status });
 
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1445: a brief real joystick deflection breaks the hands-off spawn orbit
@@ -73,7 +73,7 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 // e2e/shop-landing-spot-item-collision-altitude.test.mjs's own header
 // comment documents.
 async function stopSpawnOrbit() {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);

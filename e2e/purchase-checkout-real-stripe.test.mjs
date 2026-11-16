@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal, shopStickBox } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -341,13 +341,13 @@ if ((await page.locator('#auth-modal.visible').count()) === 0) {
 // different brand/fingerprint, same "always accepted in test mode" shape.
 await signUpAndVerifyWithRealCard(page, BUYER_LABEL, '5555555555554444');
 
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1445: a brief real joystick deflection breaks Shop-mode's own hands-off
 // spawn orbit, freeing shopAvatarPosition for the teleport hook below to
 // actually drive -- same precedent as e2e/calendar-review-mount-offset.test.mjs.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

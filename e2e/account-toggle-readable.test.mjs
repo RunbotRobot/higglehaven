@@ -5,7 +5,7 @@ import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Gear Tester', viewport: { width: 390, height: 844 } });
 await chooseIdentity(page, { mode: 'shop', label: 'Gear Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 
 const m = await page.evaluate(() => {
   const el = document.getElementById('account-menu-toggle');

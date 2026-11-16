@@ -6,7 +6,7 @@
 // e2e/credit-orb-collect.test.mjs; this exercises the new altitude
 // exclusion (CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M, checked against
 // shopFlightAltitudeM) that test's own ground-level case doesn't cover.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Flight Altitude Tester';
 const LANDLET_ID = `credit-orb-altitude-e2e-${Date.now()}`;
@@ -30,7 +30,7 @@ async function fetchJson(path) {
 }
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 const { landlets } = await fetchJson('/api/landlets?limit=100');
@@ -40,7 +40,7 @@ console.log('seeded landlet found via the API (should be true):', !!myLandlet);
 // #1445: a brief real joystick deflection breaks Shop mode's own hands-off
 // spawn orbit, freeing shopAvatarPosition for the teleport hook to drive —
 // same sequence e2e/credit-orb-collect.test.mjs uses.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

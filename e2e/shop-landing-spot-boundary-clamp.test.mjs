@@ -60,7 +60,7 @@ const landletCreated = await fetchJson(pageA, '/api/landlets', {
 console.log('landlet created at the default (0,0) center (status should be 201):', landletCreated.status);
 
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // shopWorldRadiusM is set once the world finishes loading, independent of
@@ -105,7 +105,7 @@ console.log('B\'s position as polled into A\'s own scene before landing (should 
 // descent. toggleShopFlight's own tap handler also calls
 // stopShopSpawnRotation() synchronously before anything else, so the
 // teleport right after is never raced by the orbit's own per-frame update.
-await pageA.click('#shop-fly-btn');
+await pageA.evaluate(() => window.__testToggleShopFlight());
 // Mid-landing, x/y are untouched by updateShopFlight's own landing branch
 // until the final "landed" tick (only altitude ramps during the descent;
 // see that branch's own code) -- safe to pin the exact spot here.

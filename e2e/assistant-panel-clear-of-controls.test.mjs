@@ -42,7 +42,7 @@ await fetchJson('/api/landlets', {
 });
 await installFakeVisualViewport(page);
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // What the panel overlaps, as a list of the controls it covers.
@@ -50,7 +50,7 @@ const covered = () => page.evaluate(() => {
   const panel = document.getElementById('assistant-chat-panel').getBoundingClientRect();
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   const hit = [];
-  for (const selector of ['#shop-move-joystick', '#shop-look-joystick', '#shop-fly-btn', '#shop-vertical-controls']) {
+  for (const selector of ['#shop-vertical-controls']) {
     const el = document.querySelector(selector);
     if (!el || getComputedStyle(el).display === 'none') continue;
     if (overlaps(panel, el.getBoundingClientRect())) hit.push(selector);
@@ -79,7 +79,7 @@ check(await page.evaluate(() => getComputedStyle(document.getElementById('assist
 // With the panel open the fly button is still tappable (it is not covered), and
 // the other state clears the controls too: on the ground there are no arrows,
 // in the air they stack above the fly button and the panel starts above them.
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForFunction((was) => document.body.classList.contains('shop-flying') !== was, firstState, { timeout: 10000 });
 const second = await covered();
 check(second.hit.length === 0, `${firstState ? 'on the ground' : 'flying'}: the panel covers no movement control (covers: ${second.hit.join(', ') || 'none'}; panel ${JSON.stringify(second.panel)})`);
@@ -119,7 +119,7 @@ async function headerOnScreenWithKeyboard(label) {
   await page.waitForTimeout(300);
 }
 await headerOnScreenWithKeyboard(firstState ? 'on the ground' : 'flying');
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForFunction((was) => document.body.classList.contains('shop-flying') !== was, !firstState, { timeout: 10000 });
 await headerOnScreenWithKeyboard(firstState ? 'flying' : 'on the ground');
 

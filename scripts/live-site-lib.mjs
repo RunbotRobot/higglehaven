@@ -10,7 +10,7 @@ export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
 
-// Joystick drag vector per direction, as a fraction of the joystick's radius
+// Drag direction for a walk (a unit vector scaled by the caller)
 // (screen y grows downward, so "forward" is up).
 export const WALK_VECTORS = {
   forward: [0, -1],
@@ -19,9 +19,9 @@ export const WALK_VECTORS = {
   right: [1, 0],
 };
 
-// #3479: the camera is steered by the look joystick (held, it turns the view at a
+// #3479/#3650: the camera is steered by a second finger (held, it turns the view at a
 // steady rate; up and down are the pitch), not by dragging the page, so `aim`
-// holds that joystick. Directions are as the thumb moves it, on the screen.
+// holds that finger. Directions are as the finger moves, on the screen.
 export const AIM_VECTORS = {
   up: [0, -1],
   down: [0, 1],

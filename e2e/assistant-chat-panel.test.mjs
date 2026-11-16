@@ -48,9 +48,9 @@ await fetchJson(pageA, '/api/landlets', {
   body: JSON.stringify({ landletId: LANDLET_ID, name: 'Assistant Chat Landlet', areaM2: 1000, status: 'claimed', ownerBuilderId: builderA.builderId }),
 });
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn');
+await pageA.evaluate(() => window.__testToggleShopFlight());
 await pageA.waitForTimeout(2500);
 await pageA.waitForTimeout(2500);
 
@@ -61,9 +61,9 @@ await fetchJson(pageB, '/api/presence', {
   body: JSON.stringify({ x: 0, y: 0, z: 0, heading: 0, landletId: LANDLET_ID }),
 });
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn');
+await pageB.evaluate(() => window.__testToggleShopFlight());
 await pageB.waitForTimeout(2500);
 await pageA.waitForTimeout(3000);
 
@@ -136,7 +136,7 @@ const minimised = await pageA.evaluate(() => {
   const pill = document.getElementById('assistant-chat-pill');
   const pillBox = rect(pill);
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  const controls = ['#shop-fly-btn', '#shop-move-joystick', '#shop-look-joystick', '#mode-nav'];
+  const controls = ['#shop-vertical-controls', '#mode-nav'];
   return {
     panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
     pillShown: !pill.hidden && pillBox.width > 0,

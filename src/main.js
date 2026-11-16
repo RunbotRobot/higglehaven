@@ -1030,17 +1030,19 @@ document.addEventListener('click', (event) => {
 // Exported for src/shop/mode.js's own enterShopMode (#2629) -- a reverse
 // import, same shape as the other Shop DOM consts below.
 export const shopStatusEl = document.getElementById('shop-status');
-export const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
-export const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
-export const shopLookJoystickEl = document.getElementById('shop-look-joystick');
-export const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
-export const shopFlyBtn = document.getElementById('shop-fly-btn');
-export const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
 export const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 export const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 export const shopUpBtn = document.getElementById('shop-up-btn');
 export const shopDownBtn = document.getElementById('shop-down-btn');
-// #2624: wires up both joysticks/both vertical buttons/the fly toggle/the
+// #3650: the sticks and the fly button are gone (moving is done by touching the
+// world, src/shop/worldGestures.js); what remains of "the Shop controls are up"
+// is this flag on <body> (the voice button and the assistant panel read it, and
+// so do the e2e tests) and the flying arrows' own gate.
+export function setShopControlsVisible(visible) {
+  document.body.classList.toggle('shop-ready', visible);
+  shopVerticalControlsEl.classList.toggle('visible', visible);
+}
+// #2624: wires up the world gestures (#3650)/both vertical buttons/the
 // last-location click -- deferred into a function call (rather than left
 // as shop/flightMovement.js's own top-level side effects) so it runs after
 // the DOM consts just above are actually initialized; see that module's
@@ -1578,8 +1580,8 @@ window.__testShopLeanPose = () => ({
 shopProductPreviewCloseBtn.addEventListener('click', closeShopProductPreviewModal);
 
 // Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
-// on open canvas (movement/look are joystick-driven, pinch-zoom needs two
-// fingers — see the pointerdown/pointermove pair just above), so this is
+// on open canvas (a finger that moves walks and a second one looks, see
+// src/shop/worldGestures.js; a tap that does not move is a click), so this is
 // free to use for "what is this." Tapping a product shows its info;
 // tapping anything else (ground, sky, empty space) dismisses whatever was
 // showing, the same "tap away to close" a shopper would expect.

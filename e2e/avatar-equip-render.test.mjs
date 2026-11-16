@@ -107,7 +107,7 @@ const modelResponsePromise = page.waitForResponse(
 );
 await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 const modelResponse = await modelResponsePromise;
 console.log('equipped avatar model fetched by the browser in Shop mode (status should be 200):', modelResponse.status());
 
