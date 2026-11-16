@@ -701,7 +701,7 @@ export async function createInstancesRemote(instances) {
       // already is (err.succeededCount, #903) so the existing "some items
       // didn't save" reporting below covers this case too.
       if (rejectedInstanceIds?.length) {
-        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the landlet they're on may have changed owner.`);
+        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the lándlet they're on may have changed owner.`);
       }
     } catch (err) {
       // #903: a later chunk failing doesn't mean nothing was saved — earlier
@@ -744,7 +744,7 @@ export async function upsertInstancesRemote(instances, { updateOnly = false, onC
       if (suspendedInChunk?.length) suspendedSellerInstanceIds.push(...suspendedInChunk);
       // #1772: same reasoning as createInstancesRemote's own fix above.
       if (rejectedInstanceIds?.length) {
-        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the landlet they're on may have changed owner.`);
+        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the lándlet they're on may have changed owner.`);
       }
     } catch (err) {
       // #1380: same reasoning as createInstancesRemote's own #903 fix above
@@ -774,7 +774,7 @@ export async function deleteInstancesRemote(instanceIds) {
       // #1773: same reasoning as createInstancesRemote's own #1772 fix —
       // a 200-range response can still be a partial success.
       if (rejectedInstanceIds?.length) {
-        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the landlet they're on may have changed owner.`);
+        throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the lándlet they're on may have changed owner.`);
       }
     } catch (err) {
       // #1380: same reasoning as createInstancesRemote's own #903 fix above

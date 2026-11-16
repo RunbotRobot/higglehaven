@@ -316,7 +316,7 @@ async function refreshAccountMenuLandCap() {
     // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
     // renderLandCapField's own comment (src/build/scene.js) on why.
     const me = await fetchMyBuilder();
-    accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
+    accountMenuLandCapEl.textContent = `Lándlet cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
     accountMenuLandCapEl.hidden = false;
   } catch (err) {
     console.warn('Could not refresh land cap menu display:', err);
@@ -1168,7 +1168,7 @@ async function renderMyLands() {
   } catch (err) {
     if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
     myLandsListEl.innerHTML = '';
-    myLandsStatusEl.textContent = err.message || 'Could not load your lands.';
+    myLandsStatusEl.textContent = err.message || 'Could not load your lándlets.';
     myLandsStatusEl.classList.add('error');
     return;
   }
@@ -1210,7 +1210,7 @@ async function renderMyLands() {
       // #3359: the shared in-app name modal instead of window.prompt() (a
       // browser that suppresses native dialogs made Rename do nothing). Its
       // input is maxlength 100, so the old over-length alert() is gone.
-      const result = await promptBundleName({ title: 'Rename this land', initialName: landlet.name });
+      const result = await promptBundleName({ title: 'Rename this lándlet', initialName: landlet.name });
       if (!result || result.name === landlet.name) return;
       const next = result.name;
       myLandsStatusEl.textContent = '';
@@ -1224,7 +1224,7 @@ async function renderMyLands() {
         landlet.name = updated.name;
         openLink.textContent = landlet.name;
       } catch (err) {
-        myLandsStatusEl.textContent = err.message || 'Could not rename this land.';
+        myLandsStatusEl.textContent = err.message || 'Could not rename this lándlet.';
         myLandsStatusEl.classList.add('error');
       } finally {
         renameBtn.disabled = false;

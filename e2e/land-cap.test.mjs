@@ -19,7 +19,7 @@ await openAccountMenu(page);
 // somewhere" — refreshAccountMenuLandCap (src/main.js) populates this on
 // every menu open, independent of Settings/Build mode.
 const menuLandCapText = await waitForText(page, '#account-menu-landcap', '/');
-console.log('Account menu land cap text (should read "Land cap: 1,000m² / 1,000m²"):', menuLandCapText);
+console.log('Account menu land cap text (should read "Lándlet cap: 1,000m² / 1,000m²"):', menuLandCapText);
 
 // #613: same "refresh on open" wiring, right next to the land cap line —
 // a fresh builder has earned nothing yet, so this stays hidden rather than
@@ -43,12 +43,12 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // added a Username field ahead of Land Cap in the Build tab.
 const landCapFieldText = await waitForText(page, '#land-cap-field', 'You own 1,000m²');
 const landCapFieldLabel = await page.locator('#land-cap-field').locator('span').textContent();
-console.log('Land Cap field label (should be "Land Cap"):', landCapFieldLabel);
+console.log('Land Cap field label (should be "Lándlet Cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1,000m²" twice — owned and cap):', landCapFieldText);
 
-const pass = menuLandCapText === 'Land cap: 1,000m² / 1,000m²' &&
+const pass = menuLandCapText === 'Lándlet cap: 1,000m² / 1,000m²' &&
   taxNoticeHidden &&
-  landCapFieldLabel.trim() === 'Land Cap' &&
+  landCapFieldLabel.trim() === 'Lándlet Cap' &&
   landCapFieldText.includes('You own 1,000m²') &&
   landCapFieldText.includes('your 1,000m² cap') &&
   errors.length === 0;
