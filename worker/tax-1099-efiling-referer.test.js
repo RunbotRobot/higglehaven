@@ -16,6 +16,9 @@ let adminSession;
 // The headers of each vendor call, in order, so a test can tell the token call
 // from the filing call.
 let vendorCalls = [];
+// What the mocked token endpoint does with a call, by the Referer it carried.
+// Default: accepts everything (a vendor that is not checking whitelisting).
+let tokenBehaviour = () => new Response(JSON.stringify({ AccessToken: 'test-access-token' }), { status: 200 });
 const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -33,7 +36,7 @@ beforeAll(async () => {
     const headers = new Headers(init?.headers);
     if (url.includes('tbsauth')) {
       vendorCalls.push({ kind: 'token', referer: headers.get('referer') });
-      return new Response(JSON.stringify({ AccessToken: 'test-access-token' }), { status: 200 });
+      return tokenBehaviour(headers.get('referer'));
     }
     if (/\/v2\.0\.0\/(Form1099NEC\/Create|form1099K\/create)$/i.test(url)) {
       vendorCalls.push({ kind: 'create', referer: headers.get('referer') });
@@ -108,8 +111,68 @@ describe('domain whitelisting Referer on the e-filing vendor calls (#3517)', () 
     vendorCalls = [];
     const connection = await api('/tax/efiling-connection-test', adminSession());
     expect(connection.response.status).toBe(200);
-    expect(vendorCalls).toEqual([{ kind: 'token', referer: REFERENCE_ID }]);
+    // The real id first, then (a vendor that accepts anything) one wrong id.
+    expect(vendorCalls.map((c) => c.kind)).toEqual(['token', 'token']);
+    expect(vendorCalls[0].referer).toBe(REFERENCE_ID);
+    expect(vendorCalls[1].referer).not.toBe(REFERENCE_ID);
     expect(JSON.stringify(connection.body)).not.toContain(REFERENCE_ID);
+  });
+});
+
+// #3607: the connection test also asks whether the vendor really checks the id.
+describe('what the connection test learns about whitelisting (#3607)', () => {
+  const refuse = () => new Response(JSON.stringify({ StatusCode: 401, StatusMessage: 'Unauthorized domain reference' }), { status: 401 });
+  const accept = () => new Response(JSON.stringify({ AccessToken: 'test-access-token' }), { status: 200 });
+  const test = async () => {
+    env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID = REFERENCE_ID;
+    vendorCalls = [];
+    return api('/tax/efiling-connection-test', adminSession());
+  };
+  afterAll(() => { tokenBehaviour = accept; });
+
+  it('says not enforced when a wrong id is accepted, and tests nothing more', async () => {
+    tokenBehaviour = accept;
+    const { response, body } = await test();
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ connected: true, whitelisting: 'not_enforced' });
+    expect(vendorCalls).toHaveLength(2);
+  });
+
+  it('says enforced and insensitive when the wrong id is refused and the other letter case is accepted', async () => {
+    tokenBehaviour = (referer) => (referer.toLowerCase() === REFERENCE_ID.toLowerCase() ? accept() : refuse());
+    const { body } = await test();
+    expect(body).toMatchObject({ connected: true, whitelisting: 'enforced', referenceIdCase: 'insensitive', refusal: { status: 401, message: 'Unauthorized domain reference' } });
+    expect(vendorCalls).toHaveLength(3);
+    expect(vendorCalls[2].referer).toBe(REFERENCE_ID.toUpperCase());
+    expect(JSON.stringify(body)).not.toContain(REFERENCE_ID);
+  });
+
+  it('says sensitive when only the exact letter case is accepted', async () => {
+    tokenBehaviour = (referer) => (referer === REFERENCE_ID ? accept() : refuse());
+    const { body } = await test();
+    expect(body).toMatchObject({ whitelisting: 'enforced', referenceIdCase: 'sensitive' });
+  });
+
+  it('never repeats the id if the vendor echoes it back in its refusal', async () => {
+    tokenBehaviour = (referer) => (referer === REFERENCE_ID ? accept()
+      : new Response(JSON.stringify({ StatusMessage: `Domain ${referer} is not allowed` }), { status: 403 }));
+    const { body } = await test();
+    expect(body.refusal).toEqual({ status: 403, message: 'Domain [id] is not allowed' });
+  });
+
+  it('does not call a vendor outage a refusal', async () => {
+    tokenBehaviour = (referer) => (referer === REFERENCE_ID ? accept() : new Response('bad gateway', { status: 502 }));
+    const { response } = await test();
+    expect(response.status).toBe(502);
+  });
+
+  it('skips the probes when no id is configured', async () => {
+    tokenBehaviour = accept;
+    env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID = undefined;
+    vendorCalls = [];
+    const { body } = await api('/tax/efiling-connection-test', adminSession());
+    expect(body).toEqual({ connected: true });
+    expect(vendorCalls).toHaveLength(1);
   });
 });
 

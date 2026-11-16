@@ -22,6 +22,7 @@ import { readJson, stringValue, labelValue } from './validation.js';
 import { requireCurrentUser, sha256Hex } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { assertNotFleetAccount } from './fleet.js';
 import { countryNameToCode, usStateNameToCode } from './country-codes.js';
 import {
   encryptTaxIdPayload, decryptTaxIdPayload, stripeAccountStatusJson,
@@ -277,6 +278,11 @@ export async function handleBuilderRedeem(request, env, db) {
     // this test suite since Stripe is never configured there, but not in a
     // real deployment) need the identical guard, same placement precedent
     // as #948.
+    // #3597: the fleet's own lándlet earns higgles like any builder's, and
+    // they are never spent: a fleet account cannot turn them into cash (owner,
+    // 2026-11-16, AGENTS.md "The fleet has a lándlet of its own"). Refused
+    // before anything is read or claimed.
+    assertNotFleetAccount(user, 'redeem higgles for cash');
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     // #3067: a redemption this builder already claimed (balance debited, Stripe
     // call(s) started, payout not yet confirmed) is finished by
@@ -1155,12 +1161,12 @@ function tax1099EfilingConfigured(env) {
 // DomainWhitelisting). It is the optional Worker secret
 // TAX_1099_EFILING_DOMAIN_REFERENCE_ID: optional in the Sandbox (whitelisting is
 // self-serve there), required for Live. Treated like a credential: never logged,
-// never returned. NOT YET LEARNED from a real call: what a blocked request
-// returns (status, code, message), what format the domain is entered in, or how
-// the Referer value is matched; handle whatever the first Sandbox call with
-// whitelisting switched on shows (see fetchTax1099EfilingToken's and
-// createTax1099Submission's and transmitTax1099Submission's error branches, which surface the vendor's own
-// StatusMessage).
+// never returned. Learned (owner's Sandbox run, 2026-11-16): the vendor accepts
+// the handshake with the id in lowercase. NOT YET LEARNED: whether it refuses a
+// wrong id, what that refusal returns (status, message), and whether letter case
+// matters; the admin connection test below probes exactly these (#3607) and
+// reports them, and the error branches of fetchTax1099EfilingToken and the
+// Create and Transmit calls surface the vendor's own StatusMessage.
 const TAX_1099_EFILING_TOKEN_URL = 'https://testoauth.expressauth.net/v2/tbsauth';
 // #3517: API v2.0.0 (tax year 2026 is v2.0.0 only; the vendor's versioning page
 // gives the Live API host as https://api.taxbandits.com/ plus the version, so
@@ -1199,7 +1205,7 @@ function base64UrlEncode(bytes) {
 // handshake otherwise. The JWS itself goes in a header literally named
 // `authentication` (not `authorization`); TaxBandits' token endpoint reads
 // that header specifically per their published docs.
-async function fetchTax1099EfilingToken(env) {
+async function fetchTax1099EfilingToken(env, { refererOverride } = {}) {
   const encoder = new TextEncoder();
   const header = base64UrlEncode(encoder.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
   const payload = base64UrlEncode(encoder.encode(JSON.stringify({
@@ -1214,16 +1220,49 @@ async function fetchTax1099EfilingToken(env) {
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
-  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws, ...tax1099EfilingDomainHeaders(env) } });
+  // #3607: the connection test sends a deliberately wrong Referer to see whether
+  // the vendor enforces whitelisting; every real call passes no override.
+  const domainHeaders = refererOverride === undefined ? tax1099EfilingDomainHeaders(env) : { referer: refererOverride };
+  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws, ...domainHeaders } });
   // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
   // upstream gateway error page makes response.json() itself throw before
   // the !response.ok check below ever runs, otherwise surfacing as an
   // uncaught 500 instead of this function's own intended 502.
   const data = await response.json().catch(() => null);
   if (!response.ok || !data?.AccessToken) {
-    throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
+    throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502, { vendorStatus: response.status });
   }
   return data.AccessToken;
+}
+
+// #3607: what the vendor does with a Referer that is not ours. The token call
+// either hands back a token (accepted) or refuses; a vendor 5xx, a 429 or no
+// answer at all says nothing about whitelisting, so that is rethrown instead of being
+// reported as a refusal. Returns what the refusal looked like (the vendor's status
+// and its own message, with the id scrubbed in case it is echoed back) so the
+// first real answer can be written down; never the id itself.
+async function probeTax1099EfilingReferer(env, referer) {
+  try {
+    await fetchTax1099EfilingToken(env, { refererOverride: referer });
+    return { accepted: true };
+  } catch (error) {
+    const vendorStatus = error?.extra?.vendorStatus;
+    if (!(error instanceof HttpError) || vendorStatus === undefined || vendorStatus >= 500 || vendorStatus === 429) throw error;
+    const real = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
+    const scrub = (text) => String(text ?? '').split(referer).join('[id]').split(real).join('[id]');
+    return { accepted: false, refusal: { status: vendorStatus, message: scrub(error.message).slice(0, 200) } };
+  }
+}
+
+// The real id with its last character changed to a different one of the same kind.
+function wrongReferenceId(referenceId) {
+  const last = referenceId.slice(-1);
+  const replacement = /[0-9]/.test(last) ? (last === '0' ? '1' : '0') : (last.toLowerCase() === 'a' ? 'b' : 'a');
+  return referenceId.slice(0, -1) + (last === last.toUpperCase() && last !== last.toLowerCase() ? replacement.toUpperCase() : replacement);
+}
+
+function flipCase(text) {
+  return [...text].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join('');
 }
 
 // #3517: API v2.0.0 files in two vendor calls. Create makes a submission that
@@ -1420,7 +1459,19 @@ export async function handleTax(request, env, db, route, url) {
       throw new HttpError('1099 e-filing vendor credentials are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     await fetchTax1099EfilingToken(env);
-    return json({ connected: true });
+    // #3607: with a Domain Reference Id set, also learn whether the vendor
+    // actually checks it (a wrong one is refused) and whether the letter case of
+    // ours matters. Same stateless handshake, three more times at most.
+    const referenceId = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
+    if (!referenceId) return json({ connected: true });
+    const wrong = await probeTax1099EfilingReferer(env, wrongReferenceId(referenceId));
+    if (wrong.accepted) return json({ connected: true, whitelisting: 'not_enforced' });
+    const result = { connected: true, whitelisting: 'enforced', refusal: wrong.refusal };
+    const flipped = flipCase(referenceId);
+    if (flipped !== referenceId) {
+      result.referenceIdCase = (await probeTax1099EfilingReferer(env, flipped)).accepted ? 'insensitive' : 'sensitive';
+    }
+    return json(result);
   }
   // #645: admin-only review list -- (re-)generates draft 1099 records for
   // the requested year, then returns every form on file for it, so an

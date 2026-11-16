@@ -10052,12 +10052,13 @@ both the OAuth URL and the API URL. It is the optional Worker secret
 test); it is never logged or returned. It is optional in the Sandbox
 (whitelisting is self-serve there) and required once the host pair is switched
 to Live (`TAX_1099_EFILING_IS_LIVE`): Live without it answers `503` ("...domain
-whitelisting reference is not configured on this server yet."). Not yet learned
-from a real call: what a blocked request returns, what format the domain is
-entered in, and how the Referer value is matched. A Worker's outbound `fetch`
-delivers a caller-set `Referer` (checked against a local echo server under
-workerd); the first Sandbox call with whitelisting switched on is the check on
-the production edge.
+whitelisting reference is not configured on this server yet."). Learned from the
+owner's first Sandbox run (2026-11-16): a Worker's outbound `fetch` delivers a
+caller-set `Referer` to the vendor and the vendor accepted the handshake with the
+id entered in lowercase (the vendor's console shows it in uppercase in one place).
+Still to be learned, and what the connection test below now reports: whether the
+vendor actually refuses a wrong id, what such a refusal looks like (status and
+message), and whether the letter case of the id matters.
 
 #### Testing note
 
@@ -10101,7 +10102,16 @@ with the vendor's own error message on failure (a real credential/request-
 shape problem, not a local validation gap). Side-effect-free and safe to
 call repeatedly — no filing, no form, no user data touched, just the
 stateless token exchange every real filing call would also need to make
-first. This is the "confirm the first real Sandbox call" step
+first. When `TAX_1099_EFILING_DOMAIN_REFERENCE_ID` is set it also makes up to
+two more handshakes (#3607): one with the id's last character changed, which
+sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal` is
+`{ status, message }`, the vendor's own, with any echo of an id replaced by
+`[id]`) or `"not_enforced"` (accepted); and, when enforced and the id has letters,
+one with every letter's case flipped, which sets `referenceIdCase` to
+`"insensitive"` or `"sensitive"`. A vendor 5xx, a 429 or no answer on a probe is
+not read as a refusal: the route answers 502 instead. The ids themselves are never
+returned. The admin page turns this into one plain sentence under the button.
+Without an id configured the answer is still just `{ "connected": true }`. This is the "confirm the first real Sandbox call" step
 `fetchTax1099EfilingToken`'s own comment and the "Unverified against a live
 vendor" paragraph above call for, without requiring the owner's EIN/
 business name to exist yet.
@@ -10331,6 +10341,14 @@ against one budget per client IP.
   feedback (`403`). It cannot buy while Stripe is in live mode (a `rk_live_` or
   `sk_live_` `STRIPE_SECRET_KEY`); test-mode purchases are allowed. Suspension
   and moderation apply to it like any account.
+- **Its higgles are earned and never spent (#3597).** The fleet's own lándlet is
+  paid like any builder's. Higgles leave a builder in exactly two places, and a
+  fleet account is refused at both with `403`: `POST /builders/me/redeem` (cash
+  out, before anything is claimed; the `GET` still reads the balance) and
+  `POST /auctions/:id/bids` (a winning bid is the only debit a builder makes on
+  purpose). There is no transfer between builders. A refund's clawback also
+  debits, but it reverses a credit rather than spending, so it stays. Selling
+  land (starting an auction) only credits, so it is allowed.
 - **Visibility.** Fleet avatars are visible to everyone like any other avatar
   until a launch decision says otherwise; there is no search by name in the
   app, so there is nothing to exclude from one.

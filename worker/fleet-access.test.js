@@ -265,6 +265,37 @@ describe('What a fleet account cannot do', () => {
     expect(created.response.status).toBe(201);
   }
 
+  // #3597: the fleet's own landlet is paid like any builder's and what it earns
+  // is never spent. Higgles leave a builder in exactly two places, a cash
+  // redemption and a winning auction bid; a fleet account is refused at both.
+  // (A refund's clawback is a reversal, not a spend, and stays.)
+  it('cannot redeem higgles for cash, and a fleet builder can still be paid', async () => {
+    const fleet = await fleetLogin('higglehaven7');
+    const builder = await api('/builders/me', withKey(fleet.token));
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 5000 WHERE builder_id = ?').bind(builder.body.builder.builderId).run();
+    const redeemed = await api('/builders/me/redeem', withKey(fleet.token, { method: 'POST', body: JSON.stringify({}) }));
+    expect(redeemed.response.status).toBe(403);
+    expect(redeemed.body.error).toBe('A fleet account cannot redeem higgles for cash.');
+    // Nothing was claimed, and reading the balance still works (it is paid, just never spent).
+    const after = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?').bind(builder.body.builder.builderId).first();
+    expect(after.higgles_balance_cents).toBe(5000);
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?').bind(builder.body.builder.builderId).first()).n).toBe(0);
+    expect((await api('/builders/me/redeem', withKey(fleet.token))).response.status).toBe(200);
+  });
+
+  it('cannot bid on a land auction', async () => {
+    const seller = await signupBuilder('fleet-bid-seller');
+    await env.DB.prepare("INSERT INTO landlets (landlet_id, name, status, owner_builder_id) VALUES ('fleet-bid-landlet', 'Fleet bid', 'claimed', ?)").bind(seller.builderId).run();
+    await env.DB.prepare("INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at) VALUES ('fleet-bid-auction', 'fleet-bid-landlet', ?, 0, ?)")
+      .bind(seller.builderId, new Date(Date.now() + 3600_000).toISOString()).run();
+    const fleet = await fleetLogin('higglehaven8');
+    await env.DB.prepare("UPDATE users SET trust_tier = 'id_verified', age_attested_at = '2026-01-01T00:00:00.000Z' WHERE username = 'higglehaven8'").run();
+    const bid = await api('/auctions/fleet-bid-auction/bids', withKey(fleet.token, { method: 'POST', body: JSON.stringify({ amountCents: 100 }) }));
+    expect(bid.response.status).toBe(403);
+    expect(bid.body.error).toBe('A fleet account cannot bid on a land auction.');
+    expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind('fleet-bid-auction').first()).n).toBe(0);
+  });
+
   it('its product flag is recorded but carries zero weight', async () => {
     const seller = await signupSeller('fleet-flag-seller');
     await createTemplate('fleet-flag-template', seller);

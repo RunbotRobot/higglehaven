@@ -826,13 +826,23 @@
 
   async function testConnection() {
     clearMessages();
+    let result;
     try {
-      await apiFetch('/api/tax/efiling-connection-test');
+      result = await apiFetch('/api/tax/efiling-connection-test');
     } catch (error) {
       showError(error.message);
       return;
     }
-    showOk('Connected.');
+    // #3607: what the check found about the vendor's domain whitelisting, in plain words.
+    if (result && result.whitelisting === 'enforced') {
+      const caseNote = result.referenceIdCase === 'insensitive' ? ' Capital and small letters in the id do not matter.'
+        : result.referenceIdCase === 'sensitive' ? ' Capital and small letters in the id DO matter, so type it exactly as the service shows it.' : '';
+      showOk('Connected. The service refuses calls without our id, and accepts ours.' + caseNote);
+    } else if (result && result.whitelisting === 'not_enforced') {
+      showOk('Connected, but the test service is not checking the id yet.');
+    } else {
+      showOk('Connected.');
+    }
   }
 
   document.getElementById('taxLoadBtn').addEventListener('click', loadForms);
