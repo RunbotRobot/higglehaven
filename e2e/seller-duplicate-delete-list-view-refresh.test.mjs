@@ -69,7 +69,14 @@ await page.waitForTimeout(300); // DELETE is now in flight, delayed by the route
 // exercising the handler's own renderActiveSellerView() contract regardless.
 await page.evaluate(() => document.querySelector('.seller-view-btn[data-view="list"]').click());
 await page.waitForTimeout(300);
-const cardPresentBeforeDeleteResolves = await page.locator('.seller-card').filter({ hasText: DELETE_PRODUCT_NAME }).isVisible();
+// #3586: the delete's confirm modal is still open here, and while it is the
+// Seller modal behind it is hidden (visibility: hidden, one sheet at a time),
+// so Playwright's isVisible() is false for any card in it. What this sanity
+// check needs is that List view rendered the still-undeleted card, so ask for
+// exactly that: one card in the DOM, not removed from layout by display.
+const cardPresentBeforeDeleteResolves = await page.locator('.seller-card').filter({ hasText: DELETE_PRODUCT_NAME }).evaluateAll(
+  (cards) => cards.length === 1 && getComputedStyle(cards[0]).display !== 'none',
+);
 console.log('deleted product\'s card visible in List view before the delete resolves (should be true -- sanity check):', cardPresentBeforeDeleteResolves);
 
 // Let the delayed DELETE actually land.

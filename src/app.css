@@ -802,12 +802,17 @@
         position: relative;
       }
       #account-menu-toggle {
+        /* #3569: it is the only way to Notices, Friends, My Purchases and Settings, so it
+           reads on any ground: a near-solid backing, an ink outline, a larger glyph and a
+           44x36 touch target (it was a 55%-clear pill with a 12px emoji). */
+        min-width: 44px;
+        min-height: 36px;
         padding: 5px var(--space-xl);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / 0.35);
+        background: rgb(var(--pill-rgb) / 0.95);
+        color: var(--pill-text);
+        font: 17px/var(--leading-normal) var(--font-sans);
         position: relative;
       }
       #account-menu-toggle.active {
@@ -1169,6 +1174,10 @@
          properties come from visualViewport (see syncVisibleArea in
          src/shop/assistantChat.js). */
       #assistant-chat-panel.typing {
+        /* Defaults only; syncVisibleArea sets both inline, which wins. Declared here so the
+           token check sees them as defined (main failed it after #3621). */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         bottom: calc(var(--assistant-kb-inset, 0px) + 8px);
         max-height: calc(var(--assistant-visible-height, 100dvh) - 16px);
       }
@@ -3482,6 +3491,17 @@
       }
       #seller-modal.visible {
         display: flex;
+      }
+      /* #3586 (interface week): one sheet at a time. Upload Model, Sell This
+         Too, the delete confirmation and Settings all open from My products,
+         and each used to leave it drawn underneath a translucent sheet, so
+         its heading, rows and buttons read through the new one. While any of
+         them is open My products is hidden (visibility, not display, so its
+         scroll position and any open product block are still there when the
+         upper sheet closes). A browser without :has() keeps the old stacking
+         and loses nothing else. */
+      body:has(#upload-modal.visible, #sell-this-too-modal.visible, #confirm-modal.visible, #settings-modal.visible) #seller-modal.visible {
+        visibility: hidden;
       }
       #seller-modal-content {
         position: relative;
