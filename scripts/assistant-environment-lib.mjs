@@ -149,14 +149,16 @@ double quotes where it says TEXT:
 
     ${reply('reply')} ID --text "TEXT"
     ${reply('end')} ID
-    ${reply('escalate')} ID --text "TEXT"
+    ${reply('escalate')} ID --text "TEXT" --kind KIND
     ${reply('handover')} ID
     ${reply('answer-question')} ID --text "TEXT"
-    ${reply('escalate-question')} ID --text "TEXT"
+    ${reply('escalate-question')} ID --text "TEXT" --kind KIND
 
 - \`reply\` answers the shopper. \`end\` ends the conversation. \`escalate\` files a card
   for the team: TEXT is your own short summary, never the shopper's words (the
-  server adds those in a marked quote).
+  server adds those in a marked quote). KIND is \`problem\` (something looks broken),
+  \`suggestion\` (an idea) or \`question\` (they need help you cannot give); leave
+  \`--kind\` out and it is a question.
 - \`handover\` passes the conversation to another assistant who is on shift and
   free. It says so if nobody is, and the conversation stays with you.
 

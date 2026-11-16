@@ -83,7 +83,13 @@ put both numbers in the PR.
 Rules of conduct on the live site:
 
 - Look at anything. Change only your own fleet account's data and the
-  landlets set aside for the fleet.
+  fleet's own landlet: `central-mosaic-012`, owned by the shared fleet
+  account `higglehaven0` (sign in as that account to build or sell there;
+  your own account is for looking around). See "The fleet has a lándlet of
+  its own in the live world" under "Standing owner decisions" for what it
+  is for and what it must never become. (Claimed 2026-11-16 on the
+  owner's typed instruction, #3431. It starts empty. Until #3597's guards
+  are in, place nothing there that a shopper could buy.)
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.
@@ -92,7 +98,7 @@ Rules of conduct on the live site:
   that talk to shoppers, and only through
   the assistant inbox (`/api/assistant-inbox`, docs/API.md "Assistant chat").
 - No load testing on the live site; stay inside the normal rate limits.
-- Clean up what you place outside your sandbox landlet.
+- Clean up what you place anywhere other than the fleet's own landlet.
 - After a change of yours deploys, look at it on the live site at phone size
   before calling it done, and say what you saw.
 
@@ -778,9 +784,14 @@ most likely to come up again.
     do it, written in the owner's voice ("my phone") with higglehaven1
     as "Claude". A decision states the exact words to type and the
     recommended answer. No task depends on an email or on chat.
-  - New information edits the task it belongs to. Things that have
-    shipped and are ready to try are added to the one standing "try the
-    latest changes on my phone" task, not given tasks of their own.
+  - New information edits the task it belongs to. Each thing that has
+    shipped and is ready to try gets a task of its own: one test, its
+    steps and what to look for, placed by how much it matters. (Owner,
+    2026-11-16: "The 'Test this on your phone' task is too unwieldy to
+    do all at once. I'd prefer to have each test as its own task." This
+    replaces the single standing "try the latest changes on my phone"
+    task. The principle: a task is one thing a person can finish in one
+    sitting and then close.)
   - higglehaven1 places each task in a single priority order across the
     owner's whole life (the nightly re-sort already keeps that order)
     and moves it when its importance changes. Quick decisions that
@@ -925,6 +936,82 @@ most likely to come up again.
   only what moving through and acting on the world needs" from the HUD
   to every surface. The owner said they do not know how to get there:
   bring options that can be looked at, not descriptions.
+
+- **The fleet has a lándlet of its own in the live world and may use it
+  freely; it is never used to steer people.** (2026-11-16, #3431.)
+  Asked for one empty, out-of-the-way test lot, the owner gave more: "I'd
+  actually like to give them more freedom to use it however they want.
+  Build with real products from the database that people in the world can
+  see. When people purchase, it goes through the same normal buying
+  avenues. higgles are paid to the higglehaven0 builder account, but we
+  just won't spend them." They named the tension with the earlier
+  decision against a central higglehaven-owned lándlet and drew the line
+  themselves: "we aren't controlling users via our lándlet, like
+  showcasing featured products, staging it as the hub for the world,
+  making it the initial spawn point for either new or returning users, or
+  using it to show new users a tutorial. Instead, it's just a space where
+  the higglehaven agents play around for their own testing and playing
+  around. It would read as kind of a look behind the curtain, embracing
+  the AI-coded nature of the app. I like the idea that higglehaven works
+  to bridge the seeming gap between 'warm, cozy, and playful higglehaven'
+  and 'evil AI is going to destroy humanity'." So: the lot is
+  `central-mosaic-012`, owned by the shared fleet account `higglehaven0`.
+  Any session may build on it with real catalog products, leave things
+  standing, and try Build and Sell changes there. Shoppers see it and buy
+  from it like any other lándlet; the seller is paid as usual; the
+  builder's share accrues to `higglehaven0` and is never redeemed, spent
+  or transferred (a guard in code, not a habit). What it must never
+  become: featured, promoted, a hub, a spawn point, a tutorial, or
+  anything the product routes people to. It gets no treatment another
+  builder's lándlet could not get. The principle: the platform having a
+  place is not the problem; the platform using a place to direct people
+  is. Something that exists on the same terms as everyone else's and says
+  honestly what it is fits the brand; something that uses the platform's
+  position to pull attention does not. (higglehaven1's working rules,
+  open to correction: it is on public view, so keep it on-brand and
+  something a visitor would enjoy finding; a sign-post may say plainly
+  that the AI sessions who build higglehaven made it; nothing there
+  imitates a real seller or person; do not design it to earn higgles; the
+  conduct rules in "Looking at the live site as a person" still hold, and
+  a session never touches anyone else's content.)
+
+- **A place outside the world still looks like the world.** (2026-11-16,
+  #3502.) Sell mode's showroom is not a real spot on the map, so it drew
+  a floor and a flat sky. Offered the real horizon, scenery of its own, or
+  leaving it bare, the owner chose its own scenery and reached for what
+  already exists: "How easy would it be to reuse the code for the
+  real-world's dome? I do like keeping the standard grass." So the
+  showroom is a small, empty piece of the world: the standard grass, the
+  same hazy wall and dome and drifting sky, and no real lándlets, because
+  it is not among them. When a view needs a setting, mount the world's own
+  ground and sky there rather than designing a second look; and never show
+  real places from somewhere that is not a real place. This is "One model,
+  not a hybrid" applied to scenery.
+
+- **The word is "lándlet", always; a person never reads "land".**
+  (2026-11-16, #3613; docs/SPEC.md v18 retired "lánd" as a separate
+  word.) Juniper told the owner "placing things on your own land ...
+  claim your first landlet", repeating her own runbook, and the owner
+  asked: "We intended to streamline the wording to always be 'lándlet'
+  with an accent on the 'a', and never 'land' or 'lánd', correct?" Yes.
+  In anything a person can read (the app, emails, an assistant's reply,
+  a runbook an assistant speaks from) a plot is a "lándlet", with the
+  accent, whatever its size; never "land", "lánd", "plot" or "lot".
+  Internal names keep the plain `a`, as the top of this file says. The
+  principle: one thing has one name, and text written for a model to
+  speak from is customer-facing text.
+
+- **An assistant can only be as good as what it is given: when one
+  answers badly, fix what it knows before changing the model.**
+  (2026-11-16, #3614.) Juniper could not give the steps for building and
+  ended with "if something looks different, tell me". The owner asked
+  for "a detailed user SOP that assistants can draw from", and wondered
+  whether it was "just an issue of using a lower-powered model". It was
+  not: her runbook gave one line per area and told her to say so when
+  unsure, and she did. So assistants get a handbook of exact steps, kept
+  true by a test against the real controls, and the runbook says what to
+  do when the handbook has no answer. A stronger model is a later
+  question for the owner, since it draws on the same weekly allowance.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
