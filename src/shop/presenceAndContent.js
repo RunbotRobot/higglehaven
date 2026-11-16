@@ -256,6 +256,11 @@ export let shopCurrentLandletEntry = null; // whichever shopLandlets entry the s
 export function resetShopCurrentLandletEntry() {
   shopCurrentLandletEntry = null;
 }
+// #3647: read-only, for the e2e that pins that a record refresh never leaves
+// the shopper standing on no lándlet (window.__testShopCurrentLandletId).
+export function currentShopLandletId() {
+  return shopCurrentLandletEntry?.record.landletId ?? null;
+}
 // #1100: the own-position report loop's own throttle state — see
 // reportOwnPresenceIfNeeded.
 let shopLastPresenceReportAt = 0;
@@ -778,7 +783,17 @@ export function refreshShopLandletRecordsNow() {
       // own bootstrap already does for the equivalent "labels just became
       // current" case, rather than leaving the "built by" label showing
       // stale data for the rest of the session.
-      if (currentEntryChanged) resetShopCurrentLandletEntry();
+      // #3647: recompute in the same breath. Resetting alone left
+      // shopCurrentLandletEntry null until the next proximity tick (a few
+      // frames later), and a presence report or poll landing in that gap read
+      // "standing on no lándlet": the report put the shopper's own row on no
+      // lándlet (so their own nearby-avatars GET answered nobody and they
+      // vanished for everyone else) and the poll despawned every other
+      // avatar. It happened on every 20 s refresh while standing on a lándlet.
+      if (currentEntryChanged) {
+        resetShopCurrentLandletEntry();
+        updateShopLandletInfo();
+      }
     })
     .catch(() => {}) // best-effort, same as every other background refresh in this file
     .finally(() => {
