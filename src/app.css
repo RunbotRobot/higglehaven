@@ -879,6 +879,7 @@
         background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
         box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
         font-size: var(--text-md);
+        white-space: nowrap;
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
