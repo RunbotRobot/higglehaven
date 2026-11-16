@@ -784,9 +784,14 @@ most likely to come up again.
     do it, written in the owner's voice ("my phone") with higglehaven1
     as "Claude". A decision states the exact words to type and the
     recommended answer. No task depends on an email or on chat.
-  - New information edits the task it belongs to. Things that have
-    shipped and are ready to try are added to the one standing "try the
-    latest changes on my phone" task, not given tasks of their own.
+  - New information edits the task it belongs to. Each thing that has
+    shipped and is ready to try gets a task of its own: one test, its
+    steps and what to look for, placed by how much it matters. (Owner,
+    2026-11-16: "The 'Test this on your phone' task is too unwieldy to
+    do all at once. I'd prefer to have each test as its own task." This
+    replaces the single standing "try the latest changes on my phone"
+    task. The principle: a task is one thing a person can finish in one
+    sitting and then close.)
   - higglehaven1 places each task in a single priority order across the
     owner's whole life (the nightly re-sort already keeps that order)
     and moves it when its importance changes. Quick decisions that
@@ -969,6 +974,44 @@ most likely to come up again.
   imitates a real seller or person; do not design it to earn higgles; the
   conduct rules in "Looking at the live site as a person" still hold, and
   a session never touches anyone else's content.)
+
+- **A place outside the world still looks like the world.** (2026-11-16,
+  #3502.) Sell mode's showroom is not a real spot on the map, so it drew
+  a floor and a flat sky. Offered the real horizon, scenery of its own, or
+  leaving it bare, the owner chose its own scenery and reached for what
+  already exists: "How easy would it be to reuse the code for the
+  real-world's dome? I do like keeping the standard grass." So the
+  showroom is a small, empty piece of the world: the standard grass, the
+  same hazy wall and dome and drifting sky, and no real lándlets, because
+  it is not among them. When a view needs a setting, mount the world's own
+  ground and sky there rather than designing a second look; and never show
+  real places from somewhere that is not a real place. This is "One model,
+  not a hybrid" applied to scenery.
+
+- **The word is "lándlet", always; a person never reads "land".**
+  (2026-11-16, #3613; docs/SPEC.md v18 retired "lánd" as a separate
+  word.) Juniper told the owner "placing things on your own land ...
+  claim your first landlet", repeating her own runbook, and the owner
+  asked: "We intended to streamline the wording to always be 'lándlet'
+  with an accent on the 'a', and never 'land' or 'lánd', correct?" Yes.
+  In anything a person can read (the app, emails, an assistant's reply,
+  a runbook an assistant speaks from) a plot is a "lándlet", with the
+  accent, whatever its size; never "land", "lánd", "plot" or "lot".
+  Internal names keep the plain `a`, as the top of this file says. The
+  principle: one thing has one name, and text written for a model to
+  speak from is customer-facing text.
+
+- **An assistant can only be as good as what it is given: when one
+  answers badly, fix what it knows before changing the model.**
+  (2026-11-16, #3614.) Juniper could not give the steps for building and
+  ended with "if something looks different, tell me". The owner asked
+  for "a detailed user SOP that assistants can draw from", and wondered
+  whether it was "just an issue of using a lower-powered model". It was
+  not: her runbook gave one line per area and told her to say so when
+  unsure, and she did. So assistants get a handbook of exact steps, kept
+  true by a test against the real controls, and the runbook says what to
+  do when the handbook has no answer. A stronger model is a later
+  question for the owner, since it draws on the same weekly allowance.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 

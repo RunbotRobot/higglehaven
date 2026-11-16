@@ -68,7 +68,7 @@ describe('resolveBaseUrl', () => {
 describe('commandsSection and buildBriefing', () => {
   const commandLines = (text) => text.split('\n').filter((line) => line.startsWith(`    node ${INSTALL_DIR}/`)).map((line) => line.trim());
   // What a rule matches, from a briefing line: the line without its ID / --text "TEXT" placeholders.
-  const bare = (line) => line.replace(/ ID --text "TEXT"$/, '').replace(/ ID$/, '');
+  const bare = (line) => line.replace(/ --kind KIND$/, '').replace(/ ID --text "TEXT"$/, '').replace(/ ID$/, '');
 
   it('prints every pre-approved command, and only those, for the one assistant', () => {
     const rules = permissionRules('juniper').permissions.allow;

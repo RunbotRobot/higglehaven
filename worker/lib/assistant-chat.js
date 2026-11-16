@@ -67,6 +67,11 @@ const QUESTION_ACTIVE = "('waiting', 'claimed')";
 export const CONTACT_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
 const QUOTE_MESSAGES = 5;
 const ESCALATION_SUMMARY_MAX_CHARS = 600;
+// #3532 (part 1): what a passed-on card is, so the fleet can tell a bug from an
+// idea from a request for help without reading the summary. Optional on the wire:
+// shift programs pinned before this existed send nothing and get 'question'.
+export const ESCALATION_KINDS = ['problem', 'suggestion', 'question'];
+const DEFAULT_ESCALATION_KIND = 'question';
 
 const isoNow = () => new Date().toISOString();
 const isoAgo = (ms) => new Date(Date.now() - ms).toISOString();
@@ -684,13 +689,14 @@ async function handleAssistantEnd(request, db, conversationId) {
 // the same Control Room board Submit Feedback uses. The shopper's own words
 // are attached by the server, from what they actually wrote, in a clearly
 // marked quoted block: the assistant's summary is its own, the quote is data.
-async function fileEscalationCard(db, assistant, { summary, shopperUserId, reference, quotedTexts }) {
+async function fileEscalationCard(db, assistant, { summary, kind, shopperUserId, reference, quotedTexts }) {
   const quote = quotedTexts.flatMap((text) => text.split('\n')).map((line) => `> ${line}`).join('\n');
   const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(shopperUserId).first();
   const now = isoNow();
   const cardId = `assistant-escalation-${crypto.randomUUID()}`;
   const note = [
     `Passed to the team by the assistant ${assistant.username} (shopper: ${shopper?.username ?? 'unknown'}, ${reference}).`,
+    `Kind: ${kind}`,
     '',
     'What the assistant says it needs:',
     summary,
@@ -703,23 +709,27 @@ async function fileEscalationCard(db, assistant, { summary, shopperUserId, refer
       task_id, kind, note_number, title, status, session, posted_by,
       note, note_updated_at, note_author, created_at, updated_at
     ) VALUES (?, 'feedback', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'assistant', ?, ?, 'assistant', ?, ?)
-  `).bind(cardId, `From assistant ${assistant.username}: ${summary.slice(0, 100)}`, note, now, now, now).run();
+  `).bind(cardId, `From assistant ${assistant.username} (${kind}): ${summary.slice(0, 100)}`, note, now, now, now).run();
   return cardId;
 }
 
-async function escalationSummary(request) {
+async function escalationInput(request) {
   const input = await readJson(request);
   const summary = stringValue(input.summary, 'summary');
   if (summary.length > ESCALATION_SUMMARY_MAX_CHARS) {
     throw new HttpError(`summary must be ${ESCALATION_SUMMARY_MAX_CHARS} characters or fewer`, 400);
   }
-  return summary;
+  const kind = input.kind ?? DEFAULT_ESCALATION_KIND;
+  if (!ESCALATION_KINDS.includes(kind)) {
+    throw new HttpError(`kind must be one of ${ESCALATION_KINDS.join(', ')}`, 400);
+  }
+  return { summary, kind };
 }
 
 async function handleEscalate(request, db, conversationId) {
   const user = await requireAssistant(request, db);
   await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
-  const summary = await escalationSummary(request);
+  const { summary, kind } = await escalationInput(request);
   const conversation = await ownConversation(db, user.user_id, conversationId);
   const { results } = await db.prepare(`
     SELECT text FROM assistant_messages WHERE conversation_id = ? AND sender = 'shopper'
@@ -727,6 +737,7 @@ async function handleEscalate(request, db, conversationId) {
   `).bind(conversationId, QUOTE_MESSAGES).all();
   const cardId = await fileEscalationCard(db, user, {
     summary,
+    kind,
     shopperUserId: conversation.shopper_user_id,
     reference: `conversation ${conversationId}`,
     quotedTexts: results.reverse().map((row) => row.text),
@@ -766,10 +777,11 @@ async function handleAnswerQuestion(request, db, questionId) {
 async function handleEscalateQuestion(request, db, questionId) {
   const user = await requireAssistant(request, db);
   await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
-  const summary = await escalationSummary(request);
+  const { summary, kind } = await escalationInput(request);
   const question = await ownQuestion(db, user.user_id, questionId);
   const cardId = await fileEscalationCard(db, user, {
     summary,
+    kind,
     shopperUserId: question.shopper_user_id,
     reference: `left question ${questionId}`,
     quotedTexts: [question.text],
