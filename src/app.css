@@ -4131,7 +4131,10 @@
         inset: 0;
         z-index: 20;
         display: none;
-        align-items: center;
+        /* #3677: anchored to the top, not centred. A centred card changed height
+           per tab (34% to 84% of the screen), so the tab strip moved under the
+           finger on every tap; from the top it stays where it is. */
+        align-items: flex-start;
         justify-content: center;
         background: var(--scrim-soft);
         /* #3625: the top reserves room below the Shop/Build/Sell buttons
