@@ -5748,7 +5748,13 @@
         font-size: var(--text-md);
         color: var(--pill-text-soft);
       }
+      #product-card-seller {
+        font-size: var(--text-sm);
+        color: var(--pill-text-soft);
+        overflow-wrap: anywhere;
+      }
       #product-card-price:empty,
+      #product-card-seller:empty,
       #product-card-notes:empty,
       #product-card-state:empty {
         display: none;

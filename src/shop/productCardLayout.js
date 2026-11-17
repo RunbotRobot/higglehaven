@@ -119,6 +119,15 @@ export function clampAnchorRadius(radiusPx) {
 //   gate the old panel used for Buy/Rate/Return Policy, SIGN_INTERACT_RADIUS_M).
 //   canReview: any product can be rated once the shopper can reach it.
 //   canReturnPolicy: only something with a price has a refund to describe.
+// #3680: the line under the price that says whose product it is. The name is the
+// seller's storefront name (a shop's name, not a person's); with no name known
+// (a seller who has closed their shop, or a lookup that has not answered) the card
+// says nothing rather than something made up.
+export function sellerLine(label) {
+  const name = typeof label === 'string' ? label.trim() : '';
+  return name ? `Sold by ${name}` : '';
+}
+
 export function productCardState({ template, inRange }) {
   const reach = !!inRange;
   const priced = template?.priceCents != null;

@@ -1716,6 +1716,16 @@ export async function editProductReview(templateId, reviewId, { rating, text } =
 // them, rather than the product itself. GET's response carries
 // averageRating/count for the same "callers don't need to recompute it"
 // reasoning fetchProductReviews' own comment gives.
+// #3680: the storefront names of some sellers, for the name on a product's card.
+// Server: GET /api/sellers?ids=a,b, `{ sellers: [{ sellerId, label, ... }] }`
+// (public; a seller that has closed their shop is simply not in the answer).
+export async function fetchSellerLabels(sellerIds) {
+  const ids = [...new Set(sellerIds.filter(Boolean))];
+  if (ids.length === 0) return {};
+  const { sellers } = await requestJson(`/sellers?ids=${ids.map(encodeURIComponent).join(',')}`);
+  return Object.fromEntries(sellers.map((seller) => [seller.sellerId, seller.label]));
+}
+
 export async function fetchSellerFeedback(sellerId) {
   return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CARD_GAP_PX, CARD_MARGIN_PX, CARD_MAX_ANCHOR_RADIUS_PX, CARD_MIN_ANCHOR_RADIUS_PX,
-  clampAnchorRadius, placeProductCard, productCardState,
+  clampAnchorRadius, placeProductCard, productCardState, sellerLine,
 } from './productCardLayout.js';
 
 const PHONE = { width: 390, height: 844 };
@@ -147,5 +147,19 @@ describe('productCardState (#3651)', () => {
   it('treats unlimited stock (null) and stock above zero as in stock', () => {
     expect(productCardState({ template: { priceCents: 1, stockQuantity: 3 }, inRange: true }).canBuy).toBe(true);
     expect(productCardState({ template: { priceCents: 1, stockQuantity: null }, inRange: true }).canBuy).toBe(true);
+  });
+});
+
+describe('sellerLine (#3680)', () => {
+  it('says who sells the product, by the seller\'s storefront name', () => {
+    expect(sellerLine('Maple Workshop')).toBe('Sold by Maple Workshop');
+    expect(sellerLine('  Maple Workshop  ')).toBe('Sold by Maple Workshop');
+  });
+  it('says nothing when no name is known, rather than something made up', () => {
+    expect(sellerLine(null)).toBe('');
+    expect(sellerLine(undefined)).toBe('');
+    expect(sellerLine('')).toBe('');
+    expect(sellerLine('   ')).toBe('');
+    expect(sellerLine(42)).toBe('');
   });
 });
