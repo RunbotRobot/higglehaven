@@ -151,7 +151,7 @@ const minimised = await pageA.evaluate(() => {
   const pill = document.getElementById('assistant-chat-pill');
   const pillBox = rect(pill);
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-  const controls = ['#shop-fly-btn', '#shop-move-joystick', '#shop-look-joystick', '#mode-nav'];
+  const controls = ['#shop-fly-btn', '#shop-move-joystick', '#shop-look-joystick', '#account-menu-toggle'];
   return {
     panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
     pillShown: !pill.hidden && pillBox.width > 0,

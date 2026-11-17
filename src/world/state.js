@@ -80,6 +80,11 @@ export function setSellerId(id) {
 export let currentMode = 'shop';
 export function setCurrentMode(mode) {
   currentMode = mode;
+  // #3649: the bud (src/ui/bud.js) and its stylesheet key on which mode is showing.
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.dataset.mode = mode;
+    document.dispatchEvent(new CustomEvent('higglehaven:mode', { detail: { mode } }));
+  }
 }
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".

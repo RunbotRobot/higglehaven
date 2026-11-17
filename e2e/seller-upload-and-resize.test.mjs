@@ -5,7 +5,7 @@
 // and "Editing a product's size" sections).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -91,7 +91,7 @@ await page.waitForTimeout(300);
 // now an explicit nav click + reload rather than something already true.
 // No need to re-pick a builder identity either way — that identity is
 // already active this session.
-await page.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(page, 'build');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#add-item-btn', { timeout: 15000 });
 await page.waitForTimeout(500);
@@ -107,7 +107,7 @@ await page.waitForTimeout(1000);
 // short-circuits once sellerId is set), so the identity picker doesn't
 // reopen at all this time — just the nav click (now a reload, see above)
 // straight into the modal once bootstrap() lands.
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);

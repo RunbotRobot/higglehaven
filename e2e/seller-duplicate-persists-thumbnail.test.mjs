@@ -10,7 +10,7 @@
 // the copy's imageUrl/imageEmbedding to show up (persistCatalogThumbnail is
 // deliberately fire-and-forget, not awaited by its caller, so this can't
 // just check immediately after the click).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Duplicate Thumbnail Tester';
 const PRODUCT_NAME = 'Duplicate Thumbnail Original';
@@ -50,7 +50,7 @@ console.log('product created directly via the API (status should be 201):', crea
 // rather than the real upload wizard. Same reasoning as the #2107 regression
 // test's own comment.
 await page.reload({ waitUntil: 'networkidle' });
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
