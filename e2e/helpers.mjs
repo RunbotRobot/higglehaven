@@ -638,14 +638,30 @@ export async function openAccountMenu(page) {
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 }
 
-// #1153: the level nav/build/dig/remove controls are now tucked behind
-// #level-menu-toggle, collapsed by default — any test driving them needs
-// this opened first. Unlike openAccountMenu's panel, this one doesn't
-// auto-close on an inner button click (see its own comment in main.js), so
-// callers only need this once per page load, not before every click.
+// #3690: in Build the level controls are the Levels petal's leaf, not a "Ground" pill. Open
+// the bud, tap Levels, and wait for the leaf. Unlike a petal's own click, the leaf does not
+// close on an inner button click (see src/build/budPetals.js), so callers only need this once
+// per page load, not before every click.
 export async function openLevelMenu(page) {
-  await page.click('#level-menu-toggle');
-  await page.waitForSelector('#level-menu-panel.expanded', { timeout: 5000 });
+  if (await page.locator('#bud-leaf-levels').count()) return;
+  await budClick(page, '#bud-petal-build-levels');
+  await page.waitForSelector('#bud-leaf-levels #level-menu-panel', { timeout: 5000 });
+}
+
+// #3690: Undo and Redo are two halves of one petal of the bud in Build, so they are only
+// there while the bud is open (and only drawn once there is something to undo or redo).
+// Opens the bud when it is closed, then clicks the control inside it.
+export async function budClick(page, selector) {
+  const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!open) await openAccountMenu(page);
+  await page.click(selector);
+}
+
+// Whether `selector` is drawn right now, with the bud opened first when it is closed.
+export async function budShows(page, selector) {
+  const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!open) await openAccountMenu(page);
+  return page.locator(selector).isVisible();
 }
 
 // Clicks down a vertical strip of screen points around (x, yStart..yEnd)

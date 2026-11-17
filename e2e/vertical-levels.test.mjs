@@ -25,17 +25,19 @@ await grantLandCapHeadroomAsAdmin(builderId);
 const levelLabel = () => page.textContent('#level-label');
 const removeHidden = () => page.isHidden('#level-remove-btn');
 
-// #1153: the nav/build/dig/remove controls this whole suite drives are now
-// tucked behind #level-menu-toggle — opened once here, and it stays open
-// (doesn't auto-close on an inner click, see openLevelMenu's own comment)
-// for every interaction below until the reload partway through resets it.
-const toggleAriaExpandedBeforeOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
+// #3690: the nav/build/dig/remove controls this whole suite drives are the Levels petal's
+// leaf (the "Ground" pill is gone). Opened once here, and it stays open (it does not close on
+// an inner click, see openLevelMenu's own comment) for every interaction below until the
+// reload partway through resets it. Before opening, the leaf does not exist and the controls
+// are parked, hidden; after, the label and the panel are inside it and drawn.
+const leafBeforeOpen = await page.locator('#bud-leaf-levels').count();
 await openLevelMenu(page);
-// #1843: mirrors #account-menu-toggle's own aria-expanded, which every
-// other open/close assertion in this app already relies on for a screen
-// reader to know whether the disclosure panel a toggle controls is shown.
-const toggleAriaExpandedAfterOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
-console.log('#level-menu-toggle aria-expanded before/after opening (should be false, then true):', toggleAriaExpandedBeforeOpen, toggleAriaExpandedAfterOpen);
+const leafAfterOpen = await page.evaluate(() => {
+  const leaf = document.getElementById('bud-leaf-levels');
+  const visible = (id) => { const el = document.getElementById(id); return Boolean(el && leaf?.contains(el) && el.getBoundingClientRect().height > 0); };
+  return { label: visible('level-label'), panel: visible('level-menu-panel') };
+});
+console.log('Levels leaf before/after opening (should be 0, then label and panel drawn inside it):', leafBeforeOpen, JSON.stringify(leafAfterOpen));
 
 const initialLabel = await levelLabel();
 const removeHiddenAtGround = await removeHidden();
@@ -188,8 +190,8 @@ const labelAfterDig = await levelLabel();
 console.log('level label after digging down (should be Level -1):', labelAfterDig);
 
 const pass =
-  toggleAriaExpandedBeforeOpen === 'false' &&
-  toggleAriaExpandedAfterOpen === 'true' &&
+  leafBeforeOpen === 0 &&
+  leafAfterOpen.label && leafAfterOpen.panel &&
   initialLabel === 'Ground' &&
   removeHiddenAtGround &&
   buildBtnAtGround.includes('m²') &&
