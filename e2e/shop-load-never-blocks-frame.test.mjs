@@ -137,7 +137,12 @@ const stats = await page.evaluate(() => ({ longestGapMs: window.__frameMonitor.l
 console.log(`loaded ${count}/${COUNT} in ${loadMs} ms; longest frame gap ${Math.round(stats.longestGapMs)} ms; long tasks ${stats.longTasks.count} (longest ${Math.round(stats.longTasks.longestMs)} ms); avatar moved ${moved.toFixed(1)} m while loading; partly-loaded state seen: ${sawPartial}`);
 check(count === COUNT, `every item arrives (${count}/${COUNT})`);
 check(stats.longestGapMs < MAX_FRAME_GAP_MS, `no frame gap of ${MAX_FRAME_GAP_MS} ms or more while loading (longest ${Math.round(stats.longestGapMs)} ms)`);
-check(moved > 1, `the avatar kept moving while the landlet loaded (${moved.toFixed(1)} m)`);
+// A rate, not a distance: the load now takes about a tenth of a second, in which a
+// walking avatar covers well under a metre, so a fixed 1 m failed on a healthy run
+// (0.7 to 0.9 m seen on CI and locally). A joystick stuck by the loader moves 0 m/s;
+// a held one moves several.
+const speed = moved / Math.max(loadMs, 1) * 1000;
+check(speed > 2, `the avatar kept moving while the landlet loaded (${moved.toFixed(1)} m in ${loadMs} ms, ${speed.toFixed(1)} m/s)`);
 console.log(`reviews requests while the ${COUNT} items of one product loaded: ${reviewRequests}`);
 check(reviewRequests <= 1, `one reviews request for the product, not one per item (${reviewRequests} for ${COUNT} items)`);
 

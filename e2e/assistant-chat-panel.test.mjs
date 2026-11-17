@@ -143,18 +143,19 @@ const answered = await pageA.evaluate(() => ({ status: window.__assistantChat.st
 console.log('after the reply:', JSON.stringify(answered));
 
 // #3529: minimise. The conversation stays open, the world's controls are
-// tappable again, a reply that comes in lights the pill, and tapping it
-// brings the panel back with the conversation as it was.
+// tappable again, a reply that comes in lights the bud's dot, and the Assistant
+// row behind the bud brings the panel back with the conversation as it was.
+// #3653: there is no pill; the bud wears her name while the panel is tucked away.
 await pageA.click('#assistant-chat-minimize');
 const minimised = await pageA.evaluate(() => {
   const rect = (el) => el.getBoundingClientRect();
-  const pill = document.getElementById('assistant-chat-pill');
+  const pill = document.querySelector('#account-menu-toggle .bud-word');
   const pillBox = rect(pill);
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   const controls = ['#account-menu-toggle']; // #3650: the sticks and the fly button were the world's other controls; the world itself is the control now
   return {
     panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
-    pillShown: !pill.hidden && pillBox.width > 0,
+    pillShown: window.__assistantChat.pill !== null && pillBox.width > 0 && getComputedStyle(pill).display !== 'none',
     pillText: pill.textContent,
     pillBox: pillBox.toJSON(),
     state: { open: window.__assistantChat.open, status: window.__assistantChat.conversationStatus, minimized: window.__assistantChat.minimized },
@@ -170,15 +171,18 @@ const minimised = await pageA.evaluate(() => {
 console.log('minimised:', JSON.stringify({ ...minimised, pillBox: undefined }));
 await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Did that work for you?' });
 await pageA.waitForFunction(() => window.__assistantChat.pill?.unread === true, null, { timeout: 10000 });
-const litPill = await pageA.evaluate(() => document.getElementById('assistant-chat-pill').textContent);
-await pageA.click('#assistant-chat-pill');
+const litPill = await pageA.evaluate(() => document.querySelector('#account-menu-toggle .bud-word').textContent);
+const dotShown = await pageA.evaluate(() => document.body.hasAttribute('data-bud-mark'));
+await pageA.click('#account-menu-toggle');
+await pageA.click('#assistant-menu-btn');
 await pageA.waitForSelector('#assistant-chat-panel:not(.minimized)', { timeout: 5000 });
 const restored = await pageA.evaluate(() => ({
-  pillHidden: document.getElementById('assistant-chat-pill').hidden,
+  pillHidden: document.getElementById('assistant-menu-btn').hidden && !document.body.hasAttribute('data-bud-mark'),
+  wordBack: document.querySelector('#account-menu-toggle .bud-word').textContent, // #3653: "Menu" again once the panel is back
   status: window.__assistantChat.conversationStatus,
   log: document.getElementById('assistant-chat-log').textContent,
 }));
-console.log('after restoring:', JSON.stringify({ litPill, restored }));
+console.log('after restoring:', JSON.stringify({ litPill, dotShown, restored }));
 
 // The assistant ends it: the panel says so, in words.
 await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/end`);
@@ -339,8 +343,8 @@ const pass = tapped === true
   && minimised.pillShown && !minimised.panelShown && minimised.pillText === ASSISTANT_NAME && minimised.inViewport
   && minimised.state.open === true && minimised.state.status === 'open' && minimised.state.minimized === true
   && minimised.clear.every((c) => !c.overlapsPill && c.tappable)
-  && litPill === `${ASSISTANT_NAME} replied`
-  && restored.pillHidden && restored.status === 'open' && restored.log.includes('Head north past the fountain!') && restored.log.includes('Did that work for you?')
+  && litPill === `${ASSISTANT_NAME} replied` && dotShown
+  && restored.pillHidden && restored.wordBack === 'Menu' && restored.status === 'open' && restored.log.includes('Head north past the fountain!') && restored.log.includes('Did that work for you?')
   && readAnswer.title === ASSISTANT_NAME && readAnswer.badgeShown
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'

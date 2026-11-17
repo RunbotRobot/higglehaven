@@ -79,11 +79,12 @@ check(held.top === 0, 'a reader who scrolled up is not pulled down by new conten
 
 // Minimise and restore: back at the newest.
 await page.click('#assistant-chat-minimize');
-await page.click('#assistant-chat-pill');
+await page.click('#account-menu-toggle'); // #3653: no pill; the Assistant row behind the bud brings it back
+await page.click('#assistant-menu-btn');
 await page.waitForTimeout(300);
 const restored = await position();
 console.log('restored:', JSON.stringify(restored));
-check(restored.gap <= 2 && restored.lastInView, 'restoring from the pill returns to the newest message');
+check(restored.gap <= 2 && restored.lastInView, 'restoring from the Assistant row returns to the newest message');
 
 const errors = session.errors || [];
 await finish(session.browser, { pass: pass && errors.length === 0, label: '#3658: the assistant window opens at the newest message and keeps a reader\'s place', errors });

@@ -5,8 +5,7 @@
 // from #2647's product-management modal (the "Manage"/"List" views
 // behind it). Extracted verbatim, zero behavior change.
 //
-// myProducts and openSellerModal (the showcase's own "Manage" button
-// target) now both live in #2647's src/sell/mode.js, which landed after
+// myProducts now lives in #2647's src/sell/mode.js, which landed after
 // this leaf's own work started -- imported from there directly.
 import * as THREE from 'three';
 import { currentMode } from '../world/state.js';
@@ -15,7 +14,7 @@ import {
   curveGroundGeometry, normalizeGroundShapeUVs, landlet, createMeshForInstance, disposeObject,
 } from '../world/models.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from '../sellerShowcase.js';
-import { myProducts, openSellerModal } from '../sell/mode.js';
+import { myProducts } from '../sell/mode.js';
 
 // Separate array from productMeshes (a genuine builder-owned landlet's
 // content, driven by persistLayout/sync) since these are read-only,
@@ -47,11 +46,9 @@ const sellerShowcasePagerEl = document.getElementById('seller-showcase-pager');
 const sellerShowcasePageLabelEl = document.getElementById('seller-showcase-page-label');
 const sellerShowcasePrevBtn = document.getElementById('seller-showcase-prev-btn');
 const sellerShowcaseNextBtn = document.getElementById('seller-showcase-next-btn');
-// Exported (the binding itself never changes, only its classList) for
-// src/main.js's own enterSellMode, which reveals this button on Sell-mode
-// entry the same way it hides/shows the rest of Sell's own chrome.
-export const sellerShowcaseManageBtn = document.getElementById('seller-showcase-manage-btn');
-sellerShowcaseManageBtn.addEventListener('click', openSellerModal);
+// #3699 (Sell in the bud, 1/6): the bottom-right "Products" button that reopened My products
+// after it had been closed is gone; the My products petal of the bud (src/sell/mode.js) is the
+// one way back to it.
 
 function disposeSellerShowcaseMeshes() {
   for (const mesh of sellerShowcaseMeshes) {

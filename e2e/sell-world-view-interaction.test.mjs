@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -100,11 +100,11 @@ const hudIsUp = async () => [await page.evaluate(() => document.body.classList.c
 const overlaps = (a, b) => a && b && a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 async function pagerClearOfHud(label) {
   const pager = await page.locator('#seller-showcase-pager').boundingBox();
-  const manage = await page.locator('#seller-showcase-manage-btn').boundingBox();
+  const manage = await page.locator('#account-menu-toggle').boundingBox(); // #3699: the bud stands where the old Products button was
   const hud = await Promise.all(hudSelectors.map((s) => page.locator(s).boundingBox()));
-  const hits = [...hud.map((box, i) => overlaps(pager, box) && hudSelectors[i]), overlaps(manage, pager) && 'manage-btn'];
-  const hudHits = hits.filter(Boolean).concat(hud.map((box, i) => overlaps(manage, box) && `manage-vs-${hudSelectors[i]}`).filter(Boolean));
-  console.log(`${label}: pager/Products button overlapping the HUD or each other (should be none):`, hudHits);
+  const hits = [...hud.map((box, i) => overlaps(pager, box) && hudSelectors[i]), overlaps(manage, pager) && 'bud'];
+  const hudHits = hits.filter(Boolean).concat(hud.map((box, i) => overlaps(manage, box) && `bud-vs-${hudSelectors[i]}`).filter(Boolean));
+  console.log(`${label}: pager/bud overlapping the HUD or each other (should be none):`, hudHits);
   return hudHits.length === 0;
 }
 const clearAtStart = await pagerClearOfHud('at start');
@@ -140,7 +140,7 @@ await page.waitForTimeout(500);
 const posBeforeHold = await page.evaluate(() => window.__testShopAvatarPosition());
 await page.keyboard.down('KeyA');
 await page.waitForTimeout(200);
-await page.click('#seller-showcase-manage-btn');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 const posModalOpen = await page.evaluate(() => window.__testShopAvatarPosition());
 await page.waitForTimeout(700);

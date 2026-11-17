@@ -7,7 +7,7 @@
 // nothing.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -115,7 +115,7 @@ console.log('avatar walked past the product along its side (should be true):', p
 console.log('avatar stopped at the far edge of the page (should be true):', farOnGround);
 
 // Reopening the modal quiets the HUD again.
-await page.click('#seller-showcase-manage-btn');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 const hudAfterReopen = await hudIsUp();

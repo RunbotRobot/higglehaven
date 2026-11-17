@@ -500,8 +500,10 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 2. A small window opens. Type in the box that says "Ask a question…" and tap "Send".
 3. An assistant answers there. Keep going in the same window.
 4. To tuck it away without ending the chat, tap the minus at the top right of the
-   window ("Minimise"). To end the chat, tap the cross ("End the conversation and
-   close").
+   window ("Minimise"). While it is tucked away the little bud in the corner shows
+   the assistant's name, with a dot once they have replied. To bring it back, tap
+   the bud, then "Assistant". To end the chat, tap the cross ("End the conversation
+   and close").
 
 **You will see:** a window at the bottom of the screen with your message and the
 assistant's replies, each labelled with who wrote it.
@@ -806,7 +808,8 @@ top of the screen.
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
 3. The "My products" window opens by itself. Tap "Close" (the × at its top right)
-   to put it away and look at the showroom. Tap "Products" at the bottom right to bring it back.
+   to put it away and look at the showroom. To bring it back, tap the round logo at the
+   top left (the bud), then "My products".
 
 **You will see:** your own products only. Nobody else's products and no real
 lándlets are shown here.
@@ -814,11 +817,11 @@ lándlets are shown here.
 **If something goes wrong:**
 - "My products" says "No custom products yet — use "+ Upload Model" to add one."
   You have not uploaded anything yet. The next entry shows how.
-- The window seems to be missing: tap "Products" at the bottom right.
+- The window seems to be missing: tap the round logo at the top left, then "My products".
 
 ```controls sell
 .mode-nav-btn[data-mode="sell"] | Sell
-#seller-showcase-manage-btn | Products
+#bud-petal-sell-my-products | My products
 #seller-showcase-prev-btn | Previous page
 #seller-showcase-next-btn | Next page
 #seller-close-btn | Close
@@ -905,7 +908,8 @@ price and stock. The original maker's listing is not changed.
   name or choose another.
 - A price above the limit is refused with a message naming the limit.
 - Something changed does not show up: close "My products" and open it again with
-  "Products"; if it is still wrong, ask what they see and offer to pass it on.
+  the round logo at the top left, then "My products"; if it is still wrong, ask
+  what they see and offer to pass it on.
 
 ```controls sell
 .seller-view-btn[data-view="manage"] | Manage

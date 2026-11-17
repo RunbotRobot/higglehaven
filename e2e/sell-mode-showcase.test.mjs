@@ -61,23 +61,24 @@ await page.click('#seller-close-btn');
 await page.waitForTimeout(500);
 
 const pagerVisibleAfterClose = await page.locator('#seller-showcase-pager').isVisible();
-const manageBtnVisible = await page.locator('#seller-showcase-manage-btn').isVisible();
-console.log('pager visible once the modal is closed (should be true):', pagerVisibleAfterClose);
-console.log('"Products" button visible once the modal is closed (should be true):', manageBtnVisible);
-
-// Owner feedback N51: at this viewport width the centered pager pill and
-// the right-anchored "Products" button used to visually overlap (the
-// button's old, longer "Manage Products" label pushed its left edge into
-// the pager's own horizontal centering). Checking real bounding boxes
-// rather than eyeballing a screenshot, so a future label/CSS change that
-// reintroduces the collision fails a real assertion.
+// #3699 (Sell in the bud): the bottom-right "Products" button is gone; My products is a petal of the
+// bud, reached with two taps. The pager must not collide with the bud (owner feedback N51's
+// real-bounding-box check, now against the thing that stands where the old controls were).
+const manageBtnGone = (await page.locator('#seller-showcase-manage-btn').count()) === 0;
+console.log('the old "Products" button is gone (should be true):', manageBtnGone);
 const pagerBox = await page.locator('#seller-showcase-pager').boundingBox();
-const manageBtnBox = await page.locator('#seller-showcase-manage-btn').boundingBox();
-const rectsOverlap = pagerBox.x < manageBtnBox.x + manageBtnBox.width &&
-  pagerBox.x + pagerBox.width > manageBtnBox.x &&
-  pagerBox.y < manageBtnBox.y + manageBtnBox.height &&
-  pagerBox.y + pagerBox.height > manageBtnBox.y;
-console.log('pager and "Products" button overlap on screen (should be false):', rectsOverlap);
+const budBox = await page.locator('#account-menu-toggle').boundingBox();
+const rectsOverlap = pagerBox.x < budBox.x + budBox.width &&
+  pagerBox.x + pagerBox.width > budBox.x &&
+  pagerBox.y < budBox.y + budBox.height &&
+  pagerBox.y + pagerBox.height > budBox.y;
+console.log('pager and the bud overlap on screen (should be false):', rectsOverlap);
+await page.click('#account-menu-toggle');
+await page.waitForSelector('#account-menu-panel.expanded');
+const myProductsPetalVisible = await page.locator('#bud-petal-sell-my-products').isVisible();
+console.log('"My products" petal visible in the bud (should be true):', myProductsPetalVisible);
+await page.click('#account-menu-toggle');
+const manageBtnVisible = manageBtnGone && myProductsPetalVisible;
 
 // Prev/Next are both disabled with only one page.
 const prevDisabled = await page.isDisabled('#seller-showcase-prev-btn');

@@ -6,6 +6,8 @@
 //   registerBudPetals(mode, [{ id, label, run }])  one definition per mode; a mode with none has no bud
 //   openLeaf({ id, title, render }) / closeLeaf()  one soft sheet at a time, close upper-right
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
+//   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
+//                                                  conversation's name); "Menu" comes back when none is set
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
@@ -14,6 +16,8 @@
 const FIRST_OPEN_KEY = 'hh_bud_opened';
 const registry = new Map();
 const marks = new Set();
+const words = new Map();
+const MENU_WORD = 'Menu';
 let leafEl = null;
 let leafId = null;
 
@@ -129,6 +133,25 @@ export function clearBudMark(key) {
   showMarks();
 }
 
+// #3653: while a word is set the bud wears it (the last one set), whether or not the bud has
+// been opened before; with none set the default word and its first-visit rule apply again.
+function showWord() {
+  const wordEl = toggle()?.querySelector('.bud-word');
+  const latest = [...words.values()].pop();
+  if (wordEl) wordEl.textContent = latest ?? MENU_WORD;
+  document.body.toggleAttribute('data-bud-word', words.size > 0);
+}
+
+export function setBudWord(key, text) {
+  words.set(key, String(text));
+  showWord();
+}
+
+export function clearBudWord(key) {
+  words.delete(key);
+  showWord();
+}
+
 // Until the bud has been opened once it pulses and says Menu; after that the word goes.
 function learned() {
   try { return localStorage.getItem(FIRST_OPEN_KEY) === '1'; } catch { return false; }
@@ -151,29 +174,31 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// How to move: one leaf, shared by every mode that walks the world with Shop's controls.
+export function openHowToMoveLeaf() {
+  openLeaf({
+    id: 'how-to-move',
+    title: 'How to move',
+    render: (body) => {
+      const lines = [
+        'Walk: the left stick, or W A S D / the arrow keys.',
+        'Look: the right stick, or Q and E to turn.',
+        'Fly: the bird button, or press Space twice.',
+        'Tap a product to look at it.',
+      ];
+      for (const text of lines) {
+        const p = document.createElement('p');
+        p.textContent = text;
+        body.appendChild(p);
+      }
+    },
+  });
+}
+
 // Shop's petals. Settings, Friends and My Purchases are rows of the same panel already;
 // Build and Sell are the mode buttons moved in; How to move is a leaf. (Chat arrives with the
-// leaf that moves the chat controls, so there is never a second way in.)
+// leaf that moves the chat controls, so there is never a second way in.) Sell's own petals are
+// registered by src/sell/mode.js, next to the product list they open (#3699).
 registerBudPetals('shop', [
-  {
-    id: 'how-to-move',
-    label: 'How to move',
-    run: () => openLeaf({
-      id: 'how-to-move',
-      title: 'How to move',
-      render: (body) => {
-        const lines = [
-          'Walk: the left stick, or W A S D / the arrow keys.',
-          'Look: the right stick, or Q and E to turn.',
-          'Fly: the bird button, or press Space twice.',
-          'Tap a product to look at it.',
-        ];
-        for (const text of lines) {
-          const p = document.createElement('p');
-          p.textContent = text;
-          body.appendChild(p);
-        }
-      },
-    }),
-  },
+  { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
 ]);

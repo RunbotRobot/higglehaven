@@ -126,10 +126,11 @@ await headerOnScreenWithKeyboard(firstState ? 'flying' : 'on the ground');
 await page.click('#assistant-chat-minimize');
 const tucked = await page.evaluate(() => ({
   panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
-  pillShown: !document.getElementById('assistant-chat-pill').hidden,
+  pillShown: !document.getElementById('assistant-menu-btn').hidden,
 }));
-check(!tucked.panelShown && tucked.pillShown, `minimising with no conversation tucks the panel away and shows the pill (${JSON.stringify(tucked)})`);
-await page.click('#assistant-chat-pill');
+check(!tucked.panelShown && tucked.pillShown, `minimising with no conversation tucks the panel away and shows the Assistant row (${JSON.stringify(tucked)})`);
+await page.click('#account-menu-toggle');
+await page.click('#assistant-menu-btn');
 await page.waitForSelector('#assistant-chat-panel:not(.minimized)', { timeout: 5000 });
 
 await finish(session.browser, { pass, label: '#3553: the assistant panel opens above the joysticks, fly button and arrows, and can be minimised at once', errors: session.errors });
