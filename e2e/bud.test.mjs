@@ -75,7 +75,7 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('#settings-close-btn');
 
-// Sell wears the bud too now (#3707): no top row, no wordmark, no gear.
+// Sell has the bud too (#3699, #3707), as Build does (#3688): the old top row and the gear are gone there.
 await page.reload();
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
