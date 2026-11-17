@@ -1,0 +1,64 @@
+/* People in the bud (#3653, part of #3648). Extra pieces on top of c.css, for the plan page only. */
+[data-moment-only] { display: none; }
+.stage[data-moment="chat"] [data-moment-only="chat"],
+.stage[data-moment="vb"] [data-moment-only="vb"],
+.stage[data-moment="vc"] [data-moment-only="vc"] { display: block; }
+.stage[data-moment="va"] [data-moment-only="va"] { display: block; }
+
+/* The bud sits top-left, where the app has it. Its petals unfold downward. */
+.bud-wrap { left: 14px; top: 14px; right: auto; bottom: auto; }
+.petals { right: auto; left: 0; bottom: auto; top: 66px; width: 170px; }
+.petals li { right: auto; left: 0; bottom: auto; top: calc(var(--i) * 50px); transform-origin: 0 0; }
+
+.hint { left: 80px; top: 24px; bottom: auto; max-width: 220px; animation: none; display: block; }
+.stage:not([data-moment="vb"]) .hint { display: none; }
+
+.word {
+  position: absolute; left: 64px; top: 17px; font-size: 13px; line-height: 1;
+  padding: 6px 10px; border-radius: 12px 3px 12px 3px; white-space: nowrap;
+  background: rgb(255 255 255 / 0.62); color: var(--ink);
+}
+.word:empty { display: none; }
+
+/* One dot on the bud for anything waiting; a dot (never a number) on the petal that holds it. */
+.bud-dot { position: absolute; right: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 2px #fff; display: none; }
+.stage[data-marked="true"] .bud-dot { display: block; }
+.dot { display: inline-block; width: 10px; height: 10px; margin-left: 6px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9); vertical-align: middle; }
+.petal .dot { display: none; }
+.stage[data-marked="true"] .petal.has-dot .dot { display: inline-block; }
+.petal.soft { background: rgb(255 255 255 / 0.7); font-weight: 400; }
+.petal.live { background: var(--yellow); }
+
+/* Voice A: the bud itself shows the mic is live (ring), and a brighter one while speaking. */
+.stage[data-moment="va"] .bud { box-shadow: 0 0 0 3px var(--brand-green), 0 2px 10px rgb(var(--ink-rgb) / 0.22); }
+.stage[data-moment="va"][data-speaking="true"] .bud { box-shadow: 0 0 0 5px rgb(var(--spring-rgb) / 0.9), 0 2px 10px rgb(var(--ink-rgb) / 0.22); }
+/* Voice B: the bud glows while held. */
+.stage[data-moment="vb"] .bud { box-shadow: 0 0 0 5px rgb(var(--spring-rgb) / 0.9), 0 2px 10px rgb(var(--ink-rgb) / 0.22); }
+
+/* Voice C: the standing dot. */
+.mic-dot { position: absolute; left: 80px; top: 22px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: rgb(var(--spring-rgb) / 0.65); font-size: 16px; line-height: 1; cursor: pointer; }
+
+.chat-leaf { left: 14px; right: 14px; top: 96px; bottom: auto; transform-origin: 0 0; }
+.chat-leaf .tabs { display: flex; gap: 6px; margin: 0 0 6px; }
+.chat-leaf .tab { font-size: 13px; padding: 5px 12px; border-radius: 999px; border: 1px solid rgb(var(--ink-rgb) / 0.25); }
+.chat-leaf .tab.on { background: var(--brand-green); border-color: transparent; color: #fff; }
+.chat-leaf .log { list-style: none; margin: 0 0 8px; padding: 0; font-size: 14px; }
+.chat-leaf .log li { padding: 3px 0; }
+.chat-leaf .log .soft { color: var(--ink-soft); font-size: 13px; }
+.chat-leaf .send { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: rgb(255 255 255 / 0.55); font-size: 14px; color: var(--ink-soft); }
+.chat-leaf .mic-row { margin-top: 6px; border-top: 1px solid rgb(var(--ink-rgb) / 0.12); }
+.pill.small { font-size: 13px; padding: 7px 12px; background: rgb(255 255 255 / 0.5); }
+
+.caption { padding: 0 16px; margin: 8px 0 0; font-size: 14px; }
+.map { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 6px; }
+.map th, .map td { text-align: left; vertical-align: top; padding: 6px 8px 6px 0; border-bottom: 1px solid rgb(var(--ink-rgb) / 0.12); }
+.map th { font-weight: 600; }
+.map td:first-child { width: 38%; color: var(--ink-soft); }
+.plain { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
+.plain li { margin: 0 0 6px; }
+.three h3 { font-size: 15px; margin: 14px 0 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-leaf { animation: none; }
+}
+.stage:not([data-moment="va"]) .petals li:last-child { top: calc(5 * 50px); }
