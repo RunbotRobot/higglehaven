@@ -168,8 +168,8 @@ check(loaded.geometries - baseline.geometries < 20, `batches share geometry inst
 // item by its instance id (its review is registered on its handle).
 const tapped = await page.evaluate((id) => window.__testTapShopProductByInstanceId(id), 'instanced-batches-400');
 check(tapped === true, 'a batched placement resolves for tap-to-inspect by instance id');
-// The preview that opened covers the screen; close it so the real taps below reach the canvas.
-await page.click('#shop-product-preview-close-btn');
+// Close the card that opened (#3651) so the real taps below reach the canvas.
+await page.click('#product-card-close-btn');
 await page.waitForTimeout(300);
 
 // A real tap, on the pixels where a brick is drawn, opens that brick's product:
@@ -204,10 +204,10 @@ if (target) {
   await page.mouse.click(target.x, target.y);
   await page.waitForTimeout(500);
   const tappedId = await page.evaluate(() => window.__testShopTappedInstanceId());
-  const modalOpen = await page.locator('#shop-product-preview-modal').evaluate((el) => el.classList.contains('visible'));
-  console.log(`tapped (${Math.round(target.x)}, ${Math.round(target.y)}) near ${target.id}; resolved to ${tappedId}; preview open: ${modalOpen}`);
+  const modalOpen = await page.locator('#product-card').evaluate((el) => !el.hidden);
+  console.log(`tapped (${Math.round(target.x)}, ${Math.round(target.y)}) near ${target.id}; resolved to ${tappedId}; card open: ${modalOpen}`);
   check(typeof tappedId === 'string' && tappedId.startsWith('instanced-batches-'), `a real tap on a brick resolves to one of the wall's placements (${tappedId})`);
-  check(modalOpen, 'a real tap on a brick opens its product preview');
+  check(modalOpen, 'a real tap on a brick opens its product card');
   // The tapped brick is drawn where the tap landed: its centre is within a
   // brick's size of the tap, not somewhere else in the wall.
   const hit = tappedId ? await page.evaluate((id) => window.__testShopScreenPointOfInstance(id), tappedId) : null;

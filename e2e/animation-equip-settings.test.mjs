@@ -20,7 +20,7 @@
 // around it, not re-deriving that correctness proof.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -82,16 +82,16 @@ await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' });
 console.log('purchase response (status should be 201):', purchased.status);
 
-// --- Shop-mode preview modal: tap the still-unpurchased-by-anyone-else
+// --- Shop-mode product card: tap the still-unpurchased-by-anyone-else
 // placed instance and confirm the compatibility note appears on an
 // animation product's info line (no avatar equipped at all here, so the
 // "no real skeleton to compare against" case). ---
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
-const productInfoText = await page.evaluate(() => document.getElementById('shop-product-preview-info')?.textContent || '');
-console.log('Shop product preview info text before any tap (diagnostic only):', productInfoText);
+const productInfoText = await page.evaluate(() => document.getElementById('product-card')?.textContent || '');
+console.log('Shop product card text before any tap (diagnostic only):', productInfoText);
 
 // --- Settings > Shop: the "My Animations" picker ---
 await openAccountMenu(page);

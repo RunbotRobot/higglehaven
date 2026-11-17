@@ -10,7 +10,7 @@
 // proportionally to height rather than reusing the default's absolute one.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -29,7 +29,7 @@ await claimLandlet(page);
 
 // Baseline: visit Shop mode before anything is equipped, so the default
 // procedural body is what's live-rendered.
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 const baseline = await page.evaluate(() => window.__shopAvatarMetrics);
@@ -95,7 +95,7 @@ const modelResponsePromise = page.waitForResponse(
   (r) => r.url().includes(equipped.body.avatar.modelUrl) && r.request().method() === 'GET',
   { timeout: 15000 },
 );
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await modelResponsePromise;

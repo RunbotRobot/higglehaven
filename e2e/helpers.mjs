@@ -403,7 +403,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // actually land either way.
   const authModalAlreadyShown = (await page.locator('#auth-modal.visible').count()) > 0;
   if (!authModalAlreadyShown) {
-    await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+    await goToMode(page, mode);
     // #540 gave Sell the same real currentMode/reload treatment Build and
     // Shop already had (src/main.js's #mode-nav click handler no longer
     // special-cases it) — all three now always reload the page first;
@@ -483,7 +483,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // Once authenticated and verified, ensureBuilderIdentity/
   // ensureSellerIdentity resolve silently with no further prompt.
   if (authModalAlreadyShown && mode !== 'shop') {
-    await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+    await goToMode(page, mode);
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   }
 }
@@ -623,6 +623,16 @@ export async function claimLandlet(page) {
 // independent always-visible pills — open it before clicking any of the
 // four rows inside. The panel auto-collapses again once a row is clicked
 // (see main.js), so callers don't need to close it themselves.
+// #3649: in Shop the Build and Sell buttons are petals of the bud (hidden until it is open);
+// in Build and Sell they are still the top row. Click the mode's button wherever it is.
+export async function goToMode(page, mode) {
+  // Clicking the mode you are already in was always a no-op; in Shop its button is not drawn.
+  if (await page.evaluate(() => document.body.dataset.mode) === mode) return;
+  const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
+  if (!(await nav.isVisible())) await openAccountMenu(page);
+  await nav.click();
+}
+
 export async function openAccountMenu(page) {
   await page.click('#account-menu-toggle');
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });

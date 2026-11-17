@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel, acceptConfirmModal, shopStickBox } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal, shopStickBox, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -140,12 +140,12 @@ const { browser: sellerBrowser, page: sellerPage, errors: sellerErrors } = await
 // switch into the actually-requested mode afterward.
 const sellerAuthModalAlreadyShown = (await sellerPage.locator('#auth-modal.visible').count()) > 0;
 if (!sellerAuthModalAlreadyShown) {
-  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await goToMode(sellerPage, 'build');
   await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 await signUpAndVerifyWithRealCard(sellerPage, SELLER_LABEL);
 if (sellerAuthModalAlreadyShown) {
-  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await goToMode(sellerPage, 'build');
   await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 
@@ -177,7 +177,7 @@ const [claimResponse] = await Promise.all([
 if (!claimResponse.ok()) throw new Error(`claim failed with HTTP ${claimResponse.status()}`);
 await sellerPage.waitForSelector('#claim-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 
-await sellerPage.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(sellerPage, 'sell');
 await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await sellerPage.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerPage.waitForTimeout(300);
@@ -331,7 +331,7 @@ page.on('dialog', (dialog) => { dialogMessages.push(dialog.message()); });
 // re-click is needed afterward: clearing Shop's own gate already *is*
 // clearing the mode this test actually wants.
 if ((await page.locator('#auth-modal.visible').count()) === 0) {
-  await page.click('.mode-nav-btn[data-mode="shop"]');
+  await goToMode(page, 'shop');
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 // Distinct test card from the seller's own verification above -- see
@@ -396,9 +396,9 @@ await page.waitForFunction(
 // same "log it so the CI log itself can carry the detail" reasoning the
 // Stripe Connect poll loop above already documents.
 try {
-  await page.waitForFunction(() => document.getElementById('shop-product-preview-buy-btn').classList.contains('visible'), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('product-card-buy-btn').classList.contains('visible'), null, { timeout: 15000 });
 } catch (err) {
-  console.log('shop-product-preview-buy-btn never became visible -- last buy-hint debug:', await page.evaluate(() => window.__lastShopBuyHintDebug));
+  console.log('product-card-buy-btn never became visible -- last buy-hint debug:', await page.evaluate(() => window.__lastShopBuyHintDebug));
   // #2934: raw ground truth to settle whether the product's real world
   // position actually moved after anchoring it at landlet.center's own
   // negation (this landlet object, its own center, and the avatar's own
@@ -414,18 +414,18 @@ try {
 // e2e/purchase-shipping.test.mjs's own dialogMessages capture) as a tripwire:
 // the "Purchase complete" result is the in-app notice modal now (#3249), so
 // any native dialog here means a purchase step regressed to confirm()/alert().
-await page.click('#shop-product-preview-buy-btn');
+await page.click('#product-card-buy-btn');
 // Never mind first: the modal names a price, focuses the safe choice, and
-// cancelling starts no checkout and leaves the preview modal open and armed.
+// cancelling starts no checkout and leaves the product card open and armed.
 await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
 const buyConfirmNamesPrice = /\$\d/.test(await page.textContent('#confirm-modal-message'));
 const buyConfirmFocusOnSafeChoice = await page.evaluate(() => document.activeElement?.id === 'confirm-modal-cancel-btn');
 await page.click('#confirm-modal-cancel-btn');
 await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
 const checkoutOpenedAfterCancel = (await page.locator('#checkout-modal.visible').count()) !== 0;
-const previewStillOpen = (await page.locator('#shop-product-preview-modal.visible').count()) === 1;
-console.log('buy confirm names a price / focuses Never mind / no checkout after cancel / preview still open:', buyConfirmNamesPrice, buyConfirmFocusOnSafeChoice, !checkoutOpenedAfterCancel, previewStillOpen);
-await page.click('#shop-product-preview-buy-btn');
+const previewStillOpen = (await page.locator('#product-card:not([hidden])').count()) === 1;
+console.log('buy confirm names a price / focuses Never mind / no checkout after cancel / card still open:', buyConfirmNamesPrice, buyConfirmFocusOnSafeChoice, !checkoutOpenedAfterCancel, previewStillOpen);
+await page.click('#product-card-buy-btn');
 await acceptConfirmModal(page);
 
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });

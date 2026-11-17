@@ -114,7 +114,9 @@
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
       </div>
       <div id="account-menu">
-        <button id="account-menu-toggle" type="button" aria-label="Account menu" aria-expanded="false">&#9881;&#65039;</button>
+        <!-- #3649: in Shop this is the bud (the logo, with the word Menu until it has been opened once);
+             in Build and Sell it is still the gear until those modes get their petals. -->
+        <button id="account-menu-toggle" type="button" aria-label="Account menu" aria-expanded="false"><span class="bud-gear" aria-hidden="true">&#9881;&#65039;</span><img class="bud-logo" src="/favicon.svg" alt="" width="36" height="36" /><span class="bud-word">Menu</span></button>
         <div id="account-menu-panel">
           <button id="account-auth-btn" type="button">Log In / Sign Up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
@@ -817,17 +819,26 @@
         <div id="pending-restoration-empty">Nothing is waiting to be restored.</div>
       </div>
     </div>
-    <div id="shop-product-preview-modal" role="dialog" aria-modal="true" tabindex="-1">
-      <div id="shop-product-preview-modal-content">
-        <button id="shop-product-preview-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <canvas id="shop-product-preview-canvas"></canvas>
-        <div id="shop-product-preview-info"></div>
-        <div id="shop-product-preview-actions">
-          <button id="shop-product-preview-review-btn" type="button">Rate this Product</button>
-          <button id="shop-product-preview-buy-btn" type="button">Purchase</button>
-          <button id="shop-product-preview-return-policy-btn" type="button">Return Policy</button>
-        </div>
+    <!-- #3651 (leaf 3/9 of #3648, the bud): a tapped product's card. It blooms
+         beside the product in the world (src/shop/productCard.js places it),
+         replacing the old #shop-product-preview-modal, which covered the
+         world with a dimmed sheet and a second 3D copy of the product. Not a
+         modal: nothing behind it is dimmed or locked, and tapping the world
+         folds it away. All of its text can be selected. -->
+    <div id="product-card" role="region" aria-label="Product" data-state="closed" hidden>
+      <div id="product-card-name"></div>
+      <div id="product-card-price"></div>
+      <div id="product-card-notes"></div>
+      <div id="product-card-state" role="status"></div>
+      <div id="product-card-actions">
+        <button id="product-card-buy-btn" type="button">Buy</button>
+        <button id="product-card-more-btn" type="button" aria-expanded="false" aria-controls="product-card-more">More</button>
       </div>
+      <div id="product-card-more" hidden>
+        <button id="product-card-review-btn" type="button">Rate this Product</button>
+        <button id="product-card-return-policy-btn" type="button">Return Policy</button>
+      </div>
+      <button id="product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>
     <!-- #2718 (sub-issue of #2715): src/feedback/submitFeedbackUI.js owns
          every element below -- open/close, the screenshot capture, and the

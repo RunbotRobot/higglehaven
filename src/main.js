@@ -303,10 +303,15 @@ import {
 // that module's own comment for its dependency notes, including why it in
 // turn imports loadStripeJs back from this module.
 import {
-  openShopProductPreviewModal, closeShopProductPreviewModal,
   handleShopProductReviewClick, handleShopReturnPolicyClick, closeRefundPolicyModal,
   handleShopProductBuyClick,
 } from './shop/productCheckout.js';
+// #3651 (leaf 3/9 of #3648, the bud): a tapped product's card, replacing the
+// old product-preview modal. See that module's own header comment.
+import {
+  openProductCard, closeProductCard,
+  productCardBuyButton, productCardReviewButton, productCardReturnPolicyButton,
+} from './shop/productCard.js';
 // #2629 (last leaf of #2563/#2504/#2500, depends on every other shop/*.js
 // leaf above): enterShopMode itself, plus disposeObject3D/
 // unloadShopLandletInstances/reportRendererMemoryDiagnostic, now live in
@@ -645,6 +650,7 @@ import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
+import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/
@@ -1052,10 +1058,6 @@ initShopFlightInputBindings();
 // a reverse import, same shape as the other Shop DOM consts above.
 export const shopSignHintEl = document.getElementById('shop-sign-hint');
 export const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
-const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
-const shopProductPreviewReviewBtn = document.getElementById('shop-product-preview-review-btn');
-const shopProductPreviewBuyBtn = document.getElementById('shop-product-preview-buy-btn');
-const shopProductPreviewReturnPolicyBtn = document.getElementById('shop-product-preview-return-policy-btn');
 const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
 
 // A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
@@ -1579,8 +1581,6 @@ window.__testShopLeanPose = () => ({
 // click listener, the sign/calendar hint click listeners, and
 // unloadShopLandletInstances, which all stay here (unloadShopLandletInstances'
 // own forward-import shape already established by #2626).
-shopProductPreviewCloseBtn.addEventListener('click', closeShopProductPreviewModal);
-
 // Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
 // on open canvas (a finger that moves walks and a second one looks, see
 // src/shop/worldGestures.js; a tap that does not move is a click), so this is
@@ -1610,19 +1610,19 @@ renderer.domElement.addEventListener('click', (event) => {
     : null;
   if (tappedAssistant) {
     setShopTappedProduct(null);
-    closeShopProductPreviewModal();
+    closeProductCard();
     openAssistantChat(tappedAssistant);
     return;
   }
   const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;
   setShopTappedProduct(review);
-  if (review) openShopProductPreviewModal(review);
-  else closeShopProductPreviewModal();
+  if (review) openProductCard(review);
+  else closeProductCard();
 });
 
-// #2861: e2e-only hook that reaches the real product-preview modal (and,
-// from there, a real "Buy" click drives runCheckoutFlow's real Stripe
-// Elements checkout) for a known instanceId, without raycasting a tap onto
+// #2861: e2e-only hook that reaches the real product card (#3651; the
+// product-preview modal before it) (and, from there, a real "Buy" click
+// drives runCheckoutFlow's real Stripe Elements checkout) for a known instanceId, without raycasting a tap onto
 // the right on-screen pixel the way the real click listener just above
 // does -- real camera-driven tap-to-inspect accuracy is deliberately never
 // automated in this suite (see e2e/product-pricing.test.mjs's own comment
@@ -1647,7 +1647,7 @@ window.__testTapShopProductByInstanceId = (instanceId) => {
   const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
   if (!review) return false;
   setShopTappedProduct(review);
-  openShopProductPreviewModal(review);
+  openProductCard(review);
   return true;
 };
 
@@ -1787,7 +1787,7 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
 });
 
-shopProductPreviewReviewBtn.addEventListener('click', handleShopProductReviewClick);
+productCardReviewButton().addEventListener('click', handleShopProductReviewClick);
 
 // #453: Stripe.js is loaded lazily, only the first time a real-money
 // checkout is actually needed — the overwhelming majority of purchases in
@@ -1829,10 +1829,10 @@ export function loadTurnstileJs() {
   return turnstileJsPromise;
 }
 
-shopProductPreviewReturnPolicyBtn.addEventListener('click', handleShopReturnPolicyClick);
+productCardReturnPolicyButton().addEventListener('click', handleShopReturnPolicyClick);
 refundPolicyCloseBtn.addEventListener('click', closeRefundPolicyModal);
 
-shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
+productCardBuyButton().addEventListener('click', handleShopProductBuyClick);
 
 // #1358: the renderer's own live (i.e. still-referenced, not-yet-disposed)
 // GPU resource counts — exposed on `window` the same way __shopAvatarModelUrl

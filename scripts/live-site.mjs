@@ -143,6 +143,14 @@ async function clearLocalVerifyModal() {
 }
 
 
+// #3649: in Shop the Build and Sell buttons are petals of the bud, hidden until it is open;
+// in Build and Sell they are still the top row. Click the mode's button wherever it is.
+async function clickModeButton(page, mode, timeout) {
+  const button = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
+  if (!(await button.isVisible())) await page.click('#account-menu-toggle', timeout ? { timeout } : undefined);
+  await button.click(timeout ? { timeout } : undefined);
+}
+
 // #3542: the page's own side of `cover`: every visible element that paints something itself,
 // as a rectangle, with whether it is a root (no painted ancestor). Self-contained, because
 // Playwright serialises it into the page. What counts is explained in live-site-lib.mjs.
@@ -284,7 +292,7 @@ async function runStep(step, index) {
       else await page.locator(a).first().click();
       return null;
     case 'mode':
-      await page.click(`.mode-nav-btn[data-mode="${a}"]`);
+      await clickModeButton(page, a);
       await settle();
       return null;
     case 'fly':
@@ -353,7 +361,7 @@ async function runCoverReport() {
   await page.click('#settings-close-btn').catch(() => {});
   // Switching mode can show the title/loading screen again; measure once it has gone.
   const switchMode = async (mode) => {
-    await page.click(`.mode-nav-btn[data-mode="${mode}"]`, { timeout: 8000 });
+    await clickModeButton(page, mode, 8000);
     await settle();
     await page.waitForSelector('#loading-screen', { state: 'hidden', timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1200);

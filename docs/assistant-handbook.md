@@ -57,7 +57,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I sign up for an account?
 
-1. Tap the gear at the top left. When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once). When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
 2. Tap the "Sign Up" tab.
 3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
 4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
@@ -82,7 +82,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I log in, or get back in if I forgot my password?
 
-1. Tap the gear at the top left, then "Log In / Sign Up". The "Log In" tab is the first one.
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Log In / Sign Up". The "Log In" tab is the first one.
 2. Fill in "Email" and "Password", then tap "Log In".
 3. If they forgot the password, tap "Forgot password?" instead, type their email and tap "Send Reset Link".
 4. The email carries a link. It opens a screen that says "Choose a new password": type one (8 or more characters) and tap "Reset Password".
@@ -128,7 +128,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### Where is Settings, and what is in each tab?
 
-1. Tap the gear at the top left, then "Settings".
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop", "Build" and "Sell".
 3. "General" holds "Units" (Meters or Feet), "Version", and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
@@ -155,7 +155,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I wear an avatar I bought, or apply an animation?
 
-1. Tap the gear at the top left, then "Settings", then the "Shop" tab.
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Shop" tab.
 2. Under "My Avatars", each avatar they own is a row, and the first row is always "Default avatar". Tap "Equip" on the one they want.
 3. Under "My Animations", tap "Apply" on an animation to use it with the avatar they are wearing, or "Clear" to take it off.
 
@@ -172,7 +172,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I send feedback about a problem?
 
-1. Tap the gear at the top left, then "Settings".
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
 2. Tap "Send feedback" at the bottom.
 3. A window titled "Submit Feedback" shows a picture of what they were looking at. In the box under "Describe what happened (optional)", say what went wrong, in as much detail as they like.
 4. Tap "Submit". "Cancel" closes it without sending.
@@ -193,7 +193,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I change my password or log out?
 
-1. Tap the gear at the top left, then tap their username (the first row) to open "Account".
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then tap their username (the first row) to open "Account".
 2. To change the password, tap "Change Password". Fill in "Current password" and "New password (8+ characters)" and tap "Change Password" again. This signs them out of every other device, but keeps this one signed in.
 3. To log out, tap "Log Out".
 
@@ -281,28 +281,36 @@ ground.
 ### How do I look at a product and read about it?
 
 1. Walk or fly to a product somewhere in the world and tap it.
-2. A card opens with a picture of it you can turn, and its details.
-3. The card has three buttons: "Rate this Product", "Purchase" and "Return Policy".
-4. Tap the cross at the top right of the card when you are done.
+2. A small card blooms beside the product with its name, its price and any notes
+   about it (for example that it ships to the United States only, or that it has no
+   returns).
+3. When the product is for sale and you are standing near it, the card has a yellow
+   "Buy" button. "More" opens "Rate this Product" and "Return Policy".
+4. Tap anywhere else in the world, or the cross at the top right of the card, when
+   you are done.
 
-**You will see:** a card over the world with the product's picture and its price
-and details.
+**You will see:** a small card next to the product, with the world still moving
+behind it.
 
 **If something goes wrong:**
 - Nothing opens when tapping: you may have tapped the ground beside it. Tap the
   product itself, or move closer.
+- The card has no "Buy" button: it says why in a line of its own. "Walk closer to buy
+  this." means to go up to the product. "Out of stock." and "Not for sale." mean it
+  cannot be bought right now.
 - "Return Policy" tells the person what the seller says about returns, which can
   differ by product. Read it with them, and do not promise more than it says.
 
 ```controls any
-#shop-product-preview-review-btn | Rate this Product
-#shop-product-preview-buy-btn | Purchase
-#shop-product-preview-return-policy-btn | Return Policy
+#product-card-more-btn | More
+#product-card-review-btn | Rate this Product
+#product-card-buy-btn | Buy
+#product-card-return-policy-btn | Return Policy
 ```
 
 ### How do I buy something?
 
-1. Open the product's card (see the entry above) and tap "Purchase".
+1. Open the product's card (see the entry above) and tap "Buy".
 2. A sheet titled "Checkout" shows what you are buying. Enter your card in the card
    box.
 3. Tap "Pay".
@@ -320,7 +328,7 @@ shows under "My Purchases".
   team, and use the runbook's hand-off.
 
 ```controls any
-#shop-product-preview-buy-btn | Purchase
+#product-card-buy-btn | Buy
 #checkout-modal-title | Checkout
 #checkout-pay-btn | Pay
 #verify-modal h2 | Verify to continue
@@ -331,7 +339,7 @@ label:has(#verify-age-attest) | at least 18
 
 ### Where are the things I bought, and how do I rate a seller?
 
-1. Tap the gear at the top left ("Account menu"). A short menu opens, with your name
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"). A short menu opens, with your name
    at the top and "Notices", "Friends", "My Purchases" and "Settings" below it.
 2. Tap "My Purchases".
 3. Each purchase has a "Rate this seller" button. Tap it to rate the seller.
@@ -369,7 +377,7 @@ label:has(#verify-age-attest) | at least 18
 - To back out, tap "Cancel".
 
 ```controls any
-#shop-product-preview-review-btn | Rate this Product
+#product-card-review-btn | Rate this Product
 #product-review-modal-title | Review this product
 #product-review-save-btn | Post review
 #product-review-cancel-btn | Cancel
@@ -457,7 +465,7 @@ are speaking.
 
 ### How do I add a friend and send them a message?
 
-1. Tap the gear at the top left ("Account menu"), then "Friends".
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"), then "Friends".
 2. Tap "+ Add Friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
 3. They get your request. When they accept, they show in your list.
@@ -945,7 +953,7 @@ nobody owns and nothing uses is removed completely.
 
 ### Where do I set up payouts and tax forms?
 
-1. Tap the gear at the top left, then "Settings", then the "Sell" tab.
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Sell" tab.
 2. "Payout Account" says whether one is set up. "Set up payout account" (or "Update
    payout account" if there already is one) opens the steps for it.
 3. Tax forms and identity checks, where they are asked for, are filled in by the

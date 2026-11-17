@@ -7,9 +7,7 @@
 // collapsed until tapped, a contextual choose-button label, "+ New
 // identity") no longer exist — Build/Sell entry is a real signup/login
 // form now, not a list to pick from.
-import {
-  launchPage, openAccountMenu, growWorldAsAdmin, finish, clearVerifyModalIfShown,
-} from './helpers.mjs';
+import { launchPage, openAccountMenu, growWorldAsAdmin, finish, clearVerifyModalIfShown, goToMode } from './helpers.mjs';
 
 const LABEL = 'Chrome Suite Tester';
 const EMAIL = `chrome-suite-${Date.now()}@e2e.test`;
@@ -28,7 +26,7 @@ await page.click('#auth-close-btn');
 await page.waitForTimeout(300);
 
 // --- Sell nav: active immediately, real login wall shown (#88, #89) ---
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 const sellNavActiveImmediately = await page.locator('.mode-nav-btn[data-mode="sell"]').evaluate((el) => el.classList.contains('active'));
 // #1503: aria-pressed mirrors .active so the current mode is announced to
@@ -52,7 +50,7 @@ console.log('Sell nav aria-pressed no longer stuck true after cancel (should be 
 console.log('seller modal did not open after cancel (should be 0):', sellerModalOpenedAfterCancel);
 
 // --- Re-open, actually sign up this time -> Upload Model lives in Seller modal (#90) ---
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', LABEL);
@@ -86,7 +84,7 @@ await page.waitForTimeout(300);
 // --- Catalog picker: opaque background, hides product-info while open (#96, #97) ---
 // Already logged in from the Sell signup above — entering Build mode now
 // resolves the same account's builder profile silently, no login prompt.
-await page.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(page, 'build');
 await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(2000);
 const claimStatus = await page.textContent('#claim-status');
