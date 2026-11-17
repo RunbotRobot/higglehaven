@@ -48,7 +48,7 @@ await page.waitForTimeout(150);
 await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 
-const multiSelectInfo = await page.textContent('#product-info');
+const multiSelectInfo = await page.textContent('#item-card-name');
 console.log('status after multi-selecting both trees (should be "2 items selected"):', multiSelectInfo);
 
 // #2761: Save Bundle now opens a themed name-prompt modal instead of
@@ -111,7 +111,7 @@ const reloadedA = positionsAfterReload.find((p) => p.instanceId === instanceAId)
 // as an explicitly-Grouped selection would.
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
-const selectionAfterTappingOneMember = await page.textContent('#product-info');
+const selectionAfterTappingOneMember = await page.textContent('#item-card-name');
 console.log('status after tapping only A post-reload (should still be "2 items selected" -- Save Bundle\'s grouping expanded the selection):', selectionAfterTappingOneMember);
 
 const pass =

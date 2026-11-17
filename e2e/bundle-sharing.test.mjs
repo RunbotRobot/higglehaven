@@ -46,7 +46,7 @@ await sharerPage.mouse.click(210, 400);
 // options slot, and the timeout itself is widened to 60000ms for real
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
-await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
+await sharerPage.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('Tree'), null, { timeout: 60000 });
 
 // Placing already auto-selected the tree (handlePlacementClick's own
 // selectOnly) — Multi-Select carries that selection in (confirmed: see the
@@ -96,7 +96,7 @@ await communityTile.locator('.bundle-tile-place').click();
 await viewerPage.waitForTimeout(300);
 await viewerPage.mouse.click(210, 500);
 await viewerPage.waitForTimeout(1000);
-const viewerPlacedInfo = await viewerPage.textContent('#product-info');
+const viewerPlacedInfo = await viewerPage.textContent('#item-card-name');
 console.log('info after viewer places the shared bundle (should mention the placed template):', viewerPlacedInfo);
 
 // Assembled here, after every interaction has happened, rather than at

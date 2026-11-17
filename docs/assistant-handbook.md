@@ -603,8 +603,9 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - It will not go any further: it has reached a limit and the app stops it there,
   saying so at the top of the screen. If the message is about how high or how deep
   the lándlet goes, see the levels entry below.
-- You want to line it up with something nearby: tap "Snap" so it is green. A
-  dragged item then lines its edges and middle up with items close to it.
+- You want to line it up with something nearby: tap "More" on the card beside the
+  item, then "Snap" so it is yellow. A dragged item then lines its edges and
+  middle up with items close to it.
 - Wrong spot: the round logo button at the top left, then "Undo".
 
 ```controls build
@@ -635,7 +636,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 ### How do I copy an item?
 
-1. Tap the item, then tap "Copy" in the row above it. The top of the screen says
+1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
 2. Tap "Paste" at the bottom left. With the item still selected, the copy appears
    right on top of it.
@@ -659,7 +660,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 ### How do I remove an item, or get it back?
 
 1. Tap the item.
-2. Tap "Delete" in the row above it.
+2. Tap "Delete" on the card beside it.
 
 **You will see:** the item disappears at once. There is no "are you sure" for a
 single item.

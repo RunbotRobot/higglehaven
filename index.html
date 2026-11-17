@@ -208,8 +208,6 @@
           <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
         </label>
       </div>
-      <button id="toggle-snap" type="button">Snap</button>
-      <button id="copy-item" type="button">Copy</button>
       <button id="save-bundle-item" type="button">Save Bundle</button>
       <button id="group-item" type="button">Bundle</button>
       <button id="ungroup-item" type="button">Unbundle</button>
@@ -218,7 +216,6 @@
       <button id="toggle-community-sign" type="button" data-width-sizer="Community Sign">Community Sign</button>
       <button id="toggle-community-calendar" type="button" data-width-sizer="Community Calendar">Community Calendar</button>
       <button id="toggle-backup-chain" type="button">Backup Chain</button>
-      <button id="delete-item" type="button">Delete</button>
       <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
         <span id="selection-action-status-text" class="shop-notice-text"></span>
         <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
@@ -836,7 +833,7 @@
          world with a dimmed sheet and a second 3D copy of the product. Not a
          modal: nothing behind it is dimmed or locked, and tapping the world
          folds it away. All of its text can be selected. -->
-    <div id="product-card" role="region" aria-label="Product" data-state="closed" hidden>
+    <div id="product-card" class="world-card" role="region" aria-label="Product" data-state="closed" hidden>
       <div id="product-card-name"></div>
       <div id="product-card-price"></div>
       <div id="product-card-seller"></div>
@@ -851,6 +848,26 @@
         <button id="product-card-return-policy-btn" type="button">Return Policy</button>
       </div>
       <button id="product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+    </div>
+    <!-- #3689 (leaf 2/6 of #3654, Build in the bud): the card of the selected
+         item (or of the selection). It blooms BESIDE what is selected in Build
+         and follows it as the view moves (src/build/itemCard.js, on the same
+         mechanism as the product card above: src/ui/worldCard.js). Its title is
+         the item's name, so the name no longer floats at the top of the screen
+         (#3573). Copy, Delete and Snap moved here from the selection toolbar;
+         Delete is as immediate and as undoable as it was. All its text can be
+         selected. -->
+    <div id="item-card" class="world-card" role="region" aria-label="Selected item" data-state="closed" hidden>
+      <div id="item-card-name"></div>
+      <div id="item-card-actions">
+        <button id="copy-item" type="button">Copy</button>
+        <button id="delete-item" type="button">Delete</button>
+        <button id="item-card-more-btn" type="button" aria-expanded="false" aria-controls="item-card-more">More</button>
+      </div>
+      <div id="item-card-more" hidden>
+        <button id="toggle-snap" type="button">Snap</button>
+      </div>
+      <button id="item-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>
     <!-- #2718 (sub-issue of #2715): src/feedback/submitFeedbackUI.js owns
          every element below -- open/close, the screenshot capture, and the
