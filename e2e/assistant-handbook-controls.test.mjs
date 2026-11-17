@@ -9,6 +9,7 @@
 // file is read here and checked first, so a malformed handbook fails with a plain
 // sentence before any browser work.
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 import { parseHandbook, validateHandbook, controlMatches } from '../scripts/assistant-handbook-lib.mjs';
 
@@ -22,7 +23,7 @@ if (formatProblems.length > 0) {
 
 // Every listed control with where it was listed.
 const controls = entries.flatMap((entry) => entry.controls.map((control) => ({ ...control, entry: entry.title })));
-const modes = ['build', 'shop', 'sell'].filter((mode) => controls.some((control) => control.mode === mode));
+const modes = ['build', 'shop', 'sell'].filter((mode) => controls.some((control) => control.mode === mode || (mode === 'sell' && control.mode === 'sell-row')));
 // "any" controls are checked in the first mode visited (they are on every page).
 const firstMode = modes[0] || 'build';
 
@@ -42,6 +43,24 @@ async function read(selector) {
       value: el.tagName === 'INPUT' && ['button', 'submit'].includes(el.type) ? el.value : '',
     };
   }, selector);
+}
+
+const CRATE_MODEL_PATH = fileURLToPath(new URL('../public/models/crate.glb', import.meta.url));
+async function openOwnProductRow() {
+  await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
+  await page.click('#upload-model-btn');
+  await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
+  await page.fill('#upload-name', 'Handbook Crate');
+  await page.fill('#upload-price', '5');
+  await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
+  await page.click('#upload-submit-btn');
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  await page.click('#upload-submit-btn');
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
+  await page.waitForTimeout(500);
+  await page.locator('.seller-row').filter({ hasText: 'Handbook Crate' }).locator('.seller-row-toggle').click();
+  await page.waitForTimeout(500);
 }
 
 const failures = [];
@@ -68,6 +87,12 @@ for (const mode of modes.filter((m) => m !== 'build')) {
   await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(2500);
   await checkMode(mode);
+  // #3617: the buttons on one of the seller's own products only exist once a row is
+  // opened, so upload a product, open its row and look for them there.
+  if (mode === 'sell' && controls.some((control) => control.mode === 'sell-row')) {
+    await openOwnProductRow();
+    await checkMode('sell-row');
+  }
 }
 
 console.log(`checked ${checked} listed controls across ${entries.length} entries (${modes.join(', ')}); ${failures.length} problem(s)`);
