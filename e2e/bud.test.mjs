@@ -75,12 +75,12 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('#settings-close-btn');
 
-// Build keeps its own top row until it has petals.
+// Sell keeps its own top row until it has petals (Build got them in #3688).
 await page.reload();
 await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
-await goToMode(page, 'build');
-await page.waitForSelector('body[data-mode="build"]', { timeout: 30000 }); // the mode is decided after the page first paints
+await goToMode(page, 'sell');
+await page.waitForSelector('body[data-mode="sell"]', { timeout: 30000 }); // the mode is decided after the page first paints
 await page.waitForSelector('#mode-nav', { state: 'visible', timeout: 20000 });
 const inBuild = {
   budOff: await page.evaluate(() => document.body.dataset.bud),
@@ -88,7 +88,7 @@ const inBuild = {
   wordmark: await shown('#wordmark-panel'),
   gear: await shown('#account-menu-toggle .bud-gear'),
 };
-console.log('in Build:', JSON.stringify(inBuild));
+console.log('in Sell:', JSON.stringify(inBuild));
 
 const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark && !rest.modeNav
   && Math.round(rest.budBox.width) === 56 && rest.panelOpen === 0

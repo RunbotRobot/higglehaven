@@ -2042,40 +2042,31 @@ async function enterSellMode() {
   // so that load puts the avatar at the page's start.
   await enterSellWorldView({ onFrame: recordSellFeedbackSample });
 
-  // Preserves today's default: Sell has always opened straight into the
-  // product-management modal — the showcase array behind it (semi-
-  // transparent backdrop, see #seller-modal's own CSS) is new, not a
-  // replacement for that entry behavior. Deliberately not calling
-  // openSellerModal() itself here: its own `await bootstrapPromise` exists
-  // for the *old* no-reload mode-nav path (Sell reachable while some other
-  // mode's bootstrap() call might still be resolving) — this function only
-  // ever runs from inside this very page's own bootstrap() now, so
-  // awaiting that same promise here would deadlock (it can't resolve
-  // until this call returns).
+  // #3700 (Sell in the bud, 2/6; part of #3655 and #3648): Sell opens on the showroom it just
+  // landed on, unobstructed. My products used to open over it here (the owner's audit finding
+  // #3587); it is now one tap away, the My products petal of the bud (src/sell/mode.js's
+  // registerBudPetals('sell', ...)), which calls openSellerModal(). Deliberately not calling
+  // openSellerModal() itself here: its own `await bootstrapPromise` exists for the *old*
+  // no-reload mode-nav path -- this function only ever runs from inside this very page's own
+  // bootstrap() now, so awaiting that same promise here would deadlock (it can't resolve until
+  // this call returns). The modal's own contents are still prepared below, so the petal opens
+  // it instantly instead of showing an empty list for a moment.
   // #2647: sellerActiveView is a module-private binding in src/sell/mode.js
   // now -- resetSellerView() is that module's own setter for this same
   // assignment.
   resetSellerView();
   updateSellerViewToggleUI();
   renderActiveSellerView();
-  sellerModalEl.classList.add('visible');
-  openModalA11y(sellerModalEl, closeSellerModal);
-  // #1214: openSellerModal() (see its own comment above) has never actually
-  // been called from anywhere since #540 moved Sell to this reload-based
-  // entry path — this function inlines the rest of its body, but had
-  // dropped this one call along the way, leaving #seller-feedback-summary
-  // permanently hidden/stale in the live app regardless of real feedback
-  // on file. Found while adding e2e coverage for the seller-feedback flow.
+  // #1214: openSellerModal() has never actually been called from anywhere since #540 moved Sell
+  // to this reload-based entry path -- this function inlines the rest of its body, but had
+  // dropped this one call along the way, leaving #seller-feedback-summary permanently
+  // hidden/stale in the live app regardless of real feedback on file. Found while adding e2e
+  // coverage for the seller-feedback flow.
   renderSellerFeedbackSummary(id);
-  // #1801 (owner feedback): this modal doesn't need the showcase array
-  // behind it to be loaded at all — it was sitting there blocking this
-  // whole function (and bootstrapPromise's own hideLoadingScreen with it)
-  // behind a real per-model fetch-and-load for every product, the same
-  // "unrelated 3D scene" delay closeSellerModal's own comment already
-  // reasons about. Deferred/unawaited here exactly like that same call
-  // there and the Prev/Next pager buttons above — the modal is already
-  // visible by the time this resolves, so there's nothing for a slower
-  // load here to visibly block.
+  // #1801 (owner feedback): the showcase array behind the list is not awaited -- it was sitting
+  // there blocking this whole function (and bootstrapPromise's own hideLoadingScreen with it)
+  // behind a real per-model fetch-and-load for every product. Deferred/unawaited here exactly
+  // like the same call in closeSellerModal and the Prev/Next pager buttons above.
   loadSellerShowcasePage(0);
 }
 

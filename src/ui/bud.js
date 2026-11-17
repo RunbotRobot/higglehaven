@@ -3,7 +3,7 @@
 // a petal runs an action or opens a leaf. This module is the small contract every other
 // leaf of that work builds on (docs/DESIGN.md, "The bud"):
 //
-//   registerBudPetals(mode, [{ id, label, run }])  one definition per mode; a mode with none has no bud
+//   registerBudPetals(mode, [{ id, label, run, domId? }])  one definition per mode; a mode with none has no bud
 //   openLeaf({ id, title, render }) / closeLeaf()  one soft sheet at a time, close upper-right
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
 //   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
@@ -25,7 +25,7 @@ const toggle = () => document.getElementById('account-menu-toggle');
 const panel = () => document.getElementById('account-menu-panel');
 
 export function registerBudPetals(mode, petals) {
-  registry.set(mode, petals.map((p) => ({ id: p.id, label: p.label, run: p.run })));
+  registry.set(mode, petals.map((p) => ({ id: p.id, label: p.label, run: p.run, domId: p.domId })));
   syncBud();
 }
 
@@ -49,8 +49,17 @@ function syncBud() {
   if (!host) return;
   for (const [petalMode, petals] of registry) {
     for (const petal of petals) {
-      const id = `bud-petal-${petalMode}-${petal.id}`;
+      // A petal may adopt a button that already exists (domId), keeping its id and its own
+      // handler: the Build catalog's Add item is the one that did, so its tests and its
+      // placement state (its label says Cancel while an item is being placed) carry over.
+      const id = petal.domId ?? `bud-petal-${petalMode}-${petal.id}`;
       let btn = document.getElementById(id);
+      if (btn && petal.domId && !btn.dataset.budMode) {
+        btn.classList.add('bud-petal');
+        btn.dataset.budMode = petalMode;
+        btn.addEventListener('click', foldBud);
+        if (btn.parentElement !== host) host.appendChild(btn);
+      }
       if (!btn) {
         btn = document.createElement('button');
         btn.type = 'button';
@@ -181,9 +190,9 @@ export function openHowToMoveLeaf() {
     title: 'How to move',
     render: (body) => {
       const lines = [
-        'Walk: the left stick, or W A S D / the arrow keys.',
-        'Look: the right stick, or Q and E to turn.',
-        'Fly: the bird button, or press Space twice.',
+        'Walk: drag anywhere on the world, or W A S D / the arrow keys.',
+        'Look: drag a second finger, or Q and E to turn.',
+        'Fly: double-tap the world, or press Space twice.',
         'Tap a product to look at it.',
       ];
       for (const text of lines) {
@@ -201,4 +210,12 @@ export function openHowToMoveLeaf() {
 // registered by src/sell/mode.js, next to the product list they open (#3699).
 registerBudPetals('shop', [
   { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
+]);
+
+// Build's petals. The mode buttons (Shop, Sell) come in as petals the same way Shop's do. Add item
+// adopts the old "+ Add Item" button, so there is no second control for it: it sits in the bud and
+// keeps its id and its handler (src/catalog/picker.js). Levels, Tools and Undo/Redo arrive with
+// the slices that move them (#3690, #3691), so they are never in two places.
+registerBudPetals('build', [
+  { id: 'add-item', label: 'Add item', domId: 'add-item-btn', run: () => {} },
 ]);

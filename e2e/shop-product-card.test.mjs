@@ -163,6 +163,9 @@ check(justOpened.state === 'blooming' || justOpened.state === 'open', `the card 
 await page.waitForFunction(() => document.getElementById('product-card').dataset.state === 'open', null, { timeout: 4000 });
 check((await page.textContent('#product-card-name')).trim() === 'Card Crate', 'the card names the product');
 check((await page.textContent('#product-card-price')).trim() === '$5.00', 'the card shows the price');
+// #3680: the card names the seller (their storefront name), filled in when the lookup answers.
+await page.waitForFunction(() => document.getElementById('product-card-seller').textContent.trim() !== '', null, { timeout: 8000 }).catch(() => {});
+check((await page.textContent('#product-card-seller')).trim() === `Sold by ${sellerMeBody.seller.label}`, 'the card names the seller');
 try {
   await page.waitForSelector('#product-card-buy-btn.visible', { timeout: 8000 });
 } catch (err) {

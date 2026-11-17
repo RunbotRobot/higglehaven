@@ -38,7 +38,7 @@ await page.waitForTimeout(800);
 const productInfoAfterPlace = await page.textContent('#product-info');
 console.log('product-info after tapping to place with Measure previously on (should be non-empty, not still "Tap a spot..."):', productInfoAfterPlace);
 const addItemBtnTextAfterPlace = await addItemBtnText();
-console.log('Add Item button text right after a successful placement (should be back to "+ Add Item"):', addItemBtnTextAfterPlace);
+console.log('Add Item button text right after a successful placement (should be back to "Add item"):', addItemBtnTextAfterPlace);
 
 // Direction 2: a placement already pending, then Measure is toggled on —
 // the pending placement should be canceled rather than left stranded
@@ -48,14 +48,14 @@ await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').first().click();
 await page.waitForTimeout(300);
 const addItemBtnTextWhilePending = await addItemBtnText();
-console.log('Add Item button text with a placement pending (should be "✕ Cancel"):', addItemBtnTextWhilePending);
+console.log('Add Item button text with a placement pending (should be "Cancel placing"):', addItemBtnTextWhilePending);
 
 await page.click('#toggle-measure');
 await page.waitForTimeout(300);
 const measureActiveAfterCancelToggle = await measureActive();
 console.log('Measure active after toggling it on with a placement pending (should be true):', measureActiveAfterCancelToggle);
 const addItemBtnTextAfterCancelToggle = await addItemBtnText();
-console.log('Add Item button text after Measure canceled the pending placement (should be back to "+ Add Item"):', addItemBtnTextAfterCancelToggle);
+console.log('Add Item button text after Measure canceled the pending placement (should be back to "Add item"):', addItemBtnTextAfterCancelToggle);
 
 // Leave Measure off for a clean exit.
 await page.click('#toggle-measure');
@@ -65,9 +65,9 @@ const pass =
   measureActiveBeforePlacement &&
   !measureActiveDuringPlacement &&
   !productInfoAfterPlace.toLowerCase().includes('tap a spot') &&
-  addItemBtnTextAfterPlace.trim() === '+ Add Item' &&
-  addItemBtnTextWhilePending.trim() === '✕ Cancel' &&
+  addItemBtnTextAfterPlace.trim() === 'Add item' &&
+  addItemBtnTextWhilePending.trim() === 'Cancel placing' &&
   measureActiveAfterCancelToggle &&
-  addItemBtnTextAfterCancelToggle.trim() === '+ Add Item' &&
+  addItemBtnTextAfterCancelToggle.trim() === 'Add item' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Measure mode does not swallow Add-Item placement taps in either direction', errors });
