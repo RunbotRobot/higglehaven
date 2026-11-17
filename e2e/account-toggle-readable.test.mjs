@@ -4,9 +4,9 @@
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Gear Tester', viewport: { width: 390, height: 844 } });
-// #3649: in Shop the toggle is the bud now (its own e2e, bud.test.mjs); Build and Sell still
-// show the gear, so this is where the gear has to stay readable.
-await chooseIdentity(page, { mode: 'build', label: 'Gear Tester', isNew: true });
+// #3649, #3690: in Shop and Build the toggle is the bud now (its own e2e, bud.test.mjs); Sell
+// still shows the gear, so this is where the gear has to stay readable until Sell has its bud.
+await chooseIdentity(page, { mode: 'sell', label: 'Gear Tester', isNew: true });
 await page.waitForSelector('#account-menu-toggle .bud-gear', { state: 'visible', timeout: 30000 });
 
 const m = await page.evaluate(() => {
