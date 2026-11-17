@@ -53,9 +53,10 @@ let feedbackScreenshotUrl = null;
 // in-flight capture from the other.
 let feedbackModalToken = 0;
 
-// #3302: the modal this one was opened over (Settings), re-armed on close so
-// Settings is not left on screen but untrapped -- same bug class #2515 fixed
-// for the upload/seller pair. Null when opened from anywhere else.
+// #3302: the modal this one was opened over (Settings). #3676: Settings is put
+// away while this card is open and shown again on close, so the two are never
+// stacked -- same bug class #2515 fixed for the upload/seller pair. Null when
+// opened from anywhere else.
 let feedbackReturnTo = null;
 
 // #2718's own body: "the actual GPU/driver string via
@@ -139,7 +140,11 @@ function closeFeedbackModal() {
   feedbackScreenshotBlob = null;
   const returnTo = feedbackReturnTo;
   feedbackReturnTo = null;
-  if (returnTo?.el?.classList.contains('visible')) openModalA11y(returnTo.el, returnTo.close);
+  // #3676: the modal it came from was put away while this one was open; bring it back.
+  if (returnTo?.el) {
+    returnTo.el.classList.add('visible');
+    openModalA11y(returnTo.el, returnTo.close);
+  }
 }
 
 async function handleFeedbackSubmit() {
