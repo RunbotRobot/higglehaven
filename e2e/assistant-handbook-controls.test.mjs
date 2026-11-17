@@ -10,7 +10,7 @@
 // sentence before any browser work.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode, openAddProductLeaf } from './helpers.mjs';
 import { parseHandbook, validateHandbook, controlMatches } from '../scripts/assistant-handbook-lib.mjs';
 
 const entries = parseHandbook(readFileSync(new URL('../docs/assistant-handbook.md', import.meta.url), 'utf8'));
@@ -48,7 +48,7 @@ async function read(selector) {
 const CRATE_MODEL_PATH = fileURLToPath(new URL('../public/models/crate.glb', import.meta.url));
 async function openOwnProductRow() {
   await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', 'Handbook Crate');
   await page.fill('#upload-price', '5');

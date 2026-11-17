@@ -13,7 +13,7 @@
 // its own analogous pagination gap).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -79,7 +79,7 @@ const feedbackSummaryText = await page.locator('#seller-feedback-summary').textC
 console.log(`seller feedback summary (should mention the real count ${FAKE_FEEDBACK_COUNT}, not the mocked array length 1):`, feedbackSummaryText);
 
 // Upload a product so there's a seller row to open the Reviews panel on.
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10');

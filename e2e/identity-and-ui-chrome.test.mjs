@@ -64,8 +64,12 @@ await page.click('#auth-signup-form button[type="submit"]');
 // helper does before the seller modal actually opens.
 await clearVerifyModalIfShown(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
+// #3703: adding a product starts at the bud's Add a product petal; My products no longer carries
+// an Upload Model button.
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();
-console.log('Upload Model button lives inside Seller modal (should be 1):', uploadBtnInSeller);
+console.log('My products has no Upload Model button of its own any more (should be 0):', uploadBtnInSeller);
+const addProductPetal = await page.locator('#bud-petal-sell-add-product').count();
+console.log('The Add a product petal exists in Sell (should be 1):', addProductPetal);
 
 // --- X-close buttons exist on every modal that has one, and open/close it (#98) ---
 const sellerCloseIsX = await page.locator('#seller-close-btn').evaluate((el) => el.classList.contains('modal-close-btn') && el.textContent.includes('×'));

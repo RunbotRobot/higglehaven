@@ -2371,8 +2371,6 @@
         font-size: var(--text-md);
         line-height: 1;
       }
-      #upload-model-btn,
-      #sell-this-too-btn,
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
@@ -2502,6 +2500,41 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-lg);
+      }
+      /* #3703 (Sell in the bud, 5/6): in Sell the Add a product leaf, and the Sell This Too sheet it
+         leads to, grow from under the bud like Settings does (#3652): no dimming scrim, the leaf's
+         own shape, scrolling inside itself. */
+      body[data-bud="on"] #upload-modal,
+      body[data-bud="on"] #sell-this-too-modal {
+        justify-content: flex-start;
+        align-items: flex-start;
+        background: transparent;
+        padding: 76px var(--space-2xl) var(--space-2xl);
+      }
+      body[data-bud="on"] #upload-modal-content,
+      body[data-bud="on"] #sell-this-too-modal-content {
+        box-sizing: border-box;
+        max-height: calc(100vh - 92px);
+        max-height: calc(100dvh - 92px);
+        max-width: 316px;
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        box-shadow: var(--shadow-card);
+        border-radius: 30px 6px 30px 6px;
+      }
+      .add-product-choice {
+        padding: var(--space-lg) var(--space-2xl);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: var(--pill-text);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        text-align: left;
+        cursor: pointer;
+      }
+      #upload-step-choose:not([hidden]) {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
       }
       #sell-this-too-modal-content h2 {
         margin: 0;
