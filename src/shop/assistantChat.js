@@ -14,6 +14,7 @@ import {
   leaveAssistantQuestion, fetchAssistantQuestion, closeAssistantQuestion,
 } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
+import { setBudWord, clearBudWord, setBudMark, clearBudMark } from '../ui/bud.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
   canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
@@ -29,7 +30,7 @@ const badgeEl = document.getElementById('assistant-chat-badge');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
 const minimizeEl = document.getElementById('assistant-chat-minimize');
-const pillEl = document.getElementById('assistant-chat-pill');
+const menuRowEl = document.getElementById('assistant-menu-btn'); // #3653: the way back to a minimised conversation
 const offerEl = document.getElementById('assistant-chat-offer');
 const leaveEl = document.getElementById('assistant-chat-leave');
 const withdrawEl = document.getElementById('assistant-chat-withdraw');
@@ -189,9 +190,14 @@ function render() {
   withdrawEl.textContent = withdrawLabel;
   blockEl.hidden = !assistant?.builderId;
   panelEl.classList.toggle('minimized', minimized);
-  pillEl.hidden = !(isOpen() && minimized);
-  pillEl.textContent = pillLabel(title.name, unread);
-  pillEl.classList.toggle('unread', unread);
+  // #3653: no pill. While tucked away the bud wears her name (and a dot once she has replied) and
+  // the account menu has a row that brings the window back.
+  const tucked = isOpen() && minimized;
+  const tuckedLabel = pillLabel(title.name, unread);
+  menuRowEl.hidden = !tucked;
+  menuRowEl.textContent = tuckedLabel;
+  if (tucked) setBudWord('assistant', tuckedLabel); else clearBudWord('assistant');
+  if (tucked && unread) setBudMark('assistant'); else clearBudMark('assistant');
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
   renderLog();
@@ -211,9 +217,9 @@ function render() {
       status: question.status, position: question.position ?? null, text: question.text, answer: question.answer?.text ?? null,
     } : null,
     statusIsError: statusEl.classList.contains('error'),
-    // added for #3529: the minimised state and what the pill shows
+    // added for #3529: the minimised state and what its stand-in shows (#3653: the bud's word and the menu row)
     minimized,
-    pill: pillEl.hidden ? null : { text: pillEl.textContent, unread },
+    pill: tucked ? { text: tuckedLabel, unread } : null,
   };
 }
 
@@ -531,7 +537,7 @@ minimizeEl.addEventListener('click', () => {
   minimized = true;
   render();
 });
-pillEl.addEventListener('click', restorePanel);
+menuRowEl.addEventListener('click', restorePanel);
 
 // Go to the free assistant the server named. The shopper's typed question stays
 // in the box, so asking again is one tap on Send. A conversation is never open
