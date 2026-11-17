@@ -38,11 +38,13 @@ const flow = await page.evaluate(() => {
 });
 console.log('flow:', JSON.stringify({ ...flow, box: undefined }));
 
-// Minimised, the pill is in front too and My Products is as it was.
+// Minimised (#3653: no pill; the account menu's Assistant row is the way back, and it is in front of
+// My Products too), My Products is as it was.
 await page.click('#assistant-chat-minimize').catch(() => {});
 await page.waitForTimeout(300);
+await openAccountMenu(page);
 const pill = await page.evaluate(() => {
-  const el = document.getElementById('assistant-chat-pill');
+  const el = document.getElementById('assistant-menu-btn');
   if (!el || el.hidden) return { shown: false };
   const box = el.getBoundingClientRect();
   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
@@ -54,15 +56,15 @@ console.log('pill:', JSON.stringify(pill));
 const stacking = await page.evaluate(() => {
   const z = (el) => { const n = Number.parseInt(getComputedStyle(el).zIndex, 10); return Number.isNaN(n) ? null : n; };
   const panelZ = z(document.getElementById('assistant-chat-panel'));
-  const pillZ = z(document.getElementById('assistant-chat-pill'));
-  const level = Math.min(panelZ, pillZ);
+  const pillZ = panelZ;
+  const level = panelZ;
   const over = [];
   for (const el of document.querySelectorAll('body *')) {
     if (getComputedStyle(el).position !== 'fixed') continue;
     const value = z(el);
     if (value === null || value < level) continue;
-    if (el.id === 'assistant-chat-panel' || el.id === 'assistant-chat-pill') continue;
-    if (el.closest('#assistant-chat-panel, #assistant-chat-pill')) continue;
+    if (el.id === 'assistant-chat-panel') continue;
+    if (el.closest('#assistant-chat-panel')) continue;
     over.push({ id: el.id || el.className || el.tagName, z: value });
   }
   return { panelZ, pillZ, level, over };
@@ -80,6 +82,6 @@ const pass = flow.sellerStillOpen && flow.centreInPanel && flow.cornersInPanel
   && errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#3626: the assistant window and pill are in front of My Products and every panel; only confirmation, verification and sign-in are above',
+  label: '#3626: the assistant window and its way back are in front of My Products and every panel; only confirmation, verification and sign-in are above',
   errors,
 });
