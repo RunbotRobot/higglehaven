@@ -16,7 +16,7 @@
 // whether the app itself handled it gracefully) — the same reasoning
 // other rejection-path tests already document avoiding elsewhere in this
 // suite.
-import { launchPage, finish, waitForText, clearVerifyModalIfShown, goToMode } from './helpers.mjs';
+import { launchPage, finish, waitForText, clearVerifyModalIfShown, goToMode, openMyProducts } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Auth Suite' });
 const email = `auth-suite-${Date.now()}@example.com`;
@@ -214,6 +214,7 @@ await goToMode(page, 'sell');
 // way that helper does, or the /sellers/me fetch below never fires.
 await clearVerifyModalIfShown(page);
 await firstSellerFetch;
+await openMyProducts(page);
 const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No custom products yet');
 console.log('seller status for the first account (should say no products yet):', sellerStatusForFirstAccount);
 await page.click('#seller-close-btn');
@@ -270,6 +271,7 @@ try {
   sellerRefetchedForSecondAccount = false;
 }
 console.log('a fresh /sellers/me GET fired for the second account (should be true — a stale cache would skip it):', sellerRefetchedForSecondAccount);
+await openMyProducts(page);
 const sellerStatusForSecondAccount = await waitForText(page, '#seller-status', 'No custom products yet');
 console.log('seller status for the second account (should say no products yet, not the first account\'s list):', sellerStatusForSecondAccount);
 await page.click('#seller-close-btn');

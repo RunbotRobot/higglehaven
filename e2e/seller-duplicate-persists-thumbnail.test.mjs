@@ -10,7 +10,7 @@
 // the copy's imageUrl/imageEmbedding to show up (persistCatalogThumbnail is
 // deliberately fire-and-forget, not awaited by its caller, so this can't
 // just check immediately after the click).
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Duplicate Thumbnail Tester';
 const PRODUCT_NAME = 'Duplicate Thumbnail Original';
@@ -19,6 +19,7 @@ const TEMPLATE_ID = `duplicate-thumb-${Date.now()}`;
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -51,6 +52,7 @@ console.log('product created directly via the API (status should be 201):', crea
 // test's own comment.
 await page.reload({ waitUntil: 'networkidle' });
 await goToMode(page, 'sell');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

@@ -20,7 +20,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openMyProducts } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,6 +32,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewpo
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#seller-close-btn');

@@ -6,7 +6,7 @@
 // account GET and the link POST are mocked with route.fulfill (same idiom as
 // e2e/seller-stripe-onboarding-refreshes-payouts.test.mjs); the DOM behaviour
 // under test is the real, unmodified app code.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Stripe Step Handoff Tester';
 const STRIPE_URL = 'https://connect.stripe.test/setup/e/handoff';
@@ -14,6 +14,7 @@ const STRIPE_URL = 'https://connect.stripe.test/setup/e/handoff';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 

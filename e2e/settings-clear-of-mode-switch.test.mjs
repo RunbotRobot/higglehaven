@@ -5,7 +5,7 @@
 // screen. This is the test that fails if the next addition to the panel (a
 // taller footer, a longer tab) brings it back: the Sell tab is the tallest,
 // 390x660 is a phone with the browser bars showing.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Settings Clear Shopper';
 
@@ -58,6 +58,7 @@ await page.waitForTimeout(500);
 await checkSettings('build', 'Build');
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#seller-close-btn');

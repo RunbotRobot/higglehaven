@@ -1,7 +1,7 @@
 // #3250: Sell > Manage -- an opened product row made the seller panel run up
 // underneath the (higher z-index) Shop/Build/Sell pills on a phone. The panel
 // must start below the nav and stay inside the screen on a short phone.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Manage Panel Nav Tester';
 const PRODUCT_NAME = 'Panel Nav Crate';
@@ -9,6 +9,7 @@ const PRODUCT_NAME = 'Panel Nav Crate';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 600 } });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 await page.evaluate(async (name) => {
@@ -27,6 +28,7 @@ await page.evaluate(async (name) => {
 }, PRODUCT_NAME);
 await page.reload();
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

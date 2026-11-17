@@ -18,7 +18,7 @@
 // worker/commerce.test.js's own mark-shipped/confirm-delivery tests.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -46,6 +46,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
@@ -139,6 +140,7 @@ console.log('notice after re-visiting the same link a second time (should still 
 // same as any other fresh page load. Re-enter it the normal way instead of
 // assuming prior UI state survived.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await row().locator('.seller-row-toggle').click();

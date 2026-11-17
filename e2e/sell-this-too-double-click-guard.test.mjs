@@ -13,7 +13,7 @@
 // created directly via the API, seller B does the attaching) -- this test
 // is purely about the double-click race, not re-covering the happy path
 // already covered there.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const SELLER_A = 'Double Click Guard Seller A';
 const SELLER_B = 'Double Click Guard Seller B';
@@ -30,6 +30,7 @@ async function fetchJson(page, pathAndQuery, options) {
 }
 
 await chooseIdentity(sellerASession.page, { mode: 'sell', label: SELLER_A, isNew: true });
+await openMyProducts(sellerASession.page);
 await sellerASession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerASession.page.waitForTimeout(300);
 
@@ -50,6 +51,7 @@ const originalTemplateId = created.body.template.templateId;
 const productId = created.body.template.productId;
 
 await chooseIdentity(sellerBSession.page, { mode: 'sell', label: SELLER_B, isNew: true });
+await openMyProducts(sellerBSession.page);
 await sellerBSession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerBSession.page.waitForTimeout(300);
 

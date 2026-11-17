@@ -13,12 +13,13 @@
 // proceeds case is already covered server-side by worker/commerce.test.js's
 // "Seller deletion (#732)" suite).
 import {
-  launchPage, chooseIdentity, openAccountMenu, waitForText, finish, acceptConfirmModal } from './helpers.mjs';
+  launchPage, chooseIdentity, openAccountMenu, waitForText, finish, acceptConfirmModal, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Delete Seller Suite Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 // Settings opens directly into the Sell tab (openSettingsModal derives

@@ -7,7 +7,7 @@
 // and Sell reports are no longer empty). The POST is intercepted so the exact
 // multipart body can be read; the backend's own handling is covered by
 // worker/feedback.test.js.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Feedback Settings Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -112,6 +112,7 @@ await sendFeedbackFromSettings('shop');
 
 await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 await page.waitForSelector('#seller-modal:not(.visible)', { state: 'attached', timeout: 5000 });

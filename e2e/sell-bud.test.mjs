@@ -1,17 +1,18 @@
 // #3699 (Sell in the bud, 1/6 of #3655; part of #3648): in Sell the interface is the bud. Covers at
 // 390x844: the old top row (wordmark pill, gear, Shop/Build/Sell pills) and the bottom-right
 // Products button are gone; the bud unfolds into My products, How to move, Settings and the Shop and
-// Build mode buttons; My products opens from its petal (two taps) after the list has been closed;
-// How to move is a leaf that closes with Escape.
+// Build mode buttons; My products opens from its petal (two taps); How to move is a leaf that closes
+// with Escape. #3700 (2/6): Sell opens onto the showroom, not onto the product list.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const LABEL = 'Sell Bud Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForSelector('body[data-bud="on"]', { timeout: 10000 });
-await page.click('#seller-close-btn');
-await page.waitForTimeout(500);
+await page.waitForTimeout(1500);
+// #3700: nothing stands over the showroom on entry but the bud.
+const listOnEntry = await page.locator('#seller-modal.visible').count();
+console.log('product list open on entry (should be 0):', listOnEntry);
 
 const shown = (selector) => page.locator(selector).isVisible();
 const rest = {
@@ -61,7 +62,7 @@ await page.click('#account-menu-toggle');
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 
-const pass = rest.bud && rest.logo && !rest.gear && !rest.wordmark && !rest.modeNav && rest.productsButton === 0
+const pass = listOnEntry === 0 && rest.bud && rest.logo && !rest.gear && !rest.wordmark && !rest.modeNav && rest.productsButton === 0
   && rest.panelOpen === 0
   && open.myProducts && open.howToMove && !open.shopHowToMove && open.settings && open.shop && open.build && !open.sellItself
   && foldedAfterPetal && leafTitle === 'How to move' && leafClosed

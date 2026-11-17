@@ -35,8 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import {
-  launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, emailForLabel, grantAdmin,
-} from './helpers.mjs';
+  launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, emailForLabel, grantAdmin, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -52,6 +51,7 @@ await chooseIdentity(seedPage, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(seedPage);
 
 await chooseIdentity(seedPage, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(seedPage);
 await seedPage.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await seedPage.waitForTimeout(300);
 await seedPage.click('#upload-model-btn');

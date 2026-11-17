@@ -804,9 +804,9 @@ top of the screen.
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
-3. The "My products" window opens by itself. Tap "Close" (the × at its top right)
-   to put it away and look at the showroom. To bring it back, tap the round logo at the
-   top left (the bud), then "My products".
+3. Nothing else is in the way: only the round logo at the top left (the bud) stands over
+   the showroom. To see your products as a list, tap the bud, then "My products". Tap
+   "Close" (the × at its top right) to put the list away again.
 
 **You will see:** your own products only. Nobody else's products and no real
 lándlets are shown here.
@@ -814,7 +814,8 @@ lándlets are shown here.
 **If something goes wrong:**
 - "My products" says "No custom products yet — use "+ Upload Model" to add one."
   You have not uploaded anything yet. The next entry shows how.
-- The window seems to be missing: tap the round logo at the top left, then "My products".
+- The list is not on screen: it no longer opens by itself. Tap the round logo at the top
+  left, then "My products".
 
 ```controls sell
 .mode-nav-btn[data-mode="sell"] | Sell

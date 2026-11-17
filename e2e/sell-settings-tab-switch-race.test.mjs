@@ -7,13 +7,14 @@
 // render the way every sibling Settings-tab renderer already does. Same
 // "delay one endpoint, switch tabs during the gap" technique as
 // settings-tab-switch-race.test.mjs (#905) and seller-modal-reopen-race.test.mjs.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Sell Settings Tab Race Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 

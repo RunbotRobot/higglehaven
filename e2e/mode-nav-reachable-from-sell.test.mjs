@@ -10,13 +10,14 @@
 // proves the Build button is not just visually on top but actually
 // clickable while Sell is open, since Playwright's own actionability checks
 // fail a click on an element another one is covering.
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Mode Nav From Sell Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

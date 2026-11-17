@@ -9,6 +9,7 @@ const PRODUCT_NAME = 'List View Crate';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -40,6 +41,7 @@ await page.evaluate(async (name) => {
 }, PRODUCT_NAME);
 await page.reload();
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

@@ -10,7 +10,7 @@
 // (re-arm the parent's trap inside the close function) as #1679's own
 // e2e/friends-map-and-dm-escape-restores-friends.test.mjs, just applied to
 // a stacked pair instead of a swapped one.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Upload Modal Escape Restore Tester';
 
@@ -19,6 +19,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

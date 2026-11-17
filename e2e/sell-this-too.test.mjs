@@ -18,7 +18,7 @@
 // through the real upload wizard -- this test is about the cross-seller
 // attach flow, not re-covering the upload wizard itself (already covered
 // by e2e/seller-upload-and-resize.test.mjs and friends).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const SELLER_A = 'Sell This Too Seller A';
 const SELLER_B = 'Sell This Too Seller B';
@@ -35,6 +35,7 @@ async function fetchJson(page, pathAndQuery, options) {
 }
 
 await chooseIdentity(sellerASession.page, { mode: 'sell', label: SELLER_A, isNew: true });
+await openMyProducts(sellerASession.page);
 await sellerASession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerASession.page.waitForTimeout(300);
 
@@ -58,6 +59,7 @@ const originalTemplateId = created.body.template.templateId;
 const productId = created.body.template.productId;
 
 await chooseIdentity(sellerBSession.page, { mode: 'sell', label: SELLER_B, isNew: true });
+await openMyProducts(sellerBSession.page);
 await sellerBSession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerBSession.page.waitForTimeout(300);
 

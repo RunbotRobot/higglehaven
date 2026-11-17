@@ -17,7 +17,7 @@
 // anything to do with #1166's own conversion feature.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FBX_FIXTURE_PATH = path.join(REPO_ROOT, 'e2e', 'fixtures', 'test-triangle.fbx');
@@ -28,6 +28,7 @@ const PRODUCT_NAME = 'Suite FBX Triangle';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

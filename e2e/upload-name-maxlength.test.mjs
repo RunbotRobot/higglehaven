@@ -6,7 +6,7 @@
 // then hit the raw server error text. This is pure client-side (the
 // browser itself enforces maxlength, truncating keystrokes past the
 // limit), so no upload/network round trip is needed to prove the fix.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Upload Name Maxlength Tester';
 
@@ -15,6 +15,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');

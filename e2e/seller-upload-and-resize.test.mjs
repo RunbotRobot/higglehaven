@@ -5,7 +5,7 @@
 // and "Editing a product's size" sections).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -26,6 +26,7 @@ console.log('notifications badge hidden before any notice (should be true):', ba
 // Seller identity is a genuinely separate roster from builders — the first
 // visit to Sell needs its own picker even with a builder already chosen.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -109,6 +110,7 @@ await page.waitForTimeout(1000);
 // straight into the modal once bootstrap() lands.
 await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });

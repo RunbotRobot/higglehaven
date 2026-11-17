@@ -3,12 +3,13 @@
 // My products drawn underneath a translucent sheet, so its heading and rows
 // read through the new one. One sheet at a time now: My products is hidden
 // while any of them is open and comes back, unchanged, when it closes.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'One Sheet Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 800 } });
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

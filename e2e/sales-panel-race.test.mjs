@@ -6,7 +6,7 @@
 // deterministic reordering, matching the exact repro in the issue.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -25,6 +25,7 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 // e2e suite, all bumped to this same 30000ms in the same pass) -- same
 // post-identity-switch margin-under-contention class as #1388/#1896's
 // '#auth-modal' wait in chooseIdentity, which this now matches.
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');

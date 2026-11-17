@@ -6,7 +6,7 @@
 // Same bug shape (and same fix idiom -- a real aria-label, matching the
 // pattern already used for icon-only buttons) as #1324's icon-button
 // accessible-name fix (see e2e/icon-button-accessible-names.test.mjs).
-import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Search Input A11y Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -22,6 +22,7 @@ console.log('#catalog-search-input aria-label (should be set):', catalogSearchLa
 await page.click('#catalog-picker-close-btn');
 await page.waitForTimeout(300);
 await goToMode(page, 'sell');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

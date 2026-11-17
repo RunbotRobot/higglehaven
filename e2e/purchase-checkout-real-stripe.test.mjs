@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel, acceptConfirmModal, goToMode } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal, goToMode, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -179,6 +179,7 @@ await sellerPage.waitForSelector('#claim-modal:not(.visible)', { state: 'attache
 
 await goToMode(sellerPage, 'sell');
 await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await openMyProducts(sellerPage);
 await sellerPage.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerPage.waitForTimeout(300);
 await sellerPage.click('#upload-model-btn');

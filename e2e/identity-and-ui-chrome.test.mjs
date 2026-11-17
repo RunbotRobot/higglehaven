@@ -7,7 +7,7 @@
 // collapsed until tapped, a contextual choose-button label, "+ New
 // identity") no longer exist — Build/Sell entry is a real signup/login
 // form now, not a list to pick from.
-import { launchPage, openAccountMenu, growWorldAsAdmin, finish, clearVerifyModalIfShown, goToMode } from './helpers.mjs';
+import { launchPage, openAccountMenu, growWorldAsAdmin, finish, clearVerifyModalIfShown, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Chrome Suite Tester';
 const EMAIL = `chrome-suite-${Date.now()}@e2e.test`;
@@ -63,6 +63,7 @@ await page.click('#auth-signup-form button[type="submit"]');
 // chooseIdentity, so the verify-modal needs clearing the same way that
 // helper does before the seller modal actually opens.
 await clearVerifyModalIfShown(page);
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();
 console.log('Upload Model button lives inside Seller modal (should be 1):', uploadBtnInSeller);

@@ -10,7 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 // Same default this file's own helpers.mjs uses internally (not exported) —
 // kept in sync deliberately rather than importing it, since the plain
@@ -29,6 +29,7 @@ const LABEL = 'Sell Showcase Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -205,6 +206,7 @@ await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);

@@ -22,13 +22,14 @@
 // below #mode-nav's z-index (#1596 raised #mode-nav above it specifically so
 // Shop/Build stay clickable while Sell is open). Build's own claim-modal
 // backdrop sits above #mode-nav instead and would block this click.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Mode Nav Instant Feedback Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

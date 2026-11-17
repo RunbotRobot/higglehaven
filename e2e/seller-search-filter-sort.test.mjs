@@ -6,13 +6,14 @@
 // products, so seven "Zz Filler" products ($10, same placeholder category)
 // bring the list to nine; visibleRowLabels() leaves them out so every
 // assertion below still reads about the two products it was written for.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Search Filter Sort Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -104,6 +105,7 @@ const recasePatch = await page.evaluate(async (id) => {
 console.log('recased Zeta Gadget to PLACEHOLDER (should be 200, "PLACEHOLDER"):', recasePatch.status, recasePatch.category);
 await page.reload({ waitUntil: 'networkidle' });
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -155,6 +157,7 @@ await page.evaluate(async () => {
 });
 await page.reload({ waitUntil: 'networkidle' });
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

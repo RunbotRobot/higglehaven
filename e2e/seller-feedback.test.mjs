@@ -10,7 +10,7 @@
 // both via renderSellerFeedbackSummary, fetched fresh on every modal open.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -24,6 +24,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -130,6 +131,7 @@ await page.waitForSelector('#add-item-btn', { timeout: 15000 });
 await page.waitForTimeout(300);
 await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, null, { timeout: 30000 });
 const summaryText = await page.locator('#seller-feedback-summary').textContent();

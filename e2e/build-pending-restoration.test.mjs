@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal, openMyProducts } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,6 +39,7 @@ const adminCookie = await ensureAdminSession();
 // --- The seller: its own browser/session, lists one product. ---
 const { browser: sellerBrowser, page: sellerPage } = await launchPage({ promptAnswer: LABEL_SELLER });
 await chooseIdentity(sellerPage, { mode: 'sell', label: LABEL_SELLER, isNew: true });
+await openMyProducts(sellerPage);
 await sellerPage.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerPage.waitForTimeout(300);
 await sellerPage.click('#seller-close-btn');

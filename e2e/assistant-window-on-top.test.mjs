@@ -6,12 +6,13 @@
 // the assistant window; (2) the computed stacking of every fixed element in the
 // page against the assistant window's, so a panel added later with a higher
 // z-index fails here.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openMyProducts } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Window On Top', viewport: { width: 390, height: 844 } });
 
 // Sell mode opens My Products on arrival.
 await chooseIdentity(page, { mode: 'sell', label: 'Window On Top', isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
 
 // The owner's path: Settings, then Ask an assistant, with My Products open.

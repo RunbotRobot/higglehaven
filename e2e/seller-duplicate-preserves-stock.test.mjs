@@ -10,7 +10,7 @@
 // Duplicate button and checks the resulting copy's stockQuantity via the API
 // -- same "confirm via the API, not just the client" approach #1045's own
 // regression test uses.
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Duplicate Stock Tester';
 const PRODUCT_NAME = 'Duplicate Stock One-Of-A-Kind';
@@ -19,6 +19,7 @@ const TEMPLATE_ID = `duplicate-stock-${Date.now()}`;
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
@@ -56,6 +57,7 @@ console.log('one-of-a-kind product created directly via the API (status should b
 // own.
 await page.reload({ waitUntil: 'networkidle' });
 await goToMode(page, 'sell');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

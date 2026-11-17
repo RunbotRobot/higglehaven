@@ -6,13 +6,14 @@
 // a delete brings the list back to eight, they go again and their values
 // are reset, so a search typed while the list was long cannot keep hiding
 // products behind controls nobody can reach to clear it. Phone width.
-import { launchPage, chooseIdentity, acceptConfirmModal, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, acceptConfirmModal, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'Filter Controls Long List Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 800 } });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
