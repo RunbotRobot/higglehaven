@@ -35,7 +35,7 @@ console.log('Measure active once a placement is pending (should be false — ent
 
 await page.mouse.click(210, 400);
 await page.waitForTimeout(800);
-const productInfoAfterPlace = await page.textContent('#product-info');
+const productInfoAfterPlace = await page.textContent('#item-card-name');
 console.log('product-info after tapping to place with Measure previously on (should be non-empty, not still "Tap a spot..."):', productInfoAfterPlace);
 const addItemBtnTextAfterPlace = await addItemBtnText();
 console.log('Add Item button text right after a successful placement (should be back to "Add item"):', addItemBtnTextAfterPlace);

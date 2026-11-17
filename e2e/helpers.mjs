@@ -750,7 +750,7 @@ export async function budShows(page, selector) {
 }
 
 // Clicks down a vertical strip of screen points around (x, yStart..yEnd)
-// until #product-info's text includes `expectedText`, returning whatever
+// until the item card's title includes `expectedText`, returning whatever
 // text was showing when it stopped (a match, or the last attempt's text if
 // none matched). A placed item's own clickable footprint can be
 // meaningfully smaller once it's no longer wearing the selection
@@ -763,7 +763,7 @@ export async function clickUntilSelected(page, { x, yStart, yEnd, yStep = 10, ex
   for (let y = yStart; y <= yEnd; y += yStep) {
     await page.mouse.click(x, y);
     await page.waitForTimeout(waitAfterClick);
-    info = (await page.textContent('#product-info')) || '';
+    info = (await page.textContent('#item-card-name')) || '';
     if (info.includes(expectedText)) return info;
   }
   return info;

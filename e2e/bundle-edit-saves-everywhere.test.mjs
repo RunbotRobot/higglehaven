@@ -20,7 +20,7 @@ async function placeTreeAt(p, x, y) {
   await p.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
   await p.waitForTimeout(300);
   await p.mouse.click(x, y);
-  await p.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
+  await p.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('Tree'), null, { timeout: 60000 });
 }
 
 await placeTreeAt(page, 160, 380);
@@ -48,7 +48,7 @@ await other.waitForTimeout(500);
 await other.locator('.bundle-tile').filter({ hasText: OWNER }).locator('.bundle-tile-place').click();
 await other.waitForTimeout(300);
 await other.mouse.click(210, 500);
-await other.waitForFunction(() => document.getElementById('product-info').textContent.includes('items selected'), null, { timeout: 60000 });
+await other.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 60000 });
 await other.waitForTimeout(800);
 
 const bundleItems = () => page.evaluate(async () => {
@@ -60,7 +60,7 @@ const before = await bundleItems();
 
 // Owner selects the bundle, opens it, moves one member, and leaves edit mode.
 await page.evaluate(() => window.__testSelectAllProducts());
-await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('items selected'), null, { timeout: 15000 });
+await page.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 15000 });
 await page.waitForSelector('#edit-bundle-item', { state: 'visible', timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('edit-bundle-item').disabled, null, { timeout: 15000 });
 await page.click('#edit-bundle-item');

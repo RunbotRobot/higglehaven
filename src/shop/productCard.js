@@ -23,12 +23,10 @@
 // is the DOM and the projection: one project() per frame while a card is open,
 // and a style write only when the placement actually changes.
 import * as THREE from 'three';
-import { camera } from '../world/scene.js';
 import { meshDimensions } from '../world/models.js';
+import { createWorldCard } from '../ui/worldCard.js';
 import { productInfoParts, setShopTappedProduct } from './worldSprites.js';
-import {
-  clampAnchorRadius, placeProductCard, productCardState, sellerLine,
-} from './productCardLayout.js';
+import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 
@@ -45,24 +43,12 @@ const reviewBtn = document.getElementById('product-card-review-btn');
 const returnPolicyBtn = document.getElementById('product-card-return-policy-btn');
 const closeBtn = document.getElementById('product-card-close-btn');
 
-// The bloom's own length (--motion-bloom is 0.45s) plus a little: how long the
-// card stays in its 'blooming' state if no animationend ever arrives (a browser
-// that skips animations, a hidden tab).
-const BLOOM_FALLBACK_MS = 800;
-
+// The projection, the placement writes and the bloom are the shared world-card
+// mechanism (src/ui/worldCard.js, #3689): Build's item card uses the same one.
+const card = createWorldCard(cardEl);
 const scratchWorld = new THREE.Vector3();
-const scratchRight = new THREE.Vector3();
-const scratchForward = new THREE.Vector3();
-const scratchProjected = new THREE.Vector3();
 
 let openReview = null;
-let measuredSize = { width: 240, height: 120 };
-let sizeDirty = true;
-let lastPlacement = null;
-let bloomTimer = null;
-// Where the last frame put the product on screen. Read only by the e2e hook
-// below; recomputed every frame the card is open.
-let lastAnchor = null;
 
 export function productCardBuyButton() {
   return buyBtn;
@@ -78,16 +64,6 @@ export function productCardReturnPolicyButton() {
 
 export function isProductCardOpen() {
   return openReview !== null;
-}
-
-function setBloomState(state) {
-  clearTimeout(bloomTimer);
-  cardEl.dataset.state = state;
-  if (state === 'blooming') {
-    bloomTimer = setTimeout(() => {
-      if (cardEl.dataset.state === 'blooming') cardEl.dataset.state = 'open';
-    }, BLOOM_FALLBACK_MS);
-  }
 }
 
 // #3680: seller storefront names already looked up (sellerId -> name, or null
@@ -120,7 +96,7 @@ function fillSellerLine(review) {
   loadSellerName(sellerId).then((name) => {
     if (review !== openReview) return; // folded away, or another product opened meanwhile
     sellerEl.textContent = sellerLine(name);
-    sizeDirty = true;
+    card.markDirty();
   });
 }
 
@@ -155,7 +131,7 @@ function fillCard(review) {
   for (const btn of [buyBtn, reviewBtn, returnPolicyBtn]) btn.classList.remove('visible');
   moreEl.hidden = true;
   moreBtn.setAttribute('aria-expanded', 'false');
-  sizeDirty = true;
+  card.markDirty();
 }
 
 // Which petals show, and what the card says when it offers nothing. Called by
@@ -176,7 +152,7 @@ export function syncProductCardActions(review, inRange) {
     moreBtn.setAttribute('aria-expanded', 'false');
   }
   stateEl.textContent = state.stateText;
-  sizeDirty = true;
+  card.markDirty();
 }
 
 export function openProductCard(review) {
@@ -184,26 +160,19 @@ export function openProductCard(review) {
   openReview = review;
   if (!reopened) {
     fillCard(review);
-    lastPlacement = null;
+    card.resetPlacement();
     // Place it before it is shown, so it never flashes at the corner.
     cardEl.hidden = false;
     updateProductCard();
     // Restart the bloom for a different product, even when a card was open.
-    setBloomState('closed');
-    // eslint-disable-next-line no-unused-expressions
-    cardEl.offsetWidth;
-    setBloomState('blooming');
+    card.bloom();
   }
 }
 
 export function closeProductCard() {
   if (openReview === null && cardEl.hidden) return;
   openReview = null;
-  lastPlacement = null;
-  lastAnchor = null;
-  clearTimeout(bloomTimer);
-  cardEl.dataset.state = 'closed';
-  cardEl.hidden = true;
+  card.close();
 }
 
 // A shopper folding the card away themselves (the close button, Escape): the
@@ -213,70 +182,23 @@ function dismissProductCard() {
   closeProductCard();
 }
 
-function measure() {
-  const width = cardEl.offsetWidth;
-  const height = cardEl.offsetHeight;
-  if (width > 0 && height > 0) measuredSize = { width, height };
-  sizeDirty = false;
-}
-
 // Per frame while a card is open (src/shop/flightMovement.js, right after the
 // camera has been positioned for this frame).
 export function updateProductCard() {
   if (!openReview || cardEl.hidden) return;
-  const viewport = { width: window.innerWidth, height: window.innerHeight };
   const mesh = openReview.mesh;
   const world = mesh.getWorldPosition(scratchWorld);
   const dims = meshDimensions(mesh);
-  const halfSize = 0.5 * Math.max(dims.width, dims.depth, dims.height, 0.05);
-
-  camera.getWorldDirection(scratchForward);
-  const behind = scratchProjected.copy(world).sub(camera.position).dot(scratchForward) <= camera.near;
-  let anchor;
-  if (behind) {
-    anchor = { x: NaN, y: NaN, radius: 0, behind: true };
-  } else {
-    scratchProjected.copy(world).project(camera);
-    const x = (scratchProjected.x * 0.5 + 0.5) * viewport.width;
-    const y = (-scratchProjected.y * 0.5 + 0.5) * viewport.height;
-    // The product's on-screen radius: how far a point half its size away,
-    // sideways to the camera, lands from its centre.
-    scratchRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(halfSize).add(world).project(camera);
-    const rightX = (scratchRight.x * 0.5 + 0.5) * viewport.width;
-    anchor = { x, y, radius: clampAnchorRadius(Math.abs(rightX - x)), behind: false };
-  }
-  lastAnchor = anchor;
-
-  if (sizeDirty) measure();
-  const place = placeProductCard({ anchor, card: measuredSize, viewport });
-  const left = Math.round(place.left * 2) / 2;
-  const top = Math.round(place.top * 2) / 2;
-  const pointerY = Math.round(place.pointerY);
-  const pointerX = Math.round(place.pointerX);
-  const last = lastPlacement;
-  if (last && last.left === left && last.top === top && last.side === place.side
-    && last.edge === place.edge && last.pointerY === pointerY && last.pointerX === pointerX) return;
-  lastPlacement = {
-    left, top, side: place.side, edge: place.edge, pointerY, pointerX,
-  };
-  cardEl.style.setProperty('--card-x', `${left}px`);
-  cardEl.style.setProperty('--card-y', `${top}px`);
-  cardEl.style.setProperty('--pointer-y', `${pointerY}px`);
-  cardEl.style.setProperty('--pointer-x', `${pointerX}px`);
-  cardEl.dataset.side = place.side;
-  cardEl.dataset.edge = place.edge ? 'true' : 'false';
+  card.place(world, 0.5 * Math.max(dims.width, dims.depth, dims.height, 0.05));
 }
 
 moreBtn.addEventListener('click', () => {
   const opening = moreEl.hidden;
   moreEl.hidden = !opening;
   moreBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
-  sizeDirty = true;
+  card.markDirty();
 });
 closeBtn.addEventListener('click', dismissProductCard);
-cardEl.addEventListener('animationend', (event) => {
-  if (event.target === cardEl && cardEl.dataset.state === 'blooming') setBloomState('open');
-});
 // Escape folds the card, unless a modal has just used that same Escape (the
 // shared modal handler in src/ui/modal.js calls preventDefault when it does):
 // cancelling the Buy confirmation must not also fold the card behind it.
@@ -287,4 +209,4 @@ document.addEventListener('keydown', (event) => {
 // e2e-only (same window.__test* convention as the rest of Shop): where the
 // last frame put the tapped product on screen, so a test can check the card
 // sits beside it and follows it. null when no card is open. Inert otherwise.
-window.__testProductCardAnchor = () => lastAnchor;
+window.__testProductCardAnchor = () => card.anchor();

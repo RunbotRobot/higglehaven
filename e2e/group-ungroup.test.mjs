@@ -57,7 +57,7 @@ await page.waitForTimeout(150);
 await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 
-const multiSelectInfo = await page.textContent('#product-info');
+const multiSelectInfo = await page.textContent('#item-card-name');
 console.log('status after multi-selecting both trees (should be "2 items selected"):', multiSelectInfo);
 
 // Leaving multi-select on is fine for Group/Ungroup (see updateSelectionUI's
@@ -101,7 +101,7 @@ const reloadedA = positionsAfterReload.find((p) => p.instanceId === instanceAId)
 // group selects/moves the whole group.
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
-const selectionAfterTappingOneMember = await page.textContent('#product-info');
+const selectionAfterTappingOneMember = await page.textContent('#item-card-name');
 console.log('status after tapping only A post-reload (should still be "2 items selected" -- the group expanded the selection):', selectionAfterTappingOneMember);
 
 const ungroupEnabledAfterReload = await page.locator('#ungroup-item').isEnabled();
@@ -123,7 +123,7 @@ await page.mouse.click(60, 550);
 await page.waitForTimeout(300);
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
-const selectionAfterUngroupTap = await page.textContent('#product-info');
+const selectionAfterUngroupTap = await page.textContent('#item-card-name');
 console.log('status after tapping A alone post-ungroup (should NOT say "2 items selected" anymore):', selectionAfterUngroupTap);
 
 const pass =

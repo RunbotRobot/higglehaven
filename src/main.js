@@ -1895,7 +1895,7 @@ window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geome
 // Exported for src/shop/mode.js's own enterShopMode (#2629) -- a reverse
 // import, same shape as showShopAccessGate's own below.
 export const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'item-card', 'add-item-panel', 'camera-debug-panel',
   'level-controls', 'connectivity-indicator',
 ];
 
@@ -1953,7 +1953,7 @@ export function showShopAccessGate() {
 // here any more: Sell's world view walks the page with Shop's movement and the
 // seller's avatar (#3295), so it has the same facing for the compass to show.
 export const SELL_HIDDEN_BUILDER_UI_IDS = [
-  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'item-card', 'add-item-panel', 'camera-debug-panel', 'level-controls',
 ];
 
 // #2561: the faux-layout preview mode (layoutPreviewMeshes/Instances,

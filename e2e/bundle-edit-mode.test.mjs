@@ -27,7 +27,7 @@ async function placeTreeAt(p, x, y) {
   await p.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
   await p.waitForTimeout(300);
   await p.mouse.click(x, y);
-  await p.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
+  await p.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('Tree'), null, { timeout: 60000 });
 }
 
 await placeTreeAt(page, 160, 380);
@@ -48,7 +48,7 @@ await page.waitForTimeout(300);
 
 const editBtn = page.locator('#edit-bundle-item');
 const modalVisible = () => page.locator('#confirm-modal.visible').count();
-const info = () => page.textContent('#product-info');
+const info = () => page.textContent('#item-card-name');
 
 // --- Unsaved bundle: no prompt. ---
 const unsavedEnabled = await editBtn.isEnabled();
@@ -121,7 +121,7 @@ await other.waitForTimeout(500);
 await other.locator('.bundle-tile').filter({ hasText: OWNER }).locator('.bundle-tile-place').click();
 await other.waitForTimeout(300);
 await other.mouse.click(210, 500);
-await other.waitForFunction(() => document.getElementById('product-info').textContent.includes('items selected'), null, { timeout: 60000 });
+await other.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 60000 });
 await other.waitForFunction(() => document.getElementById('edit-bundle-reason').textContent.includes('Only the builder'), null, { timeout: 15000 });
 const otherEditDisabled = await other.locator('#edit-bundle-item').isDisabled();
 const reason = await other.textContent('#edit-bundle-reason');

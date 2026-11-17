@@ -107,7 +107,7 @@ await page.locator('#catalog-picker-grid button').first().click();
 await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(800);
-const productInfoAfterPlace = await page.textContent('#product-info');
+const productInfoAfterPlace = await page.textContent('#item-card-name');
 console.log('product-info after placing on Level +1 (should be non-empty, not still "Tap a spot..."):', productInfoAfterPlace);
 
 // Reload — a fresh session, same builder — and confirm the level itself

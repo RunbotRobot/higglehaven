@@ -18,7 +18,7 @@ await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
 await page.waitForTimeout(300);
 await page.mouse.click(150, 400);
-await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
+await page.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('Tree'), null, { timeout: 60000 });
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 await saveBundleAs(page, BUNDLE, { shared: true });

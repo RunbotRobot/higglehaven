@@ -40,7 +40,7 @@ for (const pos of positions) {
   await page.mouse.click(pos.x, pos.y);
   await page.waitForTimeout(200);
 }
-const selectionText = await page.textContent('#product-info');
+const selectionText = await page.textContent('#item-card-name');
 const looseBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('status:', selectionText, '| boxes with three loose items selected (should be 3):', looseBoxes.length);
 
