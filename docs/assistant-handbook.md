@@ -537,9 +537,9 @@ assistant's replies, each labelled with who wrote it.
 4. Tap "Claim". The sheet closes and you are standing on your own lándlet.
 
 **You will see:** the sheet goes away and the Build buttons appear: "Multi-Select"
-and "Measure" at the bottom left, "Undo" at the top right. "Add item" is in the
-small round bud with the higglehaven logo at the top left: tap the bud and it
-unfolds.
+and "Measure" at the bottom left. "Add item", "Levels" and, once there is something
+to take back, "Undo" are in the small round bud with the higglehaven logo at the
+top left: tap the bud and it unfolds.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -575,7 +575,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
-  "Undo" at the top right to take it back.
+  "Undo" in the bud to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
@@ -605,7 +605,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
   the lándlet goes, see the levels entry below.
 - You want to line it up with something nearby: tap "Snap" so it is green. A
   dragged item then lines its edges and middle up with items close to it.
-- Wrong spot: "Undo" at the top right.
+- Wrong spot: "Undo" in the bud.
 
 ```controls build
 #mode-move | Move
@@ -624,7 +624,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **You will see:** the item turns as you drag, and the line at the top shows how far.
 
 **If something goes wrong:**
-- It turned the wrong way or too far: "Undo" at the top right.
+- It turned the wrong way or too far: "Undo" in the bud.
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 
@@ -649,7 +649,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
   reads "Cancel placing". Tap the bud, then that.
-- Wrong spot: "Undo" at the top right.
+- Wrong spot: "Undo" in the bud.
 
 ```controls build
 #copy-item | Copy
@@ -665,7 +665,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap "Undo" at the top right straight away and it comes back.
+- It was a mistake: tap the bud, then "Undo", straight away and it comes back.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.
@@ -678,16 +678,16 @@ single item.
 
 ### How do I undo a mistake, or redo it?
 
-1. Tap "Undo" at the top right. The last thing you did is taken back: a move, a
+1. Tap the bud, then "Undo". The last thing you did is taken back: a move, a
    turn, an add, a removal.
 2. Tap it again to go back further.
-3. If you went too far, "Redo" appears under it. Tap it to put things back.
+3. If you went too far, "Redo" appears next to it in the bud. Tap it to put things back.
 
 **You will see:** the item jumps back to how it was. "Redo" shows up only after an
 "Undo".
 
 **If something goes wrong:**
-- "Undo" is greyed out: there is nothing to take back yet.
+- "Undo" is not in the bud: there is nothing to take back yet.
 - "Redo" has gone: it only shows while there is something to put back.
 
 ```controls build
@@ -754,17 +754,17 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I build up or dig down to another level?
 
-1. Tap the pill at the bottom, which reads "Ground" when you are on the ground
-   level. A small menu opens.
+1. Tap the bud at the top left, then "Levels". A small sheet opens that says which
+   level you are on ("Ground" when you are on the ground level).
 2. Tap "Build Level Above" to add a level over the one you are on, or "Dig Level
    Below" to add one underneath. The button shows in brackets how much space the
    new level uses.
 3. Use the up and down arrows ("Level up", "Level down") to move between levels.
-   The pill shows which level you are on.
+   The sheet says which level you are on.
 4. On a level above or below the ground, "Remove This Level" appears. It removes
    that level.
 
-**You will see:** the world shifts to the new level and the pill's name changes.
+**You will see:** the world shifts to the new level and the name of the level on the sheet changes.
 
 **If something goes wrong:**
 - The app says "That's as high as this lándlet goes. Use Build Level Above to
@@ -777,7 +777,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
   before the person taps it.
 
 ```controls build
-#level-menu-toggle | Ground
+#level-label | Ground
 #level-build-btn | Build Level Above
 #level-dig-btn | Dig Level Below
 #level-up-btn | Level up

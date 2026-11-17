@@ -3,8 +3,8 @@
 // a petal runs an action or opens a leaf. This module is the small contract every other
 // leaf of that work builds on (docs/DESIGN.md, "The bud"):
 //
-//   registerBudPetals(mode, [{ id, label, run, domId? }])  one definition per mode; a mode with none has no bud
-//   openLeaf({ id, title, render }) / closeLeaf()  one soft sheet at a time, close upper-right
+//   registerBudPetals(mode, [{ id, label, run, domId?, ownVisibility? }])  one definition per mode; a mode with none has no bud
+//   openLeaf({ id, title, render, onClose? }) / closeLeaf()  one soft sheet at a time, close upper-right
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
 //   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
 //                                                  conversation's name); "Menu" comes back when none is set
@@ -20,17 +20,27 @@ const words = new Map();
 const MENU_WORD = 'Menu';
 let leafEl = null;
 let leafId = null;
+let leafOnClose = null;
 
 const toggle = () => document.getElementById('account-menu-toggle');
 const panel = () => document.getElementById('account-menu-panel');
 
 export function registerBudPetals(mode, petals) {
-  registry.set(mode, petals.map((p) => ({ id: p.id, label: p.label, run: p.run, domId: p.domId })));
+  registry.set(mode, petals.map((p) => ({ id: p.id, label: p.label, run: p.run, domId: p.domId, ownVisibility: Boolean(p.ownVisibility) })));
   syncBud();
 }
 
 export function budPetalsFor(mode) {
   return registry.get(mode) || [];
+}
+
+// Build's petals sit together at the top of the open bud, in the order they were registered;
+// Shop's go at the end, after the account rows, as they always did.
+function placePetal(host, btn, petalMode) {
+  if (petalMode !== 'build') { host.appendChild(btn); return; }
+  const mine = [...host.querySelectorAll('[data-bud-mode="build"]')].filter((el) => el !== btn);
+  if (mine.length) mine[mine.length - 1].after(btn);
+  else host.prepend(btn);
 }
 
 function foldBud() {
@@ -58,7 +68,7 @@ function syncBud() {
         btn.classList.add('bud-petal');
         btn.dataset.budMode = petalMode;
         btn.addEventListener('click', foldBud);
-        if (btn.parentElement !== host) host.appendChild(btn);
+        if (btn.parentElement !== host) placePetal(host, btn, petalMode);
       }
       if (!btn) {
         btn = document.createElement('button');
@@ -71,9 +81,11 @@ function syncBud() {
           foldBud();
           petal.run();
         });
-        host.appendChild(btn);
+        placePetal(host, btn, petalMode);
       }
-      btn.hidden = petalMode !== mode;
+      // A petal with ownVisibility (Undo, Redo) is drawn or not by the code that knows when it is
+      // usable; the bud only keeps it out of the other modes (app.css, [data-bud-mode]).
+      if (!petal.ownVisibility) btn.hidden = petalMode !== mode;
     }
   }
   if (!mode) return;
@@ -88,12 +100,16 @@ function syncBud() {
 }
 
 export function closeLeaf() {
+  // A leaf that borrowed a part of the page (Levels borrows the level controls) hands it back first.
+  const onClose = leafOnClose;
+  leafOnClose = null;
+  if (onClose) onClose();
   leafEl?.remove();
   leafEl = null;
   leafId = null;
 }
 
-export function openLeaf({ id, title, render }) {
+export function openLeaf({ id, title, render, onClose }) {
   closeLeaf();
   foldBud();
   const leaf = document.createElement('section');
@@ -119,6 +135,7 @@ export function openLeaf({ id, title, render }) {
   document.body.appendChild(leaf);
   leafEl = leaf;
   leafId = id;
+  leafOnClose = onClose ?? null;
   render(body);
   close.focus({ preventScroll: true });
   return body;
@@ -175,6 +192,10 @@ if (typeof document !== 'undefined') {
   if (!learned()) document.body.setAttribute('data-bud-new', '');
   toggle()?.addEventListener('click', () => {
     if (panel()?.classList.contains('expanded')) markLearned();
+    // The account menu's own handler toggles the panel in this same click; look after it has run.
+    // Opening the bud puts a leaf away: its petals unfold over the same corner, and a leaf never
+    // sits on top of another thing (#3690).
+    setTimeout(() => { if (panel()?.classList.contains('expanded')) closeLeaf(); }, 0);
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -212,10 +233,33 @@ registerBudPetals('shop', [
   { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
 ]);
 
-// Build's petals. The mode buttons (Shop, Sell) come in as petals the same way Shop's do. Add item
-// adopts the old "+ Add Item" button, so there is no second control for it: it sits in the bud and
-// keeps its id and its handler (src/catalog/picker.js). Levels, Tools and Undo/Redo arrive with
-// the slices that move them (#3690, #3691), so they are never in two places.
+// Build's petals. The mode buttons (Shop, Sell) come in as petals the same way Shop's do. Add item,
+// Undo and Redo adopt the old buttons, so there is no second control for them: they sit in the bud
+// and keep their ids and handlers (src/catalog/picker.js, src/build/scene.js). Undo and Redo are
+// drawn only while there is something to undo or redo (ownVisibility: scene.js decides, and
+// app.css hides them in the other modes). Levels opens a leaf that borrows the level controls.
+// Tools arrive with their own slice (#3691), so nothing is ever in two places.
+function openLevelsLeaf() {
+  const panel = document.getElementById('level-menu-panel');
+  const home = document.getElementById('level-controls');
+  if (!panel || !home) return;
+  openLeaf({
+    id: 'levels',
+    title: 'Levels',
+    render: (body) => {
+      panel.classList.add('expanded');
+      body.appendChild(panel);
+    },
+    onClose: () => {
+      panel.classList.remove('expanded');
+      home.appendChild(panel);
+    },
+  });
+}
+
 registerBudPetals('build', [
   { id: 'add-item', label: 'Add item', domId: 'add-item-btn', run: () => {} },
+  { id: 'undo', label: 'Undo', domId: 'undo-btn', ownVisibility: true, run: () => {} },
+  { id: 'redo', label: 'Redo', domId: 'redo-btn', ownVisibility: true, run: () => {} },
+  { id: 'levels', label: 'Levels', run: openLevelsLeaf },
 ]);

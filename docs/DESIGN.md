@@ -284,12 +284,18 @@ Tapping it unfolds petals; a petal runs an action or opens a leaf (a soft sheet
 by the bud, close control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
-- `registerBudPetals(mode, [{ id, label, run }])`: one definition per mode
+- `registerBudPetals(mode, [{ id, label, run, domId?, ownVisibility? }])`: one definition per mode
   (`shop`, `build`, `sell`). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
-- `openLeaf({ id, title, render })` and `closeLeaf()`: one leaf at a time;
-  `render(bodyEl)` fills it. Escape or the close control closes it.
+  A petal with `domId` adopts a button that already exists (it keeps its id and its own
+  handler; Build's Add item, Undo and Redo did, #3688, #3690). With `ownVisibility` the code
+  that knows when it is usable decides when it is drawn (Undo and Redo), and the bud only keeps
+  it out of the other modes.
+- `openLeaf({ id, title, render, onClose? })` and `closeLeaf()`: one leaf at a time;
+  `render(bodyEl)` fills it. Escape or the close control closes it, and so does opening the bud
+  again. A leaf that borrows part of the page (Build's Levels borrows the level controls) hands
+  it back in `onClose`.
 - `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
   unread mark; it clears when none are left.
 - The bud is the existing account toggle and its petals are the buttons of the

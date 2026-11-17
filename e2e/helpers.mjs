@@ -382,7 +382,7 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
 // is only drawn while the bud is open. A test that clicks it, or waits for it as the sign that Build
 // is ready, goes through these two wrappers instead of knowing about the bud. Any other page a test
 // makes for itself can be passed through budAware too.
-const BUD_PETALS = new Set(['#add-item-btn']);
+const BUD_PETALS = new Set(['#add-item-btn', '#undo-btn', '#redo-btn']);
 export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
@@ -676,13 +676,14 @@ export async function openAccountMenu(page) {
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 }
 
-// #1153: the level nav/build/dig/remove controls are now tucked behind
-// #level-menu-toggle, collapsed by default — any test driving them needs
-// this opened first. Unlike openAccountMenu's panel, this one doesn't
-// auto-close on an inner button click (see its own comment in main.js), so
-// callers only need this once per page load, not before every click.
+// #1153 tucked the level nav/build/dig/remove controls behind a pill; #3690 moved them into the
+// bud: Levels is a petal that opens a leaf. Any test driving them needs it opened first. The leaf
+// does not close on an inner button click, so callers only need this once per page load, not
+// before every click.
 export async function openLevelMenu(page) {
-  await page.click('#level-menu-toggle');
+  if (await page.locator('#level-menu-panel.expanded').count() > 0) return;
+  await openAccountMenu(page);
+  await page.click('#bud-petal-build-levels');
   await page.waitForSelector('#level-menu-panel.expanded', { timeout: 5000 });
 }
 

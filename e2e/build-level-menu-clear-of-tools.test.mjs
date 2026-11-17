@@ -1,7 +1,7 @@
-// #3572 (part of #3539, Build mode audit): the level menu opens clear of the
-// bottom-left tool stack (Paste, Measure, Multi-Select, + Add Item) on a phone.
-// It used to be centred on the "Ground" pill, which put its left edge over them.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+// #3572 (part of #3539, Build mode audit), kept in #3690: the level menu opens clear of the
+// bottom-left tool stack (Paste, Measure, Multi-Select) on a phone. It is now the bud's Levels
+// leaf (it used to be centred on a "Ground" pill, which put its left edge over them).
+import { launchPage, chooseIdentity, claimLandlet, finish, openLevelMenu } from './helpers.mjs';
 
 const LABEL = 'Level Menu Clear Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -9,8 +9,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.waitForTimeout(800);
 
-await page.click('#level-menu-toggle');
-await page.waitForSelector('#level-menu-panel.expanded', { timeout: 5000 });
+await openLevelMenu(page);
 await page.waitForTimeout(300);
 
 const boxes = await page.evaluate(() => {
@@ -19,7 +18,7 @@ const boxes = await page.evaluate(() => {
     return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
   };
   return {
-    panel: rect('#level-menu-panel'),
+    panel: rect('#bud-leaf-levels'),
     tools: ['#paste-btn', '#toggle-measure', '#toggle-multiselect'].map((id) => ({ id, ...rect(id) })),
     vw: window.innerWidth,
   };

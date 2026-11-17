@@ -19,7 +19,7 @@ await page.waitForTimeout(500);
 const builderId = await page.evaluate(() => fetch('/api/builders/me').then((r) => r.json()).then((body) => body.builder.builderId));
 await grantLandCapHeadroomAsAdmin(builderId);
 
-// #1153: Build/Remove now live behind #level-menu-toggle, collapsed by default.
+// #1153: Build/Remove now live in the bud's Levels leaf (#3690).
 await openLevelMenu(page);
 
 await page.click('#level-build-btn');

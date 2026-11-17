@@ -224,9 +224,12 @@
         <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
       </div>
     </div>
+    <!-- #3690 (part of #3654, Build in the bud): the level controls have no pill of their own any
+         more. #level-controls is only where the panel waits; the bud's Levels petal opens a leaf
+         that borrows #level-menu-panel (src/ui/bud.js) and hands it back when the leaf closes. -->
     <div id="level-controls">
-      <button id="level-menu-toggle" type="button" aria-expanded="false"><span id="level-label">Ground</span></button>
       <div id="level-menu-panel">
+        <p id="level-current">You are on: <strong id="level-label">Ground</strong></p>
         <div id="level-nav">
           <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
           <button id="level-up-btn" type="button" aria-label="Level up">&#9650;</button>

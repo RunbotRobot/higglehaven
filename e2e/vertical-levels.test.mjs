@@ -26,16 +26,17 @@ const levelLabel = () => page.textContent('#level-label');
 const removeHidden = () => page.isHidden('#level-remove-btn');
 
 // #1153: the nav/build/dig/remove controls this whole suite drives are now
-// tucked behind #level-menu-toggle — opened once here, and it stays open
+// in the bud's Levels leaf — opened once here, and it stays open
 // (doesn't auto-close on an inner click, see openLevelMenu's own comment)
 // for every interaction below until the reload partway through resets it.
-const toggleAriaExpandedBeforeOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
+// #3690: the pill is gone; the bud's Levels petal opens a leaf that borrows the panel.
+const toggleAriaExpandedBeforeOpen = (await page.locator('#bud-leaf-levels').count()) === 0 ? 'false' : 'true';
 await openLevelMenu(page);
 // #1843: mirrors #account-menu-toggle's own aria-expanded, which every
 // other open/close assertion in this app already relies on for a screen
 // reader to know whether the disclosure panel a toggle controls is shown.
-const toggleAriaExpandedAfterOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
-console.log('#level-menu-toggle aria-expanded before/after opening (should be false, then true):', toggleAriaExpandedBeforeOpen, toggleAriaExpandedAfterOpen);
+const toggleAriaExpandedAfterOpen = (await page.locator('#bud-leaf-levels #level-menu-panel.expanded').count()) === 1 ? 'true' : 'false';
+console.log('the Levels leaf before/after opening (should be false, then true):', toggleAriaExpandedBeforeOpen, toggleAriaExpandedAfterOpen);
 
 const initialLabel = await levelLabel();
 const removeHiddenAtGround = await removeHidden();
