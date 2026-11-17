@@ -67,6 +67,7 @@ export const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
 const catalogPickerGridEl = document.getElementById('catalog-picker-grid');
 const catalogPickerCloseBtn = document.getElementById('catalog-picker-close-btn');
+const catalogAllItemsBtn = document.getElementById('catalog-all-items-btn');
 const catalogSearchInputEl = document.getElementById('catalog-search-input');
 const catalogPickerEmptyEl = document.getElementById('catalog-picker-empty');
 const catalogPickerEmptyQueryEl = document.getElementById('catalog-picker-empty-query');
@@ -146,6 +147,37 @@ for (const btn of searchScopeButtons) {
   });
 }
 
+// #3688 (part of #3654): the catalog opens as a short strip (see #catalog-picker.strip in
+// app.css): the person's recent items first, then the rest in catalog order, one row to swipe.
+// "All items" or typing a search opens the whole catalog. Recents are this browser's own
+// convenience, so a blocked or empty store just means catalog order.
+const RECENT_ITEMS_KEY = 'hh_catalog_recent';
+const RECENT_ITEMS_MAX = 8;
+function recentTemplateIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(RECENT_ITEMS_KEY) || '[]');
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+  } catch { return []; }
+}
+function rememberRecentTemplate(templateId) {
+  try {
+    const ids = [templateId, ...recentTemplateIds().filter((id) => id !== templateId)].slice(0, RECENT_ITEMS_MAX);
+    localStorage.setItem(RECENT_ITEMS_KEY, JSON.stringify(ids));
+  } catch { /* recents are a convenience only */ }
+}
+function orderTilesByRecent() {
+  const recent = recentTemplateIds();
+  for (const tile of catalogPickerGridEl.children) {
+    const rank = recent.indexOf(tile.dataset.templateId);
+    tile.style.order = String(rank === -1 ? recent.length : rank);
+  }
+}
+function setCatalogStrip(on) {
+  catalogPickerEl.classList.toggle('strip', on);
+}
+catalogAllItemsBtn.addEventListener('click', () => setCatalogStrip(false));
+catalogSearchInputEl.addEventListener('input', () => setCatalogStrip(false));
+
 // Shared by manual mode's own grid below and prompt mode's search-result
 // grid (#329/#330) — both list catalog template objects and both arm the
 // exact same enterPlacementMode({type:'template',...}) flow on click, so
@@ -155,6 +187,7 @@ function buildCatalogTemplateTile(template) {
   tile.type = 'button';
   tile.className = 'catalog-tile';
   tile.dataset.name = template.name.toLowerCase();
+  tile.dataset.templateId = template.templateId;
 
   const thumb = document.createElement('img');
   thumb.className = 'catalog-thumb';
@@ -220,6 +253,7 @@ function buildCatalogTemplateTile(template) {
       onPick(template);
       return;
     }
+    rememberRecentTemplate(template.templateId);
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
   });
   return { tile, thumb };
@@ -242,6 +276,7 @@ export function buildCatalogPickerButtons() {
     }
   }
   filterCatalogTiles();
+  orderTilesByRecent();
 }
 
 // #329/#330: "Prompt mode" — a builder types a free-text description, an
@@ -651,6 +686,7 @@ export function openCatalogPickerForPick(onPick, onDone) {
     b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'products'));
   }
   catalogSearchScopeTabsEl.hidden = true;
+  setCatalogStrip(false);
   updateCatalogSearchPanel();
   openModalA11y(catalogPickerEl, closeCatalogPicker);
 }
@@ -678,6 +714,8 @@ addItemBtn.addEventListener('click', () => {
     b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'both'));
   }
   updateCatalogSearchPanel();
+  orderTilesByRecent();
+  setCatalogStrip(true);
   openModalA11y(catalogPickerEl, closeCatalogPicker);
 });
 catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
