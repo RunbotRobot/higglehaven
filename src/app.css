@@ -1553,6 +1553,10 @@
         top: 56px;
         left: 50%;
         transform: translateX(-50%);
+        /* left: 50% leaves only half the screen to shrink-wrap into; the readout
+           is as wide as its text, up to the screen's width, so it wraps to two
+           lines instead of three (#3573). */
+        width: max-content;
         max-width: 94vw;
         color: var(--pill-text);
         background: rgb(var(--pill-rgb) / 0.65);
@@ -1582,7 +1586,9 @@
       }
       #gizmo-mode-controls {
         position: fixed;
-        top: 64px;
+        /* #3573: never above the bottom of the item's name box (set by
+           placeBuildTopStack in src/build/scene.js), which wraps on a phone. */
+        top: max(64px, var(--product-info-bottom, 0px));
         left: 50%;
         transform: translateX(-50%);
         display: none;
@@ -1630,7 +1636,7 @@
           top: 84px;
         }
         #gizmo-mode-controls {
-          top: 136px;
+          top: max(136px, var(--product-info-bottom, 0px));
         }
       }
       #gizmo-mode-controls button {
