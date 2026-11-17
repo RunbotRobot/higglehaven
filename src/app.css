@@ -868,6 +868,10 @@
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
+      /* #3690: Undo and Redo are one petal with two halves (src/build/budPetals.js). */
+      .bud-pair { display: flex; gap: var(--space-sm); }
+      .bud-pair[hidden] { display: none; }
+      .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(255 255 255 / 0.35); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
@@ -1895,26 +1899,6 @@
       #add-item-panel > * {
         pointer-events: auto;
       }
-      /* Vertical construction (issue #169) — bottom-center, clear of
-         #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
-         right), the same "always in the DOM, hidden from Shop mode only
-         via SHOP_HIDDEN_BUILDER_UI_IDS" convention as every other
-         Build-only panel here (see main.js).
-         #1153: the nav/build/dig/remove/status row used to all sit open on
-         screen at once, dominating the build view — collapsed into one
-         small toggle (showing just the current level, e.g. "Ground") that
-         expands into a dropdown panel on tap, the same
-         one-pill-instead-of-a-whole-cluster idiom #account-menu already
-         uses elsewhere in this file for the same reason
-         (docs/SPEC.md §1's "clean, minimalist... expanding menus... leave
-         plenty of screen space open"). Unlike #account-menu, the panel here
-         opens *upward* (bottom: 100%, not top) since this whole control
-         sits at the bottom of the screen — opening downward would run it
-         off-screen. It also doesn't auto-close on every inner button
-         click: Up/Down/Build/Dig are meant to be used repeatedly while
-         reviewing #level-status's result, and that status renders inside
-         this same panel, so auto-closing on click would hide the very
-         message a Build/Dig failure needs to show. */
       /* #3576: Community Sign and Community Calendar change their label
          once on, and the wrapping selection toolbar re-flowed when the width
          changed (Delete jumped under the finger). The on-label is now no
@@ -1930,40 +1914,25 @@
         overflow: hidden;
         visibility: hidden;
       }
-      #level-controls {
-        position: fixed;
-        bottom: 44px;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 10;
-      }
-      #level-menu-toggle {
-        padding: var(--space-xs) var(--space-2xl);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
-        min-width: 7em;
-      }
-      #level-menu-toggle.active {
-        background: rgb(var(--pill-rgb) / 0.9);
-      }
+      /* #3690 (Build in the bud, 3/6): the "Ground" pill and its dropdown are gone. The level
+         label and #level-menu-panel wait, hidden, in #level-controls; the Levels petal's
+         leaf (src/build/budPetals.js) borrows them while it is open and gives them back.
+         They keep their ids and handlers, so what Up/Down/Build/Dig/Remove do is unchanged.
+         The leaf stays open across Up/Down/Build/Dig: #level-status shows a failed Build
+         or Dig's reason inside it, and closing on every tap would hide that (#1153). */
       #level-menu-panel {
-        display: none;
+        display: flex;
         flex-direction: column;
         align-items: stretch;
         gap: var(--space-xs);
-        position: absolute;
-        bottom: calc(100% + 6px);
-        /* #3572: anchored at the pill's left edge, not centred on it. Centred, a
-           220 px panel on a phone reached back over the bottom-left stack
-           (Paste, Measure, Multi-Select) and printed its labels over theirs. */
-        left: 0;
-        min-width: min(220px, calc(100vw - 140px));
       }
-      #level-menu-panel.expanded {
-        display: flex;
+      .bud-level-line {
+        margin: 0 0 var(--space-xs);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        color: var(--pill-text);
+      }
+      #level-label {
+        font-weight: 600;
       }
       #level-nav {
         display: flex;
