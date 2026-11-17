@@ -15,6 +15,11 @@
 //     itself is never scaled with distance.
 export const CARD_MARGIN_PX = 12;
 export const CARD_GAP_PX = 14;
+// #3698: the top of the screen belongs to the always-visible bar (the logo, the
+// gear, Shop/Build/Sell: about 46 px tall at the phone's size). A card never
+// sits under it, or its close button can end up beneath the mode buttons and
+// not be tappable; the card's top edge stays at least this far down.
+export const CARD_TOP_CLEAR_PX = 52;
 export const CARD_MIN_ANCHOR_RADIUS_PX = 10;
 export const CARD_MAX_ANCHOR_RADIUS_PX = 140;
 // How far from the card's top or bottom its pointer may sit, so the pointer
@@ -38,10 +43,11 @@ function clamp(value, lo, hi) {
 //   edge: true when there is no on-screen product to point at (the card is
 //   then pinned and shows no pointer).
 export function placeProductCard({
-  anchor, card, viewport, margin = CARD_MARGIN_PX, gap = CARD_GAP_PX,
+  anchor, card, viewport, margin = CARD_MARGIN_PX, gap = CARD_GAP_PX, topClear = CARD_TOP_CLEAR_PX,
 }) {
+  const minTop = Math.max(margin, topClear);
   const maxLeft = Math.max(margin, viewport.width - margin - card.width);
-  const maxTop = Math.max(margin, viewport.height - margin - card.height);
+  const maxTop = Math.max(minTop, viewport.height - margin - card.height);
   const offScreen = !!anchor.behind
     || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)
     || anchor.x < 0 || anchor.x > viewport.width
@@ -51,7 +57,7 @@ export function placeProductCard({
     // Nothing on screen to sit beside: centred, a third of the way down.
     return {
       left: clamp((viewport.width - card.width) / 2, margin, maxLeft),
-      top: clamp(viewport.height * 0.3 - card.height / 2, margin, maxTop),
+      top: clamp(viewport.height * 0.3 - card.height / 2, minTop, maxTop),
       side: 'right',
       pointerX: card.width / 2,
       pointerY: card.height / 2,
@@ -73,16 +79,16 @@ export function placeProductCard({
   if (fitsRight || fitsLeft) {
     side = fitsRight ? 'right' : 'left';
     left = fitsRight ? rightLeft : leftLeft;
-    top = clamp(y - card.height / 2, margin, maxTop);
+    top = clamp(y - card.height / 2, minTop, maxTop);
   } else {
     // Neither side has room (a product in the middle of a narrow screen): above
     // or below it, whichever has more room, centred on it.
     const belowTop = y + radius + gap;
     const aboveTop = y - radius - gap - card.height;
     const fitsBelow = belowTop <= maxTop;
-    const fitsAbove = aboveTop >= margin;
+    const fitsAbove = aboveTop >= minTop;
     const roomBelow = viewport.height - margin - (y + radius + gap);
-    const roomAbove = y - radius - gap - margin;
+    const roomAbove = y - radius - gap - minTop;
     if (fitsBelow || fitsAbove) {
       side = fitsBelow && (!fitsAbove || roomBelow >= roomAbove) ? 'below' : 'above';
       top = side === 'below' ? belowTop : aboveTop;
@@ -92,7 +98,7 @@ export function placeProductCard({
       // screen on the side with more room, even if it overlaps.
       side = x < viewport.width / 2 ? 'right' : 'left';
       left = clamp(side === 'right' ? rightLeft : leftLeft, margin, maxLeft);
-      top = clamp(y - card.height / 2, margin, maxTop);
+      top = clamp(y - card.height / 2, minTop, maxTop);
     }
   }
   const pointerY = clamp(y - top, CARD_POINTER_INSET_PX, Math.max(CARD_POINTER_INSET_PX, card.height - CARD_POINTER_INSET_PX));
