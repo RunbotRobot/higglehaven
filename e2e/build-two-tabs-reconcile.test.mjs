@@ -12,7 +12,7 @@
 //      and A's next Undo cannot recreate it server-side;
 //   2. a save still in flight when the tab regains focus is never clobbered;
 //   3. an edit whose save failed is never silently reverted.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, budClick } from './helpers.mjs';
 
 const LABEL = 'Two Tabs Reconcile Suite Builder';
 
@@ -95,7 +95,7 @@ const sceneAfterFocus = await sceneIds(tabA);
 console.log('tab A scene after regaining focus (should be just Y):', JSON.stringify(sceneAfterFocus));
 const undoEnabled = await tabA.locator('#undo-btn').isEnabled();
 if (undoEnabled) {
-  await tabA.click('#undo-btn');
+  await budClick(tabA, '#undo-btn');
   await tabA.waitForTimeout(1500);
 }
 const serverAfterUndo = await serverIds();
