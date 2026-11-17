@@ -75,7 +75,8 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('#settings-close-btn');
 
-// Sell has petals now (#3655), so it wears the bud too: no top row, the bud is on.
+// Sell has the bud too (#3699), as Build does (#3688): the old top row and the gear are gone there.
+// (Main's version of this check still expected Sell to keep its row, red since both landed.)
 await page.reload();
 await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
@@ -96,6 +97,6 @@ const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark 
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload
   && leafInfo.title === 'How to move' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
   && leafClosedByEscape && leafClosedByX
-  && inBuild.budOff === 'on' && !inBuild.modeNav && !inBuild.wordmark
+  && inBuild.budOff === 'on' && !inBuild.modeNav && !inBuild.wordmark && !inBuild.gear
   && errors.length === 0;
 await finish(browser, { pass, label: 'bud (#3649)', errors });
