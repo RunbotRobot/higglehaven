@@ -3,7 +3,7 @@
 // holds Snap), follows the item as the view moves, stays wholly on screen, and goes
 // when the selection does. Delete is immediate and Undo brings the item back, as it
 // did from the old toolbar. 390x844, a placed Tree.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, budClick, finish } from './helpers.mjs';
 
 const LABEL = 'Item Card Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -84,7 +84,7 @@ check((await card()).shown, 'the card shows for a selection made another way');
 await page.click('#delete-item');
 await page.waitForTimeout(500);
 check(!(await card()).shown, 'Delete removes the item and the card goes');
-await page.click('#undo-btn');
+await budClick(page, '#undo-btn');
 await page.waitForTimeout(800);
 await page.evaluate(() => window.__testSelectAllProducts());
 await page.waitForTimeout(300);
