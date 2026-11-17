@@ -43,14 +43,17 @@ const productRow = () => page.locator('.seller-row').filter({ hasText: PRODUCT_N
 await productRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
 
-// Delay only the PATCH (the save), same shape as digital-goods.test.mjs's
-// own cross-panel race test — long enough to reliably close+reopen the
-// modal and inspect the freshly-rendered row before the response lands.
+// Hold only the PATCH (the save) until this test releases it, same shape as
+// digital-goods.test.mjs's own cross-panel race test. #3718: this used to
+// delay the PATCH by a fixed 3 s, then 6 s (#3700), and every time the
+// close, reopen and open-the-row steps (two taps of the bud, #3699) ran
+// longer than the hold on a loaded runner, the save had already landed
+// before the check looked for it still being in flight. A held save stays
+// in flight exactly as long as the test needs it to, however slow the runner.
+let releaseSave;
+const saveGate = new Promise((resolve) => { releaseSave = resolve; });
 await page.route('**/api/catalog/*', async (route) => {
-  // #3700: 6 s, not 3 s -- reopening My products is two taps of the bud (#3699), which on a loaded
-  // CI runner can take longer than the old 3 s hold, and the save would then have landed before
-  // the check below looks for it still being in flight.
-  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 6000));
+  if (route.request().method() === 'PATCH') await saveGate;
   await route.continue();
 });
 
@@ -88,8 +91,11 @@ await page.waitForTimeout(200);
 const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isDisabled();
 console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
 
-// Wait past the delayed PATCH's own delay so its `finally` block runs.
-await page.waitForTimeout(6500);
+// Release the held PATCH and wait for its `finally` block to run: the button
+// comes back (polled, not a fixed wait, so a slow runner cannot cut it short).
+releaseSave();
+const saveReturnsButton = productRow().locator('button', { hasText: 'Save Returns Policy' });
+for (let i = 0; i < 60 && !(await saveReturnsButton.isEnabled()); i++) await page.waitForTimeout(500);
 
 const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isEnabled();
 console.log('that same button is enabled again once the pre-close save actually resolves (should be true — not stuck disabled forever):', reopenedSaveReenabledAfterSettling);
