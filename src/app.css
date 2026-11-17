@@ -969,6 +969,18 @@
       #account-menu-panel button:hover {
         background: rgb(var(--ink-rgb) / 0.08);
       }
+      /* #3700 (follow-up, from #3655): My products can be open when the bud is tapped, and the petals
+         then unfold over its title and rows with both fully readable. It stays open (the owner's
+         call, #3626: what was open stays open behind what is opened on top of it, in case the
+         question is about it), so while the bud is open it steps back: faint and not tappable, and
+         the petals read clearly in front of it. */
+      #seller-modal-content {
+        transition: opacity var(--motion-quick) var(--ease-soft);
+      }
+      body:has(#account-menu-panel.expanded) #seller-modal-content {
+        opacity: 0.28;
+        pointer-events: none;
+      }
       #account-menu-landcap {
         padding: var(--space-sm) var(--space-lg);
         margin-top: var(--space-3xs);
