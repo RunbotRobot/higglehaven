@@ -1699,6 +1699,14 @@
       body:has(#catalog-picker.visible) #product-info {
         display: none;
       }
+      /* #3689: the selected item's card is what the name pill used to be, so it
+         steps aside for the picker the same way (the e2e caught it covering the
+         picker's Close button: catalog-search-scope.test.mjs). visibility, not
+         display, so the card keeps its place and comes back unchanged when the
+         picker closes by any of its paths. */
+      body:has(#catalog-picker.visible) #item-card {
+        visibility: hidden;
+      }
       #gizmo-mode-controls {
         position: fixed;
         /* #3573: never above the bottom of the item's name box (set by
