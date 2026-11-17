@@ -2072,7 +2072,7 @@
       #catalog-picker.strip {
         width: min(calc(100vw - 16px), 360px);
         max-height: none;
-        padding: 44px var(--space-md) var(--space-md);
+        padding: 40px var(--space-md) var(--space-md);
       }
       #catalog-picker.strip #catalog-all-items-btn {
         display: block;
@@ -2103,7 +2103,8 @@
         scroll-snap-type: x proximity;
       }
       #catalog-picker.strip #catalog-picker-grid[hidden] { display: none; }
-      #catalog-picker.strip .catalog-tile { flex: 0 0 76px; scroll-snap-align: start; }
+      #catalog-picker.strip .catalog-tile { flex: 0 0 64px; scroll-snap-align: start; }
+      #catalog-picker.strip .catalog-thumb { width: 48px; height: 48px; }
       #catalog-picker.visible {
         /* #2762: flex column so #catalog-manual-mode (the single
            scrolling region now -- see its own rule below) can use
