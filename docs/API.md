@@ -12532,6 +12532,21 @@ mention it leaves it alone. **It clears by itself** when the card becomes
 else the same request says, and a card created already `done` never stores
 one.
 
+**`shopperLine` (#3532 part 2, part of #3444)** is the sentence a shopper
+hears about a card an assistant filed for them. It is accepted only together
+with `status: "done"` (otherwise 400) and passes the same checks as
+`publicLine` (one short sentence, no issue number, file name, route or URL).
+When the card was filed through `/api/assistant-inbox/.../escalate` and this
+is its first move to `done`, the shopper gets one notification, "About what
+you passed on: <the sentence>", and the response carries `shopperTold: true`;
+a second `done`, a card an assistant did not file, or a close with no
+sentence tells nobody (`shopperTold: false`). The server never invents the
+sentence: whichever session closes the card writes it, in the shopper's
+terms ("The toilet you reported now looks right from far away.", or "Thanks
+for the idea about the sky; we are keeping it as it is."). The record of who
+to tell (`assistant_card_followups`) is dropped 30 days after the card was
+filed.
+
 `subIssues`/`subIssueSummaries` (#998) are how a top-level tracking
 task's card shows its breakdown — the admin page renders them as a
 linked "Sub-issues: #218 #219 ..." line (see AGENTS.md's "Proposing big

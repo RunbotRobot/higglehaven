@@ -5,7 +5,13 @@
 // e2e/assistant-handbook-controls.test.mjs can reuse the same parse to walk the
 // real app. The format is described at the top of the handbook itself.
 
-export const CONTROL_MODES = ['any', 'shop', 'build', 'sell'];
+// 'sell-row' is Sell mode with one of the seller's own products opened in "My
+// products": its buttons (Rename, Edit Price, Delete) are built when a row is
+// opened, so the test uploads a product and opens its row before looking for them.
+export const CONTROL_MODES = ['any', 'shop', 'build', 'sell', 'sell-row'];
+// A control with nothing written on it (a joystick, a picture): the steps name it
+// by what it looks like, and the test only checks that it is on the page.
+export const NO_WORDS = '(no words)';
 export const SECTION_SEE = '**You will see:**';
 export const SECTION_WRONG = '**If something goes wrong:**';
 
@@ -92,7 +98,7 @@ export function validateHandbook(entries) {
       if (!CONTROL_MODES.includes(control.mode)) problems.push(`${at}: line ${control.line}: the mode "${control.mode}" is not one of ${CONTROL_MODES.join(', ')}`);
       if (!control.selector) problems.push(`${at}: line ${control.line}: a control has no selector`);
       if (!control.words) problems.push(`${at}: line ${control.line}: "${control.selector}" has no words after the bar`);
-      else if (!normal(entry.text).includes(normal(control.words))) {
+      else if (control.words !== NO_WORDS && !normal(entry.text).includes(normal(control.words))) {
         problems.push(`${at}: the steps never name "${control.words}", which its controls list says they do`);
       }
     }
@@ -110,6 +116,7 @@ export function validateHandbook(entries) {
 // e2e/assistant-handbook-controls.test.mjs feeds it what it reads from the page.
 export function controlMatches(reading, words) {
   if (!reading || !reading.exists) return false;
+  if (words === NO_WORDS) return true;
   const wanted = normal(words);
   return [reading.text, reading.ariaLabel, reading.placeholder, reading.title, reading.value]
     .some((candidate) => normal(candidate).includes(wanted));

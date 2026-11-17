@@ -277,7 +277,7 @@ import {
 import {
   shopLandlets, updateShopProximity, updateShopLandletInfo, pickShopSpawnLocation,
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
-  accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow,
+  accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
   shopOtherAvatars, assistantFromHit, assistantGroups,
 } from './shop/presenceAndContent.js';
 // #3447: tapping an assistant in the Shop world opens its chat panel.
@@ -1308,6 +1308,8 @@ window.__testForceShopProximityCheck = () => {
 // underlying promise so a test can await it instead of polling for
 // completion.
 window.__testForceShopLandletRecordRefresh = () => refreshShopLandletRecordsNow();
+// #3647: the lándlet the shopper is standing on right now (null on none), so a test can see that a record refresh never leaves a gap.
+window.__testShopCurrentLandletId = () => currentShopLandletId();
 // #2716: see setShopSkyElapsedSecondsForTest's own comment. Always inert
 // unless a test calls it, same convention as every other window.__test* hook.
 window.__testSetShopSkyElapsedSeconds = (seconds) => {

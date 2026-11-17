@@ -154,6 +154,7 @@
           <div class="stat"><div class="n">${escapeHtml(user.createdAt)}</div><div class="l">Account created</div></div>
           <div class="stat"><div class="n">${user.builderId ? escapeHtml(user.builderLabel) : '—'}</div><div class="l">Builder profile</div></div>
           <div class="stat"><div class="n">${user.sellerId ? escapeHtml(user.sellerLabel) : '—'}</div><div class="l">Seller profile</div></div>
+          <div class="stat"><div class="n">${user.cardRefusal ? escapeHtml(user.cardRefusal.code + (user.cardRefusal.declineCode ? ' / ' + user.cardRefusal.declineCode : '') + ' x' + user.cardRefusal.count + ', last ' + user.cardRefusal.at) : '—'}</div><div class="l">Card refusals (Stripe)</div></div>
         </div>
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
         <h3>Suspension history</h3>

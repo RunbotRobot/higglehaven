@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import handbook from '../docs/assistant-handbook.md?raw';
-import { parseHandbook, validateHandbook, controlMatches, SECTION_SEE, SECTION_WRONG } from './assistant-handbook-lib.mjs';
+import { parseHandbook, validateHandbook, controlMatches, NO_WORDS, SECTION_SEE, SECTION_WRONG } from './assistant-handbook-lib.mjs';
 
 // #3615 (part of #3614): the handbook assistants answer from stays in its format.
 // The format's rules live in scripts/assistant-handbook-lib.mjs; the walk against
@@ -69,6 +69,14 @@ describe('validateHandbook', () => {
   it('refuses two entries with the same title and an unclosed controls block', () => {
     expect(validateHandbook([...parseHandbook(entry()), ...parseHandbook(entry())]).join('\n')).toContain('two entries have this title');
     expect(() => parseHandbook('## Build\n\n### Q?\n\n```controls build\n#go | Go\n')).toThrow('never closed');
+  });
+});
+
+describe('a control with no words on it', () => {
+  it('needs only to be on the page, and its entry need not name any words', () => {
+    expect(validateHandbook(parseHandbook(entry(`\`\`\`controls shop\n#pad | ${NO_WORDS}\n\`\`\``)))).toEqual([]);
+    expect(controlMatches({ exists: true, text: '' }, NO_WORDS)).toBe(true);
+    expect(controlMatches({ exists: false }, NO_WORDS)).toBe(false);
   });
 });
 

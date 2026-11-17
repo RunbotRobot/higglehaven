@@ -835,7 +835,9 @@ export async function handleAdminUserDetail(request, db, url) {
   const userId = (url.searchParams.get('userId') || '').trim();
   if (!userId) throw new HttpError('userId query parameter is required', 400);
   const row = await db.prepare(
-    'SELECT user_id, username, email, trust_tier, created_at, email_verified_at FROM users WHERE user_id = ?',
+    `SELECT user_id, username, email, trust_tier, created_at, email_verified_at,
+      card_refusal_code, card_refusal_decline_code, card_refusal_at, card_refusal_count
+    FROM users WHERE user_id = ?`,
   ).bind(userId).first();
   if (!row) throw new HttpError('No account with that userId', 404);
   const builder = await db.prepare('SELECT builder_id, label FROM builders WHERE user_id = ?').bind(userId).first();
@@ -857,6 +859,12 @@ export async function handleAdminUserDetail(request, db, url) {
       trustTier: row.trust_tier,
       createdAt: row.created_at,
       emailVerifiedAt: row.email_verified_at,
+      cardRefusal: row.card_refusal_count > 0 ? {
+        code: row.card_refusal_code,
+        declineCode: row.card_refusal_decline_code,
+        at: row.card_refusal_at,
+        count: row.card_refusal_count,
+      } : null,
       builderId: builder ? builder.builder_id : null,
       builderLabel: builder ? builder.label : null,
       sellerId: seller ? seller.seller_id : null,

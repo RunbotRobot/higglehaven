@@ -3387,16 +3387,29 @@
         justify-content: flex-end;
         gap: var(--space-sm);
       }
-      #verify-age-continue-btn, #verify-card-submit-btn {
+      /* #3675 (part of #3547): these two rules named #verify-age-continue-btn and
+         #verify-card-submit-btn, ids the markup no longer has, so the real
+         buttons (#verify-continue-btn, #verify-id-instead-btn) were drawn as
+         browser-default grey buttons on the brand's card. The primary is the
+         green pill; the ID alternative is the same pill, quiet and outlined. */
+      #verify-continue-btn, #verify-id-instead-btn {
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         background: var(--brand-green);
         color: var(--ink);
+        cursor: pointer;
       }
-      #verify-age-continue-btn:disabled, #verify-card-submit-btn:disabled {
+      #verify-id-instead-btn {
+        background: none;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        color: rgb(var(--ink-rgb) / 0.85);
+        font-size: var(--text-sm);
+      }
+      #verify-continue-btn:disabled {
         opacity: 0.5;
+        cursor: default;
       }
       #verify-logout-btn {
         align-self: center;
