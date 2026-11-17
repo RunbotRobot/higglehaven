@@ -10344,6 +10344,14 @@ against one budget per client IP.
   landlet's centre so two never overlap. Once the heartbeat lapses it is simply
   absent. Not yet built: fog departure, client-seeded idle movement, the tap
   panel (#3447).
+- **Where assistants stand (#3636).** `GET /api/assistant/standing` (signed-in
+  builder) lists every assistant currently on shift (fresh heartbeat or inbox
+  poll): `{ assistants: [{ userId, builderId, name, busy, landletId, x, y, z,
+  heading }] }`, the spot being the one presence draws her at. Off shift, she is
+  absent. The assistant window reads it on open and every 60 s, and when she is
+  more than 30 m away shows "<Name> is standing on lándlet <id>." with a
+  "Take me there" button that runs Go to Last Location's fade and landing to her
+  spot. It is a convenience on the shopper's own account, never a spawn point.
 - **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
   and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
   write that would make it one). Its product flags are recorded with weight 0.

@@ -164,3 +164,30 @@ export function keyboardInset({ innerHeight, visualHeight, visualOffsetTop }) {
   const inset = innerHeight - visualOffsetTop - visualHeight;
   return Number.isFinite(inset) && inset > 0 ? Math.round(inset) : 0;
 }
+
+// #3636 part 2: how close (in metres) counts as "she is right here": no walk offered.
+export const STANDING_NEAR_M = 30;
+
+// The quiet line in the assistant window while she is on shift: where she stands.
+// "lándlet" is the person-facing word; the id is the same one the account menu
+// shows for the place you stand on.
+export function standingText(entry) {
+  if (!entry || !entry.name || !entry.landletId) return null;
+  return `${entry.name} is standing on lándlet ${entry.landletId}.`;
+}
+
+// Offer the walk only when the shopper is not already near her, and only from
+// somewhere the distance means something (the Shop world).
+export function shouldOfferWalk({ entry, distanceM }) {
+  if (!entry) return false;
+  if (!Number.isFinite(distanceM)) return false;
+  return distanceM > STANDING_NEAR_M;
+}
+
+// The standing-list entry for the assistant the window is about: by account id
+// when the window knows it, otherwise (a question left from Settings, no
+// assistant attached) none.
+export function standingFor(list, assistant) {
+  if (!assistant || !Array.isArray(list)) return null;
+  return list.find((item) => item.userId === assistant.userId) || null;
+}

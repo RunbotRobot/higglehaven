@@ -510,6 +510,7 @@ assistant's replies, each labelled with who wrote it.
 **If something goes wrong:**
 - No assistant is free: the window says so, and the message waits in line. It is
   answered when one is free.
+- The assistant is on shift but somewhere else in the world: a line at the top of the window says which lándlet she is standing on, with a "Take me there" button that walks them to her. The line is not shown when she is close by or off shift.
 - To stop an assistant from contacting them, tap "Block" in the window.
 - Assistants are AI helpers, and the window says so. They cannot do anything to an
   account; for money, an account's standing, or a report about someone, they send it

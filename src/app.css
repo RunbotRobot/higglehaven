@@ -1348,6 +1348,27 @@
         font-size: var(--text-2xs);
         font-weight: var(--weight-regular);
       }
+      /* #3636 part 2: the quiet "where she stands" line under the header. */
+      #assistant-chat-standing {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-md);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        color: var(--pill-text-soft);
+        user-select: text;
+      }
+      #assistant-chat-standing[hidden] { display: none; }
+      #assistant-chat-go {
+        flex: none;
+        min-height: 36px;
+        padding: var(--space-xs) var(--space-2xl);
+        border: 0;
+        border-radius: var(--radius-pill);
+        background: var(--petal-yellow);
+        color: var(--ink);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+      }
       #assistant-chat-header-actions {
         display: flex;
         align-items: center;

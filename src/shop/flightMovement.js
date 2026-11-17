@@ -1091,11 +1091,25 @@ function restoreShopAvatarTransparency() {
 // the actual fade-out/teleport/fade-in/auto-land sequence.
 function startGoToLastLocation() {
   if (!shopLastLocation || shopGoToLastLocationPhase) return;
+  beginGoTo(shopLastLocation);
+}
+
+// #3636 part 2: the same fade, jump and landing, for any {x, y, heading} the
+// shopper asked to be taken to (the assistant window's "Take me there"). One
+// sequence, two callers: the last location is just one target.
+let shopGoToTarget = null;
+function beginGoTo(target) {
+  shopGoToTarget = target;
   stopShopSpawnRotation();
   shopLastLocationHideTimerS = null;
   shopLastLocationBtn.classList.remove('visible');
   shopGoToLastLocationPhase = 'fadingOut';
   shopGoToLastLocationElapsedS = 0;
+}
+export function goToShopLocation(target) {
+  if (!shopActive || shopGoToLastLocationPhase || !target) return false;
+  beginGoTo(target);
+  return true;
 }
 
 // #1176: the click-triggered sequence itself — fade the avatar out, jump
@@ -1113,8 +1127,8 @@ function updateGoToLastLocation(dt) {
   if (shopGoToLastLocationPhase === 'fadingOut') {
     setShopAvatarOpacity(1 - t);
     if (t < 1) return;
-    shopAvatarPosition.x = shopLastLocation.x;
-    shopAvatarPosition.y = shopLastLocation.y;
+    shopAvatarPosition.x = shopGoToTarget.x;
+    shopAvatarPosition.y = shopGoToTarget.y;
     shopFlightState = 'flying';
     shopFlightTransitionElapsedS = 0;
     shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
@@ -1127,8 +1141,8 @@ function updateGoToLastLocation(dt) {
     // falls back to whatever shopYaw already was (invisible either way at
     // this exact instant, so it's never a visible jump) rather than
     // guessing a direction that isn't actually meaningful here.
-    if (shopLastLocation.heading !== null && shopLastLocation.heading !== undefined) {
-      shopYaw = shopLastLocation.heading;
+    if (shopGoToTarget.heading !== null && shopGoToTarget.heading !== undefined) {
+      shopYaw = shopGoToTarget.heading;
     }
     setShopAvatarFacing(shopYaw);
     applyShopCameraOrientation();
