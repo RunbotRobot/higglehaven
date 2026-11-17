@@ -20,7 +20,7 @@ await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(1000);
 
-const placedInfo = await page.textContent('#product-info');
+const placedInfo = await page.textContent('#item-card-name');
 console.log('product-info right after placing (should mention Tree):', placedInfo);
 const placedImmediately = Boolean(placedInfo && placedInfo.includes('Tree'));
 

@@ -1,8 +1,8 @@
-// #3573: in Build, the selected item's name sits above the toolbar row and clear
-// of the compass and the Undo/Redo pair. On a phone a long name wraps to two
-// lines; the name box used to end 3 px below where the toolbar row started, and
-// the row's top was a fixed number that never followed the name. It now starts
-// below the name wherever the name ends. 390x844, a placed Tree.
+// #3573, #3689: in Build, the selected item's name is the title of the item card
+// that blooms beside the item (it no longer floats in the stack at the top of the
+// screen, where on a phone a long name wrapped into the toolbar row). The card is
+// wholly on screen, clear of the compass, the Undo/Redo pair and the toolbar row,
+// and the top pill stays empty. 390x844, a placed Tree.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Name Label Clear Tester';
@@ -19,7 +19,7 @@ const boxes = () => page.evaluate(() => {
     const r = el.getBoundingClientRect();
     return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, shown: r.height > 0 && getComputedStyle(el).display !== 'none' };
   };
-  return { name: box('product-info'), toolbar: box('gizmo-mode-controls'), compass: box('compass-panel'), undo: box('undo-redo-panel') };
+  return { name: box('item-card'), pill: box('product-info'), toolbar: box('gizmo-mode-controls'), compass: box('compass-panel'), undo: box('undo-redo-panel') };
 });
 
 await page.click('#add-item-btn');
@@ -30,8 +30,11 @@ await page.mouse.click(160, 380);
 await page.waitForTimeout(800);
 
 const b = await boxes();
-check(b.name.shown && b.toolbar.shown, `the name and the toolbar row are both showing (${JSON.stringify(b)})`);
-check(b.toolbar.top >= b.name.bottom, `the toolbar row starts at or below the bottom of the name (toolbar ${b.toolbar.top}, name ${b.name.bottom})`);
+check(b.name.shown && b.toolbar.shown, `the item card and the toolbar row are both showing (${JSON.stringify(b)})`);
+check(!b.pill.shown, `the name is not also drawn in the top pill (${JSON.stringify(b.pill)})`);
+check(b.name.left >= 0 && b.name.right <= 390 && b.name.top >= 0 && b.name.bottom <= 844, `the item card is wholly on screen (${JSON.stringify(b.name)})`);
+check(await page.evaluate(() => document.getElementById('item-card-name').textContent.includes('Tree')), 'the card is titled with the item name');
+check(b.name.bottom <= b.toolbar.top || b.name.top >= b.toolbar.bottom || b.name.right <= b.toolbar.left || b.name.left >= b.toolbar.right, `the card does not cover the toolbar row (${JSON.stringify({ name: b.name, toolbar: b.toolbar })})`);
 check(b.name.right <= b.compass.left || b.name.bottom <= b.compass.top || b.name.left >= b.compass.right, `the name does not run under the compass (${JSON.stringify({ name: b.name, compass: b.compass })})`);
 check(b.name.top >= b.undo.bottom || b.name.right <= b.undo.left, `the name does not run under the Undo/Redo pair (${JSON.stringify({ name: b.name, undo: b.undo })})`);
 
@@ -41,5 +44,6 @@ await page.mouse.click(40, 600);
 await page.waitForTimeout(500);
 const after = await boxes();
 check(!after.toolbar.shown, 'the toolbar row goes with the selection');
+check(!after.name.shown, 'the item card goes with the selection');
 
-await finish(browser, { pass: pass && errors.length === 0, label: '#3573: the item name clears the compass, Undo/Redo and the toolbar row', errors });
+await finish(browser, { pass: pass && errors.length === 0, label: '#3573, #3689: the item card clears the compass, Undo/Redo and the toolbar row', errors });

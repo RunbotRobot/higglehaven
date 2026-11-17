@@ -1904,12 +1904,14 @@
         font-weight: var(--weight-semibold);
         opacity: 0.75;
       }
-      #gizmo-mode-controls button.pressed {
+      #gizmo-mode-controls button.pressed,
+      #item-card button.pressed {
         transform: scale(0.92);
         background: var(--brand-green);
         color: var(--ink);
       }
-      #delete-item {
+      /* #3689: Delete lives in the item card now; it keeps its danger colour. */
+      #item-card #delete-item {
         background: var(--danger);
         color: var(--white);
       }
@@ -5817,7 +5819,7 @@
          c.css, .bloom and .buy). All its text is selectable (standing
          decision "Any text a user can read, they can copy"); only the mist
          drawn around it is not, and the mist holds no text. */
-      #product-card {
+      .world-card {
         position: fixed;
         left: 0;
         top: 0;
@@ -5840,16 +5842,16 @@
         flex-direction: column;
         gap: var(--space-xs);
       }
-      #product-card[data-side='left'] {
+      .world-card[data-side='left'] {
         transform-origin: right center;
       }
-      #product-card[data-side='above'] {
+      .world-card[data-side='above'] {
         transform-origin: center bottom;
       }
-      #product-card[data-side='below'] {
+      .world-card[data-side='below'] {
         transform-origin: center top;
       }
-      #product-card[hidden] {
+      .world-card[hidden] {
         display: none;
       }
       #product-card-name {
@@ -5939,7 +5941,7 @@
       /* A small pointer toward the product, on the side facing it, drawn fully
          outside the card. Gone when the product is off screen: there is nothing
          to point at. */
-      #product-card::before {
+      .world-card::before {
         content: '';
         position: absolute;
         top: calc(var(--pointer-y, 24px) - 8px);
@@ -5947,28 +5949,28 @@
         height: 0;
         border: 8px solid transparent;
       }
-      #product-card[data-side='right']::before {
+      .world-card[data-side='right']::before {
         left: -15px;
         border-right-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='left']::before {
+      .world-card[data-side='left']::before {
         right: -15px;
         border-left-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
       /* Above or below the product (a product in the middle of a narrow screen
          has no room beside it): the pointer is on the card's bottom or top edge. */
-      #product-card[data-side='above']::before {
+      .world-card[data-side='above']::before {
         top: auto;
         bottom: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-top-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='below']::before {
+      .world-card[data-side='below']::before {
         top: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-bottom-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-edge='true']::before {
+      .world-card[data-edge='true']::before {
         display: none;
       }
       /* Things arrive in the world through fog; nothing pops in (standing
@@ -5977,10 +5979,10 @@
          while the mist around it thins and spreads. The timeline is the
          bloom's own (--motion-bloom), shorter than a landlet's arrival: a tap
          is not a load. */
-      #product-card[data-state='blooming'] {
+      .world-card[data-state='blooming'] {
         animation: product-card-bloom var(--motion-bloom) var(--ease-bloom) both;
       }
-      #product-card[data-state='blooming']::after {
+      .world-card[data-state='blooming']::after {
         content: '';
         position: absolute;
         inset: -28px;
@@ -5998,11 +6000,77 @@
         from { opacity: 1; scale: 0.7; }
         to { opacity: 0; scale: 1.35; }
       }
+      /* #3689: the card of the selected item in Build. Shell, pointer and bloom
+         are the shared .world-card rules above; only its contents are here.
+         Its text (the item's name) is selectable like every text surface. */
+      #item-card-name {
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
+        line-height: var(--leading-tight);
+        padding-right: var(--space-3xl);
+        overflow-wrap: anywhere;
+      }
+      #item-card-actions {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: var(--space-xs);
+      }
+      #item-card-actions button,
+      #item-card-more button {
+        padding: var(--space-xs) var(--space-xl);
+        min-height: 32px;
+        border: none;
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #item-card-actions button:disabled,
+      #item-card-more button:disabled {
+        opacity: 0.5;
+      }
+      #item-card-actions button.active,
+      #item-card-more button.active {
+        background: var(--petal-yellow);
+        color: var(--ink);
+      }
+      #item-card-more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+      }
+      #item-card-more[hidden] {
+        display: none;
+      }
+      /* Multi-select: the next taps add items, so the card shrinks to its title
+         (what is selected) and every tap goes through it to the world. Copy,
+         Delete and More are back when multi-select is turned off, with the
+         selection carried over. */
+      #item-card.pass-through {
+        pointer-events: none;
+      }
+      #item-card.pass-through #item-card-actions,
+      #item-card.pass-through #item-card-more,
+      #item-card.pass-through #item-card-close-btn {
+        display: none;
+      }
+      #item-card.pass-through #item-card-name {
+        padding-right: 0;
+      }
+      #item-card-close-btn {
+        position: absolute;
+        top: var(--space-xs);
+        right: var(--space-xs);
+      }
       @media (prefers-reduced-motion: reduce) {
-        #product-card[data-state='blooming'] {
+        .world-card[data-state='blooming'] {
           animation: product-card-fade 0.25s linear both;
         }
-        #product-card[data-state='blooming']::after {
+        .world-card[data-state='blooming']::after {
           display: none;
         }
         @keyframes product-card-fade {

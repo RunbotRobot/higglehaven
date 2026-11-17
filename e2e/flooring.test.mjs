@@ -101,7 +101,7 @@ const zIsGroundLevel = flooringInstance !== undefined;
 const preDragZ = flooringInstance?.z;
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-let groupSelectionText = await page.textContent('#product-info');
+let groupSelectionText = await page.textContent('#item-card-name');
 
 // Flooring (already selected from placement) carries into multi-select
 // mode. The tree's own clickable footprint sits above the ground point it
@@ -113,7 +113,7 @@ let groupSelectionText = await page.textContent('#product-info');
 for (let y = 370; y >= 280; y -= 10) {
   await page.mouse.click(210, y);
   await page.waitForTimeout(250);
-  const text = await page.textContent('#product-info');
+  const text = await page.textContent('#item-card-name');
   groupSelectionText = text;
   if (/2.*selected/i.test(text)) break;
 }

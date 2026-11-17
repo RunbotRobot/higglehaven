@@ -93,7 +93,7 @@ await page.mouse.click(100, 500);
 await page.waitForTimeout(300);
 await page.mouse.click(320, 500);
 await page.waitForTimeout(300);
-const selectionText = await page.textContent('#product-info');
+const selectionText = await page.textContent('#item-card-name');
 console.log('selection status before saving (should say 2 items selected):', selectionText);
 
 await saveBundleAs(page, LABEL);
@@ -105,7 +105,11 @@ await page.waitForFunction(
 
 // Both crates are still selected (Save Bundle doesn't clear selection) —
 // delete the placed instances so the template's ON DELETE RESTRICT FK no
-// longer has anything blocking it.
+// longer has anything blocking it. #3689: while Multi-Select is on the item card
+// is only a title (its taps go through to the world), so turn Multi-Select off
+// first; the selection carries over and the card's Delete is back.
+await page.click('#toggle-multiselect');
+await page.waitForTimeout(300);
 await page.click('#delete-item');
 await page.waitForTimeout(300);
 

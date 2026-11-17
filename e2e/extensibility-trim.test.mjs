@@ -64,7 +64,7 @@ await page.locator('#catalog-picker-grid button').filter({ hasText: PRODUCT_NAME
 await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(1000);
-const productInfo = await page.textContent('#product-info');
+const productInfo = await page.textContent('#item-card-name');
 console.log('selected product right after placing (should be product name):', productInfo);
 
 await page.click('#mode-trim');
