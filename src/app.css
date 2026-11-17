@@ -143,7 +143,7 @@
           height: 18px;
         }
         #wordmark-panel {
-          padding: 3px var(--space-sm);
+          padding: var(--space-2xs) var(--space-sm);
         }
       }
       /* #540: Sell mode's "faux lándlet" 3D array — scrolling through pages
@@ -152,9 +152,8 @@
          page's items, capped by a cumulative model-file-size budget rather
          than a fixed item count. Hidden by default (only shown while
          currentMode === 'sell'); bottom-center is free in every other mode.
-         bottom matches #seller-showcase-manage-btn's own bottom (owner
-         feedback N51 — the two pills read as vertically mismatched
-         otherwise, and this one used to sit 4px higher). */
+         (#3699: the bottom-right Products button it once lined up with is gone;
+         the bud's My products petal reopens the list.) */
       #seller-showcase-pager {
         display: none;
         position: fixed;
@@ -165,7 +164,7 @@
         align-items: center;
         gap: var(--space-md);
         background: rgb(var(--pill-rgb) / 0.65);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
@@ -185,33 +184,6 @@
       }
       #seller-showcase-pager button:disabled {
         opacity: 0.4;
-      }
-      /* Reopens #seller-modal after it's been closed to browse the
-         showcase array behind it — otherwise closing it would strand the
-         seller with no way back to Manage/List/Upload. Bottom-right is
-         free while in Sell mode: #camera-debug-panel (its usual occupant)
-         is one of SELL_HIDDEN_BUILDER_UI_IDS. */
-      #seller-showcase-manage-btn {
-        display: none;
-        position: fixed;
-        bottom: 12px;
-        right: 8px;
-        z-index: 10;
-        padding: var(--space-sm) var(--space-2xl);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
-      }
-      #seller-showcase-manage-btn.visible {
-        display: block;
-      }
-      /* #3295: with Shop's movement HUD up on the showcase page, the right-hand
-         look joystick (108px, 24px off the bottom) covers this button's usual
-         spot; lift it clear above the joystick. */
-      body.sell-world-view #seller-showcase-manage-btn {
-        bottom: 140px;
       }
       /* #3296: the pager's usual bottom-centre spot sits under the left joystick
          on a phone-width screen (and next to the fly button); move it to the top
@@ -390,7 +362,7 @@
         left: 12px;
         max-width: 60vw;
         background: rgb(var(--pill-rgb) / 0.65);
-        padding: var(--space-sm) var(--space-xl);
+        padding: var(--space-sm) var(--space-lg);
         border-radius: var(--radius-md);
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
@@ -438,7 +410,7 @@
         left: 50%;
         transform: translateX(-50%);
         background: rgb(var(--pill-rgb) / 0.9);
-        padding: var(--space-md) var(--space-3xl);
+        padding: var(--space-md) var(--space-2xl);
         border-radius: var(--radius-md);
         border: none;
         color: var(--pill-text);
@@ -607,7 +579,7 @@
         border: none;
         background: transparent;
         color: var(--pill-text-soft);
-        font: var(--text-2xl)/var(--leading-none) var(--font-sans);
+        font: var(--text-xl)/var(--leading-none) var(--font-sans);
         cursor: pointer;
       }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
@@ -715,7 +687,7 @@
         border: none;
         background: var(--brand-green);
         color: var(--pill-text);
-        font-size: var(--text-2xl);
+        font-size: var(--text-xl);
         touch-action: none;
       }
       /* #3393: colour no longer tells the two states apart, so a press and
@@ -755,7 +727,7 @@
       #shop-vertical-controls button {
         width: 52px;
         height: var(--shop-vertical-button-height);
-        border-radius: var(--radius-xl);
+        border-radius: var(--radius-lg);
         border: none;
         background: rgb(var(--spring-green-rgb) / 0.85);
         color: var(--pill-text);
@@ -819,7 +791,7 @@
            44x36 touch target (it was a 55%-clear pill with a 12px emoji). */
         min-width: 44px;
         min-height: 36px;
-        padding: 5px var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.35);
         background: rgb(var(--pill-rgb) / 0.95);
@@ -912,7 +884,7 @@
         width: min(320px, calc(100vw - 24px));
         max-height: calc(100vh - 100px);
         overflow-y: auto;
-        padding: var(--space-xl) var(--space-xl) var(--space-lg);
+        padding: var(--space-lg) var(--space-lg) var(--space-lg);
         border-radius: 30px 6px 30px 6px;
         background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
         box-shadow: var(--shadow-card);
@@ -973,7 +945,7 @@
         left: 0;
         min-width: 150px;
         background: rgb(var(--pill-rgb) / 0.95);
-        border-radius: var(--radius-xl);
+        border-radius: var(--radius-lg);
         padding: var(--space-xs);
         box-shadow: var(--shadow-card);
       }
@@ -981,7 +953,7 @@
         display: flex;
       }
       #account-menu-panel button {
-        padding: 7px var(--space-lg);
+        padding: var(--space-sm) var(--space-lg);
         border-radius: var(--radius-md);
         border: none;
         background: transparent;
@@ -993,7 +965,7 @@
         background: rgb(var(--ink-rgb) / 0.08);
       }
       #account-menu-landcap {
-        padding: 7px var(--space-lg);
+        padding: var(--space-sm) var(--space-lg);
         margin-top: var(--space-3xs);
         border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
@@ -1001,7 +973,7 @@
         opacity: 0.75;
       }
       #account-menu-tax-notice {
-        padding: 7px var(--space-lg);
+        padding: var(--space-sm) var(--space-lg);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         color: var(--pill-text);
         opacity: 0.75;
@@ -1020,7 +992,7 @@
          menu panel itself is collapsed, so it's current the moment the menu
          opens rather than stale until the next landlet crossing. */
       #account-menu-landlet-info {
-        padding: 7px var(--space-lg);
+        padding: var(--space-sm) var(--space-lg);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         color: var(--pill-text);
         opacity: 0.75;
@@ -1030,12 +1002,12 @@
       #dm-badge {
         display: inline-block;
         min-width: 15px;
-        margin-left: 5px;
+        margin-left: var(--space-xs);
         padding: 0 var(--space-2xs);
         border-radius: var(--radius-pill);
         background: var(--danger-bright);
         color: var(--white);
-        font-size: 10px;
+        font-size: var(--text-2xs);
         line-height: 15px;
         text-align: center;
       }
@@ -1072,7 +1044,7 @@
         gap: var(--space-xs);
       }
       .mode-nav-btn {
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--pill-rgb) / 0.55);
@@ -1184,15 +1156,15 @@
          shape above -- never rendered on the sender's own messages. */
       .shop-nearby-chat-message-actions {
         display: flex;
-        gap: 3px;
+        gap: var(--space-2xs);
         flex: 1 0 100%;
       }
       .shop-nearby-chat-message-actions[hidden] {
         display: none;
       }
       .shop-nearby-chat-message-actions button {
-        padding: 1px 5px;
-        border-radius: 5px;
+        padding: var(--space-3xs) var(--space-xs);
+        border-radius: var(--radius-sm);
         border: none;
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
@@ -1220,8 +1192,8 @@
         color: var(--pill-text);
       }
       #shop-nearby-chat-muted button {
-        padding: 1px var(--space-xs);
-        border-radius: 5px;
+        padding: var(--space-3xs) var(--space-xs);
+        border-radius: var(--radius-sm);
         border: none;
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
@@ -1233,7 +1205,7 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-xs);
-        margin-top: 3px;
+        margin-top: var(--space-2xs);
       }
       #shop-nearby-chat-form {
         display: flex;
@@ -1243,13 +1215,13 @@
         flex: 1;
         min-width: 0;
         padding: var(--space-2xs) var(--space-xs);
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius-md);
         border: none;
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       #shop-nearby-chat-form button {
         padding: var(--space-2xs) var(--space-md);
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius-md);
         border: none;
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
@@ -1294,7 +1266,7 @@
         flex-direction: column;
         gap: var(--space-xs);
         padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--pill-rgb) / 0.92);
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
@@ -1378,7 +1350,7 @@
       }
       #assistant-chat-badge {
         margin-left: var(--space-2xs);
-        padding: 1px 7px;
+        padding: var(--space-3xs) var(--space-sm);
         border-radius: var(--radius-pill);
         background: rgb(var(--ink-rgb) / 0.14);
         font-size: var(--text-2xs);
@@ -1407,7 +1379,7 @@
         border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
-        font: var(--text-3xl)/var(--leading-none) var(--font-sans);
+        font: var(--text-2xl)/var(--leading-none) var(--font-sans);
         cursor: pointer;
       }
       #assistant-chat-log {
@@ -1417,7 +1389,7 @@
         overflow-y: auto;
         display: flex;
         flex-direction: column;
-        gap: 5px;
+        gap: var(--space-xs);
         user-select: text;
       }
       .assistant-chat-message {
@@ -1470,7 +1442,7 @@
         font: var(--text-lg)/var(--leading-tight) var(--font-sans);
       }
       #assistant-chat-send {
-        padding: var(--space-sm) var(--space-xl);
+        padding: var(--space-sm) var(--space-lg);
         border-radius: var(--radius-md);
         border: none;
         background: rgb(var(--ink-rgb) / 0.16);
@@ -1547,7 +1519,7 @@
         display: flex;
         align-items: center;
         gap: var(--space-2xs);
-        padding: 3px 0;
+        padding: var(--space-2xs) 0;
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         color: var(--pill-text);
       }
@@ -1555,8 +1527,8 @@
         flex: 1 1 auto;
       }
       .shop-voice-peer-row button {
-        padding: var(--space-3xs) 7px;
-        border-radius: var(--radius-sm);
+        padding: var(--space-3xs) var(--space-sm);
+        border-radius: var(--radius-md);
         border: none;
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
@@ -1634,8 +1606,8 @@
         -webkit-user-select: text;
       }
       #camera-debug-copy {
-        padding: 3px var(--space-md);
-        border-radius: var(--radius-sm);
+        padding: var(--space-2xs) var(--space-md);
+        border-radius: var(--radius-md);
         border: none;
         background: rgb(var(--pill-rgb) / 0.6);
         color: var(--pill-text-soft);
@@ -1648,7 +1620,7 @@
         transform: translateX(-50%);
         color: var(--pill-text);
         background: rgb(var(--pill-rgb) / 0.65);
-        padding: var(--space-sm) var(--space-xl);
+        padding: var(--space-sm) var(--space-lg);
         border-radius: var(--radius-md);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         text-align: center;
@@ -1796,7 +1768,7 @@
         box-sizing: border-box;
         text-align: center;
         padding: var(--space-xs) var(--space-lg);
-        border-radius: var(--radius-xl);
+        border-radius: var(--radius-lg);
         background: rgb(var(--pill-rgb) / 0.85);
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
@@ -1817,8 +1789,8 @@
         text-align: center;
         /* 7px so a one-line status is tall enough for the 32px dismiss target
            in its corner (#3377). */
-        padding: 7px var(--space-lg);
-        border-radius: var(--radius-xl);
+        padding: var(--space-sm) var(--space-lg);
+        border-radius: var(--radius-lg);
         background: rgb(var(--pill-rgb) / 0.85);
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
@@ -1839,7 +1811,7 @@
         display: none;
         align-items: center;
         gap: var(--space-2xs);
-        padding: var(--space-sm) var(--space-xl);
+        padding: var(--space-sm) var(--space-lg);
         border-radius: var(--radius-pill);
         background: rgb(var(--pill-rgb) / 0.5);
         color: var(--pill-text-soft);
@@ -1851,7 +1823,7 @@
       .gizmo-numeric-control input {
         width: 4.5em;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-3xs) var(--space-2xs);
         font: inherit;
         background: rgb(0 0 0 / 0.1);
@@ -2012,7 +1984,7 @@
         align-items: center;
         justify-content: center;
         gap: var(--space-sm);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         background: rgb(var(--pill-rgb) / 0.65);
         color: var(--pill-text);
@@ -2044,7 +2016,7 @@
         font-size: var(--text-sm);
         color: var(--pill-text);
         background: rgb(var(--pill-rgb) / 0.65);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         text-align: center;
       }
@@ -2069,7 +2041,7 @@
            let the land show through behind it clearly enough to make the
            listings hard to read. */
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         padding: 36px var(--space-sm) var(--space-sm);
         max-width: min(90vw, 360px);
         max-height: 50vh;
@@ -2127,7 +2099,7 @@
         display: none;
       }
       .search-scope-btn {
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -2181,7 +2153,7 @@
         flex-shrink: 0;
       }
       .catalog-mode-tab-btn {
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -2286,7 +2258,7 @@
         width: 64px;
         height: 64px;
         object-fit: contain;
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.1);
       }
       .catalog-tile-name {
@@ -2324,7 +2296,7 @@
         margin-bottom: var(--space-sm);
       }
       .bundle-tab-btn {
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -2477,8 +2449,8 @@
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -2501,7 +2473,7 @@
         border-radius: var(--radius-round);
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
-        font-size: var(--text-2xl);
+        font-size: var(--text-xl);
         line-height: 1;
         display: flex;
         align-items: center;
@@ -2524,7 +2496,7 @@
       }
       #upload-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       /* #2748: same centered-overlay-stacked-above-the-Seller-modal shape
          as #upload-modal above, just its own id so both can independently
@@ -2549,8 +2521,8 @@
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -2559,7 +2531,7 @@
       }
       #sell-this-too-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       /* Same grid idiom as #seller-list-view's own tiles (reuses that
          view's .seller-card/-thumb/-name/-price classes directly, see
@@ -2682,7 +2654,7 @@
       #upload-dimensions-preview {
         width: 100%;
         height: 170px;
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.06);
         touch-action: none;
       }
@@ -2799,8 +2771,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -2809,7 +2781,7 @@
       }
       #bundle-name-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #bundle-name-modal-content label {
         display: flex;
@@ -2883,8 +2855,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -2893,7 +2865,7 @@
       }
       #report-reason-modal-content h2 {
         margin: 0 32px 0 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #report-reason-modal-content label {
         display: flex;
@@ -2945,8 +2917,8 @@
         width: 100%;
         max-width: 380px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -2955,12 +2927,12 @@
       }
       #product-review-modal-content h2 {
         margin: 0 32px 0 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #product-review-rating {
         display: flex;
         flex-wrap: wrap;
-        gap: var(--space-xs) var(--space-xl);
+        gap: var(--space-xs) var(--space-lg);
         margin: 0;
         padding: 0;
         border: none;
@@ -3068,8 +3040,8 @@
         width: 100%;
         max-width: 380px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3078,7 +3050,7 @@
       }
       #note-modal-content h2 {
         margin: 0 32px 0 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #note-modal-text-label,
       #note-modal-schedule-label {
@@ -3171,8 +3143,8 @@
         width: 100%;
         max-width: 380px;
         background: rgb(var(--panel-rgb) / 0.99);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3181,7 +3153,7 @@
       }
       #notice-modal-content h2 {
         margin: 0 32px 0 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #notice-modal-message {
         margin: 0;
@@ -3239,8 +3211,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.99);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3249,7 +3221,7 @@
       }
       #confirm-modal-content h2 {
         margin: 0 32px 0 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #confirm-modal-message {
         margin: 0;
@@ -3310,8 +3282,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3320,7 +3292,7 @@
       }
       #moderation-category-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #moderation-category-modal-subtitle {
         margin: 0;
@@ -3383,14 +3355,14 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
+        border-radius: var(--radius-lg);
         padding: 20px;
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-loose) var(--font-sans);
       }
       #refund-policy-modal-content h2 {
         margin: 0 0 var(--space-lg);
-        font-size: var(--text-2xl);
+        font-size: var(--text-xl);
       }
       #refund-policy-modal-content p {
         margin: 0 0 var(--space-lg);
@@ -3416,8 +3388,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3426,7 +3398,7 @@
       }
       #checkout-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #checkout-summary {
         font-size: var(--text-sm);
@@ -3482,8 +3454,8 @@
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3493,7 +3465,7 @@
       }
       #feedback-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #feedback-screenshot-preview[hidden] {
         display: none;
@@ -3577,8 +3549,8 @@
         width: 100%;
         max-width: 380px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3592,7 +3564,7 @@
       }
       #verify-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #verify-modal-intro {
         font-size: var(--text-sm);
@@ -3694,8 +3666,8 @@
         max-height: min(90vh, calc(100dvh - 108px));
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -3704,7 +3676,7 @@
       }
       #seller-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       /* #1602: layout-only (no font-size/color of its own, unlike
          .upload-step-heading) so wrapping the h2 in this doesn't disturb
@@ -3771,7 +3743,7 @@
         gap: var(--space-xs);
       }
       .seller-view-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -3798,7 +3770,7 @@
         align-items: center;
         gap: var(--space-2xs);
         padding: var(--space-sm);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         border: none;
         background: rgb(var(--ink-rgb) / 0.08);
         color: var(--pill-text);
@@ -3835,7 +3807,7 @@
         flex-direction: column;
         gap: var(--space-sm);
         background: rgb(var(--ink-rgb) / 0.08);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         padding: var(--space-md) var(--space-lg);
         transition: background-color var(--motion-quick) var(--ease-soft);
       }
@@ -3864,7 +3836,7 @@
          tidy single line, and unlike the catalog picker's own compact
          buttons, each row already has room to grow vertically. */
       .seller-row-label {
-        font-size: 15px;
+        font-size: var(--text-lg);
         font-weight: var(--weight-semibold);
         color: var(--pill-text);
       }
@@ -3887,7 +3859,7 @@
       }
       .seller-row-action-btn {
         flex-shrink: 0;
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -3918,7 +3890,7 @@
       .seller-preview-canvas {
         width: 100%;
         height: 170px;
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.06);
         touch-action: none;
       }
@@ -4001,7 +3973,7 @@
         width: 5.5em;
       }
       .seller-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4043,7 +4015,7 @@
         color: var(--danger-text);
       }
       .seller-size-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4086,7 +4058,7 @@
         width: 8em;
       }
       .seller-price-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4137,7 +4109,7 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .seller-digital-good-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4178,7 +4150,7 @@
         color: var(--pill-text);
       }
       .seller-no-returns-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4219,7 +4191,7 @@
         color: var(--pill-text);
       }
       .seller-domestic-only-save-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4294,7 +4266,7 @@
         box-shadow: var(--shadow-card);
         /* The leaf's own shape (#3652), as the bud's leaves have it. */
         border-radius: 30px 6px 30px 6px;
-        padding: var(--space-3xl);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -4303,7 +4275,7 @@
       }
       #settings-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #settings-tabs {
         display: flex;
@@ -4311,7 +4283,7 @@
         flex-wrap: wrap;
       }
       .settings-tab-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -4326,7 +4298,7 @@
       #settings-section {
         display: flex;
         flex-direction: column;
-        gap: var(--space-xl);
+        gap: var(--space-lg);
         min-height: 80px;
         /* #3302: with a row below it, a tall tab (Sell) used to shrink this
            box under its own content and paint over that row, swallowing
@@ -4371,7 +4343,7 @@
       }
       .settings-radio-row {
         display: flex;
-        gap: var(--space-xl);
+        gap: var(--space-lg);
       }
       .settings-radio-row label {
         display: flex;
@@ -4416,7 +4388,7 @@
       .version-action-btn {
         align-self: flex-start;
         flex-shrink: 0;
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -4482,7 +4454,7 @@
       .auction-row-bid-input {
         width: 5.5em;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-xs);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.08);
@@ -4492,7 +4464,7 @@
       .auction-refresh-btn {
         align-self: flex-start;
         flex-shrink: 0;
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
@@ -4531,7 +4503,7 @@
       .auction-start-form input {
         width: 5.5em;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-xs);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.08);
@@ -4557,7 +4529,7 @@
       .low-stock-filter-input {
         width: 5.5em;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-xs);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.08);
@@ -4617,7 +4589,7 @@
       .sold-out-marker-row-dismiss {
         flex-shrink: 0;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-md);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.12);
@@ -4637,7 +4609,7 @@
       }
       .landlet-picker select {
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-xs);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.08);
@@ -4670,7 +4642,7 @@
         flex: 1 1 auto;
         min-width: 0;
         border: none;
-        border-radius: var(--radius-xs);
+        border-radius: var(--radius-sm);
         padding: var(--space-2xs) var(--space-xs);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         background: rgb(var(--ink-rgb) / 0.08);
@@ -4713,8 +4685,8 @@
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -4723,11 +4695,14 @@
       }
       #auth-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #auth-tabs {
         display: flex;
         gap: var(--space-xs);
+      }
+      #auth-tabs[hidden] {
+        display: none;
       }
       .auth-form {
         display: flex;
@@ -4800,7 +4775,7 @@
         height: 16px;
       }
       .auth-form > button[type='submit'] {
-        padding: 9px var(--space-2xl);
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4845,7 +4820,7 @@
         color: var(--leaf-text);
       }
       #auth-account-email {
-        font-size: 15px;
+        font-size: var(--text-lg);
         font-weight: var(--weight-semibold);
         overflow-wrap: anywhere;
       }
@@ -4936,8 +4911,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -4946,7 +4921,7 @@
       }
       #notifications-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #notifications-list {
         display: flex;
@@ -4955,7 +4930,7 @@
       }
       .notification-row {
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -4998,7 +4973,7 @@
       }
       #notifications-mark-all-btn,
       #notifications-clear-read-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5012,7 +4987,7 @@
       #notifications-load-more-btn {
         align-self: center;
         margin-top: var(--space-sm);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.1);
@@ -5029,7 +5004,7 @@
       #saved-layouts-load-more-btn {
         align-self: center;
         margin-top: var(--space-sm);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.1);
@@ -5061,8 +5036,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5071,7 +5046,7 @@
       }
       #my-purchases-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #my-purchases-list {
         display: flex;
@@ -5080,7 +5055,7 @@
       }
       .my-purchase-row {
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5106,7 +5081,7 @@
         gap: var(--space-sm);
       }
       .my-purchase-action {
-        padding: 5px var(--space-lg);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5154,7 +5129,7 @@
       #my-purchases-load-more-btn {
         align-self: center;
         margin-top: var(--space-sm);
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.1);
@@ -5190,8 +5165,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5200,7 +5175,7 @@
       }
       #friends-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #friends-modal-content h3 {
         margin: var(--space-2xs) 0 0;
@@ -5215,7 +5190,7 @@
       }
       #friends-add-btn, #friends-map-btn {
         align-self: flex-start;
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5267,8 +5242,8 @@
         width: 100%;
         max-width: 360px;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5277,12 +5252,12 @@
       }
       #friends-map-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #friends-map-canvas {
         width: 100%;
         aspect-ratio: 1;
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
       }
       #friends-map-empty {
@@ -5311,8 +5286,8 @@
         max-width: 360px;
         max-height: 80vh;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5321,7 +5296,7 @@
       }
       #dm-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       /* #3140: the DM header's Block control. */
       #dm-block-btn {
@@ -5346,7 +5321,7 @@
       .dm-row {
         max-width: 80%;
         padding: var(--space-sm) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5378,7 +5353,7 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #dm-send-btn {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5393,7 +5368,7 @@
          it sits above #dm-list rather than below it. */
       #dm-load-more-btn {
         align-self: center;
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.1);
@@ -5409,7 +5384,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         padding: var(--space-sm) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5475,8 +5450,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5485,7 +5460,7 @@
       }
       #sign-posts-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #sign-posts-list {
         display: flex;
@@ -5498,7 +5473,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5538,7 +5513,7 @@
          intercept taps meant for the 3D canvas beneath it). */
       #sign-posts-unflag-btn {
         align-self: flex-start;
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5568,8 +5543,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5578,7 +5553,7 @@
       }
       #calendar-events-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #calendar-events-list {
         display: flex;
@@ -5591,7 +5566,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5636,7 +5611,7 @@
       }
       #calendar-events-unflag-btn {
         align-self: flex-start;
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5669,8 +5644,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5679,7 +5654,7 @@
       }
       #backup-chain-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #backup-chain-intro {
         margin: 0;
@@ -5696,7 +5671,7 @@
         align-items: center;
         gap: var(--space-sm);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5730,7 +5705,7 @@
       }
       #backup-chain-add-btn {
         align-self: flex-start;
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
@@ -5761,8 +5736,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -5771,7 +5746,7 @@
       }
       #pending-restoration-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #pending-restoration-intro {
         margin: 0;
@@ -5788,7 +5763,7 @@
         align-items: center;
         gap: var(--space-md);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -5797,7 +5772,7 @@
         flex-shrink: 0;
         width: 40px;
         height: 40px;
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius-md);
         object-fit: cover;
       }
       .pending-restoration-row-text {
@@ -5842,7 +5817,7 @@
         z-index: 15;
         width: min(240px, calc(100vw - 24px));
         box-sizing: border-box;
-        padding: var(--space-xl) var(--space-2xl) var(--space-2xl);
+        padding: var(--space-lg) var(--space-2xl) var(--space-2xl);
         border-radius: var(--radius-bloom);
         background: linear-gradient(160deg, rgb(255 255 255 / 0.82), rgb(var(--panel-rgb) / 0.86));
         box-shadow: var(--shadow-leaf);
@@ -5871,10 +5846,10 @@
         display: none;
       }
       #product-card-name {
-        font-size: var(--text-3xl);
+        font-size: var(--text-2xl);
         font-weight: var(--weight-semibold);
         line-height: var(--leading-tight);
-        padding-right: var(--space-3xl);
+        padding-right: var(--space-2xl);
         overflow-wrap: anywhere;
       }
       #product-card-price {
@@ -5922,7 +5897,7 @@
       }
       #product-card-more-btn,
       #product-card-more button {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         border: none;
         border-radius: var(--radius-pill);
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
@@ -6051,8 +6026,8 @@
         max-height: 80vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -6061,7 +6036,7 @@
       }
       #my-lands-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #my-lands-status.error {
         color: var(--danger-text);
@@ -6113,7 +6088,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -6180,7 +6155,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         background: rgb(var(--ink-rgb) / 0.08);
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.9);
@@ -6259,8 +6234,8 @@
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         display: flex;
@@ -6269,7 +6244,7 @@
       }
       #claim-modal-content h2 {
         margin: 0;
-        font-size: var(--text-xl);
+        font-size: var(--text-lg);
       }
       #claim-hint {
         font-size: var(--text-xs);
@@ -6283,7 +6258,7 @@
       #claim-map-wrap {
         width: 100%;
         aspect-ratio: 1 / 1;
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         overflow: hidden;
         background: rgb(var(--ink-rgb) / 0.08);
       }
@@ -6303,12 +6278,12 @@
       .claim-legend-item {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
+        gap: var(--space-xs);
       }
       .claim-swatch {
         width: 10px;
         height: 10px;
-        border-radius: 2px;
+        border-radius: var(--radius-sm);
         display: inline-block;
       }
       .claim-swatch.available {
@@ -6327,7 +6302,7 @@
         justify-content: space-between;
         gap: var(--space-md);
         background: rgb(var(--ink-rgb) / 0.08);
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         padding: var(--space-md) var(--space-lg);
       }
       #claim-selection-name {

@@ -151,29 +151,31 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// How to move: one leaf, shared by every mode that walks the world with Shop's controls.
+export function openHowToMoveLeaf() {
+  openLeaf({
+    id: 'how-to-move',
+    title: 'How to move',
+    render: (body) => {
+      const lines = [
+        'Walk: the left stick, or W A S D / the arrow keys.',
+        'Look: the right stick, or Q and E to turn.',
+        'Fly: the bird button, or press Space twice.',
+        'Tap a product to look at it.',
+      ];
+      for (const text of lines) {
+        const p = document.createElement('p');
+        p.textContent = text;
+        body.appendChild(p);
+      }
+    },
+  });
+}
+
 // Shop's petals. Settings, Friends and My Purchases are rows of the same panel already;
 // Build and Sell are the mode buttons moved in; How to move is a leaf. (Chat arrives with the
-// leaf that moves the chat controls, so there is never a second way in.)
+// leaf that moves the chat controls, so there is never a second way in.) Sell's own petals are
+// registered by src/sell/mode.js, next to the product list they open (#3699).
 registerBudPetals('shop', [
-  {
-    id: 'how-to-move',
-    label: 'How to move',
-    run: () => openLeaf({
-      id: 'how-to-move',
-      title: 'How to move',
-      render: (body) => {
-        const lines = [
-          'Walk: the left stick, or W A S D / the arrow keys.',
-          'Look: the right stick, or Q and E to turn.',
-          'Fly: the bird button, or press Space twice.',
-          'Tap a product to look at it.',
-        ];
-        for (const text of lines) {
-          const p = document.createElement('p');
-          p.textContent = text;
-          body.appendChild(p);
-        }
-      },
-    }),
-  },
+  { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
 ]);

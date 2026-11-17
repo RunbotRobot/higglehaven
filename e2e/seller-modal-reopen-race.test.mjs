@@ -11,7 +11,7 @@
 // re-enable.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -67,7 +67,7 @@ await productRow().locator('button', { hasText: 'Save Digital Good' }).click();
 await page.waitForTimeout(200);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
-await page.click('#seller-showcase-manage-btn');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
