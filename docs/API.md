@@ -2921,7 +2921,7 @@ as a backfilled historical one, not a dead end. `productId` is `null`
 only for a row from the narrow window between that migration landing
 (#2746) and this fix (#2748) actually deploying; nothing in this codebase
 produces a `null` `productId` on a newly created template by this point.
-The seller-facing "Sell This Too" button (`src/sell/mode.js`, Seller
+The seller-facing "Sell This Too" choice (`src/sell/mode.js`, reached from the bud's Add a product leaf, formerly a Seller
 modal) is this endpoint's own UI entry point — browses every product in
 the catalog and calls this endpoint to attach the browsing seller's own
 listing to whichever one is picked.

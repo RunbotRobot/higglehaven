@@ -701,6 +701,23 @@ export async function openMyProducts(page) {
   await page.click('#bud-petal-sell-my-products');
 }
 
+// #3703 (Sell in the bud, 5/6): every way of adding a product starts at the bud's Add a product
+// petal, which opens one leaf asking which way. `way` is 'upload' (the upload steps) or
+// 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
+export async function openAddProductLeaf(page, way = 'upload') {
+  const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!expanded) await openAccountMenu(page);
+  await page.click('#bud-petal-sell-add-product');
+  await page.waitForSelector('#upload-step-choose:not([hidden])', { timeout: 5000 });
+  if (way === 'sell-this-too') {
+    await page.click('#add-product-sell-too-btn');
+    await page.waitForSelector('#sell-this-too-modal.visible', { timeout: 5000 });
+  } else {
+    await page.click('#add-product-upload-btn');
+    await page.waitForSelector('#upload-step-file:not([hidden])', { timeout: 5000 });
+  }
+}
+
 export async function openAccountMenu(page) {
   // #3650: a toggle click can be lost while the page is still re-laying out after a mode change
   // (saved-layout-preview failed twice on CI at this wait, never locally), and a panel that is

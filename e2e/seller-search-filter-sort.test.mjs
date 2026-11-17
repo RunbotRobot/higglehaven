@@ -6,7 +6,7 @@
 // products, so seven "Zz Filler" products ($10, same placeholder category)
 // bring the list to nine; visibleRowLabels() leaves them out so every
 // assertion below still reads about the two products it was written for.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
 const LABEL = 'Search Filter Sort Tester';
 
@@ -17,7 +17,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct(name, price) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', String(price));

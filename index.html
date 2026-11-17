@@ -424,8 +424,14 @@
     <div id="upload-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="upload-modal-content">
         <button id="upload-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2 id="upload-modal-title">Add a custom product</h2>
-        <div id="upload-step-file">
+        <h2 id="upload-modal-title">Add a product</h2>
+        <!-- #3703: the one leaf a seller starts from (the bud's Add a product petal). It asks
+             the one question first; each answer carries on in the place it always has. -->
+        <div id="upload-step-choose" hidden>
+          <button id="add-product-upload-btn" type="button" class="add-product-choice">Upload my own model</button>
+          <button id="add-product-sell-too-btn" type="button" class="add-product-choice">Sell one that is already here</button>
+        </div>
+        <div id="upload-step-file" hidden>
           <label>
             Name
             <input id="upload-name" type="text" placeholder="e.g. Brick" maxlength="100" />
@@ -666,16 +672,6 @@
              real count to show. -->
         <div id="seller-feedback-summary" hidden></div>
         <div id="seller-feedback-list" class="seller-review-list"></div>
-        <button id="upload-model-btn" type="button">+ Upload Model</button>
-        <!-- #2748 (leaf of #2745's shared-products redesign): attaches the
-             seller's own listing (price/stock) to a product someone else
-             already uploaded, instead of uploading a new model -- "Sell
-             This Too" rather than "Duplicate" deliberately: see #2218's
-             own discussion (that button copies a product within ONE
-             seller's own catalog for safe editing; this attaches a SECOND
-             seller's own listing to the SAME shared product, never
-             implying a copy is made). -->
-        <button id="sell-this-too-btn" type="button">Sell This Too</button>
         <div id="seller-view-toggle">
           <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
           <button type="button" class="seller-view-btn" data-view="list">List view</button>
