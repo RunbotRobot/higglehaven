@@ -1078,6 +1078,20 @@ most likely to come up again.
   for by teaching, not by permanent controls. It also shows how to bring
   the owner a design question: three things to look at on a phone, each
   with its cost stated, got an answer in three hours.
+  **Refined 2026-11-17 (#3723), after the owner opened the live bud:** "I
+  would like the Shop, Build, and Sell buttons to stand apart from the
+  other menu items somehow. Let's make them three sections of a semi-ring
+  on the corner of the bud. Actually, they could be petals! They would be
+  hidden until we click the bud." So the three modes are a group of their
+  own: three petals in a half-ring at the bud's corner, hidden until the
+  bud is tapped, apart from the column of things a person opens (Settings,
+  Friends and the rest). The principle: where a person is (a mode) and
+  what a person opens (a panel) are different kinds of thing, and the
+  interface shows them differently. A refinement like this adds nothing
+  that stands on the world, so it is inside the bud decision: a session
+  builds it without asking. (higglehaven1's reading, not the owner's
+  words: all three modes show whichever mode you are in, with the current
+  one marked.)
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
