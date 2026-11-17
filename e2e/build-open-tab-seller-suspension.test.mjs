@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -118,7 +118,7 @@ if (suspend.response.status !== 200) {
   throw new Error(`suspend-account failed (${suspend.response.status}): ${JSON.stringify(suspend.body)}`);
 }
 
-await page.click('#undo-btn');
+await budClick(page, '#undo-btn');
 await page.waitForFunction(() => window.__alerts.length > 0 || document.getElementById('pending-restoration-btn')?.hidden === false, null, { timeout: 10000 }).catch(() => {});
 await page.waitForTimeout(1500);
 
