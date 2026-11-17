@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
+import { failLoadingStage, markLoadingStage } from './ui/loadingStages.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
@@ -2240,6 +2241,7 @@ async function bootstrap() {
   // since enterShopMode already covers it before this function ever
   // reaches this line for the other three modes.
   await authInitPromise;
+  markLoadingStage('signedin'); // #3738
 
   if (startMode === 'sell') {
     setCurrentMode('sell');
@@ -2366,5 +2368,11 @@ async function bootstrap() {
 // instead of going through openSellerModal() for that reason.
 // Exported for src/sell/mode.js (#2647) -- its own openSellerModal awaits
 // this same promise (see the comment above).
+// #3738: every module has run by here, so the opening screen's "scripts" stage is
+// reached; a bootstrap that fails says so on the screen (with Try again) rather
+// than lifting it onto a half-built page.
+markLoadingStage('scripts');
 export const bootstrapPromise = bootstrap();
-bootstrapPromise.then(hideLoadingScreen, hideLoadingScreen);
+bootstrapPromise.then(hideLoadingScreen, () => {
+  failLoadingStage('higglehaven did not finish opening. Check your connection, then tap Try again.');
+});
