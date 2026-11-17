@@ -214,6 +214,24 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ## Getting around and Shop
 
+### How do I go between Shop, Build and Sell?
+
+1. Tap the round logo at the top left (the bud).
+2. Three small petals fan out beside it in an arc: "Shop", "Build" and "Sell". The
+   one you are in is shaded green.
+3. Tap the one you want.
+
+**You will see:** the menu folds away and you are in that place. The three petals
+are the same in all three places.
+
+**If something goes wrong:**
+- The petals are not there: the bud is folded. Tap the round logo once.
+- Nothing happens on tapping the place you are already in: that is expected.
+
+```controls any
+.mode-nav-btn[data-mode="shop"] | Shop
+```
+
 ### How do I walk around and look around?
 
 1. Put your left thumb on the round pad at the bottom left and push it in the
@@ -529,7 +547,8 @@ assistant's replies, each labelled with who wrote it.
 
 ### How do I get my own lándlet?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Build".
+1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+   "Shop", "Build" and "Sell". Tap "Build".
 2. The first time, a sheet opens with the title "Claim a" and a small map.
    Green squares are "Available", grey are "Claimed", blue is "Water".
 3. Tap an available green square on the map. The line under the map names it and
@@ -814,7 +833,8 @@ top of the screen.
 
 ### What does Sell mode show, and where is my showroom?
 
-1. Tap the gear at the top left (in Shop and Build it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Sell".
+1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+   "Shop", "Build" and "Sell". Tap "Sell".
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.

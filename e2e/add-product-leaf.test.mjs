@@ -51,6 +51,7 @@ check(m.content.left < 30, `the leaf grows from the bud's corner (left ${Math.ro
 check(m.content.bottom <= m.vh && m.content.top >= 0, 'the leaf is inside the screen');
 check(m.close.left + m.close.width / 2 > m.content.left + m.content.width * 0.75, 'the close control is upper right');
 check((await stepsShown()).file === false, 'the upload steps wait for the answer');
+check(!(await page.locator('#upload-submit-btn').isVisible()), 'no Add Product button shows while the leaf is still asking which way');
 
 // Upload my own model: the upload steps, a required field refused on its own step.
 await page.click('#add-product-upload-btn');
