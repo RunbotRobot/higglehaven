@@ -859,7 +859,8 @@
         animation: none;
       }
       body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
-      body[data-bud="on"][data-bud-new] .bud-word {
+      body[data-bud="on"][data-bud-new] .bud-word,
+      body[data-bud="on"][data-bud-word] .bud-word {
         display: block;
         position: absolute;
         left: 64px;
@@ -1338,35 +1339,8 @@
       body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
         --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
       }
-      /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
-         clear of the joysticks (bottom corners), the fly button (bottom centre)
-         and the mode buttons (top right). */
-      #assistant-chat-pill {
-        position: fixed;
-        z-index: 32;
-        left: 8px;
-        top: 38%;
-        min-height: 36px;
-        max-width: 150px;
-        padding: 0 var(--space-lg);
-        border: none;
-        border-radius: var(--radius-pill);
-        background: rgb(var(--pill-rgb) / 0.92);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-none) var(--font-sans);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        cursor: pointer;
-      }
-      #assistant-chat-pill[hidden] {
-        display: none;
-      }
-      #assistant-chat-pill.unread {
-        background: var(--brand-green);
-        color: var(--ink);
-        font-weight: var(--weight-semibold);
-      }
+      /* #3653: a minimised conversation has no pill: the bud wears her name (and a dot when she has
+         replied) and the account menu has an Assistant row that brings the window back. */
       #assistant-chat-header {
         display: flex;
         align-items: center;

@@ -6,6 +6,8 @@
 //   registerBudPetals(mode, [{ id, label, run }])  one definition per mode; a mode with none has no bud
 //   openLeaf({ id, title, render }) / closeLeaf()  one soft sheet at a time, close upper-right
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
+//   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
+//                                                  conversation's name); "Menu" comes back when none is set
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
@@ -14,6 +16,8 @@
 const FIRST_OPEN_KEY = 'hh_bud_opened';
 const registry = new Map();
 const marks = new Set();
+const words = new Map();
+const MENU_WORD = 'Menu';
 let leafEl = null;
 let leafId = null;
 
@@ -127,6 +131,25 @@ export function setBudMark(key) {
 export function clearBudMark(key) {
   marks.delete(key);
   showMarks();
+}
+
+// #3653: while a word is set the bud wears it (the last one set), whether or not the bud has
+// been opened before; with none set the default word and its first-visit rule apply again.
+function showWord() {
+  const wordEl = toggle()?.querySelector('.bud-word');
+  const latest = [...words.values()].pop();
+  if (wordEl) wordEl.textContent = latest ?? MENU_WORD;
+  document.body.toggleAttribute('data-bud-word', words.size > 0);
+}
+
+export function setBudWord(key, text) {
+  words.set(key, String(text));
+  showWord();
+}
+
+export function clearBudWord(key) {
+  words.delete(key);
+  showWord();
 }
 
 // Until the bud has been opened once it pulses and says Menu; after that the word goes.
