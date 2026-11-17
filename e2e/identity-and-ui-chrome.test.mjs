@@ -162,7 +162,7 @@ console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb)
 
 const pass = sellNavActiveImmediately && sellNavAriaPressedImmediately === 'true' && closeBtnVisible &&
   modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellNavAriaPressedAfterCancel === 'false' && sellerModalOpenedAfterCancel === 0 &&
-  uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
+  uploadBtnInSeller === 0 && addProductPetal === 1 && sellerCloseIsX && settingsCloseIsX &&
   activeTabInBuildMode === 'build' &&
   hintVisibleBeforePicker && hintTextBeforePicker.includes('Tree') && hintHiddenWhilePickerOpen &&
   pickerOpaque && hintVisibleAfterClosingPicker &&
