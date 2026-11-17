@@ -804,9 +804,9 @@ top of the screen.
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
-3. The "My products" window opens by itself. Tap "Close" (the × at its top right)
-   to put it away and look at the showroom. To bring it back, tap the round logo at the
-   top left (the bud), then "My products".
+3. Nothing covers the showroom: walk around it as you would anywhere. To see your
+   list, tap the round logo at the top left (the bud), then "My products". Tap "Close"
+   (the × at its top right) to put the list away again.
 
 **You will see:** your own products only. Nobody else's products and no real
 lándlets are shown here.
@@ -814,7 +814,8 @@ lándlets are shown here.
 **If something goes wrong:**
 - "My products" says "No custom products yet — use "+ Upload Model" to add one."
   You have not uploaded anything yet. The next entry shows how.
-- The window seems to be missing: tap the round logo at the top left, then "My products".
+- The list is not on screen: it does not open by itself. Tap the round logo at the top
+  left, then "My products".
 
 ```controls sell
 .mode-nav-btn[data-mode="sell"] | Sell
@@ -826,8 +827,8 @@ lándlets are shown here.
 
 ### How do I put my own product up for sale?
 
-1. In Sell, in the "My products" window, tap "+ Upload Model". A window opens
-   called "Upload Model".
+1. In Sell, open your list: tap the round logo at the top left, then "My products".
+   Tap "+ Upload Model". A window opens called "Upload Model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
    in dollars, or 0 for a free product.
 3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
