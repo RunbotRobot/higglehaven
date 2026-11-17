@@ -9,7 +9,7 @@
 // actually clickable/interactive while Sell is open, since Playwright's
 // own actionability checks fail a click on an element another one is
 // covering.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, openMyProducts, finish } from './helpers.mjs';
 
 const LABEL = 'Menu From Sell Tester';
 
@@ -36,11 +36,16 @@ console.log('Settings modal opens on top of the Seller modal (should be 1):', se
 await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
-// Closing Settings should leave the Seller modal exactly as it was —
-// this fix shouldn't have disturbed its own lifecycle.
-const sellerStillOpenAfter = await page.locator('#seller-modal.visible').count();
-console.log('Seller modal still open after closing Settings on top of it (should be 1):', sellerStillOpenAfter);
+// #3701: My products is a bud leaf now, so opening the bud folds it (the petals never unfold over an
+// open list), and closing Settings does not bring it back by itself. What must hold is what #539
+// was about: Sell is left exactly usable, so the product list opens again from its petal.
+const sellerClosedByTheBud = await page.locator('#seller-modal.visible').count();
+console.log('Seller list folded by the bud and not reopened by closing Settings (should be 0):', sellerClosedByTheBud);
+await openMyProducts(page);
+await page.waitForSelector('#seller-modal.visible', { timeout: 5000 });
+const sellerOpensAgain = await page.locator('#seller-modal.visible').count();
+console.log('My products opens again from its petal after Settings (should be 1):', sellerOpensAgain);
 
-const pass = panelExpandedOverSell === 1 && settingsOpenedOverSell === 1 && sellerStillOpenAfter === 1 &&
+const pass = panelExpandedOverSell === 1 && settingsOpenedOverSell === 1 && sellerClosedByTheBud === 0 && sellerOpensAgain === 1 &&
   errors.length === 0;
 await finish(browser, { pass, label: '#539: the account menu (and modals opened from it) stay reachable while Sell mode is open', errors });
