@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CARD_GAP_PX, CARD_MARGIN_PX, CARD_MAX_ANCHOR_RADIUS_PX, CARD_MIN_ANCHOR_RADIUS_PX,
-  clampAnchorRadius, placeProductCard, productCardState,
+  CARD_GAP_PX, CARD_MARGIN_PX, CARD_MAX_ANCHOR_RADIUS_PX, CARD_MIN_ANCHOR_RADIUS_PX, CARD_TOP_CLEAR_PX,
+  clampAnchorRadius, placeProductCard, productCardState, sellerLine,
 } from './productCardLayout.js';
 
 const PHONE = { width: 390, height: 844 };
@@ -32,7 +32,7 @@ describe('placeProductCard (#3651)', () => {
 
   it('stays on screen for a product at the top or bottom edge', () => {
     const top = placeProductCard({ anchor: { x: 100, y: 4, radius: 20 }, card: CARD, viewport: PHONE });
-    expect(top.top).toBe(CARD_MARGIN_PX);
+    expect(top.top).toBe(CARD_TOP_CLEAR_PX); // #3698: below the always-visible top bar
     const bottom = placeProductCard({ anchor: { x: 100, y: 840, radius: 20 }, card: CARD, viewport: PHONE });
     expect(bottom.top + CARD.height).toBeLessThanOrEqual(PHONE.height - CARD_MARGIN_PX);
     // The pointer still points at where the product is.
@@ -93,6 +93,25 @@ describe('placeProductCard (#3651)', () => {
   });
 });
 
+describe('the top bar stays clear (#3698)', () => {
+  it('never puts any part of the card in the top bar, wherever the product is', () => {
+    for (const y of [0, 20, 60, 80, 92, 120]) {
+      for (const x of [20, 195, 370]) {
+        const place = placeProductCard({ anchor: { x, y, radius: 30 }, card: { width: 240, height: 160 }, viewport: PHONE });
+        expect(place.top).toBeGreaterThanOrEqual(CARD_TOP_CLEAR_PX);
+      }
+    }
+  });
+  it('does the same for a product off screen or behind the camera', () => {
+    const behind = placeProductCard({ anchor: { x: NaN, y: NaN, radius: 0, behind: true }, card: { width: 240, height: 700 }, viewport: PHONE });
+    expect(behind.top).toBeGreaterThanOrEqual(CARD_TOP_CLEAR_PX);
+  });
+  it('still keeps a card on screen on a screen too short to leave room', () => {
+    const place = placeProductCard({ anchor: { x: 100, y: 100, radius: 20 }, card: { width: 240, height: 300 }, viewport: { width: 390, height: 320 } });
+    expect(place.top).toBeGreaterThanOrEqual(CARD_TOP_CLEAR_PX);
+  });
+});
+
 describe('clampAnchorRadius (#3651)', () => {
   it('floors a tiny radius, caps a huge one, and survives a bad number', () => {
     expect(clampAnchorRadius(0.2)).toBe(CARD_MIN_ANCHOR_RADIUS_PX);
@@ -147,5 +166,19 @@ describe('productCardState (#3651)', () => {
   it('treats unlimited stock (null) and stock above zero as in stock', () => {
     expect(productCardState({ template: { priceCents: 1, stockQuantity: 3 }, inRange: true }).canBuy).toBe(true);
     expect(productCardState({ template: { priceCents: 1, stockQuantity: null }, inRange: true }).canBuy).toBe(true);
+  });
+});
+
+describe('sellerLine (#3680)', () => {
+  it('says who sells the product, by the seller\'s storefront name', () => {
+    expect(sellerLine('Maple Workshop')).toBe('Sold by Maple Workshop');
+    expect(sellerLine('  Maple Workshop  ')).toBe('Sold by Maple Workshop');
+  });
+  it('says nothing when no name is known, rather than something made up', () => {
+    expect(sellerLine(null)).toBe('');
+    expect(sellerLine(undefined)).toBe('');
+    expect(sellerLine('')).toBe('');
+    expect(sellerLine('   ')).toBe('');
+    expect(sellerLine(42)).toBe('');
   });
 });
