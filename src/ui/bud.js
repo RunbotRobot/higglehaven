@@ -79,12 +79,32 @@ function syncBud() {
   if (!mode) return;
   // A mode with a definition has the bud; without one its old controls are still its way in.
   document.body.dataset.bud = registry.has(mode) ? 'on' : 'off';
-  // Shop's mode buttons become petals; the old top row (logo, gear, pills) is gone in Shop.
+  // #3723: the three modes are a group of their own, a half-ring of petals at the bud's corner
+  // (docs/DESIGN.md, "The bud"), the same three in every mode with the current one marked. They
+  // are the existing .mode-nav-btn buttons moved here, so their ids and handlers carry over; a
+  // mode without a bud keeps them in the old top row.
+  const ring = modesRing();
   for (const btn of document.querySelectorAll('.mode-nav-btn')) {
-    const inBud = registry.has(mode) && btn.dataset.mode !== mode;
-    if (inBud && btn.parentElement !== host) host.appendChild(btn);
-    if (!inBud && btn.parentElement === host) document.getElementById('mode-nav')?.appendChild(btn);
+    const inBud = registry.has(mode);
+    if (inBud && btn.parentElement !== ring) ring.appendChild(btn);
+    if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
+    if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
+    else btn.removeAttribute('aria-current');
   }
+}
+
+// The ring lives after the petal column, so it is last in reading order, and CSS shows it only
+// while the bud is unfolded. Choosing a mode folds the bud.
+function modesRing() {
+  let ring = document.getElementById('bud-modes');
+  if (ring) return ring;
+  ring = document.createElement('div');
+  ring.id = 'bud-modes';
+  ring.setAttribute('role', 'group');
+  ring.setAttribute('aria-label', 'Places');
+  ring.addEventListener('click', foldBud);
+  panel()?.after(ring);
+  return ring;
 }
 
 export function closeLeaf() {
@@ -205,14 +225,14 @@ export function openHowToMoveLeaf() {
 }
 
 // Shop's petals. Settings, Friends and My Purchases are rows of the same panel already;
-// Build and Sell are the mode buttons moved in; How to move is a leaf. (Chat arrives with the
+// the modes are the half-ring (#3723); How to move is a leaf. (Chat arrives with the
 // leaf that moves the chat controls, so there is never a second way in.) Sell's own petals are
 // registered by src/sell/mode.js, next to the product list they open (#3699).
 registerBudPetals('shop', [
   { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
 ]);
 
-// Build's petals. The mode buttons (Shop, Sell) come in as petals the same way Shop's do. Add item
+// Build's petals. The modes are the same half-ring as everywhere. Add item
 // adopts the old "+ Add Item" button, so there is no second control for it: it sits in the bud and
 // keeps its id and its handler (src/catalog/picker.js). Levels, Tools and Undo/Redo arrive with
 // the slices that move them (#3690, #3691), so they are never in two places.

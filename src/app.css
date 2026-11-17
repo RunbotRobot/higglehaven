@@ -868,13 +868,59 @@
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
+      /* #3723: Shop, Build and Sell are a half-ring of three petals at the bud's corner, apart from
+         the column of things you open, hidden until the bud is unfolded. The arc opens away from
+         the screen edge: --ring-sx/--ring-sy are +1 for a bud in the top-left corner (the ring
+         goes right and down) and -1 for one in the bottom-right; whoever moves the bud sets
+         body[data-bud-corner="bottom-right"]. Centres sit 100px from the bud's centre at 10, 45
+         and 80 degrees, so no two petals touch. The column below starts 92px lower, under the ring. */
+      #bud-modes {
+        --ring-sx: 1;
+        --ring-sy: 1;
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+      }
+      body[data-bud-corner="bottom-right"] #bud-modes { --ring-sx: -1; --ring-sy: -1; }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes { display: block; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn {
+        position: absolute;
+        box-sizing: border-box;
+        width: 52px;
+        height: 44px;
+        padding: 0;
+        left: calc(2px + var(--ring-sx) * var(--ring-x));
+        top: calc(6px + var(--ring-sy) * var(--ring-y));
+        border: none;
+        border-radius: 24px 5px 24px 5px;
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
+        color: var(--pill-text);
+        font: var(--text-md)/1 var(--font-sans);
+        text-align: center;
+        animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+      }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-x: 98.5px; --ring-y: 17.4px; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-x: 70.7px; --ring-y: 70.7px; animation-delay: 0.04s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-x: 17.4px; --ring-y: 98.5px; animation-delay: 0.08s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn.active,
+      body[data-bud="on"] #bud-modes .mode-nav-btn[aria-current="true"] {
+        background: var(--brand-green);
+        color: var(--ink);
+        font-weight: 600;
+      }
+      body[data-bud="on"] #account-menu-panel { margin-top: 92px; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(255 255 255 / 0.35); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
-        body[data-bud="on"] #account-menu-panel button { animation: none; }
+        body[data-bud="on"] #account-menu-panel button,
+        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: none; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {

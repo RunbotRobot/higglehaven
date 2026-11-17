@@ -299,6 +299,14 @@ by touching the world. The module is `src/ui/bud.js`:
   dimming scrim, so the world shows around it; it stays inside the screen and scrolls
   inside itself. A panel that moves into the bud takes this look, not a full-screen
   dialog.
+- The three modes are a petal group of their own, a half-ring at the bud's corner (#3723):
+  Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, hidden until the bud
+  is unfolded, the same three in every mode with the current one green and `aria-current`.
+  They sit 100px from the bud's centre at 10, 45 and 80 degrees, so no two touch, and the
+  column of things you open starts 92px lower, under them. The arc opens away from the
+  screen edge: the ring's two direction variables are +1 for a top-left bud and -1 for one in the
+  bottom-right (set `body[data-bud-corner="bottom-right"]`). A mode is never a petal of the
+  column, and the ring is last in reading order.
 - The glow, never a scale, is the bud's breath: a control that moves is hard to
   tap, and cannot be clicked by a test.
 
