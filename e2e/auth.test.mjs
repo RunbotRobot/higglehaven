@@ -16,9 +16,7 @@
 // whether the app itself handled it gracefully) — the same reasoning
 // other rejection-path tests already document avoiding elsewhere in this
 // suite.
-import {
-  launchPage, finish, waitForText, clearVerifyModalIfShown,
-} from './helpers.mjs';
+import { launchPage, finish, waitForText, clearVerifyModalIfShown, goToMode } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Auth Suite' });
 const email = `auth-suite-${Date.now()}@example.com`;
@@ -207,7 +205,7 @@ console.log('account button after logging in with the NEW password (should be "A
 // rather than #432's original no-reload Shop-mode case. Either way the
 // same identity-reset guarantee is what's under test here.
 const firstSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET');
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 // #556: this account signed up through the auth modal directly above, not
 // through chooseIdentity — clear the age/credit-card verify gate the same
 // way that helper does, or the /sellers/me fetch below never fires.
@@ -260,7 +258,7 @@ await page.waitForTimeout(200);
 // Timeout bumped from the original 5000ms to comfortably cover that round
 // trip on top of the fetch itself.
 const secondSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET', { timeout: 10000 });
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await clearVerifyModalIfShown(page);
 let sellerRefetchedForSecondAccount = true;
 try {

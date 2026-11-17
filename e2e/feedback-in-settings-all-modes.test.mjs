@@ -7,7 +7,7 @@
 // and Sell reports are no longer empty). The POST is intercepted so the exact
 // multipart body can be read; the backend's own handling is covered by
 // worker/feedback.test.js.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Feedback Settings Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -50,6 +50,16 @@ async function sendFeedbackFromSettings(expectedMode) {
       img.addEventListener('error', () => resolve(false), { once: true });
     });
   });
+  // #3676: Settings is put away while the card is open, and the description and
+  // Submit are on screen without scrolling the card.
+  const cardLayout = await page.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect();
+    return {
+      settingsHidden: !document.getElementById('settings-modal').classList.contains('visible'),
+      descriptionOnScreen: rect('feedback-description').bottom <= window.innerHeight,
+      submitOnScreen: rect('feedback-submit-btn').bottom <= window.innerHeight,
+    };
+  });
   await page.fill('#feedback-description', `Feedback from ${expectedMode}`);
   await page.click('#feedback-submit-btn');
   await page.waitForFunction(
@@ -76,6 +86,7 @@ async function sendFeedbackFromSettings(expectedMode) {
     mode: expectedMode,
     pillCount,
     previewOk,
+    ...cardLayout,
     settingsStillOpen,
     focusInsideSettings,
     payloadMode: lastReport?.metadata?.mode,
@@ -94,12 +105,12 @@ await claimLandlet(page);
 await page.waitForTimeout(500);
 await sendFeedbackFromSettings('build');
 
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
 await sendFeedbackFromSettings('shop');
 
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
@@ -107,7 +118,7 @@ await page.waitForSelector('#seller-modal:not(.visible)', { state: 'attached', t
 await sendFeedbackFromSettings('sell');
 
 const pass = results.length === 3 && results.every((r) => (
-  r.pillCount === 0 && r.previewOk && r.settingsStillOpen && r.focusInsideSettings
+  r.pillCount === 0 && r.previewOk && r.settingsHidden && r.descriptionOnScreen && r.submitOnScreen && r.settingsStillOpen && r.focusInsideSettings
   && r.payloadMode === r.mode && r.screenshotBytes > 1000
   && r.sampleMode === r.mode && r.sampleHasCamera
 )) && errors.length === 0;

@@ -3,14 +3,14 @@
 // field never move the avatar, and Space still belongs to the flight toggle.
 // Drives real key presses in a real browser and reads the avatar's position
 // and camera yaw.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Keyboard Movement Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 

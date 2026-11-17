@@ -20,7 +20,7 @@
 // without a real DIDIT_API_KEY (see voice-chat-core.test.mjs's own header
 // comment for the full reasoning).
 import { chromium } from 'playwright';
-import { chooseIdentity, finish } from './helpers.mjs';
+import { chooseIdentity, finish, goToMode } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -85,7 +85,7 @@ await page.route('**/api/voice/friend-channels*', async (route) => {
 // so every signal/friend-channels hit below can only come from the
 // setInterval actually under test.
 await page.reload({ waitUntil: 'networkidle' });
-await page.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(page, 'build');
 await page.waitForLoadState('networkidle', { timeout: 15000 });
 
 // Baseline: visible (document.hidden defaults to false), the loop should

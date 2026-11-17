@@ -281,6 +281,29 @@ Nothing bounces, snaps or slides in from off screen.
 - A confirmation that can be missed (see AGENTS.md), however light the dress.
 - A new popup for something that could be said in the world.
 
+## The bud
+
+The owner chose direction C, "one bud" (#3648). In Shop the only standing
+interface is one small, slowly glowing bud in a corner, carrying the
+higglehaven logo; until it has been opened once it pulses and says Menu.
+Tapping it unfolds petals; a petal runs an action or opens a leaf (a soft sheet
+by the bud, close control upper right, one at a time). Everything else is done
+by touching the world. The module is `src/ui/bud.js`:
+
+- `registerBudPetals(mode, [{ id, label, run }])`: one definition per mode
+  (`shop`, `build`, `sell`). A mode with none has no bud, and keeps its old
+  controls until its own leaf. `body[data-mode]` says which mode is showing and
+  `body[data-bud]` is `on` when that mode has the bud.
+- `openLeaf({ id, title, render })` and `closeLeaf()`: one leaf at a time;
+  `render(bodyEl)` fills it. Escape or the close control closes it.
+- `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
+  unread mark; it clears when none are left.
+- The bud is the existing account toggle and its petals are the buttons of the
+  account panel, so a row there is already a petal. Do not rebuild a panel to
+  make a petal; move it, and remove the old control in the same change.
+- The glow, never a scale, is the bud's breath: a control that moves is hard to
+  tap, and cannot be clicked by a test.
+
 ## Where the clutter is
 
 `node scripts/design-census.mjs` counts it from the stylesheet. "In use" is the
