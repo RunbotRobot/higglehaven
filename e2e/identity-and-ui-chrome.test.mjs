@@ -81,7 +81,7 @@ console.log('Settings modal close is an X button (should be true):', settingsClo
 await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
-// --- Catalog picker: opaque background, hides product-info while open (#96, #97) ---
+// --- Catalog picker: opaque background, hides the selected item's card while open (#96, #97; the card replaced the #product-info name pill, #3689) ---
 // Already logged in from the Sell signup above — entering Build mode now
 // resolves the same account's builder profile silently, no login prompt.
 await goToMode(page, 'build');
@@ -117,10 +117,11 @@ console.log('Settings tab active by default while in Build mode (should be "buil
 await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
-// #product-info no longer shows an idle "Tap a product to inspect it"
-// hint (removed — permanent screen space spent stating the obvious), so
-// there's nothing to hide/reveal here unless something's actually
-// selected first. Place and select a Tree to get it showing real content.
+// Nothing shows an idle "Tap a product to inspect it" hint (removed —
+// permanent screen space spent stating the obvious), so there's nothing
+// to hide/reveal here unless something's actually selected first. Place
+// and select a Tree: its card (#item-card, titled with the item's name)
+// is what the open catalog picker must step aside from.
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
@@ -128,13 +129,13 @@ await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(800);
 
-const hintVisibleBeforePicker = await page.locator('#product-info').isVisible();
-const hintTextBeforePicker = await page.textContent('#product-info');
+const hintVisibleBeforePicker = await page.locator('#item-card').isVisible();
+const hintTextBeforePicker = await page.textContent('#item-card-name');
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
-const hintHiddenWhilePickerOpen = await page.locator('#product-info').isHidden();
-console.log('product-info visible before reopening Add Item, showing the placed Tree (should be true):', hintVisibleBeforePicker, hintTextBeforePicker);
-console.log('product-info hidden while catalog picker is open (should be true):', hintHiddenWhilePickerOpen);
+const hintHiddenWhilePickerOpen = await page.locator('#item-card').isHidden();
+console.log('item card visible before reopening Add Item, showing the placed Tree (should be true):', hintVisibleBeforePicker, hintTextBeforePicker);
+console.log('item card hidden while catalog picker is open (should be true):', hintHiddenWhilePickerOpen);
 
 const pickerBg = await page.locator('#catalog-picker').evaluate((el) => getComputedStyle(el).backgroundColor);
 console.log('catalog picker background (should be near-opaque, alpha close to 1):', pickerBg);
@@ -142,8 +143,8 @@ const pickerOpaque = /,\s*0?\.9\d*\s*\)/.test(pickerBg) || /,\s*1\s*\)/.test(pic
 
 await page.locator('#catalog-picker-close-btn').click();
 await page.waitForTimeout(300);
-const hintVisibleAfterClosingPicker = await page.locator('#product-info').isVisible();
-console.log('product-info visible again after closing catalog picker (should be true):', hintVisibleAfterClosingPicker);
+const hintVisibleAfterClosingPicker = await page.locator('#item-card').isVisible();
+console.log('item card visible again after closing catalog picker (should be true):', hintVisibleAfterClosingPicker);
 
 // --- Pale-green pill vs pale-yellow panel color split: the two token
 // buckets should resolve to genuinely different, non-default values, not
