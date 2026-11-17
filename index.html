@@ -101,7 +101,6 @@
     <!-- #3529: the minimised panel. A small pill at the left edge, clear of the
          joysticks, the fly button and the mode buttons; the conversation stays
          open and the pill says when a reply has come in. -->
-    <button id="assistant-chat-pill" type="button" hidden></button>
     <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
          voice chat's mic toggle. Same live trustTier-driven visibility as
          #shop-nearby-chat-btn above (src/shop/voiceChat.js's own
@@ -139,6 +138,8 @@
                from the Friends panel) -- distinct from friends-badge's own
                meaning (pending incoming friend requests). -->
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
+          <!-- #3653: only while a conversation is minimised: its way back, now the pill is gone. -->
+          <button id="assistant-menu-btn" type="button" hidden>Assistant</button>
           <button id="my-purchases-btn" type="button">My Purchases</button>
           <button id="my-lands-btn" type="button">My Lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
