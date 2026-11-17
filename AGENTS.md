@@ -1729,6 +1729,13 @@ shard, so one flaky file costs about one file's runtime rather than
 doubling the shard; a shard that fails before reporting which files
 failed (a build error, a crash) still retries in full.
 
+**A red `main` announces itself (#3727).** When the CI run on a push to `main` fails,
+the `main-red-alert` job (`scripts/main-red-alert.mjs`) opens one GitHub issue titled
+"main is red: <files>" naming the failing test files, updates it while `main` stays red, and
+closes it when a run on `main` is green again. If you see one open, fix `main` first, or tell
+the session already on it: a PR whose run fails on exactly those files is not at fault, and
+another two-hour run on it cannot pass.
+
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 
 Issue #220 sat invisible to the whole fleet for over a day, not because
