@@ -11,7 +11,7 @@
 // this bug class.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openMyProducts } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -110,7 +110,7 @@ await page.route('**/api/sellers/*/feedback', async (route) => {
 
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
-await page.click('#seller-showcase-manage-btn'); // fires the slow GET #1 (still 1 rating, 5.0 average)
+await openMyProducts(page); // fires the slow GET #1 (still 1 rating, 5.0 average)
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 // A second rating lands while GET #1 is still in flight -- averaging to 4.0
@@ -127,7 +127,7 @@ console.log('second feedback created while GET #1 was still in flight (should be
 // GET #2 that should win, showing both ratings' 4.0 average.
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
-await page.click('#seller-showcase-manage-btn');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, null, { timeout: 30000 });
 
