@@ -152,6 +152,8 @@ console.log('Undo enabled before removing the level (should be true — real his
 // only needs #1077's busy-gate behavior, not #1078's.
 await page.mouse.click(30, 700);
 await page.waitForTimeout(300);
+// #3690: opening the bud for Add item put the Levels leaf away; bring the level controls back.
+await openLevelMenu(page);
 
 // Remove the level (it's outermost, so this should succeed), then dig one
 // down from ground instead.

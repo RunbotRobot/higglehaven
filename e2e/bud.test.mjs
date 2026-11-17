@@ -75,13 +75,14 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('#settings-close-btn');
 
-// Sell keeps its own top row until it has petals (Build got them in #3688).
+// Sell has the bud too (#3699), as Build does (#3688): the old top row and the gear are gone there.
+// (Main's version of this check still expected Sell to keep its row, red since both landed.)
 await page.reload();
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
 await goToMode(page, 'sell');
 await page.waitForSelector('body[data-mode="sell"]', { timeout: 30000 }); // the mode is decided after the page first paints
-await page.waitForSelector('#mode-nav', { state: 'visible', timeout: 20000 });
+await page.waitForSelector('body[data-bud="on"]', { timeout: 20000 });
 const inBuild = {
   budOff: await page.evaluate(() => document.body.dataset.bud),
   modeNav: await shown('#mode-nav'),
@@ -96,6 +97,6 @@ const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark 
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload
   && leafInfo.title === 'How to move' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
   && leafClosedByEscape && leafClosedByX
-  && inBuild.budOff === 'off' && inBuild.modeNav && inBuild.wordmark && inBuild.gear
+  && inBuild.budOff === 'on' && !inBuild.modeNav && !inBuild.wordmark && !inBuild.gear
   && errors.length === 0;
 await finish(browser, { pass, label: 'bud (#3649)', errors });

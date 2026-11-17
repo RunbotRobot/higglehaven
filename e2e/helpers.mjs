@@ -387,6 +387,8 @@ export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
     if (BUD_PETALS.has(selector) && !(await page.locator(selector).isVisible())) {
+      // #3690: an open leaf (Levels) sits over the bud and swallows the tap on it; put it away first.
+      if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
       await page.click('#account-menu-toggle');
       await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
     }
