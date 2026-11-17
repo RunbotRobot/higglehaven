@@ -5677,75 +5677,208 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
-      /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
-         tapped product, same modal shell/reasoning as #sign-posts-modal
-         above — replacing the old #shop-product-info/#shop-buy-hint/
-         #shop-review-hint/#shop-return-policy-link pills, removed in
-         #1813 once this modal covered everything they did. */
-      #shop-product-preview-modal {
+      /* #3651 (leaf 3/9 of #3648, the bud): the card of a tapped product. It
+         blooms beside the product in the world and follows it as the view
+         moves (src/shop/productCard.js writes --card-x/--card-y and the
+         pointer's place every frame the card is open), so nothing behind it is
+         dimmed or locked. It replaced #shop-product-preview-modal (#1811),
+         which covered the world with a sheet and drew a second 3D copy of
+         the product. Values are direction C's (public/design-directions/
+         c.css, .bloom and .buy). All its text is selectable (standing
+         decision "Any text a user can read, they can copy"); only the mist
+         drawn around it is not, and the mist holds no text. */
+      #product-card {
         position: fixed;
-        inset: 0;
-        z-index: 20;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
-      }
-      #shop-product-preview-modal.visible {
-        display: flex;
-      }
-      #shop-product-preview-modal-content {
-        position: relative;
-        width: 100%;
-        max-width: 360px;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-2xl);
-        padding: var(--space-3xl);
+        left: 0;
+        top: 0;
+        z-index: 15;
+        width: min(240px, calc(100vw - 24px));
+        box-sizing: border-box;
+        padding: var(--space-xl) var(--space-2xl) var(--space-2xl);
+        border-radius: var(--radius-bloom);
+        background: linear-gradient(160deg, rgb(255 255 255 / 0.82), rgb(var(--panel-rgb) / 0.86));
+        box-shadow: var(--shadow-leaf);
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        transform: translate3d(var(--card-x, 0px), var(--card-y, 0px), 0);
+        transform-origin: left center;
+        user-select: text;
+        -webkit-user-select: text;
         display: flex;
         flex-direction: column;
-        gap: var(--space-md);
+        gap: var(--space-xs);
       }
-      /* Same sizing/background idiom as .seller-preview-canvas (Sell mode's
-         own on-demand product preview) — a fixed height rather than an
-         aspect-ratio box, since the modal's own max-width already bounds
-         the other dimension. */
-      #shop-product-preview-canvas {
-        width: 100%;
-        height: 220px;
-        border-radius: var(--radius-lg);
-        background: rgb(var(--ink-rgb) / 0.06);
-        touch-action: none;
+      #product-card[data-side='left'] {
+        transform-origin: right center;
       }
-      #shop-product-preview-info {
+      #product-card[data-side='above'] {
+        transform-origin: center bottom;
+      }
+      #product-card[data-side='below'] {
+        transform-origin: center top;
+      }
+      #product-card[hidden] {
+        display: none;
+      }
+      #product-card-name {
+        font-size: var(--text-3xl);
+        font-weight: var(--weight-semibold);
+        line-height: var(--leading-tight);
+        padding-right: var(--space-3xl);
+        overflow-wrap: anywhere;
+      }
+      #product-card-price {
         font-size: var(--text-md);
-        color: var(--pill-text);
+        color: var(--pill-text-soft);
       }
-      /* #1812: the Buy/Review/Return-Policy actions, migrated in from the
-         original #shop-buy-hint/#shop-review-hint/#shop-return-policy-link
-         pills (removed in #1813) -- same rounded-pill-button look as
-         #sign-posts-unflag-btn's own rule above, laid out in a row rather
-         than stacked since all three can be visible together. Hidden by
-         default (no .visible), toggled by the same updateReviewFade gating
-         their pill-era originals used. */
-      #shop-product-preview-actions {
+      #product-card-price:empty,
+      #product-card-notes:empty,
+      #product-card-state:empty {
+        display: none;
+      }
+      #product-card-notes,
+      #product-card-state {
+        font-size: var(--text-sm);
+        color: var(--pill-text-soft);
+      }
+      #product-card-actions {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: center;
+        margin-top: var(--space-xs);
+      }
+      /* The one yellow Buy petal. Hidden unless the product is for sale and the
+         shopper stands next to it (productCardState in productCardLayout.js);
+         src/shop/worldSprites.js sets .visible every frame, as it did for the
+         old panel's Purchase button. */
+      #product-card-buy-btn {
+        display: none;
+        flex: 1;
+        padding: var(--space-md) 0;
+        border: none;
+        border-radius: var(--radius-petal);
+        background: var(--petal-yellow);
+        color: var(--ink);
+        font: var(--weight-semibold) var(--text-lg)/var(--leading-normal) var(--font-sans);
+        box-shadow: var(--shadow-petal);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #product-card-buy-btn.visible {
+        display: block;
+      }
+      #product-card-buy-btn:disabled {
+        opacity: 0.6;
+      }
+      #product-card-more-btn,
+      #product-card-more button {
+        padding: var(--space-xs) var(--space-xl);
+        border: none;
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #product-card-more {
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-sm);
       }
-      #shop-product-preview-actions button {
+      #product-card-more[hidden] {
         display: none;
-        padding: var(--space-xs) var(--space-xl);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
-      #shop-product-preview-actions button.visible {
+      /* Review and Return Policy only exist for a product the shopper can reach
+         (the same range gate as Buy), so they stay out of the way otherwise. */
+      #product-card-review-btn,
+      #product-card-return-policy-btn {
+        display: none;
+      }
+      #product-card-review-btn.visible,
+      #product-card-return-policy-btn.visible {
         display: inline-block;
+      }
+      #product-card-close-btn {
+        position: absolute;
+        top: var(--space-xs);
+        right: var(--space-xs);
+      }
+      /* A small pointer toward the product, on the side facing it, drawn fully
+         outside the card. Gone when the product is off screen: there is nothing
+         to point at. */
+      #product-card::before {
+        content: '';
+        position: absolute;
+        top: calc(var(--pointer-y, 24px) - 8px);
+        width: 0;
+        height: 0;
+        border: 8px solid transparent;
+      }
+      #product-card[data-side='right']::before {
+        left: -15px;
+        border-right-color: rgb(var(--panel-rgb) / var(--alpha-strong));
+      }
+      #product-card[data-side='left']::before {
+        right: -15px;
+        border-left-color: rgb(var(--panel-rgb) / var(--alpha-strong));
+      }
+      /* Above or below the product (a product in the middle of a narrow screen
+         has no room beside it): the pointer is on the card's bottom or top edge. */
+      #product-card[data-side='above']::before {
+        top: auto;
+        bottom: -15px;
+        left: calc(var(--pointer-x, 24px) - 8px);
+        border-top-color: rgb(var(--panel-rgb) / var(--alpha-strong));
+      }
+      #product-card[data-side='below']::before {
+        top: -15px;
+        left: calc(var(--pointer-x, 24px) - 8px);
+        border-bottom-color: rgb(var(--panel-rgb) / var(--alpha-strong));
+      }
+      #product-card[data-edge='true']::before {
+        display: none;
+      }
+      /* Things arrive in the world through fog; nothing pops in (standing
+         decision, #3397). The card blooms (direction C's bloom-in) out of a
+         soft mist: it starts small, blurred and clear, and resolves to itself
+         while the mist around it thins and spreads. The timeline is the
+         bloom's own (--motion-bloom), shorter than a landlet's arrival: a tap
+         is not a load. */
+      #product-card[data-state='blooming'] {
+        animation: product-card-bloom var(--motion-bloom) var(--ease-bloom) both;
+      }
+      #product-card[data-state='blooming']::after {
+        content: '';
+        position: absolute;
+        inset: -28px;
+        border-radius: var(--radius-round);
+        background: radial-gradient(closest-side, rgb(var(--pill-rgb) / var(--alpha-strong)), rgb(var(--pill-rgb) / 0));
+        pointer-events: none;
+        z-index: -2;
+        animation: product-card-mist calc(var(--motion-bloom) * 1.4) ease-out both;
+      }
+      @keyframes product-card-bloom {
+        from { opacity: 0; filter: blur(10px); scale: 0.6; }
+        to { opacity: 1; filter: blur(0); scale: 1; }
+      }
+      @keyframes product-card-mist {
+        from { opacity: 1; scale: 0.7; }
+        to { opacity: 0; scale: 1.35; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #product-card[data-state='blooming'] {
+          animation: product-card-fade 0.25s linear both;
+        }
+        #product-card[data-state='blooming']::after {
+          display: none;
+        }
+        @keyframes product-card-fade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
       }
       /* #1150's "My Lands" list — same shell/reasoning as #calendar-events-modal
          and its rules just above, opened from the account-menu gear icon's

@@ -7149,20 +7149,21 @@ unconditionally (`registerShopReview`, keyed by the instance's underlying
 `rebuildReviewSprites` mirrors the sign/calendar machinery exactly, reusing
 `makeSignPostSprite`/`SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/
 `SIGN_MAX_VISIBLE_POSTS` for the sprite fade. The "Rate this Product"
-action lives as a button inside the isolated product preview modal
-(`#shop-product-preview-review-btn`, see "Shop-side: seeing a price"
-below and #1809/#1811-#1813) rather than its own floating pill — #1813
-removed the original `#shop-review-hint` element once the modal covered
-everything it did.
-`#shop-product-preview-review-btn` is NOT proximity-driven — an earlier
+action lives as a button inside the tapped product's card
+(`#product-card-review-btn`, under the card's "More" petal; see "Shop-side:
+seeing a price" below and #3651, which replaced the isolated product preview
+modal of #1809/#1811-#1813 with a card that blooms beside the product)
+rather than its own floating pill — #1813 removed the original
+`#shop-review-hint` element once the modal covered everything it did.
+`#product-card-review-btn` is NOT proximity-driven — an earlier
 version was, but the owner flagged that as noisy (N42): since every
 instance is reviewable, a purely-proximity hint would show near almost
 anything a shopper walks up to. `updateReviewFade` gates its visibility
-(and the preview modal's Buy button, below) on `shopTappedProduct`
-instead — the same tap-to-inspect state that opens the preview modal in
+(and the card's Buy button, below) on `shopTappedProduct`
+instead — the same tap-to-inspect state that opens the card in
 the first place — so a shopper has to deliberately tap the product first,
 still re-checking `SIGN_INTERACT_RADIUS_M` every frame so walking away
-from a tapped product hides the modal's action buttons again.
+from a tapped product hides the card's action buttons again.
 
 Each placement fetches its product's review list independently rather than
 sharing a per-template cache across every loaded instance of the same
@@ -7379,7 +7380,7 @@ review averages are already shown" — a full shopper-facing "my orders"
 history to leave feedback from later doesn't exist in this app at all
 (see "Product reviews"' own `#454` comment on why — the server never
 stores a raw token/receipt a shopper could come back to), so submission
-originally happened immediately after the preview modal's Buy button
+originally happened immediately after the product's Buy button
 completed a purchase. **#3256 removed that immediate prompt** (too early
 to judge accuracy, timeliness or communication); feedback is now left
 only from My Purchases' per-row "Rate this seller" action (#3198). The seller's
@@ -7387,7 +7388,7 @@ own aggregate — `#seller-feedback-summary` in the Seller modal, right
 below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
 seller has at least one real rating, same "nothing to show yet stays
-invisible" convention the preview modal's own info text documents.
+invisible" convention the product card's own notes document.
 
 **#1975's `PATCH`/author-`DELETE` above are API-only for the same reason —
 no frontend wiring in this PR.** The structural gap this section's own
@@ -7395,7 +7396,7 @@ first paragraph already describes (no "my orders" page, no receipt to come
 back to) applies just as much to editing/deleting feedback already left as
 it does to leaving it in the first place (historical: the then-only
 entry point fired exactly once, immediately after a purchase, with no
-later re-entry point the way the preview modal's Review button offers for product reviews
+later re-entry point the way the product card's Rate this Product petal offers for product reviews
 (tap the same in-world product again any time)). That gap is closed: My
 Purchases (#3198) now offers leave/edit/delete per purchase.
 
@@ -8898,12 +8899,16 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 
 ### Frontend wiring
 
-Shop mode's isolated product preview modal (its action buttons' visibility
-is driven by `updateReviewFade` in `src/main.js`, shared with "Product
-reviews" and "Product pricing" above — see "Product reviews"' own note on
-why this is tap-driven, not proximity) gains a "Purchase" button
-(`#shop-product-preview-buy-btn`, `handleShopProductBuyClick`), shown only
-when the tapped instance's template has a price set. Clicking it
+Shop mode's product card (#3651; the isolated product preview modal before
+it; its action buttons' visibility is driven by `updateReviewFade` in
+`src/shop/worldSprites.js`, shared with "Product reviews" and "Product
+pricing" above — see "Product reviews"' own note on why this is
+tap-driven, not proximity, and `productCardState` in
+`src/shop/productCardLayout.js` for exactly when each petal shows) has a
+yellow "Buy" button (`#product-card-buy-btn`, `handleShopProductBuyClick`),
+shown only when the tapped instance's template has a price set, is not a
+test model and is not out of stock (`stockQuantity` 0), and the shopper
+stands within `SIGN_INTERACT_RADIUS_M` of it. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
 the response is an already-completed `purchase` (the simulated path),
 that's the whole flow — same as before this feature existed. If it's
@@ -8992,7 +8997,7 @@ manually instead" convention this section's own "Simulated purchases"
 testing note above already states for product reviews/pricing) — so
 this file instead uses one small e2e-only hook
 (`window.__testTapShopProductByInstanceId`, `src/main.js`) to open the
-real product-preview modal for a known instanceId once it's in range,
+real product card (#3651) for a known instanceId once it's in range,
 same "always inert unless a test calls it" convention as this suite's
 other `window.__test*` hooks. Everything after that point runs for real.
 Same `REAL_STRIPE_TEST_FILES`-gated credential wiring and `SKIP:`-not-fail
@@ -9140,10 +9145,10 @@ a shopper about it before they bought — per the owner's own Control Room
 direction, this closes that gap with a plain-language disclosure, entirely
 client-side (no new route, no schema change).
 
-A "Return Policy" button inside the preview modal
-(`#shop-product-preview-return-policy-btn`, `handleShopReturnPolicyClick`)
-shares that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
-the modal's own "Purchase" button (see "Shop-side: seeing a
+A "Return Policy" button inside the product card's "More" petal
+(`#product-card-return-policy-btn`, `handleShopReturnPolicyClick`)
+shares that same tap-gated `shopTappedProduct` visibility state as
+the card's own "Buy" button (see "Shop-side: seeing a
 price" above) — both toggle together off one shared `canBuy` boolean in
 `updateReviewFade()`, so the button only ever appears once a shopper has
 actually tapped a buyable product. Clicking it opens `#refund-policy-modal`
@@ -9161,10 +9166,10 @@ no-returns product's own preview-modal info line discloses that up front
 too, independent of the general 99%-refund modal.
 
 **Testing note.** Verified manually via Playwright against the running
-dev server, for the same reason the preview modal's own tap-to-show
+dev server, for the same reason the product card's own tap-to-show
 behavior is (see "Testing note" above): this suite has no real 3D
 camera/raycast simulation to drive the tap-gating honestly. Confirmed
-`#shop-product-preview-return-policy-btn` and `#refund-policy-modal` both
+`#product-card-return-policy-btn` and `#refund-policy-modal` both
 start hidden, that programmatically invoking the button's click handler
 (standing in for the real tap) opens the modal showing the "Refund Policy"
 heading and its 99%-mentioning copy, that the close button hides it
@@ -11741,29 +11746,40 @@ the field is cleared back to blank, not `0`.
 
 ### Shop-side: seeing a price
 
-#1809/#1811: tapping a placed instance opens an isolated 3D product
-preview modal (`#shop-product-preview-modal`) showing the product's model
-rendered in its own self-contained Three.js scene, plus a non-interactive
-text line (`#shop-product-preview-info`) with the product's name and
-price (`"<name> — <price>"`, or just `"<name>"` when unpriced) — reusing
-Sell mode's own existing on-demand preview pattern (`showAxisPreview`)
-rather than inventing a new one. This replaced an earlier, proximity-
-tracked design (nearest in `SIGN_INTERACT_RADIUS_M`, the same way Product
-Reviews' own hint originally was) that read as noisy — a name/price popup
-appearing the instant a shopper walked near anything, whether or not they
-cared. Driven by a plain raycast click/tap handler against every loaded
-`shopReviews` mesh (the same "walk up to whichever registered root mesh
-is this hit's ancestor" pattern Build mode's own click handler uses
-against `productMeshes`, see `findTappedShopProduct`): tapping a product
-opens the modal, tapping anything else (ground, sky, empty space) closes
-it. The modal's own Review/Buy/Return-Policy buttons
-(`#shop-product-preview-review-btn`/`-buy-btn`/`-return-policy-btn`,
-#1812) share this same `shopTappedProduct` state (see "Product reviews"
-above) — the owner flagged the same noisiness for the pill-era versions of
-these three as well (N42), so all of it is tap-gated. #1813 removed the
-original floating `#shop-product-info`/`#shop-review-hint`/
-`#shop-buy-hint`/`#shop-return-policy-link` pills once the modal covered
-everything they did.
+#1809/#1811, replaced by #3651 (leaf 3/9 of the bud, #3648): tapping a placed
+instance makes the product's card (`#product-card`, `src/shop/productCard.js`)
+bloom BESIDE it, through fog. It is not a modal: nothing is dimmed or locked,
+and the world keeps moving behind it. The card is anchored to the product in
+the scene (every frame it is open, the product's centre is projected through
+the camera and `placeProductCard` in `src/shop/productCardLayout.js` puts the
+card on the product's right, or its left near the right edge, never over it;
+a product off screen or behind the camera leaves the card pinned on screen with
+no pointer). It shows the name and price (`#product-card-name`,
+`#product-card-price`; `productInfoParts` in `src/shop/worldSprites.js`), every
+disclosure a buyer must see before buying as always-visible notes
+(`#product-card-notes`: test model, digital good, ships to the United States
+only, no returns, animation compatibility), and one yellow Buy petal
+(`#product-card-buy-btn`). "More" (`#product-card-more-btn`) opens Rate this
+Product and Return Policy. When it offers no Buy petal it says why in plain
+words (`#product-card-state`): "Walk closer to buy this.", "Out of stock.",
+"Not for sale.", or the testing-model line. `productCardState` is the one place
+that decides this. This replaced the earlier isolated 3D preview modal (a
+second copy of the product in its own Three.js scene), and before that a
+proximity-tracked design (nearest in `SIGN_INTERACT_RADIUS_M`, the same way
+Product Reviews' own hint originally was) that read as noisy. Driven by a plain
+raycast click/tap handler against every loaded `shopReviews` mesh (the same
+"walk up to whichever registered root mesh is this hit's ancestor" pattern
+Build mode's own click handler uses against `productMeshes`, see
+`findTappedShopProduct`): tapping a product opens the card, tapping anything
+else (ground, sky, empty space), the card's close button or Escape folds it
+away. The card's Review/Buy/Return-Policy buttons share this same
+`shopTappedProduct` state (see "Product reviews" above) — the owner flagged the
+same noisiness for the pill-era versions of these three as well (N42), so all of
+it is tap-gated. #1813 removed the original floating `#shop-product-info`/
+`#shop-review-hint`/`#shop-buy-hint`/`#shop-return-policy-link` pills once the
+modal covered everything they did. Not yet on the card (follow-ups under
+#3651): the seller's name, and a plain "you already own this" state; the
+client has neither today.
 
 ### Shop-side: highlighting the tapped product
 
@@ -11777,7 +11793,7 @@ into a `MeshBasicMaterial` with no `emissive` property at all, so a tint-
 based highlight silently does nothing on them. `updateReviewFade` tracks
 which product currently carries the highlight (`shopHighlightedProduct`)
 and adds/removes it exactly alongside the same `tappedInRange` check that
-already gates the preview modal's own Buy/Review buttons — so it appears the
+already gates the product card's own Buy/Review buttons — so it appears the
 moment a product is tapped while in `SIGN_INTERACT_RADIUS_M`, and clears
 either on a follow-up tap elsewhere or on walking out of range, without
 needing its own separate state machine. The landlet-unload cleanup path
@@ -11908,11 +11924,12 @@ clearing it afterward. Unchecking and saving deletes the metadata key
 entirely rather than setting it `false` or `null` — the same clear-to-
 absent convention flooring's own toggle uses.
 
-The preview modal's info text (`#shop-product-preview-info`,
-`productInfoText` — see "Product pricing" above) appends the disclosure
+The product card's notes (`#product-card-notes`, built from
+`productInfoParts`; `productInfoText` joins the same parts into the old
+one-line form — see "Product pricing" above) include the disclosure
 text in parentheses when the tapped instance is a digital good — a
-shopper tapping one sees `"<name> — <price> (<disclosure>)"` rather than
-assuming every placed item is a physical one they could pick up.
+shopper tapping one sees `"(<disclosure>)"` under the name and price rather
+than assuming every placed item is a physical one they could pick up.
 
 A prohibited-content rejection surfaces through the exact same upload-flow
 error path every other validation failure already does (`setUploadStatus`

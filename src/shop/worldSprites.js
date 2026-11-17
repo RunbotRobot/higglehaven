@@ -67,12 +67,13 @@ import {
 import { animationCompatibility, animationCompatibilityLabel } from './mode.js';
 // #2628: spawnConfettiBurst now lives in src/shop/productCheckout.js.
 import { spawnConfettiBurst } from './productCheckout.js';
+// #3651: the tapped product's card (replacing the old preview modal's own
+// buttons) is told here, every time the range/priced gate changes, which of
+// its petals to show.
+import { syncProductCardActions } from './productCard.js';
 
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
-const shopProductPreviewReviewBtn = document.getElementById('shop-product-preview-review-btn');
-const shopProductPreviewBuyBtn = document.getElementById('shop-product-preview-buy-btn');
-const shopProductPreviewReturnPolicyBtn = document.getElementById('shop-product-preview-return-policy-btn');
 
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") --
 // shopper-authored posts fade in as the camera approaches a sign and back
@@ -468,50 +469,45 @@ export function updateReviewFade() {
   if (tappedInRange !== shopReviewHintsVisible || shopTappedProduct !== shopReviewHintsProduct) {
     shopReviewHintsVisible = tappedInRange;
     shopReviewHintsProduct = shopTappedProduct;
-    shopProductPreviewReviewBtn.classList.toggle('visible', tappedInRange);
-    // Only a priced product has anything to "buy" — an unpriced one (the
-    // common case for most placeholder catalog items) shows no buy button at
-    // all rather than one that would just 400 on click. #1946 (owner
-    // correction): a test/demo model is never purchasable either, even on
-    // the rare chance it somehow carried a price — same "hide the
-    // affordance entirely" treatment as the unpriced case, not a disabled
-    // button. tappedInRange's own !!shopTappedProduct check (above) is what
-    // makes the short-circuit here safe -- shopTappedProduct can be null
-    // while tappedInRange is false.
-    const canBuy = tappedInRange
-      && shopTappedProduct.mesh.userData.template.priceCents != null
-      && !shopTappedProduct.mesh.userData.template.isTestModel;
-    shopProductPreviewBuyBtn.classList.toggle('visible', canBuy);
-    // #659: same gate as the Buy button just above — a return policy only
-    // matters for something with a price to actually refund.
-    shopProductPreviewReturnPolicyBtn.classList.toggle('visible', canBuy);
+    // #3651: which petals the card shows is decided in one place
+    // (productCardState, src/shop/productCardLayout.js), not here: Buy only
+    // for a priced, in-stock, non-test product the shopper stands next to
+    // (the old rules, #1946/#994, plus out of stock), Rate and Return Policy
+    // for one they can reach. The card says in plain words why it offers
+    // nothing when it offers nothing.
+    syncProductCardActions(shopTappedProduct, tappedInRange);
   }
 }
 
-// Shared by main.js's own tap handler and formerly by proximity — the
-// actual "name — price (disclaimer)" line the preview modal
-// (#shop-product-preview-info) shows once tapped.
-export function productInfoText(template) {
+// #3651: the tapped product's facts, split the way its card shows them: the
+// name and price lead, and every disclosure (test model, digital good,
+// ships to the United States only, no returns, animation compatibility) is a
+// note under them, always visible, never hidden behind a petal -- they are
+// what a buyer must see before saying yes (docs/SPEC.md §4/§5). The
+// "name — price (note) (note)" line the old preview modal showed is
+// productInfoText below, built from these same parts, so the wording cannot
+// drift.
+export function productInfoParts(template) {
   const {
     name, priceCents, metadata, category, skeletonSignature, isTestModel,
   } = template;
-  let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+  const notes = [];
   // #1946 (owner correction): a test/demo model must read as obviously not
   // a real product wherever a shopper sees it, same tap-to-inspect
   // disclosure slot as the digital-goods/domestic-only/no-returns notes
-  // below -- shown first since it overrides the ordinary "is this for
-  // sale" assumption the rest of this text otherwise implies.
-  if (isTestModel) text += ' (Testing Model — not a real product, not for sale)';
+  // below -- shown first since it overrides the ordinary "is this for sale"
+  // assumption the rest of this text otherwise implies.
+  if (isTestModel) notes.push('Testing Model — not a real product, not for sale');
   // The "clear higglehaven-controlled disclaimer" digital goods require
   // (docs/SPEC.md §4) — shown to the shopper right where they'd otherwise
   // assume every placed item is a physical one.
   const disclaimerKey = metadata?.digitalGoodDisclaimer;
-  if (disclaimerKey) text += ` (${DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]})`;
+  if (disclaimerKey) notes.push(DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]);
   // docs/SPEC.md §5's shipping disclosure ("ships to United States only")
   // — same tap-to-inspect treatment as the digital-goods disclaimer above,
   // shown right where a shopper would otherwise assume every item ships
   // internationally like the rest of the catalog.
-  if (metadata?.domesticOnly) text += ' (ships to United States only)';
+  if (metadata?.domesticOnly) notes.push('ships to United States only');
   // #659 (owner, Control Room, 2026-09-11): a shopper had no way to see a
   // product's own return policy before buying it — this is the same
   // tap-to-inspect disclosure slot the digital-goods/domestic-only notes
@@ -522,14 +518,27 @@ export function productInfoText(template) {
   // (see the Return Policy link this same tap also reveals) already
   // covers the default case, and repeating "returns accepted" on every
   // single product would just be noise.
-  if (metadata?.noReturns) text += ' (no returns)';
+  if (metadata?.noReturns) notes.push('no returns');
   // #1164 (sub-issue of #1161): same tap-to-inspect disclosure slot as the
   // notes above, so a shopper sees whether a standalone animation will
   // actually play against their own currently-equipped avatar before
   // buying it, rather than discovering that only after purchase.
   if (category === 'animation') {
-    text += ` (${animationCompatibilityLabel(animationCompatibility(skeletonSignature, shopEquippedAvatarSkeletonSignature))})`;
+    notes.push(animationCompatibilityLabel(animationCompatibility(skeletonSignature, shopEquippedAvatarSkeletonSignature)));
   }
+  return {
+    name,
+    priceText: priceCents == null ? null : formatPriceCents(priceCents),
+    notes,
+  };
+}
+
+// Shared by main.js's own tap handler and formerly by proximity — the
+// actual "name — price (disclaimer)" line for a tapped product.
+export function productInfoText(template) {
+  const { name, priceText, notes } = productInfoParts(template);
+  let text = priceText == null ? name : `${name} — ${priceText}`;
+  for (const note of notes) text += ` (${note})`;
   return text;
 }
 
