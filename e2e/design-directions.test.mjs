@@ -55,8 +55,26 @@ for (const [file, { signs, extra }] of Object.entries(scenes)) {
   check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${file} does not scroll sideways at phone width`);
 }
 
+// #3654: the plan page for Build in the bud (part of #3648): five moments over one 390x844 stage.
+{
+  const res = await page.goto(`${base}/c-build.html`, { waitUntil: 'load' });
+  check(res?.status() === 200, `c-build.html answers 200 (got ${res?.status()})`);
+  await page.waitForTimeout(800);
+  check(await page.locator('.moment-btn').count() === 5, 'c-build.html offers five moments');
+  const box = await page.locator('#stage').boundingBox();
+  check(box && Math.abs(box.width - 390) < 2 && Math.abs(box.height - 844) < 3, `c-build.html stage is drawn at 390x844 (${JSON.stringify(box)})`);
+  for (const moment of ['place', 'select', 'many', 'levels']) {
+    await page.click(`.moment-btn[data-moment="${moment}"]`);
+    await page.waitForTimeout(900);
+    check(await page.locator(`[data-moment-only="${moment}"] [data-ui], [data-moment-only="${moment}"][data-ui]`).first().isVisible(), `c-build.html moment ${moment} shows its own controls`);
+  }
+  check(/Covers/.test(await page.textContent('#cover')), 'c-build.html reports how much of the screen it covers');
+  check(await page.locator('style').count() === 0, 'c-build.html uses no <style> element (the policy refuses it)');
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'c-build.html does not scroll sideways at phone width');
+}
+
 // The pictures are served.
-for (const file of ['world-walk.jpg', 'world-product.jpg', 'world-settings.jpg', 'a-walk.jpg', 'a-product.jpg', 'a-settings.jpg', 'b-walk.jpg', 'b-product.jpg', 'b-settings.jpg', 'a.css', 'b.css', 'frame.css', 'frame.js', 'strip.css', 'strip.js']) {
+for (const file of ['world-walk.jpg', 'world-product.jpg', 'world-settings.jpg', 'a-walk.jpg', 'a-product.jpg', 'a-settings.jpg', 'b-walk.jpg', 'b-product.jpg', 'b-settings.jpg', 'a.css', 'b.css', 'frame.css', 'frame.js', 'strip.css', 'strip.js', 'c-build.css', 'c-build.js']) {
   const res = await page.request.get(`${base}/${file}`);
   check(res.status() === 200, `${file} is served (got ${res.status()})`);
 }

@@ -87,7 +87,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
-import { handleStripeWebhook, handleStripeV2Webhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
+import { handleStripeWebhook, handleStripeV2Webhook, handleCardSetupIntent, handleConfirmCard, handleCardRefusal } from './lib/stripe.js';
 import { classifyStripeRequirements, eventuallyDueOnly, stripeStepEventuallyDueOnly } from './lib/stripe-requirements.js';
 import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
 import { checkSchemaDrift } from './lib/schema-drift.js';
@@ -3177,6 +3177,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-card') {
     return handleConfirmCard(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'card-refusal') {
+    return handleCardRefusal(request, env, db);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'age-attest') {
     return handleAgeAttest(request, db);

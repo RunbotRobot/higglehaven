@@ -146,6 +146,22 @@ describe('Admin find-user search/detail (#2757)', () => {
       expect(result.response.status).toBe(404);
     });
 
+    it('records a Stripe-side card refusal and shows it to an admin (#3565)', async () => {
+      const anon = await api('/auth/card-refusal', { method: 'POST' });
+      expect(anon.response.status).toBe(401);
+      const builder = await signupBuilder('card-refusal-record');
+      const userId = await currentUserId(builder.sessionToken);
+      const before = await api('/auth/admin-user-detail?userId=' + encodeURIComponent(userId), adminSession());
+      expect(before.body.user.cardRefusal).toBeNull();
+      const post = (payload) => api('/auth/card-refusal', builder.session({
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+      }));
+      expect((await post({ code: 'card_declined', declineCode: 'insufficient_funds', type: 'card_error' })).response.status).toBe(200);
+      expect((await post({ code: 'Bad Code!<script>', type: 'card_error' })).response.status).toBe(200);
+      const after = await api('/auth/admin-user-detail?userId=' + encodeURIComponent(userId), adminSession());
+      expect(after.body.user.cardRefusal).toMatchObject({ code: 'card_error', declineCode: null, count: 2 });
+    });
+
     it('shows no seller profile for a plain signed-up account that never called /sellers/me (builder is always auto-provisioned at signup)', async () => {
       const email = `plain-account-${crypto.randomUUID()}@example.com`;
       const signedUp = await signup(email, TEST_PASSWORD, { username: 'plain-account-detail' });

@@ -219,6 +219,20 @@ export async function confirmCard(setupIntentId) {
   return user;
 }
 
+// #3565: tell the server Stripe refused a card. Best effort: never throws.
+export async function reportCardRefusal(error) {
+  try {
+    await requestJson('/auth/card-refusal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        code: error && error.code, type: error && error.type,
+        declineCode: error && error.decline_code,
+      }),
+    });
+  } catch { /* fail open */ }
+}
+
 // docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
 // via Didit — the higher trust tier, above the credit-card tier. Starts a
 // fresh Didit-hosted verification session; the frontend opens the

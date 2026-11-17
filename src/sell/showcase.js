@@ -86,6 +86,19 @@ let sellerShowcasePageLoadedListener = null;
 export function setSellerShowcasePageLoadedListener(fn) {
   sellerShowcasePageLoadedListener = fn;
 }
+// #3502: the largest half-diagonal (metres) of any page's ground, so the
+// world's enclosure (src/sell/worldView.js) can be sized once for every page
+// instead of being rebuilt as the seller pages through. Pure: the layout is
+// the same one loadSellerShowcasePage uses.
+export function sellerShowcaseMaxHalfDiagonalM() {
+  let max = 0;
+  for (const templates of sellerShowcasePages) {
+    if (templates.length === 0) continue;
+    const { groundWidth, groundDepth } = layoutSellerShowcasePage(templates);
+    max = Math.max(max, Math.hypot(groundWidth, groundDepth) / 2);
+  }
+  return max;
+}
 // Exported for src/main.js's own enterSellMode, which calls this directly
 // after setSellerShowcasePages (below).
 export async function loadSellerShowcasePage(pageIndex) {

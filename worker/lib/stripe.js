@@ -556,6 +556,27 @@ export async function claimCardFingerprint(db, fingerprint, userId) {
 // (the same "no real Stripe balance to ever hold against" reasoning
 // simulated purchases already document) rather than the 400/503 a real
 // deployment would ever actually see.
+// #3565: the browser reports a refusal Stripe itself returned from
+// confirmCardSetup (the server never sees those). Best effort and fail-open:
+// the client ignores any failure here. Only Stripe's own short codes are kept.
+const CARD_REFUSAL_CODE = /^[a-z0-9_]{1,64}$/;
+export async function handleCardRefusal(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `card-refusal:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
+  let body = {};
+  try { body = await request.json(); } catch { body = {}; }
+  const clean = (v) => (typeof v === 'string' && CARD_REFUSAL_CODE.test(v) ? v : null);
+  const code = clean(body && body.code) || clean(body && body.type) || 'unknown';
+  const decline = clean(body && body.declineCode);
+  await db.prepare(`
+    UPDATE users SET card_refusal_code = ?, card_refusal_decline_code = ?,
+      card_refusal_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      card_refusal_count = card_refusal_count + 1
+    WHERE user_id = ?
+  `).bind(code, decline, user.user_id).run();
+  return json({ ok: true });
+}
+
 export async function handleConfirmCard(request, env, db) {
   const user = await requireCurrentUser(request, db);
   // #948: same placement as #839's own precedent — see handleCardSetupIntent's

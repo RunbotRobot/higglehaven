@@ -682,6 +682,10 @@ settingsBtn.addEventListener('click', openSettingsModal);
 // #3302: Send feedback, in every mode. Opens the Submit Feedback modal over
 // Settings; closing it returns to Settings (see openFeedbackModal's returnTo).
 document.getElementById('settings-feedback-btn').addEventListener('click', () => {
+  // #3676: Settings steps aside while the feedback card is the thing being done
+  // (two cards stacked pushed the description and Submit off a phone screen), and
+  // comes back when the card closes (the #3302 return-to-Settings behaviour).
+  closeSettingsModal();
   openFeedbackModal({ el: settingsModalEl, close: closeSettingsModal });
 });
 // #3448: Ask an assistant, in every mode. Works with no assistant standing in

@@ -107,6 +107,8 @@ import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
 import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
+// #3651: the tapped product's card follows the product, after the camera has moved.
+import { updateProductCard } from './productCard.js';
 
 // #3293: Shop's world as the movement core's default world. Getters, not
 // snapshots: shopLandlets/shopWorldRadiusM are live bindings that other
@@ -1984,6 +1986,9 @@ export function updateShopWorldServices(now, dt) {
   updateSignFade();
   updateCalendarFade();
   updateReviewFade();
+  // #3651: after the camera was positioned for this frame (the core ran first),
+  // so the card is placed against where the product really is on screen.
+  updateProductCard();
   updateCreditOrbs(dt);
   updateCreditOrbPopEffects(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {

@@ -324,15 +324,17 @@ numbers above are from before it; the table below is after it):
 
 | what | distinct in use | hard-coded | uses on a token |
 |---|---|---|---|
-| font sizes | 9 | 2 | 329 |
+| font sizes | 9 | 2 | 332 |
 | font families | 3 | 2 | 0 |
-| colours, with opacity | 61 | 12 | 631 |
-| colours, hues only | 23 | 7 | 0 |
-| corner radii | 5 | 0 | 205 |
-| shadows | 3 | 1 | 2 |
-| spacing steps | 17 | 11 | 583 |
+| colours, with opacity | 67 | 13 | 639 |
+| colours, hues only | 24 | 7 | 0 |
+| corner radii | 7 | 0 | 206 |
+| shadows | 5 | 1 | 4 |
+| spacing steps | 17 | 11 | 588 |
 
-What the pass did, and the pixels it moved:
+(Counted after merging the bud work that landed meanwhile, which adds the bud's
+own radii, shadows and colours; the text, spacing and off-scale counts are the
+pass's.) What the pass did, and the pixels it moved:
 
 - **Text:** 17px (26 uses, dialog and card titles) is now 16px; 18px and 20px
   are `--text-xl` and `--text-2xl`. The stray 10px and 15px sizes (three uses)

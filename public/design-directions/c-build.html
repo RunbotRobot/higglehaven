@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Build in the bud</title>
+  <link rel="stylesheet" href="c.css" />
+  <link rel="stylesheet" href="c-build.css" />
+  <script src="strip.js" defer></script>
+</head>
+<body>
+  <!-- The plan for Build mode inside the bud (#3654, part of #3648). A mock-up, not the app: the picture
+       behind each moment is a real view of the world, the bud, petals, handles and cards are drawn here.
+       Names are examples. -->
+  <header class="page-head">
+    <img class="wordmark" src="/wordmark.png" alt="higglehaven" />
+    <h1>Build in the bud</h1>
+    <p class="lede">Today Build puts about eleven buttons, a catalog panel and a toolbar over the world. Here it is the same bud, with five petals, and the rest done on the thing itself. Tap through the five moments.</p>
+  </header>
+
+  <nav class="moments" aria-label="Moments">
+    <button type="button" class="moment-btn" data-moment="enter" aria-pressed="true">1 Enter</button>
+    <button type="button" class="moment-btn" data-moment="place" aria-pressed="false">2 Place</button>
+    <button type="button" class="moment-btn" data-moment="select" aria-pressed="false">3 Selected</button>
+    <button type="button" class="moment-btn" data-moment="many" aria-pressed="false">4 Several</button>
+    <button type="button" class="moment-btn" data-moment="levels" aria-pressed="false">5 Levels</button>
+  </nav>
+
+  <div class="stage-fit" id="stage-fit">
+    <div class="stage" id="stage" data-moment="enter" data-open="true" data-idle="false" data-learned="true">
+      <img class="world" id="world" src="world-walk.jpg" alt="The world: a green hill with an avatar standing on it." width="390" height="844" />
+
+      <!-- 2 Place: the catalog leaf is a short strip, with the full catalog behind "All items". -->
+      <div class="ghost" data-moment-only="place" aria-hidden="true"><span>placing</span></div>
+      <p class="hint" data-moment-only="place" data-ui>Drag to place &middot; lift to drop</p>
+      <section class="strip-leaf" data-moment-only="place" data-ui aria-label="Add an item">
+        <div class="search-line"><span>Search</span><button type="button" class="pill small">All items</button></div>
+        <ul class="recents">
+          <li><span class="thumb t1"></span>Tree</li>
+          <li><span class="thumb t2"></span>Brick</li>
+          <li><span class="thumb t3"></span>Chair</li>
+          <li><span class="thumb t4"></span>Door</li>
+          <li><span class="thumb t5"></span>Table</li>
+        </ul>
+      </section>
+
+      <!-- 3 Selected: handles on the thing, and a card that blooms beside it. -->
+      <div class="selection" data-moment-only="select" aria-hidden="true">
+        <span class="sel-box"></span>
+        <span class="h h-nw" data-ui></span><span class="h h-ne" data-ui></span><span class="h h-sw" data-ui></span><span class="h h-se" data-ui></span>
+        <span class="ring" data-ui></span>
+        <span class="mover" data-ui>move</span>
+      </div>
+      <section class="bloom item-card" data-moment-only="select" data-ui aria-label="Selected item">
+        <span class="stem" aria-hidden="true"></span>
+        <h2>Tree</h2>
+        <p class="meta">Level 1</p>
+        <div class="acts">
+          <button type="button" class="pill small">Copy</button>
+          <button type="button" class="pill small">Delete</button>
+          <button type="button" class="pill small">More</button>
+        </div>
+      </section>
+
+      <!-- 4 Several: painting a selection, then one card for all of it. -->
+      <div class="paint" data-moment-only="many" aria-hidden="true"></div>
+      <section class="bloom item-card many-card" data-moment-only="many" data-ui aria-label="Several selected">
+        <span class="stem" aria-hidden="true"></span>
+        <h2>12 selected</h2>
+        <p class="meta">Brush 40</p>
+        <input class="brush" type="range" min="10" max="120" value="40" aria-label="Brush size" />
+        <div class="acts">
+          <button type="button" class="pill small">Bundle</button>
+          <button type="button" class="pill small">Copy</button>
+          <button type="button" class="pill small">Delete</button>
+        </div>
+      </section>
+
+      <!-- 5 Levels: one narrow leaf by the bud that says which floor you are on. -->
+      <section class="levels-leaf" data-moment-only="levels" data-ui aria-label="Levels">
+        <button type="button" class="pill small">Build level above</button>
+        <p class="here">Ground level</p>
+        <button type="button" class="pill small">Dig level below</button>
+      </section>
+
+      <div class="bud-wrap" id="bud-wrap">
+        <ul class="petals" id="petals">
+          <li style="--i:0"><button type="button" class="petal" data-ui>Add item</button></li>
+          <li style="--i:1"><button type="button" class="petal" data-ui>Levels</button></li>
+          <li style="--i:2"><button type="button" class="petal" data-ui>Tools</button></li>
+          <li style="--i:3"><span class="petal pair" data-ui><button type="button" class="half" aria-label="Undo">&#8630;</button><button type="button" class="half" aria-label="Redo">&#8631;</button></span></li>
+          <li style="--i:4"><button type="button" class="petal soft" data-ui>Menu &hellip;</button></li>
+        </ul>
+        <button type="button" class="bud" id="bud" data-ui aria-expanded="true" aria-controls="petals" aria-label="Menu">
+          <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
+            <g class="bud-back"><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(-28 32 52)" /><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(28 32 52)" /></g>
+            <g class="bud-mid"><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(-12 32 52)" /><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(12 32 52)" /></g>
+            <ellipse class="bud-front" cx="32" cy="34" rx="11" ry="21" fill="#8fdc6f" />
+            <circle class="bud-tip" cx="32" cy="20" r="5" fill="#f6d65c" />
+          </svg>
+        </button>
+        <span class="mark" id="mark" data-ui>Building</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="cover" id="cover" role="status" aria-live="polite"></p>
+  <p class="caption" id="caption"></p>
+
+  <section class="three">
+    <h2>What becomes what</h2>
+    <table class="map">
+      <thead><tr><th>Today in Build</th><th>In the bud</th></tr></thead>
+      <tbody>
+        <tr><td>Shop, Build, Sell, gear, compass</td><td>The bud. The compass goes (the world has the sun and the horizon). The bud wears a small &ldquo;Building&rdquo; mark.</td></tr>
+        <tr><td>+ Add Item and the 220 px catalog panel</td><td><b>Add item</b> petal: a short strip of recent items and a search line; the full catalog is one tap behind &ldquo;All items&rdquo;.</td></tr>
+        <tr><td>Undo, Redo</td><td>One petal with both halves. Only drawn once there is something to undo or redo.</td></tr>
+        <tr><td>&ldquo;Ground&rdquo; pill and the level menu</td><td><b>Levels</b> petal: a leaf that says which level you are on, with Build above and Dig below.</td></tr>
+        <tr><td>Measure, Multi-Select (and its brush row), Paste</td><td><b>Tools</b> petal. While a tool is on, the bud wears its name (&ldquo;Measuring&rdquo;, &ldquo;Selecting&rdquo;). Paste is listed only after a Copy.</td></tr>
+        <tr><td>Move, Rotate, Trim, Snap on the selection toolbar</td><td>Handles on the item itself (see below). Snap becomes a setting in the item card&rsquo;s More.</td></tr>
+        <tr><td>Copy, Delete, Save Bundle, Bundle, Unbundle, Edit</td><td>The card that blooms beside the item (or beside the selection). Delete stays immediate and can be undone, as today.</td></tr>
+        <tr><td>Community Sign, Community Calendar, Backup Chain</td><td>The card&rsquo;s <b>More</b>, since they are rare and about one item.</td></tr>
+        <tr><td>The name label above the item</td><td>The card&rsquo;s title. It sits beside the item, not on top of the compass (#3573).</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Moving you, or moving the item</h2>
+    <table class="map">
+      <tbody>
+        <tr><td>One finger drag on empty world</td><td>Walk (the same as in Shop, leaf 2).</td></tr>
+        <tr><td>One finger drag that starts on the selected item</td><td>Move the item along the ground; it stops at the lándlet&rsquo;s edge and says so once.</td></tr>
+        <tr><td>Drag a corner handle</td><td>Resize.</td></tr>
+        <tr><td>Drag the ring, or twist two fingers on the item</td><td>Rotate about the upright axis. The ring is what finds the other two axes (its card has them).</td></tr>
+        <tr><td>Second finger drag, anywhere</td><td>Look, always.</td></tr>
+        <tr><td>Tap an item / tap empty world</td><td>Select it and bloom its card / put the selection away.</td></tr>
+        <tr><td>Hold on empty world, then drag</td><td>Paint a selection (in Tools &gt; Selecting; this is today&rsquo;s brush).</td></tr>
+      </tbody>
+    </table>
+
+    <h2>What does not fit, said plainly</h2>
+    <ul class="plain">
+      <li><b>Claiming a lándlet</b> is a map you pick a plot on; it cannot be a small card. It stays one large leaf (the only large one in Build).</li>
+      <li><b>Text entry</b> (search, naming a bundle, a sign&rsquo;s words) needs the phone keyboard; those leaves sit above the keyboard, and Save Bundle keeps its own modal because it is a destructive-looking, named step.</li>
+      <li><b>Undo and Redo</b> have no gesture: three-finger swipes belong to the phone. They stay a petal, one tap from anywhere.</li>
+      <li><b>The brush size</b> is a slider, which needs a card. It blooms beside the selection while Selecting is on.</li>
+      <li><b>Precise placement</b> (nudging by a small amount) has no gesture here yet. Today it is the arrow handles; the plan keeps arrows inside the card&rsquo;s More until someone proposes better.</li>
+    </ul>
+
+    <h2>Then, in slices</h2>
+    <ol class="plain">
+      <li><b>Enter, Add item, place one thing.</b> The Build petal set, the catalog strip, dragging to place. The old Build toolbar goes for exactly these tools.</li>
+      <li><b>Select, handles, the card.</b> Move, resize and rotate on the item; Copy, Delete, More; the old selection toolbar goes.</li>
+      <li><b>Undo/Redo and Levels.</b> The pair petal, the Levels leaf, the &ldquo;Ground&rdquo; pill goes.</li>
+      <li><b>Tools.</b> Measure, Selecting with its brush, Paste.</li>
+      <li><b>Bundles.</b> Bundle, Save, Unbundle, Edit in the card, keeping their warnings and the live-template confirmation.</li>
+      <li><b>Claim, Backup Chain, Community Sign and Calendar.</b> The claim leaf and the card&rsquo;s More.</li>
+    </ol>
+  </section>
+
+  <script src="c-build.js"></script>
+</body>
+</html>

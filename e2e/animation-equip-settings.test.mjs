@@ -82,7 +82,7 @@ await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' });
 console.log('purchase response (status should be 201):', purchased.status);
 
-// --- Shop-mode preview modal: tap the still-unpurchased-by-anyone-else
+// --- Shop-mode product card: tap the still-unpurchased-by-anyone-else
 // placed instance and confirm the compatibility note appears on an
 // animation product's info line (no avatar equipped at all here, so the
 // "no real skeleton to compare against" case). ---
@@ -90,8 +90,8 @@ await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 
-const productInfoText = await page.evaluate(() => document.getElementById('shop-product-preview-info')?.textContent || '');
-console.log('Shop product preview info text before any tap (diagnostic only):', productInfoText);
+const productInfoText = await page.evaluate(() => document.getElementById('product-card')?.textContent || '');
+console.log('Shop product card text before any tap (diagnostic only):', productInfoText);
 
 // --- Settings > Shop: the "My Animations" picker ---
 await openAccountMenu(page);
