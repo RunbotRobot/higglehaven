@@ -813,8 +813,8 @@
       body[data-bud="on"] #mode-nav { display: none; }
       body[data-bud="on"] #account-menu-toggle .bud-gear { display: none; }
       body[data-bud="on"] #account-menu-toggle {
-        width: 56px;
-        height: 56px;
+        width: var(--bud-size);
+        height: var(--bud-size);
         min-width: 0;
         min-height: 0;
         padding: 0;
@@ -824,7 +824,7 @@
         justify-content: center;
         background: rgb(255 255 255 / 0.5);
         box-shadow: var(--shadow-card);
-        animation: bud-breathe 3.4s ease-in-out infinite;
+        animation: bud-breathe var(--motion-breath) ease-in-out infinite;
       }
       body[data-bud="on"] #account-menu-toggle.active {
         background: rgb(255 255 255 / 0.8);
@@ -838,7 +838,7 @@
         left: 64px;
         top: 17px;
         padding: 6px var(--space-md);
-        border-radius: 12px 3px 12px 3px;
+        border-radius: var(--radius-word);
         background: rgb(255 255 255 / 0.7);
         color: var(--ink);
         font: var(--text-xs)/1 var(--font-sans);
@@ -860,9 +860,9 @@
       body[data-bud="on"] #account-menu-panel button {
         min-height: 44px;
         padding: 10px 18px;
-        border-radius: 24px 5px 24px 5px;
+        border-radius: var(--radius-petal);
         background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
-        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
+        box-shadow: var(--shadow-petal);
         font-size: var(--text-md);
         white-space: nowrap;
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
@@ -890,7 +890,7 @@
         max-height: calc(100vh - 100px);
         overflow-y: auto;
         padding: var(--space-lg) var(--space-lg) var(--space-lg);
-        border-radius: 30px 6px 30px 6px;
+        border-radius: var(--radius-leaf);
         background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
         box-shadow: var(--shadow-card);
         color: var(--ink);
@@ -1014,19 +1014,21 @@
         color: var(--pill-text);
         opacity: 0.75;
       }
+      /* #3653: a dot on the petal that holds something waiting, never a number (the count is inside). */
       #notifications-badge,
       #friends-badge,
       #dm-badge {
         display: inline-block;
-        min-width: 15px;
+        width: 10px;
+        height: 10px;
         margin-left: var(--space-xs);
-        padding: 0 var(--space-2xs);
-        border-radius: var(--radius-pill);
-        background: var(--danger-bright);
-        color: var(--white);
-        font-size: var(--text-2xs);
-        line-height: 15px;
-        text-align: center;
+        border-radius: var(--radius-round);
+        background: var(--petal-yellow);
+        box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
+        font-size: 0;
+        line-height: 0;
+        overflow: hidden;
+        vertical-align: middle;
       }
       #notifications-badge[hidden],
       #friends-badge[hidden],
@@ -4940,27 +4942,29 @@
         color: var(--white);
       }
       /* Same modal shell as #settings-modal. */
+      /* #3653: a leaf of the bud, not a modal: a soft sheet by the bud, no scrim over the world
+         (the same shape as .bud-leaf; the elements and ids stay so what leans on them still works). */
       #notifications-modal {
         position: fixed;
-        inset: 0;
-        z-index: 20;
+        top: 76px;
+        left: 12px;
+        z-index: 22;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(340px, calc(100vw - 24px));
       }
       #notifications-modal.visible {
-        display: flex;
+        display: block;
       }
       #notifications-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 360px;
-        max-height: 80vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
@@ -5194,27 +5198,29 @@
          action buttons per section rather than three separate row classes,
          since the row body itself (label + optional location line) is
          identical across all three. */
+      /* #3653: a leaf of the bud, not a modal: a soft sheet by the bud, no scrim over the world
+         (the same shape as .bud-leaf; the elements and ids stay so what leans on them still works). */
       #friends-modal {
         position: fixed;
-        inset: 0;
-        z-index: 20;
+        top: 76px;
+        left: 12px;
+        z-index: 22;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(340px, calc(100vw - 24px));
       }
       #friends-modal.visible {
-        display: flex;
+        display: block;
       }
       #friends-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 360px;
-        max-height: 80vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);

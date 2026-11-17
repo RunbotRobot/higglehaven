@@ -169,6 +169,30 @@ describe('productCardState (#3651)', () => {
   });
 });
 
+describe('productCardState, a product the shopper already owns (#3681)', () => {
+  const priced = { priceCents: 1200, isTestModel: false, stockQuantity: null };
+
+  it('says so and offers no Buy, but still lets them rate it and read its return policy', () => {
+    expect(productCardState({ template: priced, inRange: true, owned: true })).toEqual({
+      canBuy: false, canReview: true, canReturnPolicy: true, stateText: 'You already own this.',
+    });
+  });
+  it('offers no rating or policy from out of reach, like the other states', () => {
+    const state = productCardState({ template: priced, inRange: false, owned: true });
+    expect(state.canBuy).toBe(false);
+    expect(state.canReview).toBe(false);
+    expect(state.canReturnPolicy).toBe(false);
+  });
+  it('is not mentioned for a product that is not for sale or is a testing model', () => {
+    expect(productCardState({ template: { priceCents: null }, inRange: true, owned: true }).stateText).toBe('Not for sale.');
+    expect(productCardState({ template: { priceCents: 5, isTestModel: true }, inRange: true, owned: true }).stateText).toMatch(/testing model/i);
+  });
+  it('a product not owned is unchanged', () => {
+    expect(productCardState({ template: priced, inRange: true, owned: false }).canBuy).toBe(true);
+    expect(productCardState({ template: priced, inRange: true }).canBuy).toBe(true);
+  });
+});
+
 describe('sellerLine (#3680)', () => {
   it('says who sells the product, by the seller\'s storefront name', () => {
     expect(sellerLine('Maple Workshop')).toBe('Sold by Maple Workshop');
