@@ -26,11 +26,13 @@ import * as THREE from 'three';
 import { meshDimensions } from '../world/models.js';
 import { createWorldCard } from '../ui/worldCard.js';
 import { productInfoParts, setShopTappedProduct } from './worldSprites.js';
-import { productCardState } from './productCardLayout.js';
+import { productCardState, sellerLine } from './productCardLayout.js';
+import { fetchSellerLabels } from '../api.js';
 
 const cardEl = document.getElementById('product-card');
 const nameEl = document.getElementById('product-card-name');
 const priceEl = document.getElementById('product-card-price');
+const sellerEl = document.getElementById('product-card-seller');
 const notesEl = document.getElementById('product-card-notes');
 const stateEl = document.getElementById('product-card-state');
 const buyBtn = document.getElementById('product-card-buy-btn');
@@ -63,10 +65,45 @@ export function isProductCardOpen() {
   return openReview !== null;
 }
 
+// #3680: seller storefront names already looked up (sellerId -> name, or null
+// when the lookup found none), so tapping a second product of the same seller
+// costs no request, and a card never waits on one: it opens at once and the line
+// fills in when the answer arrives.
+const sellerNames = new Map();
+const sellerLookups = new Map();
+
+function loadSellerName(sellerId) {
+  if (!sellerId) return Promise.resolve(null);
+  if (sellerNames.has(sellerId)) return Promise.resolve(sellerNames.get(sellerId));
+  if (!sellerLookups.has(sellerId)) {
+    sellerLookups.set(sellerId, fetchSellerLabels([sellerId])
+      .then((labels) => {
+        sellerNames.set(sellerId, labels[sellerId] ?? null);
+        return sellerNames.get(sellerId);
+      })
+      // A failed lookup is not remembered as "no name": the next tap tries again.
+      .catch(() => null)
+      .finally(() => sellerLookups.delete(sellerId)));
+  }
+  return sellerLookups.get(sellerId);
+}
+
+function fillSellerLine(review) {
+  const sellerId = review.mesh.userData.template?.sellerId;
+  sellerEl.textContent = sellerLine(sellerNames.get(sellerId));
+  if (!sellerId || sellerNames.has(sellerId)) return;
+  loadSellerName(sellerId).then((name) => {
+    if (review !== openReview) return; // folded away, or another product opened meanwhile
+    sellerEl.textContent = sellerLine(name);
+    card.markDirty();
+  });
+}
+
 function fillCard(review) {
   const { name, priceText, notes } = productInfoParts(review.mesh.userData.template);
   nameEl.textContent = name;
   priceEl.textContent = priceText ?? '';
+  fillSellerLine(review);
   notesEl.textContent = notes.map((note) => `(${note})`).join(' ');
   cardEl.setAttribute('aria-label', name);
   stateEl.textContent = '';

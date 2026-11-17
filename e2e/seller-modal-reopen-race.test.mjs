@@ -47,7 +47,10 @@ await page.waitForTimeout(300);
 // own cross-panel race test — long enough to reliably close+reopen the
 // modal and inspect the freshly-rendered row before the response lands.
 await page.route('**/api/catalog/*', async (route) => {
-  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 3000));
+  // #3700: 6 s, not 3 s -- reopening My products is two taps of the bud (#3699), which on a loaded
+  // CI runner can take longer than the old 3 s hold, and the save would then have landed before
+  // the check below looks for it still being in flight.
+  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 6000));
   await route.continue();
 });
 
@@ -86,7 +89,7 @@ const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('butto
 console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
 
 // Wait past the delayed PATCH's own delay so its `finally` block runs.
-await page.waitForTimeout(3500);
+await page.waitForTimeout(6500);
 
 const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isEnabled();
 console.log('that same button is enabled again once the pre-close save actually resolves (should be true — not stuck disabled forever):', reopenedSaveReenabledAfterSettling);
