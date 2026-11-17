@@ -2796,6 +2796,11 @@
         justify-content: flex-end;
         gap: var(--space-sm);
       }
+      /* #3703: hidden while the leaf is still asking which way (an author display rule beats the
+         attribute otherwise, and Add Product showed under the two choices). */
+      #upload-modal-actions[hidden] {
+        display: none;
+      }
       #upload-modal-actions button {
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
