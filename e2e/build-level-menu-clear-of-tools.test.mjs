@@ -20,7 +20,7 @@ const boxes = await page.evaluate(() => {
   };
   return {
     panel: rect('#level-menu-panel'),
-    tools: ['#paste-btn', '#toggle-measure', '#toggle-multiselect', '#add-item-btn'].map((id) => ({ id, ...rect(id) })),
+    tools: ['#paste-btn', '#toggle-measure', '#toggle-multiselect'].map((id) => ({ id, ...rect(id) })),
     vw: window.innerWidth,
   };
 });

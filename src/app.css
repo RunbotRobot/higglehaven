@@ -1998,15 +1998,6 @@
         color: var(--white);
         background: var(--danger);
       }
-      #add-item-btn {
-        padding: var(--space-sm) var(--space-2xl);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
-        align-self: flex-start;
-      }
       #catalog-picker {
         display: none;
         position: relative;
@@ -2020,6 +2011,46 @@
         max-width: min(90vw, 360px);
         max-height: 50vh;
       }
+      /* #3688 (part of #3654, Build in the bud): opened from the Add item petal the catalog is a short
+         strip, not a panel: a search line and one row of items to swipe, the person's recent ones
+         first. "All items" (or typing a search) opens the whole catalog: tabs, scopes, bundles. */
+      #catalog-all-items-btn { display: none; }
+      #catalog-picker.strip {
+        width: min(calc(100vw - 16px), 360px);
+        max-height: none;
+        padding: 40px var(--space-md) var(--space-md);
+      }
+      #catalog-picker.strip #catalog-all-items-btn {
+        display: block;
+        position: absolute;
+        top: 8px;
+        right: 52px;
+        min-height: 32px;
+        padding: 0 var(--space-lg);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+      }
+      #catalog-picker.strip #catalog-mode-tabs,
+      #catalog-picker.strip #catalog-search-scope-tabs,
+      #catalog-picker.strip #bundle-picker-section,
+      #catalog-picker.strip #catalog-picker-empty,
+      #catalog-picker.strip #catalog-prompt-mode { display: none; }
+      #catalog-picker.strip #catalog-search-input { margin-bottom: var(--space-md); }
+      #catalog-picker.strip #catalog-picker-grid {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: var(--space-xs);
+        max-height: none;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x proximity;
+      }
+      #catalog-picker.strip #catalog-picker-grid[hidden] { display: none; }
+      #catalog-picker.strip .catalog-tile { flex: 0 0 64px; scroll-snap-align: start; }
+      #catalog-picker.strip .catalog-thumb { width: 48px; height: 48px; }
       #catalog-picker.visible {
         /* #2762: flex column so #catalog-manual-mode (the single
            scrolling region now -- see its own rule below) can use
@@ -5830,7 +5861,13 @@
         font-size: var(--text-md);
         color: var(--pill-text-soft);
       }
+      #product-card-seller {
+        font-size: var(--text-sm);
+        color: var(--pill-text-soft);
+        overflow-wrap: anywhere;
+      }
       #product-card-price:empty,
+      #product-card-seller:empty,
       #product-card-notes:empty,
       #product-card-state:empty {
         display: none;
