@@ -831,6 +831,121 @@
         background: rgb(var(--pill-rgb) / 0.9);
         color: var(--pill-text);
       }
+      /* #3649 (part of #3648, direction C): in Shop the account toggle is the bud, one small
+         living thing in the corner that carries the logo; the old top row (wordmark pill and
+         Shop/Build/Sell pills) is gone there. Build and Sell keep their row until their own
+         leaves give them petals. src/ui/bud.js sets body[data-bud] once a mode is known. */
+      .bud-logo, .bud-word { display: none; }
+      #account-menu-toggle .bud-logo, #account-menu-toggle .bud-word, #account-menu-toggle .bud-gear { pointer-events: none; }
+      body[data-bud="on"] #wordmark-panel,
+      body[data-bud="on"] #mode-nav { display: none; }
+      body[data-bud="on"] #account-menu-toggle .bud-gear { display: none; }
+      body[data-bud="on"] #account-menu-toggle {
+        width: 56px;
+        height: 56px;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        border-radius: var(--radius-round);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgb(255 255 255 / 0.5);
+        box-shadow: var(--shadow-card);
+        animation: bud-breathe 3.4s ease-in-out infinite;
+      }
+      body[data-bud="on"] #account-menu-toggle.active {
+        background: rgb(255 255 255 / 0.8);
+        animation: none;
+      }
+      body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
+      body[data-bud="on"][data-bud-new] .bud-word {
+        display: block;
+        position: absolute;
+        left: 64px;
+        top: 17px;
+        padding: 6px var(--space-md);
+        border-radius: 12px 3px 12px 3px;
+        background: rgb(255 255 255 / 0.7);
+        color: var(--ink);
+        font: var(--text-xs)/1 var(--font-sans);
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
+        animation: bud-pulse 1.6s ease-in-out infinite;
+      }
+      body[data-bud="on"] #account-menu-panel {
+        background: transparent;
+        box-shadow: none;
+        padding: 0;
+        gap: var(--space-sm);
+        top: calc(100% + 8px);
+        min-width: 0;
+        align-items: flex-start;
+      }
+      body[data-bud="on"] #account-menu-panel button {
+        min-height: 44px;
+        padding: 10px 18px;
+        border-radius: 24px 5px 24px 5px;
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
+        font-size: var(--text-md);
+        white-space: nowrap;
+        animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+      }
+      body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
+      /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
+      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(255 255 255 / 0.35); } }
+      @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
+      @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"] #account-menu-toggle,
+        body[data-bud="on"] #account-menu-panel button { animation: none; }
+      }
+      /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
+      .bud-leaf {
+        position: fixed;
+        top: 76px;
+        left: 12px;
+        z-index: 22;
+        width: min(320px, calc(100vw - 24px));
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        padding: var(--space-xl) var(--space-xl) var(--space-lg);
+        border-radius: 30px 6px 30px 6px;
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: var(--shadow-card);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        animation: bud-unfold 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+        transform-origin: 0 0;
+      }
+      .bud-leaf h2 { margin: 0 40px var(--space-sm) 0; font-size: 18px; font-weight: 600; }
+      .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
+      .bud-leaf-close {
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: var(--radius-round);
+        background: transparent;
+        color: var(--ink);
+        font-size: 24px;
+        line-height: 1;
+      }
+      body[data-bud-mark] #account-menu-toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        width: 9px;
+        height: 9px;
+        border-radius: var(--radius-round);
+        background: var(--danger-bright);
+      }
       /* A small dot on the collapsed toggle summarizing "something in here
          needs your attention" — pure CSS (:has(), already relied on
          elsewhere in this file for body:has(#catalog-picker.visible)), so

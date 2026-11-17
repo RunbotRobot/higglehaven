@@ -17,7 +17,7 @@
 // clips, not crate.glb's "everything comes back null" shortcut.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AVATAR_MODEL_PATH = path.join(REPO_ROOT, 'e2e', 'fixtures', 'test-rigged-avatar.glb');
@@ -81,7 +81,7 @@ const purchaseResult = await fetchJson('/api/instances', {
 console.log('avatar purchase status (should be 201):', purchaseResult.status);
 
 // --- Enter Shop mode, then equip the rigged avatar live from Settings ---
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 

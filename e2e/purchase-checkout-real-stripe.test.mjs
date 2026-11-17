@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -140,12 +140,12 @@ const { browser: sellerBrowser, page: sellerPage, errors: sellerErrors } = await
 // switch into the actually-requested mode afterward.
 const sellerAuthModalAlreadyShown = (await sellerPage.locator('#auth-modal.visible').count()) > 0;
 if (!sellerAuthModalAlreadyShown) {
-  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await goToMode(sellerPage, 'build');
   await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 await signUpAndVerifyWithRealCard(sellerPage, SELLER_LABEL);
 if (sellerAuthModalAlreadyShown) {
-  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await goToMode(sellerPage, 'build');
   await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 
@@ -177,7 +177,7 @@ const [claimResponse] = await Promise.all([
 if (!claimResponse.ok()) throw new Error(`claim failed with HTTP ${claimResponse.status()}`);
 await sellerPage.waitForSelector('#claim-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 
-await sellerPage.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(sellerPage, 'sell');
 await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await sellerPage.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerPage.waitForTimeout(300);
@@ -331,7 +331,7 @@ page.on('dialog', (dialog) => { dialogMessages.push(dialog.message()); });
 // re-click is needed afterward: clearing Shop's own gate already *is*
 // clearing the mode this test actually wants.
 if ((await page.locator('#auth-modal.visible').count()) === 0) {
-  await page.click('.mode-nav-btn[data-mode="shop"]');
+  await goToMode(page, 'shop');
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
 // Distinct test card from the seller's own verification above -- see

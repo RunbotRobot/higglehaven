@@ -12,7 +12,7 @@
 // guarantee, not just a persisted dimensions number.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -60,7 +60,7 @@ await page.waitForTimeout(500);
 
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
-await page.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(page, 'build');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#add-item-btn', { timeout: 15000 });
 await page.waitForTimeout(500);
