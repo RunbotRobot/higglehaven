@@ -393,9 +393,18 @@ export function budAware(page) {
     return click(selector, options);
   };
   const wait = page.waitForSelector.bind(page);
-  page.waitForSelector = (selector, options = {}) => (BUD_PETALS.has(selector) && !options.state
-    ? wait(`${selector}:not([hidden])`, { ...options, state: 'attached' })
-    : wait(selector, options));
+  page.waitForSelector = async (selector, options = {}) => {
+    if (BUD_PETALS.has(selector) && !options.state) return wait(`${selector}:not([hidden])`, { ...options, state: 'attached' });
+    const handle = await wait(selector, options);
+    // The catalog opens as a short strip; the many tests written against the whole catalog (its
+    // grid, scopes, bundles, prompt mode) open it wide. The strip itself is build-bud-add-item's
+    // job, which waits on '#catalog-picker.visible.strip' so it is left alone here.
+    if (selector === '#catalog-picker.visible' && !options.state
+      && await page.evaluate(() => document.getElementById('catalog-picker')?.classList.contains('strip'))) {
+      await page.click('#catalog-all-items-btn');
+    }
+    return handle;
+  };
   return page;
 }
 

@@ -34,7 +34,7 @@ check(await shown('.mode-nav-btn[data-mode="shop"]') && await shown('.mode-nav-b
 
 // The catalog opens as a strip.
 await page.click('#add-item-btn');
-await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
+await page.waitForSelector('#catalog-picker.visible.strip', { timeout: 10000 });
 check(await page.evaluate(() => document.getElementById('catalog-picker').classList.contains('strip')), 'the catalog opens as a strip');
 check(await shown('#catalog-search-input') && await shown('#catalog-all-items-btn'), 'the strip has a search line and "All items"');
 check(!(await shown('#catalog-search-scope-tabs')) && !(await shown('#catalog-mode-tabs')), 'the tabs and scopes are not in the strip');
@@ -56,7 +56,7 @@ check((await page.textContent('#add-item-btn')).trim() === 'Add item', 'after pl
 
 // Recent first: Tree was used, so it leads the strip now.
 await page.click('#add-item-btn');
-await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
+await page.waitForSelector('#catalog-picker.visible.strip', { timeout: 10000 });
 const first = await page.evaluate(() => [...document.querySelectorAll('#catalog-picker-grid .catalog-tile')]
   .sort((a, b) => Number(getComputedStyle(a).order) - Number(getComputedStyle(b).order))[0].textContent.trim());
 check(first.startsWith('Tree'), `the item just used leads the strip (first: ${first})`);
