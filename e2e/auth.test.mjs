@@ -177,6 +177,9 @@ await page.goto(resetUrlMatch[1]);
 await page.waitForTimeout(1000);
 const resetFormVisible = await page.locator('#auth-reset-form').isVisible();
 console.log('reset-password form visible after following the link (should be true):', resetFormVisible);
+// #3694: the Log In / Sign Up tab strip is not shown on the reset view.
+const resetTabsHidden = await page.locator('#auth-tabs').isHidden();
+console.log('the Log In / Sign Up tabs are hidden on the reset view (should be true):', resetTabsHidden);
 const newPassword = 'a totally new password';
 await page.fill('#auth-reset-password', newPassword);
 await page.click('#auth-reset-form button[type="submit"]');
@@ -278,7 +281,7 @@ const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   verifiedText.includes('verified') && !verifiedText.includes('not verified') &&
   btnLabelAfterLogout === 'Log In / Sign Up' &&
   btnLabelAfterLogin === 'Ada Suite' &&
-  !!resetUrlMatch && resetFormVisible &&
+  !!resetUrlMatch && resetFormVisible && resetTabsHidden &&
   resetStatus.includes('Password reset!') &&
   btnLabelAfterNewPasswordLogin === 'Ada Suite' &&
   sellerStatusForFirstAccount.includes('No custom products yet') &&
