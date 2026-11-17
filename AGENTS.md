@@ -1701,6 +1701,14 @@ wrong shard) — refresh it via `scripts/update-shard-weights.mjs <run_id>`
 against a recent green run, not a reason to start cancelling on
 wall-clock alone again.
 
+**Update (#3727, 2026-11-17): the 53-81 min figures above date from
+about 212 files; the suite is now ~332 files (~521 min of test time) and
+`SHARD_COUNT` is 8, so a healthy shard is ~65 min plus ~3 min of set-up
+(was ~130 min at 4 shards).** `e2e/shard-weights.json` was refreshed from
+run 44107330196. The patience rule is unchanged (nothing short of the
+360-minute job ceiling is a hang); only the baseline moved. The sum behind
+the count is in the comment above `SHARD_COUNT` in `ci.yml`.
+
 If you do end up cancelling one anyway (or it reaches a terminal state
 on its own), run `scripts/check-ci-shard-progress.mjs <job_id>`
 immediately after — now that the job is `completed`, its log is
