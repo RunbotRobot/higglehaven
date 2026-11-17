@@ -1,7 +1,7 @@
 // #3700 (Sell in the bud, 2/6 of #3655; part of #3648; the owner's audit finding #3587): entering Sell
 // lands on the showroom with nothing over it. My products used to open over the showroom by itself;
 // it is now the My products petal of the bud, two taps away, and the showroom is walkable first.
-// At 390x844: right after entry the My products sheet is not shown, the pager and the bud are, and
+// At 390x844: right after entry the My products sheet is not shown, the bud is, and
 // the world view is live; two taps (the bud, then the petal) open the list with the seller's own
 // products in it; closing it returns to the unobstructed showroom.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
@@ -12,13 +12,11 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewpo
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true, openProducts: false });
 await page.waitForSelector('body[data-bud="on"]', { timeout: 30000 });
 await page.waitForFunction(() => window.__sellWorldViewActive?.() === true, null, { timeout: 30000 });
-await page.waitForSelector('#seller-showcase-pager', { state: 'visible', timeout: 30000 });
 await page.waitForTimeout(800);
 
 const onEntry = {
   sheetShown: await page.locator('#seller-modal.visible').count(),
   sheetPainted: await page.locator('#seller-modal').isVisible(),
-  pager: await page.locator('#seller-showcase-pager').isVisible(),
   bud: await page.locator('#account-menu-toggle').isVisible(),
   mode: await page.evaluate(() => document.body.dataset.mode),
 };
@@ -46,12 +44,12 @@ await page.click('#seller-close-btn');
 await page.waitForSelector('#seller-modal:not(.visible)', { state: 'attached', timeout: 5000 });
 const afterClose = {
   sheetShown: await page.locator('#seller-modal.visible').count(),
-  pager: await page.locator('#seller-showcase-pager').isVisible(),
+  bud: await page.locator('#account-menu-toggle').isVisible(),
 };
 console.log('after closing:', JSON.stringify(afterClose));
 
 const pass = onEntry.mode === 'sell' && onEntry.sheetShown === 0 && !onEntry.sheetPainted
-  && onEntry.pager && onEntry.bud && String(centre).startsWith('canvas')
-  && upload && afterClose.sheetShown === 0 && afterClose.pager
+  && onEntry.bud && String(centre).startsWith('canvas')
+  && upload && afterClose.sheetShown === 0 && afterClose.bud
   && errors.length === 0;
 await finish(browser, { pass, label: 'Sell opens on the showroom, My products two taps away (#3700)', errors });
