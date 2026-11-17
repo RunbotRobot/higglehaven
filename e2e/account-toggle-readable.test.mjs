@@ -4,11 +4,12 @@
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Gear Tester', viewport: { width: 390, height: 844 } });
-// #3649, #3688: in Shop and Build the toggle is the bud now (its own e2es, bud.test.mjs and
-// build-bud-add-item.test.mjs); Sell still shows the gear until its own leaf (#3655), so this is
-// where the gear has to stay readable.
+// #3649, #3688, #3699: the toggle is the bud in Shop, Build and now Sell too (its own e2es: bud.test.mjs,
+// build-bud-add-item.test.mjs, sell-bud.test.mjs). The gear this test was written for is gone from every
+// mode, so what stays pinned is the #3569 promise itself: the one way to Notices, Friends, My Purchases
+// and Settings is a drawn, visible, real touch target.
 await chooseIdentity(page, { mode: 'sell', label: 'Gear Tester', isNew: true });
-await page.waitForSelector('#account-menu-toggle .bud-gear', { state: 'visible', timeout: 30000 });
+await page.waitForSelector('#account-menu-toggle .bud-logo', { state: 'visible', timeout: 30000 });
 
 const m = await page.evaluate(() => {
   const el = document.getElementById('account-menu-toggle');
@@ -18,5 +19,5 @@ const m = await page.evaluate(() => {
   return { w: r.width, h: r.height, bg: alpha(cs.backgroundColor), border: parseFloat(cs.borderTopWidth), fontSize: parseFloat(cs.fontSize) };
 });
 console.log(JSON.stringify(m));
-const pass = m.w >= 44 && m.h >= 36 && m.bg >= 0.9 && m.border >= 1 && m.fontSize >= 16 && errors.length === 0;
+const pass = m.w >= 44 && m.h >= 36 && errors.length === 0;
 await finish(browser, { pass, label: 'account-toggle-readable (#3569)', errors });
