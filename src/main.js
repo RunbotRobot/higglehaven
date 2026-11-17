@@ -183,7 +183,7 @@ scene.add(landlet);
 // other leaf, #2647 -- so this file no longer needs those three itself.
 import {
   loadSellerShowcasePage, setSellerShowcasePages,
-  sellerShowcaseMeshes, sellerShowcasePageIndex, sellerShowcaseManageBtn,
+  sellerShowcaseMeshes, sellerShowcasePageIndex,
   findRootSellerShowcaseMesh,
 } from './sell/showcase.js';
 import { enterSellWorldView } from './sell/worldView.js';
@@ -1982,7 +1982,6 @@ async function enterSellMode() {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
-  sellerShowcaseManageBtn.classList.add('visible');
   clearSelection();
   translateControls.detach();
   rotateControls.detach();

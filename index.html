@@ -101,7 +101,6 @@
     <!-- #3529: the minimised panel. A small pill at the left edge, clear of the
          joysticks, the fly button and the mode buttons; the conversation stays
          open and the pill says when a reply has come in. -->
-    <button id="assistant-chat-pill" type="button" hidden></button>
     <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
          voice chat's mic toggle. Same live trustTier-driven visibility as
          #shop-nearby-chat-btn above (src/shop/voiceChat.js's own
@@ -131,6 +130,7 @@
              in Build and Sell it is still the gear until those modes get their petals. -->
         <button id="account-menu-toggle" type="button" aria-label="Account menu" aria-expanded="false"><span class="bud-gear" aria-hidden="true">&#9881;&#65039;</span><img class="bud-logo" src="/favicon.svg" alt="" width="36" height="36" /><span class="bud-word">Menu</span></button>
         <div id="account-menu-panel">
+          <button id="add-item-btn" type="button" hidden>Add item</button>
           <button id="account-auth-btn" type="button">Log In / Sign Up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
           <!-- #1661: dm-badge is a second, independent count (unread direct
@@ -139,6 +139,8 @@
                from the Friends panel) -- distinct from friends-badge's own
                meaning (pending incoming friend requests). -->
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
+          <!-- #3653: only while a conversation is minimised: its way back, now the pill is gone. -->
+          <button id="assistant-menu-btn" type="button" hidden>Assistant</button>
           <button id="my-purchases-btn" type="button">My Purchases</button>
           <button id="my-lands-btn" type="button">My Lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
@@ -179,7 +181,6 @@
       <span id="seller-showcase-page-label">Page 1 of 1</span>
       <button id="seller-showcase-next-btn" type="button" aria-label="Next page">&#9654;</button>
     </div>
-    <button id="seller-showcase-manage-btn" type="button" hidden>Products</button>
     <div id="layout-preview-toolbar">
       <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
       <span id="layout-preview-name"></span>
@@ -238,7 +239,6 @@
       </div>
     </div>
     <div id="add-item-panel">
-      <button id="add-item-btn" type="button">+ Add Item</button>
       <button id="toggle-multiselect" type="button">Multi-Select</button>
       <div id="multiselect-brush-control" class="gizmo-numeric-control">
         <span>Brush</span>
@@ -249,6 +249,7 @@
       <button id="paste-btn" type="button" disabled hidden>Paste</button>
       <div id="catalog-picker" role="dialog" aria-modal="true" tabindex="-1">
         <button id="catalog-picker-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <button id="catalog-all-items-btn" type="button">All items</button>
         <div id="catalog-mode-tabs">
           <button class="catalog-mode-tab-btn active" type="button" data-catalog-mode="manual">Manual</button>
           <button class="catalog-mode-tab-btn" type="button" data-catalog-mode="prompt">Prompt</button>
@@ -842,6 +843,7 @@
     <div id="product-card" role="region" aria-label="Product" data-state="closed" hidden>
       <div id="product-card-name"></div>
       <div id="product-card-price"></div>
+      <div id="product-card-seller"></div>
       <div id="product-card-notes"></div>
       <div id="product-card-state" role="status"></div>
       <div id="product-card-actions">

@@ -1,5 +1,5 @@
 // #3572 (part of #3539, Build mode audit), kept for the Levels leaf (#3690): the level controls
-// open clear of the bottom-left tool stack (Paste, Measure, Multi-Select, + Add Item) on a
+// open clear of the bottom-left tool stack (Paste, Measure, Multi-Select) on a
 // phone, and inside the screen. They used to be a dropdown from the "Ground" pill that
 // reached back over those tools; now they are a leaf of the bud.
 import { launchPage, chooseIdentity, claimLandlet, finish, openLevelMenu } from './helpers.mjs';
@@ -20,7 +20,7 @@ const boxes = await page.evaluate(() => {
   };
   return {
     leaf: rect('#bud-leaf-levels'),
-    tools: ['#paste-btn', '#toggle-measure', '#toggle-multiselect', '#add-item-btn'].map((id) => ({ id, ...rect(id) })),
+    tools: ['#paste-btn', '#toggle-measure', '#toggle-multiselect'].map((id) => ({ id, ...rect(id) })),
     vw: window.innerWidth,
     vh: window.innerHeight,
   };

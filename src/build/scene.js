@@ -4068,12 +4068,12 @@ export function enterPlacementMode(pending, statusText) {
   rotateControls.detach();
   pendingPlacement = pending;
   setProductInfo(statusText);
-  addItemBtn.textContent = '✕ Cancel';
+  addItemBtn.textContent = 'Cancel placing';
 }
 
 export function cancelPlacementMode() {
   pendingPlacement = null;
-  addItemBtn.textContent = '+ Add Item';
+  addItemBtn.textContent = 'Add item';
   updateSelectionUI();
 }
 
@@ -4297,7 +4297,7 @@ export async function handlePlacementClick() {
   const pending = pendingPlacement;
   if (!beginSceneMutation()) return;
   pendingPlacement = null;
-  addItemBtn.textContent = '+ Add Item';
+  addItemBtn.textContent = 'Add item';
   pushUndoSnapshot();
   try {
     if (pending.type === 'template') {
