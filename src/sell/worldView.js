@@ -16,7 +16,7 @@ import { controls } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import { fetchMyEquippedAvatar, fetchMyEquippedAnimation } from '../api.js';
 import {
-  shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature,
+  shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature, setShopDomeMesh,
   shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl, shopStatusEl,
 } from '../main.js';
 import {
@@ -30,7 +30,12 @@ import {
 } from '../shop/flightMovement.js';
 import { mountShopAvatar } from '../shop/mountShopAvatar.js';
 import { setMovementWorld, createSellMovementWorld } from '../shop/movementWorld.js';
-import { sellerShowcaseMeshes, setSellerShowcasePageLoadedListener } from './showcase.js';
+import { createWorldEnclosure } from '../shop/enclosure.js';
+import { updateShopSky, currentShopSkyTimeS, shopDomeRiseM, growShopDomeIfNeeded } from '../shop/sky.js';
+import { LANDLET_SIDE_M } from '../world/state.js';
+import {
+  sellerShowcaseMeshes, setSellerShowcasePageLoadedListener, sellerShowcaseMaxHalfDiagonalM,
+} from './showcase.js';
 
 // { minX, maxX, minY, maxY } of the current page's ground, or null before the
 // first page exists. The showcase ground is the shared `landlet` mesh whose
@@ -42,6 +47,67 @@ let groundBounds = null;
 // modal never walks the avatar.
 let modalOpen = true;
 let mounted = false;
+
+// #3502 (owner decision "A place outside the world still looks like the
+// world"): the showroom is a small, empty piece of the world, the standard
+// grass running out to the same hazy wall under the same dome and drifting sky
+// as Shop, and no real lándlets (it is not a real spot on the map). It is the
+// world's one enclosure (src/shop/enclosure.js), centred on the page.
+//
+// The edge rule ("At the world's edge the avatar and the camera both stay
+// inside, and the distance between them never changes") holds by distance, not
+// by clamping the camera: Sell's follow camera is not bounded (boundsCamera is
+// false in createSellMovementWorld, since it trails the avatar by a few metres
+// and may sit past the page's edge), so the wall and dome are set out far
+// enough that it can never reach them. At the highest the camera may go
+// (SHOP_WALL_HEIGHT_M + shopDomeRiseM - the dome clearance margin, see
+// clampShopCameraHeight) the dome's cross-section is its ellipse
+// radius * sqrt(1 - ((z - base) / rise)^2), which for the dome as built (rise
+// 60 m) is 0.40 * radius and for one raised to 150 m for a very tall product is
+// still 0.25 * radius. The enclosure's radius is 8 * (the page's half-diagonal
+// + the camera's follow distance with margin), never under 600 m, so the
+// camera, which is at most half a diagonal plus that margin from the centre,
+// is always inside the dome at its highest. The cap of 900 m keeps the far
+// side of the wall inside the camera's far plane (1000 m) for any real page.
+const SELL_ENCLOSURE_MIN_RADIUS_M = 600;
+const SELL_ENCLOSURE_MAX_RADIUS_M = 900;
+const SELL_ENCLOSURE_PAGE_FACTOR = 8;
+const SELL_ENCLOSURE_CAMERA_MARGIN_M = 6;
+let enclosure = null;
+
+export function sellEnclosureRadiusM(halfDiagonalM) {
+  return Math.min(
+    SELL_ENCLOSURE_MAX_RADIUS_M,
+    Math.max(SELL_ENCLOSURE_MIN_RADIUS_M, SELL_ENCLOSURE_PAGE_FACTOR * (halfDiagonalM + SELL_ENCLOSURE_CAMERA_MARGIN_M)),
+  );
+}
+
+// The page's ground is the standard grass already, drawn by the enclosure's own
+// disc at the same tile density (groundUvScaleM = the landlet width, the way
+// normalizeGroundShapeUVs sets a landlet's ground), so the page's own plane is
+// hidden rather than left coplanar with it. Its geometry still defines the
+// walkable bounds.
+function mountEnclosure(halfDiagonalM) {
+  const radiusM = sellEnclosureRadiusM(halfDiagonalM);
+  if (enclosure && enclosure.radiusM >= radiusM) return;
+  enclosure?.dispose();
+  enclosure = createWorldEnclosure({ radiusM, groundUvScaleM: LANDLET_SIDE_M });
+  for (const object of enclosure.objects) scene.add(object);
+  setShopDomeMesh(enclosure.dome);
+  landlet.visible = false;
+}
+
+// A page just loaded: its tallest product may need the dome raised
+// (growShopDomeIfNeeded, as Shop does for what it loads), and a page larger
+// than the one the enclosure was sized for (a product added since entry) needs
+// a larger enclosure.
+function fitEnclosureToPage() {
+  if (!mounted) return;
+  refreshGroundBounds();
+  const halfDiagonalM = Math.hypot(groundBounds.maxX - groundBounds.minX, groundBounds.maxY - groundBounds.minY) / 2;
+  mountEnclosure(Math.max(halfDiagonalM, sellerShowcaseMaxHalfDiagonalM()));
+  for (const mesh of sellerShowcaseMeshes) growShopDomeIfNeeded(mesh);
+}
 
 function refreshGroundBounds() {
   const geometry = landlet.geometry;
@@ -130,12 +196,17 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
     resetShopAvatarIdleState,
   });
   mounted = true;
-  setSellerShowcasePageLoadedListener(placeAvatarAtPageStart);
+  fitEnclosureToPage();
+  setSellerShowcasePageLoadedListener(() => {
+    fitEnclosureToPage();
+    placeAvatarAtPageStart();
+  });
   placeAvatarAtPageStart();
   // The movement core only: Shop's world services (presence, chat, voice,
   // landlet loading) are never started in Sell.
   registerModeFrameUpdate((now) => {
     updateShopMovementCore(now);
+    updateShopSky(now);
     onFrame?.(now);
   });
   registerFacingOverride(() => shopAvatarFacing);
@@ -147,4 +218,14 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
   // e2e-only: the page's walkable bounds, so a test can assert the avatar
   // stays on the page without recomputing the ground.
   window.__sellWorldGroundBounds = () => (groundBounds ? { ...groundBounds } : null);
+  // e2e-only: what surrounds the page (#3502).
+  window.__sellWorldEnclosure = () => (enclosure ? {
+    radiusM: enclosure.radiusM,
+    wallInScene: enclosure.wall.parent === scene,
+    domeInScene: enclosure.dome.parent === scene,
+    groundInScene: enclosure.ground.parent === scene,
+    domeRiseM: shopDomeRiseM,
+    skyTimeS: currentShopSkyTimeS(),
+    pageGroundHidden: landlet.visible === false,
+  } : null);
 }
