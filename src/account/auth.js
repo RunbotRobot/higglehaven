@@ -290,6 +290,7 @@ const authCloseBtn = document.getElementById('auth-close-btn');
 const authLoggedOutEl = document.getElementById('auth-logged-out');
 const authLoggedInEl = document.getElementById('auth-logged-in');
 const authTabBtns = [...document.querySelectorAll('.auth-tab-btn')];
+const authTabsEl = document.getElementById('auth-tabs');
 const authForms = {
   login: document.getElementById('auth-login-form'),
   signup: document.getElementById('auth-signup-form'),
@@ -328,6 +329,10 @@ function showAuthView(view) {
     btn.classList.toggle('active', btn.dataset.authView === view);
     btn.setAttribute('aria-pressed', String(btn.dataset.authView === view));
   }
+  // #3694 (part of #3547): the forgot and reset views are not a Log In or a
+  // Sign Up, so the tab strip (with neither pill selected) is not shown on
+  // them; the forgot view has its own "Back to Log In" link.
+  authTabsEl.hidden = view === 'forgot' || view === 'reset';
   authModalTitle.textContent = AUTH_VIEW_TITLES[view];
   setAuthStatus('');
   // Back to masked every time this view is (re)entered — form.reset()
