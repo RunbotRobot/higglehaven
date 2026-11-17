@@ -10,7 +10,7 @@
 // proportionally to height rather than reusing the default's absolute one.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -40,7 +40,7 @@ console.log('baseline metrics (default body, should be the fixed constants):', b
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');

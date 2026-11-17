@@ -177,7 +177,11 @@ const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
-const uploadModelBtn = document.getElementById('upload-model-btn');
+// #3703: the leaf's first step, asking which way to add a product.
+const uploadStepChooseEl = document.getElementById('upload-step-choose');
+const addProductUploadBtn = document.getElementById('add-product-upload-btn');
+const addProductSellTooBtn = document.getElementById('add-product-sell-too-btn');
+const uploadModalActionsEl = document.getElementById('upload-modal-actions');
 const uploadDimensionInputEls = {
   x: document.querySelector('.upload-dimension-input[data-axis="x"]'),
   y: document.querySelector('.upload-dimension-input[data-axis="y"]'),
@@ -348,6 +352,8 @@ function resetUploadModalToFileStep(mode = 'file') {
   uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
+  uploadStepChooseEl.hidden = true;
+  uploadModalActionsEl.hidden = false;
   uploadStepFileEl.hidden = false;
   uploadStepDimensionsEl.hidden = true;
   setUploadFileMode(mode);
@@ -358,6 +364,10 @@ function resetUploadModalToFileStep(mode = 'file') {
 // name/price/digital-good state the seller already entered, unlike
 // closing and reopening the whole modal.
 uploadRetryVideoBtn.addEventListener('click', () => resetUploadModalToFileStep('video'));
+
+// #3703: the Sell sheet (My products) is not what this leaf is opened from any more; it is only
+// put back on close when it was open underneath when the leaf opened.
+let uploadOpenedOverSeller = false;
 
 function openUploadModal() {
   closeCatalogPicker();
@@ -370,25 +380,43 @@ function openUploadModal() {
   uploadVideoInput.value = '';
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
+  uploadOpenedOverSeller = sellerModalEl.classList.contains('visible');
   resetUploadModalToFileStep();
   uploadModalEl.classList.add('visible');
   openModalA11y(uploadModalEl, closeUploadModal);
 }
 
+// The Add a product leaf: the question first, then the upload steps (or Sell This Too).
+function openAddProductLeaf() {
+  openUploadModal();
+  uploadModalTitleEl.textContent = 'Add a product';
+  uploadStepFileEl.hidden = true;
+  uploadStepDimensionsEl.hidden = true;
+  uploadModalActionsEl.hidden = true;
+  uploadStepChooseEl.hidden = false;
+  addProductUploadBtn.focus();
+}
+document.addEventListener('higglehaven:add-product', openAddProductLeaf);
+addProductUploadBtn.addEventListener('click', () => resetUploadModalToFileStep());
+addProductSellTooBtn.addEventListener('click', () => {
+  closeUploadModal();
+  document.dispatchEvent(new Event('higglehaven:sell-this-too'));
+});
+
 function closeUploadModal() {
   uploadModalEl.classList.remove('visible');
   resetUploadModalToFileStep();
   closeModalA11y(uploadModalEl);
-  // #2515: this modal only ever opens stacked on top of the still-visible
-  // Seller modal (openUploadModal never hides it) -- closeModalA11y above
-  // only clears activeModalEl, so without re-arming here the Seller modal
-  // is left on screen but untrapped, same bug class #1679 fixed for the
-  // Friends-map/DM pair.
-  sellerModalEl.classList.add('visible');
-  openModalA11y(sellerModalEl, closeSellerModal);
+  // #2515: this modal can open stacked on top of the still-visible Seller modal; closeModalA11y
+  // above only clears activeModalEl, so that sheet needs its focus trap re-armed (the bug class
+  // #1679 fixed for the Friends-map/DM pair). #3703: only when it was open underneath.
+  if (uploadOpenedOverSeller) {
+    sellerModalEl.classList.add('visible');
+    openModalA11y(sellerModalEl, closeSellerModal);
+  }
+  uploadOpenedOverSeller = false;
 }
 
-uploadModelBtn.addEventListener('click', openUploadModal);
 uploadCancelBtn.addEventListener('click', closeUploadModal);
 
 // Measures a freshly-uploaded model's own real-world size by loading it

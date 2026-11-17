@@ -13,7 +13,7 @@
 // created directly via the API, seller B does the attaching) -- this test
 // is purely about the double-click race, not re-covering the happy path
 // already covered there.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
 const SELLER_A = 'Double Click Guard Seller A';
 const SELLER_B = 'Double Click Guard Seller B';
@@ -71,7 +71,7 @@ sellerBSession.page.on('dialog', (dialog) => {
   return dialog.dismiss();
 });
 
-await sellerBSession.page.click('#sell-this-too-btn');
+await openAddProductLeaf(sellerBSession.page, 'sell-this-too');
 await sellerBSession.page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 
 const productCard = sellerBSession.page.locator('#sell-this-too-grid .seller-card').filter({ hasText: PRODUCT_NAME });
@@ -102,7 +102,7 @@ console.log('listings created by the double-click (should be exactly 1, not 2):'
 
 // With the listing now in place, picking the same product again warns that
 // this makes a second one (what the old "Add another one anyway?" confirm did).
-await sellerBSession.page.click('#sell-this-too-btn');
+await openAddProductLeaf(sellerBSession.page, 'sell-this-too');
 await sellerBSession.page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 await sellerBSession.page.locator('#sell-this-too-grid .seller-card').filter({ hasText: PRODUCT_NAME }).click();
 await sellerBSession.page.waitForSelector('#sell-this-too-form:not([hidden])', { timeout: 5000 });

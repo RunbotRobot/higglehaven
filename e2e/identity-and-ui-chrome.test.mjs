@@ -65,8 +65,12 @@ await page.click('#auth-signup-form button[type="submit"]');
 await clearVerifyModalIfShown(page);
 // #3700: Sell opens on the showroom; the list is one tap of the bud away.
 await showMyProductsAfterEntry(page);
+// #3703: adding a product starts at the bud's Add a product petal; My products no longer carries
+// an Upload Model button.
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();
-console.log('Upload Model button lives inside Seller modal (should be 1):', uploadBtnInSeller);
+console.log('My products has no Upload Model button of its own any more (should be 0):', uploadBtnInSeller);
+const addProductPetal = await page.locator('#bud-petal-sell-add-product').count();
+console.log('The Add a product petal exists in Sell (should be 1):', addProductPetal);
 
 // --- X-close buttons exist on every modal that has one, and open/close it (#98) ---
 const sellerCloseIsX = await page.locator('#seller-close-btn').evaluate((el) => el.classList.contains('modal-close-btn') && el.textContent.includes('×'));
@@ -159,7 +163,7 @@ console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb)
 
 const pass = sellNavActiveImmediately && sellNavAriaPressedImmediately === 'true' && closeBtnVisible &&
   modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellNavAriaPressedAfterCancel === 'false' && sellerModalOpenedAfterCancel === 0 &&
-  uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
+  uploadBtnInSeller === 0 && addProductPetal === 1 && sellerCloseIsX && settingsCloseIsX &&
   activeTabInBuildMode === 'build' &&
   hintVisibleBeforePicker && hintTextBeforePicker.includes('Tree') && hintHiddenWhilePickerOpen &&
   pickerOpaque && hintVisibleAfterClosingPicker &&

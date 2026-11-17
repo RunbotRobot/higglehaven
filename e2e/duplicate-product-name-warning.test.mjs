@@ -14,7 +14,7 @@
 // complete -- this is a warning, not a block.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -34,7 +34,7 @@ await page.waitForTimeout(300);
 
 let uploadInlineWarning = null;
 async function uploadProduct(name, { expectInlineWarning = false } = {}) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', '5');

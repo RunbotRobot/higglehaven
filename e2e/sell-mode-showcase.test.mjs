@@ -10,7 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 // Same default this file's own helpers.mjs uses internally (not exported) —
 // kept in sync deliberately rather than importing it, since the plain
@@ -33,7 +33,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct(name) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', '5');

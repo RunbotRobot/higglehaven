@@ -308,7 +308,10 @@ notificationsClearReadBtn.addEventListener('click', async () => {
 // than a separate modal.
 const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
 async function refreshAccountMenuLandCap() {
-  if (!builderId) {
+  // #3700 (follow-up, from #3655): the cap is Build information, and in Shop and Sell it showed as
+  // a bare line of text between the bud's petals ("Lándlet cap: 0m² / 1,000m²"). It stays in
+  // Settings > Build everywhere; in the account column it is shown in Build only, like My Lándlets.
+  if (!builderId || currentMode !== 'build') {
     accountMenuLandCapEl.hidden = true;
     return;
   }
