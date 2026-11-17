@@ -529,7 +529,7 @@ assistant's replies, each labelled with who wrote it.
 
 ### How do I get my own lándlet?
 
-1. Tap "Build" at the top right.
+1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Build".
 2. The first time, a sheet opens with the title "Claim a" and a small map.
    Green squares are "Available", grey are "Claimed", blue is "Water".
 3. Tap an available green square on the map. The line under the map names it and
@@ -537,9 +537,9 @@ assistant's replies, each labelled with who wrote it.
 4. Tap "Claim". The sheet closes and you are standing on your own lándlet.
 
 **You will see:** the sheet goes away and the Build buttons appear: "Multi-Select"
-and "Measure" at the bottom left, "Undo" at the top right. "Add item" is in the
-small round bud with the higglehaven logo at the top left: tap the bud and it
-unfolds.
+and "Measure" at the bottom left. The top left is the small round bud with the
+higglehaven logo: tap it and it unfolds. "Add item", "Levels" and, once you have
+done something, "Undo" and "Redo" are inside it.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -575,7 +575,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
-  "Undo" at the top right to take it back.
+  the round logo button at the top left, then "Undo" to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
@@ -606,7 +606,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - You want to line it up with something nearby: tap "More" on the card beside the
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
-- Wrong spot: "Undo" at the top right.
+- Wrong spot: the round logo button at the top left, then "Undo".
 
 ```controls build
 #mode-move | Move
@@ -625,7 +625,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **You will see:** the item turns as you drag, and the line at the top shows how far.
 
 **If something goes wrong:**
-- It turned the wrong way or too far: "Undo" at the top right.
+- It turned the wrong way or too far: the round logo button at the top left, then "Undo".
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 
@@ -650,7 +650,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
   reads "Cancel placing". Tap the bud, then that.
-- Wrong spot: "Undo" at the top right.
+- Wrong spot: the round logo button at the top left, then "Undo".
 
 ```controls build
 #copy-item | Copy
@@ -666,7 +666,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap "Undo" at the top right straight away and it comes back.
+- It was a mistake: tap the round logo button at the top left, then "Undo", straight away and it comes back.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.
@@ -679,16 +679,17 @@ single item.
 
 ### How do I undo a mistake, or redo it?
 
-1. Tap "Undo" at the top right. The last thing you did is taken back: a move, a
-   turn, an add, a removal.
+1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once),
+   then "Undo". It is there only once you have done something. The last thing you
+   did is taken back: a move, a turn, an add, a removal.
 2. Tap it again to go back further.
-3. If you went too far, "Redo" appears under it. Tap it to put things back.
+3. If you went too far, "Redo" appears next to it. Tap it to put things back.
 
 **You will see:** the item jumps back to how it was. "Redo" shows up only after an
 "Undo".
 
 **If something goes wrong:**
-- "Undo" is greyed out: there is nothing to take back yet.
+- "Undo" is greyed out, or the logo button shows no "Undo": there is nothing to take back yet.
 - "Redo" has gone: it only shows while there is something to put back.
 
 ```controls build
@@ -755,17 +756,20 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I build up or dig down to another level?
 
-1. Tap the pill at the bottom, which reads "Ground" when you are on the ground
-   level. A small menu opens.
+1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then "Levels". A sheet
+   opens that says which level you are on: "You are on Ground" when you are on the
+   ground level.
 2. Tap "Build Level Above" to add a level over the one you are on, or "Dig Level
    Below" to add one underneath. The button shows in brackets how much space the
    new level uses.
 3. Use the up and down arrows ("Level up", "Level down") to move between levels.
-   The pill shows which level you are on.
+   The sheet says which level you are on.
 4. On a level above or below the ground, "Remove This Level" appears. It removes
    that level.
+5. The "×" at the top right of the sheet puts it away. It stays open while you move
+   between levels, so you can read what the app says after each tap.
 
-**You will see:** the world shifts to the new level and the pill's name changes.
+**You will see:** the world shifts to the new level and the level's name on the sheet changes.
 
 **If something goes wrong:**
 - The app says "That's as high as this lándlet goes. Use Build Level Above to
@@ -778,7 +782,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
   before the person taps it.
 
 ```controls build
-#level-menu-toggle | Ground
+#bud-petal-build-levels | Levels
 #level-build-btn | Build Level Above
 #level-dig-btn | Dig Level Below
 #level-up-btn | Level up
@@ -810,7 +814,7 @@ top of the screen.
 
 ### What does Sell mode show, and where is my showroom?
 
-1. Tap "Sell" at the top right.
+1. Tap the gear at the top left (in Shop and Build it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Sell".
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.

@@ -16,7 +16,7 @@
 // pushUndoSnapshot) captures a snapshot of "just the first instance," and
 // restoreSnapshot pushes every instance in that snapshot through
 // syncBatchUpdate even when nothing about it actually changed.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, budClick } from './helpers.mjs';
 
 const LABEL = 'Instance Label Sync Tester';
 const INSTANCE_LABEL = 'Welcome Sign';
@@ -74,7 +74,7 @@ await page.waitForTimeout(800);
 const undoEnabled = await page.locator('#undo-btn').isEnabled();
 console.log('undo button enabled after placing a second instance (should be true):', undoEnabled);
 
-await page.click('#undo-btn');
+await budClick(page, '#undo-btn');
 await page.waitForTimeout(1000);
 
 const afterUndo = await page.evaluate(async (id) => {
