@@ -288,8 +288,19 @@ by touching the world. The module is `src/ui/bud.js`:
   (`shop`, `build`, `sell`). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
-- `openLeaf({ id, title, render })` and `closeLeaf()`: one leaf at a time;
-  `render(bodyEl)` fills it. Escape or the close control closes it.
+- `addBudPetals(mode, [petal])` (#3690): adds petals to a mode without
+  replacing the others, so each slice of a mode lands its own (a petal with the
+  same `id` replaces the earlier one). A petal with `element` adopts that
+  element instead of making a button: Build's Undo and Redo are one petal, a
+  pair holding the existing `#undo-btn` and `#redo-btn` with their handlers
+  untouched. `visible()` says when it is drawn (the pair only once there is
+  something to undo or redo) and `refreshBud()` re-reads it.
+- `openLeaf({ id, title, render, onClose })` and `closeLeaf()`: one leaf at a
+  time; `render(bodyEl)` fills it. Escape or the close control closes it.
+  `onClose` runs as it goes, while the leaf still exists: a leaf may borrow
+  existing elements (Levels borrows the level label and the Up/Down/Build/Dig
+  panel, parked in `#level-controls`) and hands them back there, so the
+  handlers on them never have to be rewritten.
 - `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
   unread mark; it clears when none are left.
 - The bud is the existing account toggle and its petals are the buttons of the
