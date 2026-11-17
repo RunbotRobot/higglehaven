@@ -152,9 +152,8 @@
          page's items, capped by a cumulative model-file-size budget rather
          than a fixed item count. Hidden by default (only shown while
          currentMode === 'sell'); bottom-center is free in every other mode.
-         bottom matches #seller-showcase-manage-btn's own bottom (owner
-         feedback N51 — the two pills read as vertically mismatched
-         otherwise, and this one used to sit 4px higher). */
+         (#3699: the bottom-right Products button it once lined up with is gone;
+         the bud's My products petal reopens the list.) */
       #seller-showcase-pager {
         display: none;
         position: fixed;
@@ -185,33 +184,6 @@
       }
       #seller-showcase-pager button:disabled {
         opacity: 0.4;
-      }
-      /* Reopens #seller-modal after it's been closed to browse the
-         showcase array behind it — otherwise closing it would strand the
-         seller with no way back to Manage/List/Upload. Bottom-right is
-         free while in Sell mode: #camera-debug-panel (its usual occupant)
-         is one of SELL_HIDDEN_BUILDER_UI_IDS. */
-      #seller-showcase-manage-btn {
-        display: none;
-        position: fixed;
-        bottom: 12px;
-        right: 8px;
-        z-index: 10;
-        padding: var(--space-sm) var(--space-2xl);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
-      }
-      #seller-showcase-manage-btn.visible {
-        display: block;
-      }
-      /* #3295: with Shop's movement HUD up on the showcase page, the right-hand
-         look joystick (108px, 24px off the bottom) covers this button's usual
-         spot; lift it clear above the joystick. */
-      body.sell-world-view #seller-showcase-manage-btn {
-        bottom: 140px;
       }
       /* #3296: the pager's usual bottom-centre spot sits under the left joystick
          on a phone-width screen (and next to the fly button); move it to the top

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>People in the bud</title>
+  <link rel="stylesheet" href="c.css" />
+  <link rel="stylesheet" href="c-people.css" />
+  <script src="strip.js" defer></script>
+</head>
+<body>
+  <!-- The plan for people in the bud (#3653, part of #3648): Friends, Chat, the assistant and notices as leaves,
+       one mark on the bud, and the one open question: how you talk to people nearby. A mock-up, not the app:
+       the picture behind each moment is a real view of the world; the bud, petals, leaves and marks are drawn here.
+       Names are examples. -->
+  <header class="page-head">
+    <img class="wordmark" src="/wordmark.png" alt="higglehaven" />
+    <h1>People in the bud</h1>
+    <p class="lede">Today Chat, the microphone, the assistant pill and the notice badges are four separate things over the world. Here they are one petal row and one mark on the bud. The open question is the microphone: tap through the three ways it could work.</p>
+  </header>
+
+  <nav class="moments" aria-label="Moments">
+    <button type="button" class="moment-btn" data-moment="rest" aria-pressed="true">1 Resting</button>
+    <button type="button" class="moment-btn" data-moment="unread" aria-pressed="false">2 Something waiting</button>
+    <button type="button" class="moment-btn" data-moment="chat" aria-pressed="false">3 Chat leaf</button>
+    <button type="button" class="moment-btn" data-moment="va" aria-pressed="false">Voice A</button>
+    <button type="button" class="moment-btn" data-moment="vb" aria-pressed="false">Voice B</button>
+    <button type="button" class="moment-btn" data-moment="vc" aria-pressed="false">Voice C</button>
+  </nav>
+
+  <div class="stage-fit" id="stage-fit">
+    <div class="stage" id="stage" data-moment="rest" data-open="false" data-idle="false" data-learned="true">
+      <img class="world" id="world" src="world-walk.jpg" alt="The world: a green hill with an avatar standing on it." width="390" height="844" />
+
+      <!-- 3 Chat leaf: nearby chat, who is talking, and the microphone as one row. -->
+      <section class="leaf-sheet chat-leaf" data-moment-only="chat" data-ui aria-label="Chat">
+        <h2>Chat</h2>
+        <div class="tabs"><span class="tab on">Nearby</span><span class="tab">Messages <i class="dot" aria-hidden="true"></i></span></div>
+        <ul class="log">
+          <li><b>Moss</b> I like your wall</li>
+          <li><b>You</b> thanks! it took ages</li>
+          <li class="soft">Muted (1)</li>
+        </ul>
+        <div class="send"><span>Say something nearby&hellip;</span><button type="button" class="pill small">Send</button></div>
+        <div class="row mic-row"><span>Microphone</span><button type="button" class="switch" role="switch" aria-checked="false" aria-label="Microphone"><span></span></button></div>
+      </section>
+
+      <!-- Voice A: the bud shows the mic; the mic is a petal. -->
+      <!-- Voice B: press and hold the bud. -->
+      <p class="hint" data-moment-only="vb" data-ui>Hold the bud to talk &middot; let go to mute</p>
+      <!-- Voice C: a small standing dot by the bud. -->
+      <button type="button" class="mic-dot" data-moment-only="vc" data-ui aria-label="Microphone">&#127908;</button>
+
+      <div class="bud-wrap" id="bud-wrap">
+        <ul class="petals" id="petals">
+          <li style="--i:0"><button type="button" class="petal" data-ui>Settings</button></li>
+          <li style="--i:1"><button type="button" class="petal has-dot" data-ui>Friends<i class="dot" aria-hidden="true"></i></button></li>
+          <li style="--i:2"><button type="button" class="petal has-dot" data-ui>Chat<i class="dot" aria-hidden="true"></i></button></li>
+          <li style="--i:3"><button type="button" class="petal" data-ui>Assistant</button></li>
+          <li style="--i:4"><button type="button" class="petal" data-ui>Notices</button></li>
+          <li style="--i:5" data-moment-only="va"><button type="button" class="petal live" data-ui>Microphone on</button></li>
+          <li style="--i:6"><button type="button" class="petal soft" data-ui>Build and Sell</button></li>
+        </ul>
+        <button type="button" class="bud" id="bud" data-ui aria-expanded="false" aria-controls="petals" aria-label="Menu">
+          <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true">
+            <g class="bud-back"><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(-28 32 52)" /><ellipse cx="32" cy="38" rx="11" ry="20" fill="#6ca42e" transform="rotate(28 32 52)" /></g>
+            <g class="bud-mid"><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(-12 32 52)" /><ellipse cx="32" cy="36" rx="12" ry="21" fill="#3ec75b" transform="rotate(12 32 52)" /></g>
+            <ellipse class="bud-front" cx="32" cy="34" rx="11" ry="21" fill="#8fdc6f" />
+            <circle class="bud-tip" cx="32" cy="20" r="5" fill="#f6d65c" />
+          </svg>
+          <i class="bud-dot" aria-hidden="true"></i>
+        </button>
+        <span class="word" id="word" data-ui></span>
+      </div>
+    </div>
+  </div>
+
+  <p class="cover" id="cover" role="status" aria-live="polite"></p>
+  <p class="caption" id="caption"></p>
+
+  <section class="three">
+    <h2>What becomes what</h2>
+    <table class="map">
+      <thead><tr><th>Today</th><th>In the bud</th></tr></thead>
+      <tbody>
+        <tr><td>Chat button, and its panel</td><td><b>Chat</b> petal: a leaf with Nearby and Messages. The leaf has the box to type in, so the keyboard sits under it.</td></tr>
+        <tr><td>Friends, with its two badges</td><td><b>Friends</b> petal. A friend request puts a small dot on the petal, never a number.</td></tr>
+        <tr><td>Notices, with its badge</td><td><b>Notices</b> petal, same dot.</td></tr>
+        <tr><td>The assistant pill, and the window</td><td><b>Assistant</b> petal opens the conversation as a leaf (one thread, her name once). While it is minimised the bud wears her name, not a second pill.</td></tr>
+        <tr><td>Microphone button and the list of who you can hear</td><td>One of A, B or C below. The list of people you can hear moves into the Chat leaf.</td></tr>
+        <tr><td>A badge on the gear, a toast per message</td><td><b>One dot on the bud</b> for anything waiting. Opening the bud shows which petal holds it; no toast for each message.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The microphone: three ways</h2>
+    <p>The microphone is muted until you turn it on, and then stays on while you walk and talk. Both thumbs are on the sticks while you move, so whatever turns it on or off must be a tap, not something held.</p>
+
+    <h3>A. A petal, and the bud shows it is live (my recommendation)</h3>
+    <p>Open the bud, tap <b>Microphone</b> (it says <b>Microphone on</b> when live). While it is live the bud has a green ring, and a brighter ring while you are speaking. Nothing else stands on the world.</p>
+    <p><b>Cost:</b> two taps to turn it on or off. That is rare: it stays on for a whole conversation, and the bud shows it without a word. <b>Standing cost:</b> nothing when muted, a ring on the bud when live (the bud is there anyway).</p>
+
+    <h3>B. Hold the bud to talk</h3>
+    <p>Press and hold the bud to speak; let go and it is muted again, like a walkie-talkie.</p>
+    <p><b>Cost:</b> you cannot move and talk at once (a third finger is needed), and the bud already means &ldquo;open the menu&rdquo; on a tap, so a slow tap could turn the mic on by accident. It also takes away the hands-free conversation people have today. <b>Standing cost:</b> nothing.</p>
+
+    <h3>C. A small standing microphone by the bud</h3>
+    <p>One small round button beside the bud, the only standing control in the corner besides the bud itself. One tap turns the mic on or off, and its colour says which.</p>
+    <p><b>Cost:</b> one more thing always on the world, about 0.9% of the screen (today&rsquo;s microphone button is the same size). <b>Benefit:</b> one tap, and you can see the state without opening anything. It is the one case where a standing control can be argued for; A is the case that it cannot.</p>
+
+    <h2>Things that do not change</h2>
+    <ul class="plain">
+      <li>A block stays silent: the blocked person sees nothing different, and the blocker is simply not in their Nearby list. Mutes stay undetectable and conduct reports stay invisible to the reported person. None of the new leaves shows any of it.</li>
+      <li>Chat and the microphone still wait for the same verification they wait for today.</li>
+      <li>The assistant leaf keeps what the earlier fixes gave it: one thread with its history, her name once, above the keyboard, and on top of any other leaf.</li>
+    </ul>
+
+    <h2>Then, in slices</h2>
+    <ol class="plain">
+      <li><b>The mark, and Notices and Friends as leaves.</b> The dot on the bud for a notice or a friend request; the old badges and the two old modals go.</li>
+      <li><b>The assistant as a leaf,</b> the pill goes, and the bud wears her name while a conversation is minimised. Includes where she is standing and an offer to walk you there (not a spawn point).</li>
+      <li><b>Chat as a leaf, and the microphone</b> (A, B or C once chosen). The Chat button, the microphone button and the voice list go.</li>
+    </ol>
+  </section>
+
+  <script src="c-people.js"></script>
+</body>
+</html>

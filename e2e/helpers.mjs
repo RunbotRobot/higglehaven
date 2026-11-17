@@ -633,6 +633,13 @@ export async function goToMode(page, mode) {
   await nav.click();
 }
 
+// #3699 (Sell in the bud): My products is a petal of the bud in Sell; the bottom-right Products
+// button it replaces is gone. Opens the bud and taps the petal.
+export async function openMyProducts(page) {
+  await openAccountMenu(page);
+  await page.click('#bud-petal-sell-my-products');
+}
+
 export async function openAccountMenu(page) {
   await page.click('#account-menu-toggle');
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });

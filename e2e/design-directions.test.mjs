@@ -73,8 +73,32 @@ for (const [file, { signs, extra }] of Object.entries(scenes)) {
   check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'c-build.html does not scroll sideways at phone width');
 }
 
+// #3653: the plan page for people in the bud (part of #3648): the microphone options over one 390x844 stage.
+{
+  const res = await page.goto(`${base}/c-people.html`, { waitUntil: 'load' });
+  check(res?.status() === 200, `c-people.html answers 200 (got ${res?.status()})`);
+  await page.waitForTimeout(800);
+  check(await page.locator('.moment-btn').count() === 6, 'c-people.html offers six moments');
+  const box = await page.locator('#stage').boundingBox();
+  check(box && Math.abs(box.width - 390) < 2 && Math.abs(box.height - 844) < 3, `c-people.html stage is drawn at 390x844 (${JSON.stringify(box)})`);
+  for (const moment of ['chat', 'vb', 'vc']) {
+    await page.click(`.moment-btn[data-moment="${moment}"]`);
+    await page.waitForTimeout(900);
+    check(await page.locator(`[data-moment-only="${moment}"][data-ui]`).first().isVisible(), `c-people.html moment ${moment} shows its own controls`);
+  }
+  await page.click('.moment-btn[data-moment="va"]');
+  await page.waitForTimeout(900);
+  check(await page.locator('.petal.live').isVisible(), 'c-people.html voice A shows the microphone petal');
+  await page.click('.moment-btn[data-moment="unread"]');
+  await page.waitForTimeout(900);
+  check(await page.locator('.bud-dot').isVisible(), 'c-people.html shows the one dot on the bud when something is waiting');
+  check(/Covers/.test(await page.textContent('#cover')), 'c-people.html reports how much of the screen it covers');
+  check(await page.locator('style').count() === 0, 'c-people.html uses no <style> element (the policy refuses it)');
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'c-people.html does not scroll sideways at phone width');
+}
+
 // The pictures are served.
-for (const file of ['world-walk.jpg', 'world-product.jpg', 'world-settings.jpg', 'a-walk.jpg', 'a-product.jpg', 'a-settings.jpg', 'b-walk.jpg', 'b-product.jpg', 'b-settings.jpg', 'a.css', 'b.css', 'frame.css', 'frame.js', 'strip.css', 'strip.js', 'c-build.css', 'c-build.js']) {
+for (const file of ['world-walk.jpg', 'world-product.jpg', 'world-settings.jpg', 'a-walk.jpg', 'a-product.jpg', 'a-settings.jpg', 'b-walk.jpg', 'b-product.jpg', 'b-settings.jpg', 'a.css', 'b.css', 'frame.css', 'frame.js', 'strip.css', 'strip.js', 'c-build.css', 'c-build.js', 'c-people.css', 'c-people.js']) {
   const res = await page.request.get(`${base}/${file}`);
   check(res.status() === 200, `${file} is served (got ${res.status()})`);
 }
