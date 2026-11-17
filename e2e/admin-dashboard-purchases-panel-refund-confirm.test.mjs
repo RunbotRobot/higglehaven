@@ -44,6 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import {
   launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, emailForLabel, grantAdmin,
+  openAddProductLeaf,
 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,7 +63,7 @@ await claimLandlet(seedPage);
 await chooseIdentity(seedPage, { mode: 'sell', label: LABEL, isNew: true });
 await seedPage.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await seedPage.waitForTimeout(300);
-await seedPage.click('#upload-model-btn');
+await openAddProductLeaf(seedPage);
 await seedPage.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await seedPage.fill('#upload-name', PRODUCT_NAME);
 await seedPage.fill('#upload-price', '25');

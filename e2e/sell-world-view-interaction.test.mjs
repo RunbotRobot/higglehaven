@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish, goToMode, openMyProducts } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode, openMyProducts, openAddProductLeaf } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,7 +24,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // One real product through the upload flow ...
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', 'Interaction Crate');
 await page.fill('#upload-price', '5');

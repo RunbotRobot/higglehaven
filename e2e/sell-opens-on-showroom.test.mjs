@@ -35,9 +35,10 @@ await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 await page.click('#bud-petal-sell-my-products');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
-const upload = await page.locator('#upload-model-btn').isVisible();
+// #3703: adding a product is the bud's Add a product petal now, not a button of the list.
+const upload = (await page.locator('#bud-petal-sell-add-product').count()) === 1;
 const status = (await page.textContent('#seller-status')) || '';
-console.log('after two taps: upload button visible, status:', upload, JSON.stringify(status));
+console.log('after two taps: Add a product petal present, status:', upload, JSON.stringify(status));
 
 // Closing it returns to the unobstructed showroom.
 await page.click('#seller-close-btn');
