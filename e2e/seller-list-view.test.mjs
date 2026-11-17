@@ -1,7 +1,7 @@
 // #541: Sell mode's new "List view" toggle — a thumbnail-first alternative
 // to the Manage rows, and tapping a card should jump back into Manage with
 // that product already expanded.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openMyProducts } from './helpers.mjs';
 
 const LABEL = 'List View Tester';
 const PRODUCT_NAME = 'List View Crate';
@@ -101,7 +101,7 @@ console.log('the tapped product\'s row is already expanded (should be true):', r
 // array) is the real way back in now.
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
-await page.click('#seller-showcase-manage-btn');
+await openMyProducts(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 const manageActiveAfterReopen = await page.locator('#seller-list').isVisible();

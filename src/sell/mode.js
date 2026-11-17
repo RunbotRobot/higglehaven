@@ -39,6 +39,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { registerBudPetals, openHowToMoveLeaf } from '../ui/bud.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
@@ -2220,6 +2221,16 @@ export function closeSellerModal() {
   updateModeNavUI();
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
+
+// #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
+// the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
+// two: My products reopens the product list (the bottom-right Products button it replaces is
+// gone), and How to move. Sell still opens onto My products and the list is still a sheet;
+// slices 2 and 3 of #3655 change those.
+registerBudPetals('sell', [
+  { id: 'my-products', label: 'My products', run: () => { void openSellerModal(); } },
+  { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
+]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
 // browse every product in the catalog (not just this seller's own) and
