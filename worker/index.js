@@ -1,3 +1,4 @@
+import { withNotFoundPage } from './lib/not-found-page.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
@@ -443,7 +444,7 @@ async function routeRequest(request, env, ctx) {
     });
   }
 
-  return env.ASSETS.fetch(request);
+  return withNotFoundPage(request, env, await env.ASSETS.fetch(request));
 }
 
 export default {
