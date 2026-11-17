@@ -4238,7 +4238,7 @@
          from just under it, the same place as every other leaf (.bud-leaf). */
       body[data-bud="on"] #settings-modal {
         padding-top: 76px;
-        padding-left: var(--space-xl);
+        padding-left: var(--space-2xl);
       }
       body[data-bud="on"] #settings-modal-content {
         max-height: calc(100vh - 92px);
