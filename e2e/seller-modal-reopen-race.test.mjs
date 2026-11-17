@@ -43,11 +43,16 @@ const productRow = () => page.locator('.seller-row').filter({ hasText: PRODUCT_N
 await productRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
 
+// Reopening My products goes through the bud's petal (it unfolds over ~0.4 s and playwright waits
+// for it to settle), which made the old 3 s hold too short: the save resolved before the reopened
+// row was inspected and the check read an already-settled row. Hold it well past the reopen.
+const SAVE_HOLD_MS = 9000;
+
 // Delay only the PATCH (the save), same shape as digital-goods.test.mjs's
 // own cross-panel race test — long enough to reliably close+reopen the
 // modal and inspect the freshly-rendered row before the response lands.
 await page.route('**/api/catalog/*', async (route) => {
-  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 3000));
+  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, SAVE_HOLD_MS));
   await route.continue();
 });
 
@@ -86,7 +91,7 @@ const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('butto
 console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
 
 // Wait past the delayed PATCH's own delay so its `finally` block runs.
-await page.waitForTimeout(3500);
+await page.waitForTimeout(SAVE_HOLD_MS + 500);
 
 const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isEnabled();
 console.log('that same button is enabled again once the pre-close save actually resolves (should be true — not stuck disabled forever):', reopenedSaveReenabledAfterSettling);
