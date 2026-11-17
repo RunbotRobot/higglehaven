@@ -41,7 +41,7 @@ import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this Product), for focus return after a notice.
-import { productCardBuyButton, productCardReviewButton } from './productCard.js';
+import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase } from './productCard.js';
 
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const checkoutModalEl = document.getElementById('checkout-modal');
@@ -379,6 +379,8 @@ export async function handleShopProductBuyClick() {
       // paid branch above rather than the dev-era "simulated" wording.
       await showNotice({ title: 'Purchase complete', message: 'Thank you!', returnFocusEl: productCardBuyButton() });
     }
+    // #3681: what was just bought may now be owned (an avatar, an animation).
+    refreshOwnedAfterPurchase();
     // #3256 (owner report): no immediate "Leave feedback for the seller?"
     // prompt here. Right after buying is too early to judge accuracy,
     // timeliness or communication (the buyer had not even equipped the

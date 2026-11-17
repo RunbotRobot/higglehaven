@@ -134,7 +134,11 @@ export function sellerLine(label) {
   return name ? `Sold by ${name}` : '';
 }
 
-export function productCardState({ template, inRange }) {
+// #3681: `owned` is true when the shopper already owns this product as a digital
+// good (an avatar or an animation they bought, src/shop/ownedProducts.js): the
+// card says so and offers no Buy, but they can still rate it and read its return
+// policy, since it is theirs.
+export function productCardState({ template, inRange, owned = false }) {
   const reach = !!inRange;
   const priced = template?.priceCents != null;
   if (template?.isTestModel) {
@@ -145,6 +149,9 @@ export function productCardState({ template, inRange }) {
   }
   if (!priced) {
     return { canBuy: false, canReview: reach, canReturnPolicy: false, stateText: 'Not for sale.' };
+  }
+  if (owned) {
+    return { canBuy: false, canReview: reach, canReturnPolicy: reach, stateText: 'You already own this.' };
   }
   if (template.stockQuantity === 0) {
     return { canBuy: false, canReview: reach, canReturnPolicy: reach, stateText: 'Out of stock.' };

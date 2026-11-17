@@ -30,6 +30,7 @@ import {
   clampAnchorRadius, placeProductCard, productCardState, sellerLine,
 } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
+import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 
 const cardEl = document.getElementById('product-card');
 const nameEl = document.getElementById('product-card-name');
@@ -123,11 +124,31 @@ function fillSellerLine(review) {
   });
 }
 
+// #3681: the last range the world reported for the open card, so the card can be
+// worked out again when the owned list arrives after it opened.
+let lastInRange = false;
+
+// Read once per page load (and again after a purchase); the card opens at once and
+// says "You already own this." when the answer arrives, never waiting on it.
+function refreshOwnedState(review, { force = false } = {}) {
+  loadOwnedProducts({ force }).then(() => {
+    if (review === openReview) syncProductCardActions(review, lastInRange);
+  });
+}
+
+// Called by the Buy flow once a purchase has finished, so a card that is still
+// open says so for what was just bought.
+export function refreshOwnedAfterPurchase() {
+  if (openReview) refreshOwnedState(openReview, { force: true });
+  else loadOwnedProducts({ force: true });
+}
+
 function fillCard(review) {
   const { name, priceText, notes } = productInfoParts(review.mesh.userData.template);
   nameEl.textContent = name;
   priceEl.textContent = priceText ?? '';
   fillSellerLine(review);
+  refreshOwnedState(review);
   notesEl.textContent = notes.map((note) => `(${note})`).join(' ');
   cardEl.setAttribute('aria-label', name);
   stateEl.textContent = '';
@@ -142,7 +163,9 @@ function fillCard(review) {
 // shopper stands next to it changes. The decision itself is productCardState.
 export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
-  const state = productCardState({ template: review.mesh.userData.template, inRange });
+  lastInRange = inRange;
+  const template = review.mesh.userData.template;
+  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId) });
   buyBtn.classList.toggle('visible', state.canBuy);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
