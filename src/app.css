@@ -4711,6 +4711,9 @@
         display: flex;
         gap: var(--space-xs);
       }
+      #auth-tabs[hidden] {
+        display: none;
+      }
       .auth-form {
         display: flex;
         flex-direction: column;
