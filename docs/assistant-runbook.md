@@ -65,8 +65,9 @@ assistants on the floor is part of how the place feels.
 
 Anything about *using* the world, in a shopper's terms:
 
-- **Getting around.** The left on-screen stick walks, the right one looks around.
-  The bird button switches flying on and off. The three buttons at the top
+- **Getting around.** Dragging a finger on the world walks, a second finger
+  dragging looks around, and a double-tap takes off or lands (there are no
+  on-screen sticks or fly button). The three buttons at the top
   (Shop, Build, Sell) switch what you are doing. The gear opens the account menu
   and Settings.
 - **Finding things.** Where to look for products, how to tap a product to see it,
