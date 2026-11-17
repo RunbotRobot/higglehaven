@@ -372,9 +372,40 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
     });
   });
   await installTransientFailureRetry(page);
+  budAware(page);
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
   return { browser, page, errors };
+}
+
+// #3688 (part of #3654): Build's Add item is a petal of the bud (it kept the id add-item-btn), so it
+// is only drawn while the bud is open. A test that clicks it, or waits for it as the sign that Build
+// is ready, goes through these two wrappers instead of knowing about the bud. Any other page a test
+// makes for itself can be passed through budAware too.
+const BUD_PETALS = new Set(['#add-item-btn']);
+export function budAware(page) {
+  const click = page.click.bind(page);
+  page.click = async (selector, options) => {
+    if (BUD_PETALS.has(selector) && !(await page.locator(selector).isVisible())) {
+      await page.click('#account-menu-toggle');
+      await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+    }
+    return click(selector, options);
+  };
+  const wait = page.waitForSelector.bind(page);
+  page.waitForSelector = async (selector, options = {}) => {
+    if (BUD_PETALS.has(selector) && !options.state) return wait(`${selector}:not([hidden])`, { ...options, state: 'attached' });
+    const handle = await wait(selector, options);
+    // The catalog opens as a short strip; the many tests written against the whole catalog (its
+    // grid, scopes, bundles, prompt mode) open it wide. The strip itself is build-bud-add-item's
+    // job, which waits on '#catalog-picker.visible.strip' so it is left alone here.
+    if (selector === '#catalog-picker.visible' && !options.state
+      && await page.evaluate(() => document.getElementById('catalog-picker')?.classList.contains('strip'))) {
+      await page.click('#catalog-all-items-btn');
+    }
+    return handle;
+  };
+  return page;
 }
 
 // Drives entry into Build or Sell mode, which now requires a real account
