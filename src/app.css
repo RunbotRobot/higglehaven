@@ -5964,7 +5964,7 @@
         font-size: var(--text-xl);
         font-weight: var(--weight-semibold);
         line-height: var(--leading-tight);
-        padding-right: var(--space-3xl);
+        padding-right: var(--space-2xl);
         overflow-wrap: anywhere;
       }
       #item-card-actions {
@@ -5976,7 +5976,7 @@
       }
       #item-card-actions button,
       #item-card-more button {
-        padding: var(--space-xs) var(--space-xl);
+        padding: var(--space-xs) var(--space-lg);
         min-height: 32px;
         border: none;
         border-radius: var(--radius-pill);
