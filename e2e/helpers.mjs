@@ -701,6 +701,23 @@ export async function openMyProducts(page) {
   await page.click('#bud-petal-sell-my-products');
 }
 
+// #3703 (Sell in the bud, 5/6): every way of adding a product starts at the bud's Add a product
+// petal, which opens one leaf asking which way. `way` is 'upload' (the upload steps) or
+// 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
+export async function openAddProductLeaf(page, way = 'upload') {
+  const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!expanded) await openAccountMenu(page);
+  await page.click('#bud-petal-sell-add-product');
+  await page.waitForSelector('#upload-step-choose:not([hidden])', { timeout: 5000 });
+  if (way === 'sell-this-too') {
+    await page.click('#add-product-sell-too-btn');
+    await page.waitForSelector('#sell-this-too-modal.visible', { timeout: 5000 });
+  } else {
+    await page.click('#add-product-upload-btn');
+    await page.waitForSelector('#upload-step-file:not([hidden])', { timeout: 5000 });
+  }
+}
+
 export async function openAccountMenu(page) {
   await page.click('#account-menu-toggle');
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
@@ -733,7 +750,7 @@ export async function budShows(page, selector) {
 }
 
 // Clicks down a vertical strip of screen points around (x, yStart..yEnd)
-// until #product-info's text includes `expectedText`, returning whatever
+// until the item card's title includes `expectedText`, returning whatever
 // text was showing when it stopped (a match, or the last attempt's text if
 // none matched). A placed item's own clickable footprint can be
 // meaningfully smaller once it's no longer wearing the selection
@@ -746,7 +763,7 @@ export async function clickUntilSelected(page, { x, yStart, yEnd, yStep = 10, ex
   for (let y = yStart; y <= yEnd; y += yStep) {
     await page.mouse.click(x, y);
     await page.waitForTimeout(waitAfterClick);
-    info = (await page.textContent('#product-info')) || '';
+    info = (await page.textContent('#item-card-name')) || '';
     if (info.includes(expectedText)) return info;
   }
   return info;

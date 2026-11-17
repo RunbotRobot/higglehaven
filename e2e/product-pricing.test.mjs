@@ -23,7 +23,7 @@
 // panel's own give-it-a-price-after-the-fact path.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -41,7 +41,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct({ name, price }) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   if (price !== undefined) await page.fill('#upload-price', price);
@@ -58,7 +58,7 @@ async function uploadProduct({ name, price }) {
 // spinner/placeholder) that reformat whatever the seller typed to
 // "$X,XXX.XX" once they leave the field — checked directly here, since
 // uploadProduct() below fills-and-submits in one go and never blurs.
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-price', '1234.5');
 await page.locator('#upload-price').blur();
@@ -70,7 +70,7 @@ await page.waitForFunction(() => !document.getElementById('upload-modal').classL
 // #1601: blank price at upload time is now rejected, not treated as "no
 // price set" — the wizard stays open on an error instead of creating the
 // product.
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', 'Suite Blank-Price Rejection Crate');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);

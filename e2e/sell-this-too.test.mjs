@@ -18,7 +18,7 @@
 // through the real upload wizard -- this test is about the cross-seller
 // attach flow, not re-covering the upload wizard itself (already covered
 // by e2e/seller-upload-and-resize.test.mjs and friends).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
 const SELLER_A = 'Sell This Too Seller A';
 const SELLER_B = 'Sell This Too Seller B';
@@ -61,8 +61,10 @@ await chooseIdentity(sellerBSession.page, { mode: 'sell', label: SELLER_B, isNew
 await sellerBSession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerBSession.page.waitForTimeout(300);
 
-const sellThisTooBtnVisible = await sellerBSession.page.locator('#sell-this-too-btn').isVisible();
-console.log('"Sell This Too" button visible in the Seller modal (should be true):', sellThisTooBtnVisible);
+// #3703: Sell This Too is a choice in the Add a product leaf (the bud's petal), not a button of
+// the Seller modal.
+const sellThisTooBtnVisible = (await sellerBSession.page.locator('#bud-petal-sell-add-product').count()) === 1;
+console.log('The Add a product petal (which leads to Sell This Too) exists in Sell (should be true):', sellThisTooBtnVisible);
 
 // #3249: price and stock are a form in the modal now, not two native prompts.
 // Refuse every native dialog to prove nothing depends on one.
@@ -73,7 +75,7 @@ sellerBSession.page.on('dialog', (dialog) => {
   return dialog.dismiss();
 });
 
-await sellerBSession.page.click('#sell-this-too-btn');
+await openAddProductLeaf(sellerBSession.page, 'sell-this-too');
 await sellerBSession.page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 await sellerBSession.page.locator('#sell-this-too-grid .seller-card').filter({ hasText: PRODUCT_NAME }).click();
 await sellerBSession.page.waitForSelector('#sell-this-too-form:not([hidden])', { timeout: 5000 });

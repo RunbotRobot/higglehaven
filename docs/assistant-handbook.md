@@ -603,8 +603,9 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - It will not go any further: it has reached a limit and the app stops it there,
   saying so at the top of the screen. If the message is about how high or how deep
   the lándlet goes, see the levels entry below.
-- You want to line it up with something nearby: tap "Snap" so it is green. A
-  dragged item then lines its edges and middle up with items close to it.
+- You want to line it up with something nearby: tap "More" on the card beside the
+  item, then "Snap" so it is yellow. A dragged item then lines its edges and
+  middle up with items close to it.
 - Wrong spot: the round logo button at the top left, then "Undo".
 
 ```controls build
@@ -635,7 +636,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 ### How do I copy an item?
 
-1. Tap the item, then tap "Copy" in the row above it. The top of the screen says
+1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
 2. Tap "Paste" at the bottom left. With the item still selected, the copy appears
    right on top of it.
@@ -659,7 +660,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 ### How do I remove an item, or get it back?
 
 1. Tap the item.
-2. Tap "Delete" in the row above it.
+2. Tap "Delete" on the card beside it.
 
 **You will see:** the item disappears at once. There is no "are you sure" for a
 single item.
@@ -825,7 +826,7 @@ top of the screen.
 lándlets are shown here.
 
 **If something goes wrong:**
-- "My products" says "No custom products yet — use "+ Upload Model" to add one."
+- "My products" says "No custom products yet — use "Add a product" in the menu."
   You have not uploaded anything yet. The next entry shows how.
 - The list is not on screen: it does not open by itself. Tap the round logo at the top
   left, then "My products".
@@ -840,8 +841,9 @@ lándlets are shown here.
 
 ### How do I put my own product up for sale?
 
-1. In Sell, open your list: tap the round logo at the top left, then "My products".
-   Tap "+ Upload Model". A window opens called "Upload Model".
+1. In Sell, tap the round logo at the top left (the bud), then "Add a product". A
+   small window opens under it and asks which way. Tap "Upload my own model". The
+   window is now called "Upload Model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
    in dollars, or 0 for a free product.
 3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
@@ -854,8 +856,8 @@ lándlets are shown here.
    other two so the proportions stay the same.
 6. Tap "Create Product".
 
-**You will see:** the window closes and the product is in your "My products" list
-and on your showroom shelf.
+**You will see:** the window closes and the product is on your showroom shelf (and in
+your "My products" list).
 
 **If something goes wrong:**
 - The window says "Name is required.", "Enter a price — use 0 for a free product."
@@ -870,14 +872,16 @@ and on your showroom shelf.
   makes a second one.
 
 ```controls sell
-#upload-model-btn | Upload Model
+#bud-petal-sell-add-product | Add a product
+#add-product-upload-btn | Upload my own model
 #upload-submit-btn | Add Product
 #upload-mode-video-btn | generate a model from a video
 ```
 
 ### How do I sell a product someone else already made?
 
-1. In "My products", tap "Sell This Too".
+1. In Sell, tap the round logo at the top left (the bud), then "Add a product", then
+   "Sell one that is already here".
 2. Look through the products, or type in "Search products". Tap the one you want to
    sell.
 3. Fill in "Your price" (0 for free). "Stock quantity (optional)" is how many you
@@ -893,7 +897,7 @@ price and stock. The original maker's listing is not changed.
 - The price is refused: it must be a number, 0 or more.
 
 ```controls sell
-#sell-this-too-btn | Sell This Too
+#add-product-sell-too-btn | Sell one that is already here
 #sell-this-too-search-input | Search products
 #sell-this-too-add-btn | Add listing
 #sell-this-too-back-btn | Back

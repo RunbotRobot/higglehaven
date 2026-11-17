@@ -1093,6 +1093,30 @@ most likely to come up again.
   words: all three modes show whichever mode you are in, with the current
   one marked.)
 
+- **A wait a person can see is first made short, and whatever is left
+  shows that things are working.** (2026-11-17, #3735.) Opening the app
+  from the owner's home-screen tile took about ten seconds, then less,
+  then two: "It felt like long enough that I'd assume the app was broken
+  and move on to something else if I was a casual user." They asked three
+  things in order: research why it is ever slow, why it varies, and what
+  changes; and for the wait itself, "something to occupy the user's
+  attention that also gives them the feeling that things are working.
+  Little tips about how to use higglehaven and some kind of quick-to-load
+  animation, paired with a status bar." So a slow step is measured before
+  it is dressed up, and the cause is fixed where it can be. A wait that
+  remains moves from its first second, shows progress that follows real
+  stages and never a timer, gives the person something worth reading, and
+  says plainly when a stage has failed. A still screen reads as a broken
+  app. This sits beside "Moving, looking and drawing never wait on
+  loading" (which covers the world once it is on screen) and applies to
+  every wait a person can see: opening, signing in, an upload, a model
+  being generated. The same day, on a sentence in the assistant window
+  that told people how long a waiting question is kept: "It seems like
+  superfluous information. Can we eliminate that?" (#3733.) That is "The
+  world is the product; every piece of interface has to earn the space it
+  takes from it" applied to a single sentence: text that helps nobody act
+  goes, and a session may remove such a line without asking.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -1700,6 +1724,14 @@ has drifted stale (a slow file grew heavier, or a new file landed in the
 wrong shard) — refresh it via `scripts/update-shard-weights.mjs <run_id>`
 against a recent green run, not a reason to start cancelling on
 wall-clock alone again.
+
+**Update (#3727, 2026-11-17): the 53-81 min figures above date from
+about 212 files; the suite is now ~332 files (~521 min of test time) and
+`SHARD_COUNT` is 8, so a healthy shard is ~65 min plus ~3 min of set-up
+(was ~130 min at 4 shards).** `e2e/shard-weights.json` was refreshed from
+run 44107330196. The patience rule is unchanged (nothing short of the
+360-minute job ceiling is a hang); only the baseline moved. The sum behind
+the count is in the comment above `SHARD_COUNT` in `ci.yml`.
 
 If you do end up cancelling one anyway (or it reaches a terminal state
 on its own), run `scripts/check-ci-shard-progress.mjs <job_id>`

@@ -59,7 +59,7 @@ await page.waitForTimeout(1000); // long enough for any same-tick overwrite to h
 const shown = await page.locator('#selection-action-status').innerText();
 check(/Couldn't bundle/.test(shown) && /removed or changed/.test(shown), `refusal text: ${shown}`);
 check(await page.locator('#selection-action-status').isVisible(), 'status still visible after a second');
-check((await page.textContent('#product-info')).includes('2 items selected'), 'selection summary still shown separately');
+check((await page.textContent('#item-card-name')).includes('2 items selected'), 'selection summary still shown separately');
 check(await page.locator('#group-item').isEnabled(), 'Group is usable again after a refusal');
 
 // #3303 (owner decision: any text a user can read, they can copy; #3348: by selecting it). On a phone
@@ -105,7 +105,7 @@ if ((await page.getAttribute('#toggle-multiselect', 'aria-pressed')) !== 'true')
 // The freshly placed tree is already selected; tapping the first one adds it.
 await page.mouse.click(posA.x, posA.y);
 await page.waitForTimeout(300);
-check((await page.textContent('#product-info')).includes('2 items selected'), 'two items selected for the second Group');
+check((await page.textContent('#item-card-name')).includes('2 items selected'), 'two items selected for the second Group');
 const before = groupRequests;
 await page.click('#group-item');
 await page.waitForTimeout(800);

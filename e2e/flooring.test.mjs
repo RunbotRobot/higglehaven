@@ -4,7 +4,7 @@
 // tapped or how its Move gizmo's Z arrow is dragged.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -20,7 +20,7 @@ await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
@@ -101,7 +101,7 @@ const zIsGroundLevel = flooringInstance !== undefined;
 const preDragZ = flooringInstance?.z;
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-let groupSelectionText = await page.textContent('#product-info');
+let groupSelectionText = await page.textContent('#item-card-name');
 
 // Flooring (already selected from placement) carries into multi-select
 // mode. The tree's own clickable footprint sits above the ground point it
@@ -113,7 +113,7 @@ let groupSelectionText = await page.textContent('#product-info');
 for (let y = 370; y >= 280; y -= 10) {
   await page.mouse.click(210, y);
   await page.waitForTimeout(250);
-  const text = await page.textContent('#product-info');
+  const text = await page.textContent('#item-card-name');
   groupSelectionText = text;
   if (/2.*selected/i.test(text)) break;
 }

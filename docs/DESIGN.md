@@ -65,8 +65,8 @@ the world, one bud) and chose the third (2026-11-16, #3540):
 Recorded in AGENTS.md as "The interface is one bud". The living reference is
 `public/design-directions/c.html` (with `c.css` and `c.js`); A and B stay beside
 it as a record and are not built. The tracking issue is #3648, and the bud's own
-contract (the names and hooks every leaf builds on) is leaf 1, #3649: it is added
-here when posted. Until then, read c.css.
+contract (the names and hooks every leaf builds on) is leaf 1, #3649, and is in
+"The bud" below (`src/ui/bud.js`); `c.css` stays the visual reference.
 
 The resting state of the interface is absent. One small, alive, branded thing is
 the door to everything else, and findability is paid for by teaching, not by

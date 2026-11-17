@@ -3,7 +3,7 @@
 // "0.00" placeholder that read as an entered value. The price is now checked
 // on the step that has the field (before any file is needed), and the field
 // has no placeholder, only a helper line.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openAddProductLeaf } from './helpers.mjs';
 
 const LABEL = 'Upload Price Step Tester';
 
@@ -14,7 +14,7 @@ await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 
 const placeholder = await page.locator('#upload-price').getAttribute('placeholder');

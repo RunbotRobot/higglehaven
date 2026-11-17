@@ -53,25 +53,27 @@ await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt
 const box = await page.evaluate(() => document.getElementById('rotation-readout').getBoundingClientRect().toJSON());
 // #3640, #3573: it sits under the name and the toolbar row, so "at the top" means the top 45%.
 check(box.bottom <= 844 * 0.45 && box.left >= 0 && box.right <= 390, `the readout sits at the top and inside the viewport (${JSON.stringify(box)})`);
-// #3640, #3573: the top of Build is a stack: the item's name, the toolbar row,
-// then the readout. None of them overlaps another, however many lines the name
-// wraps to (the tree's name is long enough to wrap at 390 px). The readout
-// used to be checked against the name only, and so was drawn on top of the
-// toolbar buttons.
+// #3640, #3573, #3689: the top of Build is a stack: the toolbar row, then the
+// readout; the item's name is the item card's title beside the item now, so the
+// readout is never pushed down by a wrapped name. The readout used to be drawn on
+// top of the toolbar buttons.
 const stack = await page.evaluate(() => {
   const box = (id) => document.getElementById(id).getBoundingClientRect();
-  const name = box('product-info');
   const toolbar = box('gizmo-mode-controls');
   const readout = box('rotation-readout');
-  return { nameHeight: name.height, nameBottom: name.bottom, toolbarTop: toolbar.top, toolbarBottom: toolbar.bottom, readoutTop: readout.top };
+  return { toolbarTop: toolbar.top, toolbarBottom: toolbar.bottom, readoutTop: readout.top };
 });
-check(stack.nameHeight > 0 && stack.toolbarTop >= stack.nameBottom, `the toolbar row starts below the item's name box (${JSON.stringify(stack)})`);
 check(stack.readoutTop >= stack.toolbarBottom, `the readout starts below the toolbar row, not on its buttons (${JSON.stringify(stack)})`);
 const selectable = await page.evaluate(() => {
   const s = getComputedStyle(document.getElementById('rotation-readout'));
   return s.userSelect !== 'none' && s.pointerEvents !== 'none';
 });
 check(selectable, 'the readout text is selectable');
+
+// #3689: Snap lives under More on the item card; open it once if it is folded.
+const openSnap = async () => {
+  if (!(await page.isVisible('#toggle-snap'))) await page.click('#item-card-more-btn');
+};
 
 // Snap is on by default: a 40 degree turn lands on 45 (a multiple of 15).
 await page.evaluate((r) => window.__testRotateSelected('z', r, { dragAxis: true }), 40 * DEG);
@@ -81,6 +83,7 @@ await page.evaluate((r) => window.__testRotateSelected('z', r, { dragAxis: true 
 await waitReadout(/Turn 60\.0° /, 'Snap on: lands on a step of the ABSOLUTE angle, not of this turn');
 
 // Snap off: free, but within a degree of a right angle settles exactly onto it.
+await openSnap();
 await page.click('#toggle-snap');
 await page.evaluate((r) => window.__testRotateSelected('z', r, { dragAxis: true }), 29.4 * DEG);
 await waitReadout(/Turn 90\.0° /, 'Snap off: 89.4 settles onto exactly 90.0');
@@ -95,6 +98,7 @@ check(await readoutText() !== null, 'the readout stays after the drag ends');
 await page.click('#mode-move');
 await page.waitForTimeout(400);
 check(await readoutText() === null, 'the readout goes away when Rotate is off');
+await openSnap();
 await page.click('#toggle-snap'); // Snap back on
 
 // ---- 2. A bundle ----
@@ -134,6 +138,7 @@ await page.click('#mode-rotate');
 await waitReadout(/Tilt 30\.0° \(red ring\)/, 'selecting the bundle again still reads 30.0');
 
 // Back to exactly upright with Snap off: 30 - 29.5 = 0.5 absolute settles onto 0.
+await openSnap();
 await page.click('#toggle-snap');
 await page.evaluate((r) => window.__testRotateBundle('x', r, { dragAxis: true }), -29.5 * DEG);
 await waitReadout(/Tilt 0\.0° \(red ring\)/, 'Snap off: 0.5 off upright settles onto exactly 0.0');

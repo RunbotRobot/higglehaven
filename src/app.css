@@ -813,8 +813,8 @@
       body[data-bud="on"] #mode-nav { display: none; }
       body[data-bud="on"] #account-menu-toggle .bud-gear { display: none; }
       body[data-bud="on"] #account-menu-toggle {
-        width: 56px;
-        height: 56px;
+        width: var(--bud-size);
+        height: var(--bud-size);
         min-width: 0;
         min-height: 0;
         padding: 0;
@@ -824,7 +824,7 @@
         justify-content: center;
         background: rgb(255 255 255 / 0.5);
         box-shadow: var(--shadow-card);
-        animation: bud-breathe 3.4s ease-in-out infinite;
+        animation: bud-breathe var(--motion-breath) ease-in-out infinite;
       }
       body[data-bud="on"] #account-menu-toggle.active {
         background: rgb(255 255 255 / 0.8);
@@ -838,7 +838,7 @@
         left: 64px;
         top: 17px;
         padding: 6px var(--space-md);
-        border-radius: 12px 3px 12px 3px;
+        border-radius: var(--radius-word);
         background: rgb(255 255 255 / 0.7);
         color: var(--ink);
         font: var(--text-xs)/1 var(--font-sans);
@@ -860,9 +860,9 @@
       body[data-bud="on"] #account-menu-panel button {
         min-height: 44px;
         padding: 10px 18px;
-        border-radius: 24px 5px 24px 5px;
+        border-radius: var(--radius-petal);
         background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
-        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
+        box-shadow: var(--shadow-petal);
         font-size: var(--text-md);
         white-space: nowrap;
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
@@ -890,7 +890,7 @@
         max-height: calc(100vh - 100px);
         overflow-y: auto;
         padding: var(--space-lg) var(--space-lg) var(--space-lg);
-        border-radius: 30px 6px 30px 6px;
+        border-radius: var(--radius-leaf);
         background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
         box-shadow: var(--shadow-card);
         color: var(--ink);
@@ -969,6 +969,18 @@
       #account-menu-panel button:hover {
         background: rgb(var(--ink-rgb) / 0.08);
       }
+      /* #3700 (follow-up, from #3655): My products can be open when the bud is tapped, and the petals
+         then unfold over its title and rows with both fully readable. It stays open (the owner's
+         call, #3626: what was open stays open behind what is opened on top of it, in case the
+         question is about it), so while the bud is open it steps back: faint and not tappable, and
+         the petals read clearly in front of it. */
+      #seller-modal-content {
+        transition: opacity var(--motion-quick) var(--ease-soft);
+      }
+      body:has(#account-menu-panel.expanded) #seller-modal-content {
+        opacity: 0.28;
+        pointer-events: none;
+      }
       #account-menu-landcap {
         padding: var(--space-sm) var(--space-lg);
         margin-top: var(--space-3xs);
@@ -1002,19 +1014,21 @@
         color: var(--pill-text);
         opacity: 0.75;
       }
+      /* #3653: a dot on the petal that holds something waiting, never a number (the count is inside). */
       #notifications-badge,
       #friends-badge,
       #dm-badge {
         display: inline-block;
-        min-width: 15px;
+        width: 10px;
+        height: 10px;
         margin-left: var(--space-xs);
-        padding: 0 var(--space-2xs);
-        border-radius: var(--radius-pill);
-        background: var(--danger-bright);
-        color: var(--white);
-        font-size: var(--text-2xs);
-        line-height: 15px;
-        text-align: center;
+        border-radius: var(--radius-round);
+        background: var(--petal-yellow);
+        box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
+        font-size: 0;
+        line-height: 0;
+        overflow: hidden;
+        vertical-align: middle;
       }
       #notifications-badge[hidden],
       #friends-badge[hidden],
@@ -1649,6 +1663,14 @@
       body:has(#catalog-picker.visible) #product-info {
         display: none;
       }
+      /* #3689: the selected item's card is what the name pill used to be, so it
+         steps aside for the picker the same way (the e2e caught it covering the
+         picker's Close button: catalog-search-scope.test.mjs). visibility, not
+         display, so the card keeps its place and comes back unchanged when the
+         picker closes by any of its paths. */
+      body:has(#catalog-picker.visible) #item-card {
+        visibility: hidden;
+      }
       #gizmo-mode-controls {
         position: fixed;
         /* #3573: never above the bottom of the item's name box (set by
@@ -1854,12 +1876,14 @@
         font-weight: var(--weight-semibold);
         opacity: 0.75;
       }
-      #gizmo-mode-controls button.pressed {
+      #gizmo-mode-controls button.pressed,
+      #item-card button.pressed {
         transform: scale(0.92);
         background: var(--brand-green);
         color: var(--ink);
       }
-      #delete-item {
+      /* #3689: Delete lives in the item card now; it keeps its danger colour. */
+      #item-card #delete-item {
         background: var(--danger);
         color: var(--white);
       }
@@ -2371,8 +2395,6 @@
         font-size: var(--text-md);
         line-height: 1;
       }
-      #upload-model-btn,
-      #sell-this-too-btn,
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
@@ -2502,6 +2524,41 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-lg);
+      }
+      /* #3703 (Sell in the bud, 5/6): in Sell the Add a product leaf, and the Sell This Too sheet it
+         leads to, grow from under the bud like Settings does (#3652): no dimming scrim, the leaf's
+         own shape, scrolling inside itself. */
+      body[data-bud="on"] #upload-modal,
+      body[data-bud="on"] #sell-this-too-modal {
+        justify-content: flex-start;
+        align-items: flex-start;
+        background: transparent;
+        padding: 76px var(--space-2xl) var(--space-2xl);
+      }
+      body[data-bud="on"] #upload-modal-content,
+      body[data-bud="on"] #sell-this-too-modal-content {
+        box-sizing: border-box;
+        max-height: calc(100vh - 92px);
+        max-height: calc(100dvh - 92px);
+        max-width: 316px;
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        box-shadow: var(--shadow-card);
+        border-radius: 30px 6px 30px 6px;
+      }
+      .add-product-choice {
+        padding: var(--space-lg) var(--space-2xl);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: var(--pill-text);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        text-align: left;
+        cursor: pointer;
+      }
+      #upload-step-choose:not([hidden]) {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
       }
       #sell-this-too-modal-content h2 {
         margin: 0;
@@ -4865,27 +4922,29 @@
         color: var(--white);
       }
       /* Same modal shell as #settings-modal. */
+      /* #3653: a leaf of the bud, not a modal: a soft sheet by the bud, no scrim over the world
+         (the same shape as .bud-leaf; the elements and ids stay so what leans on them still works). */
       #notifications-modal {
         position: fixed;
-        inset: 0;
-        z-index: 20;
+        top: 76px;
+        left: 12px;
+        z-index: 22;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(340px, calc(100vw - 24px));
       }
       #notifications-modal.visible {
-        display: flex;
+        display: block;
       }
       #notifications-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 360px;
-        max-height: 80vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
@@ -5119,27 +5178,29 @@
          action buttons per section rather than three separate row classes,
          since the row body itself (label + optional location line) is
          identical across all three. */
+      /* #3653: a leaf of the bud, not a modal: a soft sheet by the bud, no scrim over the world
+         (the same shape as .bud-leaf; the elements and ids stay so what leans on them still works). */
       #friends-modal {
         position: fixed;
-        inset: 0;
-        z-index: 20;
+        top: 76px;
+        left: 12px;
+        z-index: 22;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(340px, calc(100vw - 24px));
       }
       #friends-modal.visible {
-        display: flex;
+        display: block;
       }
       #friends-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 360px;
-        max-height: 80vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
@@ -5784,7 +5845,7 @@
          c.css, .bloom and .buy). All its text is selectable (standing
          decision "Any text a user can read, they can copy"); only the mist
          drawn around it is not, and the mist holds no text. */
-      #product-card {
+      .world-card {
         position: fixed;
         left: 0;
         top: 0;
@@ -5807,16 +5868,16 @@
         flex-direction: column;
         gap: var(--space-xs);
       }
-      #product-card[data-side='left'] {
+      .world-card[data-side='left'] {
         transform-origin: right center;
       }
-      #product-card[data-side='above'] {
+      .world-card[data-side='above'] {
         transform-origin: center bottom;
       }
-      #product-card[data-side='below'] {
+      .world-card[data-side='below'] {
         transform-origin: center top;
       }
-      #product-card[hidden] {
+      .world-card[hidden] {
         display: none;
       }
       #product-card-name {
@@ -5912,7 +5973,7 @@
       /* A small pointer toward the product, on the side facing it, drawn fully
          outside the card. Gone when the product is off screen: there is nothing
          to point at. */
-      #product-card::before {
+      .world-card::before {
         content: '';
         position: absolute;
         top: calc(var(--pointer-y, 24px) - 8px);
@@ -5920,28 +5981,28 @@
         height: 0;
         border: 8px solid transparent;
       }
-      #product-card[data-side='right']::before {
+      .world-card[data-side='right']::before {
         left: -15px;
         border-right-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='left']::before {
+      .world-card[data-side='left']::before {
         right: -15px;
         border-left-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
       /* Above or below the product (a product in the middle of a narrow screen
          has no room beside it): the pointer is on the card's bottom or top edge. */
-      #product-card[data-side='above']::before {
+      .world-card[data-side='above']::before {
         top: auto;
         bottom: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-top-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='below']::before {
+      .world-card[data-side='below']::before {
         top: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-bottom-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-edge='true']::before {
+      .world-card[data-edge='true']::before {
         display: none;
       }
       /* Things arrive in the world through fog; nothing pops in (standing
@@ -5950,10 +6011,10 @@
          while the mist around it thins and spreads. The timeline is the
          bloom's own (--motion-bloom), shorter than a landlet's arrival: a tap
          is not a load. */
-      #product-card[data-state='blooming'] {
+      .world-card[data-state='blooming'] {
         animation: product-card-bloom var(--motion-bloom) var(--ease-bloom) both;
       }
-      #product-card[data-state='blooming']::after {
+      .world-card[data-state='blooming']::after {
         content: '';
         position: absolute;
         inset: -28px;
@@ -5971,11 +6032,77 @@
         from { opacity: 1; scale: 0.7; }
         to { opacity: 0; scale: 1.35; }
       }
+      /* #3689: the card of the selected item in Build. Shell, pointer and bloom
+         are the shared .world-card rules above; only its contents are here.
+         Its text (the item's name) is selectable like every text surface. */
+      #item-card-name {
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
+        line-height: var(--leading-tight);
+        padding-right: var(--space-2xl);
+        overflow-wrap: anywhere;
+      }
+      #item-card-actions {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: var(--space-xs);
+      }
+      #item-card-actions button,
+      #item-card-more button {
+        padding: var(--space-xs) var(--space-lg);
+        min-height: 32px;
+        border: none;
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #item-card-actions button:disabled,
+      #item-card-more button:disabled {
+        opacity: 0.5;
+      }
+      #item-card-actions button.active,
+      #item-card-more button.active {
+        background: var(--petal-yellow);
+        color: var(--ink);
+      }
+      #item-card-more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+      }
+      #item-card-more[hidden] {
+        display: none;
+      }
+      /* Multi-select: the next taps add items, so the card shrinks to its title
+         (what is selected) and every tap goes through it to the world. Copy,
+         Delete and More are back when multi-select is turned off, with the
+         selection carried over. */
+      #item-card.pass-through {
+        pointer-events: none;
+      }
+      #item-card.pass-through #item-card-actions,
+      #item-card.pass-through #item-card-more,
+      #item-card.pass-through #item-card-close-btn {
+        display: none;
+      }
+      #item-card.pass-through #item-card-name {
+        padding-right: 0;
+      }
+      #item-card-close-btn {
+        position: absolute;
+        top: var(--space-xs);
+        right: var(--space-xs);
+      }
       @media (prefers-reduced-motion: reduce) {
-        #product-card[data-state='blooming'] {
+        .world-card[data-state='blooming'] {
           animation: product-card-fade 0.25s linear both;
         }
-        #product-card[data-state='blooming']::after {
+        .world-card[data-state='blooming']::after {
           display: none;
         }
         @keyframes product-card-fade {

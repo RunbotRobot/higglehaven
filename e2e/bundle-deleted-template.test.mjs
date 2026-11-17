@@ -15,7 +15,7 @@
 // the test can authenticate as.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish, saveBundleAs, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish, saveBundleAs, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -31,7 +31,7 @@ await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
@@ -93,7 +93,7 @@ await page.mouse.click(100, 500);
 await page.waitForTimeout(300);
 await page.mouse.click(320, 500);
 await page.waitForTimeout(300);
-const selectionText = await page.textContent('#product-info');
+const selectionText = await page.textContent('#item-card-name');
 console.log('selection status before saving (should say 2 items selected):', selectionText);
 
 await saveBundleAs(page, LABEL);
@@ -105,7 +105,11 @@ await page.waitForFunction(
 
 // Both crates are still selected (Save Bundle doesn't clear selection) —
 // delete the placed instances so the template's ON DELETE RESTRICT FK no
-// longer has anything blocking it.
+// longer has anything blocking it. #3689: while Multi-Select is on the item card
+// is only a title (its taps go through to the world), so turn Multi-Select off
+// first; the selection carries over and the card's Delete is back.
+await page.click('#toggle-multiselect');
+await page.waitForTimeout(300);
 await page.click('#delete-item');
 await page.waitForTimeout(300);
 
