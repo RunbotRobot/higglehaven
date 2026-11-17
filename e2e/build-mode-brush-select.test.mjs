@@ -68,7 +68,11 @@ console.log("C's real perpendicular distance from the A-B line in screen px (the
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 
+// #3691: choosing Multi-Select puts the Tools leaf away; the Brush slider is in it, so open it again.
+await page.click('#multiselect-brush-size-input', { trial: true });
 const brushControlVisibleOnceMultiSelectOn = await page.locator('#multiselect-brush-control').isVisible();
+await page.click('.bud-leaf-close');
+await page.waitForTimeout(200);
 console.log('brush size control appears once multi-select turns on (should be true):', brushControlVisibleOnceMultiSelectOn);
 
 // Small brush, just enough to cover A/B's own exact points but well short

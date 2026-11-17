@@ -301,6 +301,12 @@ by touching the world. The module is `src/ui/bud.js`:
   existing elements (Levels borrows the level label and the Up/Down/Build/Dig
   panel, parked in `#level-controls`) and hands them back there, so the
   handlers on them never have to be rewritten.
+- Tools (#3691) is the same pattern for Multi-Select (with its Brush slider), Measure and
+  Paste, parked in `#tool-controls`. Choosing Multi-Select, Measure or Paste puts the
+  leaf away so the world is clear; while Multi-Select or Measure is on the bud wears
+  "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
+  Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
+  plan blooms it beside the selection; that is a later slice).
 - `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
   unread mark; it clears when none are left.
 - The bud is the existing account toggle and its petals are the buttons of the

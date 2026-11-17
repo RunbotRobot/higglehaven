@@ -9,8 +9,11 @@ await claimLandlet(page);
 await page.waitForTimeout(500);
 
 const shown = async (id) => page.locator(id).isVisible();
+// #3691: Paste is lent to the Tools leaf, so it is not drawn until that is open; what this test
+// is about is whether it is offered, which is its `hidden` and `disabled`.
+const pasteOffered = () => page.locator('#paste-btn').evaluate((el) => !el.hidden && !el.disabled);
 // #3690: Redo is half of the Undo/Redo petal of the bud, so it is looked for with the bud open.
-const before = { paste: await shown('#paste-btn'), redo: await budShows(page, '#redo-btn') };
+const before = { paste: await pasteOffered(), redo: await budShows(page, '#redo-btn') };
 
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
@@ -22,7 +25,7 @@ await page.waitForTimeout(800);
 const selected = { unbundle: await shown('#ungroup-item'), edit: await shown('#edit-bundle-item') };
 await page.click('#copy-item');
 await page.waitForTimeout(300);
-const pasteAfterCopy = await shown('#paste-btn');
+const pasteAfterCopy = await pasteOffered();
 await budClick(page, '#undo-btn');
 await page.waitForTimeout(800);
 const redoAfterUndo = await budShows(page, '#redo-btn');
