@@ -175,9 +175,8 @@ and nothing else changes.
 | `--text-sm` | 13px | the default for HUD pills and controls |
 | `--text-md` | 14px | the default for dialog body text |
 | `--text-lg` | 16px | emphasis inside a dialog |
-| `--text-xl` | 17px | dialog and card titles |
-| `--text-2xl` | 18px | the largest title |
-| `--text-3xl` | 20px | a headline (the title screen) |
+| `--text-xl` | 18px | dialog and card titles |
+| `--text-2xl` | 20px | a headline (the title screen) |
 | `--leading-none` | 1 | single-line controls |
 | `--leading-tight` | 1.3 | titles |
 | `--leading-normal` | 1.4 | body text |
@@ -185,9 +184,9 @@ and nothing else changes.
 | `--weight-regular` | 400 | body |
 | `--weight-semibold` | 600 | titles, buttons, the active tab |
 
-Two text sizes are still written as literals because they are used a handful
-of times and sit between steps: 10px and 15px. A restyling should move them to
-a step or drop them.
+No font size in `src/app.css` is a pixel number: all are tokens. (In the #3656
+pass the 17px size became 16px, the stray 10px and 15px sizes moved onto 11px
+and 16px, and 18px and 20px took the names `--text-xl` and `--text-2xl`.)
 
 ## Space
 
@@ -201,9 +200,7 @@ Padding, margins and gaps are built from these steps.
 | `--space-sm` | 8px |
 | `--space-md` | 10px |
 | `--space-lg` | 12px |
-| `--space-xl` | 14px |
 | `--space-2xl` | 16px |
-| `--space-3xl` | 18px |
 
 Generous is the aim: a dialog's inner padding is `--space-2xl` or more, and a
 gap between two controls is never smaller than `--space-xs`. Touch targets are
@@ -214,12 +211,9 @@ control that may sit in a settings list is 32px tall.
 
 | token | value | use |
 |---|---|---|
-| `--radius-xs` | 4px | small inputs and badges |
-| `--radius-sm` | 6px | compact buttons |
-| `--radius-md` | 8px | buttons, fields, rows |
-| `--radius-lg` | 10px | cards inside a dialog |
-| `--radius-xl` | 12px | media and previews |
-| `--radius-2xl` | 14px | dialogs |
+| `--radius-sm` | 4px | small inputs, badges and swatches |
+| `--radius-md` | 8px | buttons, fields, rows and cards inside a dialog |
+| `--radius-lg` | 12px | dialogs, media and previews |
 | `--radius-pill` | 999px | the HUD pills and any control meant to feel soft |
 | `--radius-round` | 50% | round buttons (fly, joystick, close) |
 | `--radius-petal` | 24px 5px 24px 5px | a petal of the bud |
@@ -348,7 +342,35 @@ as channels). What the numbers say about the clutter:
   large) plus pill and round would be enough.
 - **22 spacing steps** where 8 would do; 5, 7, 3 and 1px are one-offs.
 
-The direction is chosen (the bud). Collapsing those is still a change of values
-in `src/tokens.css` and the removal of the redundant tokens, and it moves every
-surface at once, so it is its own reviewed pass with before and after pictures
-(#3656 follow-up), not done here: this change only adds the bud's tokens.
+The direction is chosen (the bud), and the collapse happened in #3656 (the
+numbers above are from before it; the table below is after it):
+
+| what | distinct in use | hard-coded | uses on a token |
+|---|---|---|---|
+| font sizes | 9 | 2 | 329 |
+| font families | 3 | 2 | 0 |
+| colours, with opacity | 61 | 12 | 631 |
+| colours, hues only | 23 | 7 | 0 |
+| corner radii | 5 | 0 | 205 |
+| shadows | 3 | 1 | 2 |
+| spacing steps | 17 | 11 | 583 |
+
+(Counted on the stylesheet the pass was made on. The bud leaves that landed
+alongside it bring their own literals, such as the leaf corner shapes and a few
+sizes; `node scripts/design-census.mjs` gives the live figures, and moving those
+onto tokens belongs to the bud contract.) What the pass did, and the pixels it moved:
+
+- **Text:** 17px (26 uses, dialog and card titles) is now 16px; 18px and 20px
+  are `--text-xl` and `--text-2xl`. The stray 10px and 15px sizes (three uses)
+  are on 11px and 16px.
+- **Radii:** eight steps (4, 6, 8, 10, 12, 14 plus two stray literals) are three,
+  `--radius-sm` 4px, `--radius-md` 8px and `--radius-lg` 12px. 6px and 10px went
+  to 8px, 14px to 12px.
+- **Spacing:** the 14px step now uses `--space-lg` (12px) and the 18px step uses
+  `--space-2xl` (16px); both old tokens are gone. The off-scale 3, 5, 7 and 9px literals in
+  padding, gap and margin moved to the nearest step.
+- **Left as they are, on purpose:** layout constants that are not scale steps
+  (the centring margins of -22px, a 32px gutter, the 36 to 56px top padding that
+  clears a close button, hairline 1px borders), and one-off colours and the
+  90ms press transition. The colours are the in-world labels' translucent
+  whites and corals; a later pass can fold them into the palette.
