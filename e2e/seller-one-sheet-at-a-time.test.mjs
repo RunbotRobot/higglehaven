@@ -33,13 +33,17 @@ await page.click('#sell-this-too-close-btn');
 await page.waitForFunction(() => !document.getElementById('sell-this-too-modal').classList.contains('visible'), null, { timeout: 10000 });
 results.backAfterSellThisToo = !(await sellerHidden());
 
-// Settings.
+// Settings. #3701: opening the bud folds My products away (the petals never unfold over it), so
+// Settings opens on a clear screen and My products comes back from its petal.
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 10000 });
-results.hiddenUnderSettings = await sellerHidden();
+results.hiddenUnderSettings = await page.evaluate(() => !document.getElementById('seller-modal').classList.contains('visible'));
 await page.click('#settings-close-btn');
 await page.waitForFunction(() => !document.getElementById('settings-modal').classList.contains('visible'), null, { timeout: 10000 });
+await openAccountMenu(page);
+await page.click('#bud-petal-sell-my-products');
+await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 results.backAfterSettings = !(await sellerHidden());
 
 // The delete confirmation is the shared confirm modal; it is driven by the

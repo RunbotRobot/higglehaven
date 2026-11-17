@@ -2222,6 +2222,16 @@ export function closeSellerModal() {
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
 
+// #3701 (higglehaven1's look at Sell on the live site): opening the bud while My products is open
+// unfolded the petals over the list, both readable at once. The list is a leaf now, so the bud
+// opening folds it. A sheet opened from the list (Upload, Sell This Too, the delete
+// confirmation, Settings) hides the list behind it, and then the bud leaves everything as it is.
+document.addEventListener('bud-opening', () => {
+  if (!sellerModalEl.classList.contains('visible')) return;
+  if (document.querySelector('#upload-modal.visible, #sell-this-too-modal.visible, #confirm-modal.visible, #settings-modal.visible')) return;
+  closeSellerModal();
+});
+
 // #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
 // the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
 // two: My products reopens the product list (the bottom-right Products button it replaces is

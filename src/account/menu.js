@@ -308,7 +308,10 @@ notificationsClearReadBtn.addEventListener('click', async () => {
 // than a separate modal.
 const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
 async function refreshAccountMenuLandCap() {
-  if (!builderId) {
+  // #3701: the cap line belongs to building. In Sell it sat in the bud's petal column with no
+  // petal behind it and read as a rendering fault (higglehaven1's look at the live site), so
+  // it is not drawn there.
+  if (!builderId || currentMode === 'sell') {
     accountMenuLandCapEl.hidden = true;
     return;
   }
@@ -1101,6 +1104,9 @@ accountMenuToggle.addEventListener('click', () => {
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
   accountMenuToggle.setAttribute('aria-expanded', String(expanding));
   if (expanding) {
+    // #3701: a leaf-shaped sheet that is open (Sell's My products) folds when the bud opens, so
+    // the petals never unfold over it.
+    document.dispatchEvent(new CustomEvent('bud-opening'));
     refreshAccountMenuLandCap();
     refreshAccountMenuTaxNotice();
     // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
