@@ -295,6 +295,10 @@ by touching the world. The module is `src/ui/bud.js`:
 - The bud is the existing account toggle and its petals are the buttons of the
   account panel, so a row there is already a petal. Do not rebuild a panel to
   make a petal; move it, and remove the old control in the same change.
+- Settings is a leaf in the same way (#3652): a soft sheet at the bud's corner with no
+  dimming scrim, so the world shows around it; it stays inside the screen and scrolls
+  inside itself. A panel that moves into the bud takes this look, not a full-screen
+  dialog.
 - The glow, never a scale, is the bud's breath: a control that moves is hard to
   tap, and cannot be clicked by a test.
 

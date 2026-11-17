@@ -831,7 +831,8 @@
         animation: none;
       }
       body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
-      body[data-bud="on"][data-bud-new] .bud-word {
+      body[data-bud="on"][data-bud-new] .bud-word,
+      body[data-bud="on"][data-bud-word] .bud-word {
         display: block;
         position: absolute;
         left: 64px;
@@ -1310,35 +1311,8 @@
       body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
         --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
       }
-      /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
-         clear of the joysticks (bottom corners), the fly button (bottom centre)
-         and the mode buttons (top right). */
-      #assistant-chat-pill {
-        position: fixed;
-        z-index: 32;
-        left: 8px;
-        top: 38%;
-        min-height: 36px;
-        max-width: 150px;
-        padding: 0 var(--space-lg);
-        border: none;
-        border-radius: var(--radius-pill);
-        background: rgb(var(--pill-rgb) / 0.92);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-none) var(--font-sans);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        cursor: pointer;
-      }
-      #assistant-chat-pill[hidden] {
-        display: none;
-      }
-      #assistant-chat-pill.unread {
-        background: var(--brand-green);
-        color: var(--ink);
-        font-weight: var(--weight-semibold);
-      }
+      /* #3653: a minimised conversation has no pill: the bud wears her name (and a dot when she has
+         replied) and the account menu has an Assistant row that brings the window back. */
       #assistant-chat-header {
         display: flex;
         align-items: center;
@@ -4222,13 +4196,29 @@
            per tab (34% to 84% of the screen), so the tab strip moved under the
            finger on every tap; from the top it stays where it is. */
         align-items: flex-start;
-        justify-content: center;
-        background: var(--scrim-soft);
+        /* #3652 (bud leaf 4/9): Settings is a leaf, a soft sheet at the corner the bud
+           lives in, not a dimmed full-screen dialog: no scrim, so the world shows
+           around it (it used to read as 100% of the screen). The overlay still takes
+           taps, so nothing behind it is touched by accident. */
+        justify-content: flex-start;
+        background: transparent;
         /* #3625: the top reserves room below the Shop/Build/Sell buttons
            (fixed, over every modal), so the panel can never start under them.
            52px on top plus --space-2xl (16px) below is the 68px the content's
            max-height subtracts. */
         padding: 52px var(--space-2xl) var(--space-2xl);
+      }
+      /* In Shop the bud holds the top-left corner (56px at top 10px): the leaf grows
+         from just under it, the same place as every other leaf (.bud-leaf). */
+      body[data-bud="on"] #settings-modal {
+        padding-top: 76px;
+        padding-left: var(--space-2xl);
+      }
+      body[data-bud="on"] #settings-modal-content {
+        max-height: calc(100vh - 92px);
+        max-height: calc(100dvh - 92px);
+        /* Narrow enough to leave the compass (top right, about 46px) uncovered at 390px. */
+        max-width: 316px;
       }
       #settings-modal.visible {
         display: flex;
@@ -4246,8 +4236,10 @@
         max-height: calc(100vh - 68px);
         max-height: calc(100dvh - 68px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        box-shadow: var(--shadow-card);
+        /* The leaf's own shape (#3652), as the bud's leaves have it. */
+        border-radius: 30px 6px 30px 6px;
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
