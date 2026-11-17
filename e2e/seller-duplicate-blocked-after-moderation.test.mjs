@@ -21,7 +21,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, showMyProductsAfterEntry } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -68,6 +68,8 @@ execFileSync('npx', [
 // see e2e/bundle-rename-sync.test.mjs's own identical comment.
 await page.evaluate(() => sessionStorage.setItem('higglehaven.startMode', 'sell'));
 await page.reload({ waitUntil: 'networkidle' });
+// #3700: Sell opens on the showroom; the list is one tap of the bud away.
+await showMyProductsAfterEntry(page);
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 

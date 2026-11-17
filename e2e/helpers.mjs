@@ -421,7 +421,12 @@ export function budAware(page) {
 // slugified, its email's local part — real inboxes are never involved,
 // see worker/index.js's sendEmail dev-mode fallback), and `isNew: false`
 // is for re-entry cases where nothing needs signing up again.
-export async function chooseIdentity(page, { mode, label, isNew = true }) {
+export async function chooseIdentity(page, { mode, label, isNew = true, openProducts = true }) {
+  await signInForMode(page, { mode, label, isNew });
+  if (mode === 'sell' && openProducts) await showMyProductsAfterEntry(page);
+}
+
+async function signInForMode(page, { mode, label, isNew }) {
   // N44: Shop mode now gates its own entry the same way Build/Sell already
   // did, and a fresh page load already lands on Shop by default — so the
   // auth modal it opens can already be showing before this function ever
@@ -434,7 +439,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // actually land either way.
   const authModalAlreadyShown = (await page.locator('#auth-modal.visible').count()) > 0;
   if (!authModalAlreadyShown) {
-    await goToMode(page, mode);
+    await goToMode(page, mode, { openProducts: false });
     // #540 gave Sell the same real currentMode/reload treatment Build and
     // Shop already had (src/main.js's #mode-nav click handler no longer
     // special-cases it) — all three now always reload the page first;
@@ -514,7 +519,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // Once authenticated and verified, ensureBuilderIdentity/
   // ensureSellerIdentity resolve silently with no further prompt.
   if (authModalAlreadyShown && mode !== 'shop') {
-    await goToMode(page, mode);
+    await goToMode(page, mode, { openProducts: false });
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   }
 }
@@ -656,12 +661,35 @@ export async function claimLandlet(page) {
 // (see main.js), so callers don't need to close it themselves.
 // #3649: in Shop the Build and Sell buttons are petals of the bud (hidden until it is open);
 // in Build and Sell they are still the top row. Click the mode's button wherever it is.
-export async function goToMode(page, mode) {
+async function clickModeButton(page, mode) {
   // Clicking the mode you are already in was always a no-op; in Shop its button is not drawn.
-  if (await page.evaluate(() => document.body.dataset.mode) === mode) return;
+  if (await page.evaluate(() => document.body.dataset.mode) === mode) return false;
   const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
   if (!(await nav.isVisible())) await openAccountMenu(page);
   await nav.click();
+  return true;
+}
+
+// #3700 (Sell in the bud, 2/6): Sell opens on the showroom and My products is one tap of the bud
+// away, where it used to open over the showroom by itself. Most tests entering Sell want the list
+// (they drive the products in it), so entering Sell here opens it through the petal, once, in the
+// one place; a test that is about the showroom itself passes { openProducts: false }.
+export async function showMyProductsAfterEntry(page) {
+  await page.waitForFunction(() => document.body.dataset.mode === 'sell', null, { timeout: 30000 });
+  await page.waitForSelector('#account-menu-toggle', { state: 'visible', timeout: 30000 });
+  await openMyProducts(page);
+  await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
+}
+
+export async function goToMode(page, mode, { openProducts = true } = {}) {
+  const clicked = await clickModeButton(page, mode);
+  if (clicked && mode === 'sell' && openProducts) {
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    // Not signed in yet (or not verified): the auth or verify modal is what Sell shows first, and
+    // the petal is behind it. The caller signs in and the list is not part of that path.
+    const gated = await page.waitForSelector('#auth-modal.visible, #verify-modal.visible', { timeout: 4000 }).then(() => true).catch(() => false);
+    if (!gated) await showMyProductsAfterEntry(page);
+  }
 }
 
 // #3699 (Sell in the bud): My products is a petal of the bud in Sell; the bottom-right Products
