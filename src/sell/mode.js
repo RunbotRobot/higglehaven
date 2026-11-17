@@ -94,7 +94,6 @@ const sellerListViewEl = document.getElementById('seller-list-view');
 const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
-const sellThisTooBtn = document.getElementById('sell-this-too-btn');
 const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
 const sellerSearchInput = document.getElementById('seller-search-input');
 const sellerCategoryFilterSelect = document.getElementById('seller-category-filter');
@@ -446,7 +445,7 @@ function renderSellerList() {
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
     syncSellerFilterControls(0);
-    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    sellerStatusEl.textContent = 'No custom products yet — use "Add a product" in the menu.';
     return;
   }
   syncSellerFilterControls(allTemplates.length);
@@ -1961,7 +1960,7 @@ function renderSellerListView() {
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
     syncSellerFilterControls(0);
-    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    sellerStatusEl.textContent = 'No custom products yet — use "Add a product" in the menu.';
     return;
   }
   syncSellerFilterControls(allTemplates.length);
@@ -2222,15 +2221,13 @@ export function closeSellerModal() {
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
 
-// #3701 (higglehaven1's look at Sell on the live site): opening the bud while My products is open
-// unfolded the petals over the list, both readable at once. The list is a leaf now, so the bud
-// opening folds it. A sheet opened from the list (Upload, Sell This Too, the delete
-// confirmation, Settings) hides the list behind it, and then the bud leaves everything as it is.
-document.addEventListener('bud-opening', () => {
-  if (!sellerModalEl.classList.contains('visible')) return;
-  if (document.querySelector('#upload-modal.visible, #sell-this-too-modal.visible, #confirm-modal.visible, #settings-modal.visible')) return;
-  closeSellerModal();
-});
+// A seller identity first, as My products has always needed; then the leaf (upload.js listens).
+async function openAddProductFromPetal() {
+  await bootstrapPromise;
+  const id = await ensureSellerIdentity();
+  if (!id) return;
+  document.dispatchEvent(new Event('higglehaven:add-product'));
+}
 
 // #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
 // the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
@@ -2239,6 +2236,9 @@ document.addEventListener('bud-opening', () => {
 // slices 2 and 3 of #3655 change those.
 registerBudPetals('sell', [
   { id: 'my-products', label: 'My products', run: () => { void openSellerModal(); } },
+  // #3703 (Sell in the bud, 5/6): one petal starts every way of adding a product. The leaf it opens
+  // (src/catalog/upload.js) asks which way; the + Upload Model and Sell This Too buttons are gone.
+  { id: 'add-product', label: 'Add a product', run: () => { void openAddProductFromPetal(); } },
   { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
 ]);
 
@@ -2440,7 +2440,10 @@ function renderSellThisTooGrid() {
   }
 }
 
+// #3703: put My products back on close only when it was open underneath when this opened.
+let sellThisTooOpenedOverSeller = false;
 function openSellThisTooModal() {
+  sellThisTooOpenedOverSeller = sellerModalEl.classList.contains('visible');
   sellThisTooSearchInput.value = '';
   showSellThisTooGrid();
   sellThisTooModalEl.classList.add('visible');
@@ -2449,12 +2452,15 @@ function openSellThisTooModal() {
 function closeSellThisTooModal() {
   sellThisTooModalEl.classList.remove('visible');
   closeModalA11y(sellThisTooModalEl);
-  // Same "this modal only ever opens stacked on top of the still-visible
-  // Seller modal" re-arming as closeUploadModal's own comment explains.
-  sellerModalEl.classList.add('visible');
-  openModalA11y(sellerModalEl, closeSellerModal);
+  // Same stacked-on-top re-arming as closeUploadModal's own comment explains (#3703: only when
+  // My products was open underneath).
+  if (sellThisTooOpenedOverSeller) {
+    sellerModalEl.classList.add('visible');
+    openModalA11y(sellerModalEl, closeSellerModal);
+  }
+  sellThisTooOpenedOverSeller = false;
 }
-sellThisTooBtn.addEventListener('click', openSellThisTooModal);
+document.addEventListener('higglehaven:sell-this-too', openSellThisTooModal);
 sellThisTooCloseBtn.addEventListener('click', closeSellThisTooModal);
 sellThisTooSearchInput.addEventListener('input', renderSellThisTooGrid);
 sellThisTooFormEl.addEventListener('submit', submitAttachListing);

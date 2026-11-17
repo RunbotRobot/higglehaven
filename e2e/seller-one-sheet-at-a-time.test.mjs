@@ -3,7 +3,7 @@
 // My products drawn underneath a translucent sheet, so its heading and rows
 // read through the new one. One sheet at a time now: My products is hidden
 // while any of them is open and comes back, unchanged, when it closes.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish, openAddProductLeaf } from './helpers.mjs';
 
 const LABEL = 'One Sheet Tester';
 
@@ -18,7 +18,7 @@ const results = {};
 results.startsVisible = !(await sellerHidden());
 
 // Upload Model.
-await page.click('#upload-model-btn');
+await openAddProductLeaf(page);
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 results.hiddenUnderUpload = await sellerHidden();
 await page.click('#upload-cancel-btn');
@@ -26,7 +26,7 @@ await page.waitForFunction(() => !document.getElementById('upload-modal').classL
 results.backAfterUpload = !(await sellerHidden());
 
 // Sell This Too.
-await page.click('#sell-this-too-btn');
+await openAddProductLeaf(page, 'sell-this-too');
 await page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 results.hiddenUnderSellThisToo = await sellerHidden();
 await page.click('#sell-this-too-close-btn');

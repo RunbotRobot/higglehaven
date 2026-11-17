@@ -6,7 +6,7 @@
 // a delete brings the list back to eight, they go again and their values
 // are reset, so a search typed while the list was long cannot keep hiding
 // products behind controls nobody can reach to clear it. Phone width.
-import { launchPage, chooseIdentity, acceptConfirmModal, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, acceptConfirmModal, finish, openAddProductLeaf } from './helpers.mjs';
 
 const LABEL = 'Filter Controls Long List Tester';
 
@@ -17,7 +17,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct(name, price) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', String(price));

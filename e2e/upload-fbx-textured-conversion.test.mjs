@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TEXTURED = path.join(REPO_ROOT, 'e2e', 'fixtures', 'test-textured-triangle.fbx');
@@ -35,7 +35,7 @@ page.on('request', (req) => {
 });
 
 async function runWizard(fileArg, name) {
-  await page.click('#upload-model-btn');
+  await openAddProductLeaf(page);
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', '5');

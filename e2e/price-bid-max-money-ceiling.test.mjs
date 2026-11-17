@@ -10,7 +10,7 @@
 // so no real money/balance setup is needed to exercise it.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -32,7 +32,7 @@ await claimLandlet(sellerPage);
 await chooseIdentity(sellerPage, { mode: 'sell', label: SELLER, isNew: true });
 await sellerPage.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerPage.waitForTimeout(300);
-await sellerPage.click('#upload-model-btn');
+await openAddProductLeaf(sellerPage);
 await sellerPage.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await sellerPage.fill('#upload-name', PRODUCT_NAME);
 await sellerPage.fill('#upload-price', OVER_CAP_DOLLARS);
