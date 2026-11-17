@@ -1120,7 +1120,7 @@ for (const row of accountMenuPanel.querySelectorAll('button')) {
 }
 document.addEventListener('click', (event) => {
   if (!accountMenuPanel.classList.contains('expanded')) return;
-  if (event.target === accountMenuToggle || accountMenuPanel.contains(event.target)) return;
+  if (accountMenuToggle.contains(event.target) || accountMenuPanel.contains(event.target)) return; // #3649: the toggle now has children (the bud logo)
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
   accountMenuToggle.setAttribute('aria-expanded', 'false');

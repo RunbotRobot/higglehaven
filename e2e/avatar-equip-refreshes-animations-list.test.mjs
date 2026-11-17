@@ -18,7 +18,7 @@
 // can't vary here.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, goToMode } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -91,7 +91,7 @@ const avatarPurchased = await purchaseAsInstance('suite-refresh-avatar-instance'
 const animationPurchased = await purchaseAsInstance('suite-refresh-animation-instance', animationTemplate.templateId);
 console.log('both purchases succeeded (status should both be 201):', avatarPurchased.status, animationPurchased.status);
 
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 

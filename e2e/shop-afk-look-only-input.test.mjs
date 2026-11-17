@@ -15,7 +15,7 @@
 // confirm look-only input never trips it, once to actually get an AFK state
 // to then clear) -- there's no faster deterministic way to exercise this
 // specific timer from outside the module.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'AFK Look-Only Tester';
 const SHOP_AFK_DELAY_S = 90;
@@ -24,7 +24,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 

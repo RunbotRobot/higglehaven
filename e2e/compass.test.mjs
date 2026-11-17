@@ -14,7 +14,7 @@
 // Build, a move-joystick drag in Shop — the latter also doubles as the
 // navigation input that stops Shop's spawn orbit), not just its own static
 // initial value.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
 
@@ -82,7 +82,7 @@ for (let attempt = 1; attempt < 3 && Math.abs(rotatedBuildRotation - initialBuil
 }
 console.log('Build-mode needle rotation after dragging the camera (should differ meaningfully from the initial value):', rotatedBuildRotation);
 
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
@@ -119,7 +119,7 @@ const shopRotationRight = await needleRotationDeg();
 console.log('Shop-mode needle rotation facing forward (diagnostic only):', shopRotationForward);
 console.log('Shop-mode needle rotation facing right (should differ meaningfully from facing forward):', shopRotationRight);
 
-await page.click('button[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForTimeout(500);
 // #3295: Sell's world view walks the page with Shop's movement and the seller's
 // avatar, so the compass is shown there too (it reads that avatar's facing).

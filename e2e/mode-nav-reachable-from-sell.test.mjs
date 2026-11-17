@@ -10,7 +10,7 @@
 // proves the Build button is not just visually on top but actually
 // clickable while Sell is open, since Playwright's own actionability checks
 // fail a click on an element another one is covering.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Mode Nav From Sell Tester';
 
@@ -24,7 +24,7 @@ await page.waitForTimeout(300);
 // (pre-fix, the click would silently hit the Seller modal's own backdrop
 // instead, and #mode-nav's click handler's own `location.reload()` would
 // never fire).
-await page.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(page, 'build');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
 // A real reload happened and landed in Build — not just a same-document

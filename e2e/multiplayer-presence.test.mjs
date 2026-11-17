@@ -31,7 +31,7 @@
 // hardcoded (0,0), which is actually a strictly stronger check of the
 // report/poll/smoothing pipeline this issue's own header comment above
 // describes, not a weaker stand-in for the old one.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
 
 const LABEL_A = 'Presence Suite Builder A';
 const LABEL_B = 'Presence Suite Builder B';
@@ -211,7 +211,7 @@ const pass =
 // unchanged) position mid-test and clobber the position this block sets
 // directly. From here on B's row is driven entirely via direct
 // POST /api/presence calls, not B's own simulated movement.
-await pageB.click('.mode-nav-btn[data-mode="build"]');
+await goToMode(pageB, 'build');
 await pageB.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
 const oldBPosition = { x: bRowSeenByA.x, y: bRowSeenByA.y, z: bRowSeenByA.z };

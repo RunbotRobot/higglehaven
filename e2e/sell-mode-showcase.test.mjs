@@ -10,7 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, goToMode } from './helpers.mjs';
 
 // Same default this file's own helpers.mjs uses internally (not exported) —
 // kept in sync deliberately rather than importing it, since the plain
@@ -200,9 +200,9 @@ if (await page.locator('#seller-modal.visible').isVisible()) {
 // mode opens straight back into the product-management modal on entry
 // (its own long-standing default — see this file's header comment), so
 // close it once more before interacting with the showcase behind it.
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
