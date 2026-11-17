@@ -16,7 +16,7 @@ from this one and a test can check them:
 
 - **A title that is the person's question**, ending in a question mark.
 - **Numbered steps.** Each step names the control by the words on it, in quotes
-  ("Add Item"), or by what it looks like when it has no words (the bird button, the
+  ("Add item"), or by what it looks like when it has no words (the bird button, the
   gear). It says what to tap, not where the code keeps it. Where the app's own
   words are not yet spelled the way the product spells them, quote only the part
   that is, so the step stays true when the spelling is fixed.
@@ -536,8 +536,10 @@ assistant's replies, each labelled with who wrote it.
    its size, and the "Claim" button turns on.
 4. Tap "Claim". The sheet closes and you are standing on your own lándlet.
 
-**You will see:** the sheet goes away and the Build buttons appear: "+ Add Item",
-"Multi-Select" and "Measure" at the bottom left, "Undo" at the top right.
+**You will see:** the sheet goes away and the Build buttons appear: "Multi-Select"
+and "Measure" at the bottom left, "Undo" at the top right. "Add item" is in the
+small round bud with the higglehaven logo at the top left: tap the bud and it
+unfolds.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -556,9 +558,12 @@ assistant's replies, each labelled with who wrote it.
 
 ### How do I add an item to my lándlet?
 
-1. In Build, tap "+ Add Item" at the bottom left. A list opens.
-2. Look through the list, or type in the "Search" box. "All", "Products" and
-   "Bundles" narrow it to everything, single items or saved bundles.
+1. In Build, tap the small round bud with the higglehaven logo at the top left,
+   then tap "Add item". A short strip opens at the bottom: a "Search" box and a
+   row of items to swipe, the ones used most recently first.
+2. Swipe along the row, or type in the "Search" box. For the whole list, tap
+   "All items": "All", "Products" and "Bundles" narrow it to everything, single
+   items or saved bundles.
 3. Tap an item's name. The list closes and the top of the screen says "Tap a spot
    to place" and the item's name.
 4. Tap the ground where you want it.
@@ -567,15 +572,16 @@ assistant's replies, each labelled with who wrote it.
 row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 **If something goes wrong:**
-- Changed your mind before tapping the ground: the "+ Add Item" button now reads
-  "Cancel". Tap it.
+- Changed your mind before tapping the ground: the "Add item" petal in the bud
+  now reads "Cancel placing". Tap the bud, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
   "Undo" at the top right to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
 ```controls any
-#add-item-btn | Add Item
+#add-item-btn | Add item
+#catalog-all-items-btn | All items
 #catalog-search-input | Search
 .search-scope-btn[data-search-scope="both"] | All
 .search-scope-btn[data-search-scope="products"] | Products
@@ -641,8 +647,8 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **You will see:** a second item, the same as the first.
 
 **If something goes wrong:**
-- Changed your mind about where to paste: the "+ Add Item" button now reads
-  "Cancel". Tap it.
+- Changed your mind about where to paste: the "Add item" petal in the bud now
+  reads "Cancel placing". Tap the bud, then that.
 - Wrong spot: "Undo" at the top right.
 
 ```controls build
@@ -723,11 +729,12 @@ single item.
 3. To keep it for later, tap "Save Bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
    "Save".
-4. To use a saved bundle, tap "+ Add Item", then "Bundles", and tap its name.
+4. To use a saved bundle, tap the bud, then "Add item", then "All items", then
+   "Bundles", and tap its name.
 5. To split one apart, select it and tap "Unbundle".
 
 **You will see:** after "Bundle" the buttons "Unbundle" and "Edit" appear. After
-"Save", a saved bundle is in the "+ Add Item" list under "Bundles".
+"Save", a saved bundle is in the "Add item" list under "All items" and "Bundles".
 
 **If something goes wrong:**
 - The app says "Still saving your items. Try Bundle again in a moment." Wait a
@@ -806,9 +813,9 @@ top of the screen.
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
-3. The "My products" window opens by itself. Tap "Close" (the × at its top right)
-   to put it away and look at the showroom. To bring it back, tap the round logo at the
-   top left (the bud), then "My products".
+3. Nothing covers the showroom: walk around it as you would anywhere. To see your
+   list, tap the round logo at the top left (the bud), then "My products". Tap "Close"
+   (the × at its top right) to put the list away again.
 
 **You will see:** your own products only. Nobody else's products and no real
 lándlets are shown here.
@@ -816,7 +823,8 @@ lándlets are shown here.
 **If something goes wrong:**
 - "My products" says "No custom products yet — use "Add a product" in the menu."
   You have not uploaded anything yet. The next entry shows how.
-- The window seems to be missing: tap the round logo at the top left, then "My products".
+- The list is not on screen: it does not open by itself. Tap the round logo at the top
+  left, then "My products".
 
 ```controls sell
 .mode-nav-btn[data-mode="sell"] | Sell
