@@ -634,8 +634,17 @@ export async function goToMode(page, mode) {
 }
 
 export async function openAccountMenu(page) {
+  // #3650: a toggle click can be lost while the page is still re-laying out after a mode change
+  // (saved-layout-preview failed twice on CI at this wait, never locally), and a panel that is
+  // already open must not be toggled shut. So: skip if open, and re-click once if the first
+  // click did not open it.
+  const isOpen = () => page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded') === true);
+  if (await isOpen()) return;
   await page.click('#account-menu-toggle');
-  await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+  if (!(await page.waitForSelector('#account-menu-panel.expanded', { timeout: 3000 }).then(() => true, () => false))) {
+    if (!(await isOpen())) await page.click('#account-menu-toggle');
+    await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+  }
 }
 
 // #1153: the level nav/build/dig/remove controls are now tucked behind
