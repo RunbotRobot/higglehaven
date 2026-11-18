@@ -201,6 +201,10 @@ async function launchVoicePage(label) {
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
   const page = await browser.newPage({ viewport: { width: 420, height: 860 }, permissions: ['microphone'] });
+  // #3556: the microphone is in the Chat leaf, and an open leaf polls nearby chat. This page's
+  // trust tier is patched client-side only, so the real endpoint refuses (403) and the run would
+  // log page errors; nothing in this test is about chat.
+  await page.route('**/api/nearby-chat?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], nextCursor: null, landletId: null }) }));
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });

@@ -1892,8 +1892,9 @@
          before the rest of the Shop HUD, and it alone led on page load.
          Same specificity as the id rule's own state classes below, so the
          .shop-ui gate stays authoritative until .visible is added. */
+      #shop-voice-btn.visible { display: none; } /* #3556: never on the world... */
       .bud-voice-row #shop-voice-btn.visible {
-        display: flex; /* #3556: drawn only inside the Chat leaf, never on the world */
+        display: flex; /* ...only inside the Chat leaf */
       }
       /* Current-state convention (#2778's resolution) -- background color
          always reflects what the mic is doing right now. */

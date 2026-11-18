@@ -83,7 +83,7 @@ await page.route('**/api/auth/me', async (route) => {
 await page.reload({ waitUntil: 'domcontentloaded' });
 
 await page.waitForSelector('body.shop-ready', { timeout: 20000 });
-await page.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
+await page.waitForSelector('#shop-voice-btn.visible', { state: 'attached', timeout: 10000 });
 await page.waitForTimeout(500);
 
 const order = await page.evaluate(() => window.__hudOrder);

@@ -115,6 +115,10 @@ async function launchVoicePage(label) {
   });
   // ICE: host candidates alone are enough for two pages on the same
   // machine -- no real STUN/TURN network dependency needed in this suite.
+  // #3556: the microphone is in the Chat leaf, and an open leaf polls nearby chat. This page's
+  // trust tier is patched client-side only, so the real endpoint refuses (403) and the run would
+  // log page errors; nothing in this test is about chat.
+  await page.route('**/api/nearby-chat?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], nextCursor: null, landletId: null }) }));
   await page.route('**/api/voice/ice-config', (route) => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify({ iceServers: [] }),
   }));
@@ -205,8 +209,8 @@ await pageB.waitForTimeout(2200);
 
 // Both sides' voice button should be visible (id_verified, mocked) and
 // default to muted -- #2778's resolution: no auto-activate-on-proximity.
-await pageA.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
-await pageB.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
+await pageA.waitForSelector('#shop-voice-btn.visible', { state: 'attached', timeout: 10000 });
+await pageB.waitForSelector('#shop-voice-btn.visible', { state: 'attached', timeout: 10000 });
 const aMutedByDefault = await pageA.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 const bMutedByDefault = await pageB.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 
