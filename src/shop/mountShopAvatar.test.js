@@ -72,6 +72,7 @@ describe('mountShopAvatar (#3294)', () => {
     expect(t.calls.filter(([k]) => k === 'signature').map(([, v]) => v)).toEqual([null, 'sig-1']);
     expect(t.win.__shopAvatarModelUrl).toBe('/uploads/a.glb');
     expect(t.win.__shopAvatarAnimationSource).toBe('applied');
+    expect(t.win.__shopAvatarBuiltinMotion).toBe(false); // it has clips, so no built-in motion (#3777)
     expect(t.win.__shopAvatarMetrics).toEqual({ heightM: 1.7, collisionHalfM: 0.3, cameraAnchorHeightM: 1.5 });
     expect(t.deps.resetShopAvatarIdleState).toHaveBeenCalledTimes(1);
   });

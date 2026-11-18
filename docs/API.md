@@ -4203,6 +4203,14 @@ the same `status` and `ownerBuilderId` filters while following a cursor.
 
 Fetches one landlet.
 
+Every landlet record (this route, the list, and `PUT`/`PATCH`) carries
+`wordmarkStyle` and `wordmarkColors` (#3781): the builder's chosen lettering and
+colour pair for the lándlet's name, as ids from `shared/wordmark-set.js`, the one
+definition the Worker and the client both read. Both default to `"default"`.
+The owner sets them with `PATCH /api/landlets/:id`; an id outside the set is
+refused with `400` and a plain message. They ride on the record shoppers already
+fetch, so there is no extra request.
+
 ### `GET /api/far-placements?tile=x,y`
 
 Public, read-only (#3417). Every placement on every landlet whose centre lies in
@@ -10562,6 +10570,13 @@ cookie or a header. `--url` defaults to the live site; a local server needs
   program prints it as `{ handover }`).
   `answer-question` and `escalate-question` do the same for a left question by its
   `questionId`, which the shift program prints as `{ question }` (#3448).
+  `escalate-question` also needs `--say "..."` (#3748): what the person reads.
+  `POST /api/assistant-inbox/questions/:id/escalate` takes `{ summary, kind, say }`,
+  refuses a call without `say` (400), stores `say` as the question's answer
+  (`status = 'answered'`, the same quiet "replied" notice) and files the card in
+  that one call, and answers `409 { questionClosed }` for a question that is no
+  longer waiting. A 5xx on sign-in or on the call is retried once by the reply
+  program; a 4xx never is.
 
 `--text` is typed into a shell command line, so the program refuses it (before
 any request) unless it is one line of at most 1000 characters made only of
@@ -13407,6 +13422,13 @@ a one-time `wrangler r2 bucket create higglehaven-feedback` (run once from
 before this binding resolves to anything live; the endpoint 500s with a
 clear message if `env.FEEDBACK` isn't configured, same as every other R2
 binding check in this codebase.
+
+**#3736**: `metadata` may also carry `startupTimings`, an object of stage name
+to milliseconds since navigation start (`src/ui/startupMarks.js`: bootstrap
+start, auth checked, identity checked, catalog, last location, world, avatar
+mounted, loading screen hidden). Display-only: written into the card note as
+"Startup timings (ms)". The server keeps at most 20 numeric entries, names cut
+to 40 characters; anything else is dropped.
 
 **#3303**: `metadata` may also carry `recentUserVisibleMessages`, an array of
 `{ text, shownAt }` — the last few error/refusal strings the person was

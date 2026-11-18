@@ -93,3 +93,48 @@ describe('product review eligibility keys on the account (#3217)', () => {
     expect((await review(templateId, buyer)).response.status).toBe(400);
   });
 });
+
+// #3775: a product rating belongs to one order. A caller may name the order it rates
+// (My Purchases does); the list says, per order, what was rated and what still can be.
+describe('product rating is one-to-one with an order (#3775)', () => {
+  const mine = (who) => api('/purchases/mine', who.session());
+
+  it('rates the order it is told to, not just the oldest, and refuses an order that is not the caller\'s or is already rated', async () => {
+    const templateId = await createTemplate('review-order-named');
+    const buyer = await signupBuilder('review-order-named-buyer');
+    const stranger = await signupBuilder('review-order-named-other');
+    const userId = await userIdOf(buyer);
+    const first = await addPurchase(templateId, { buyerUserId: userId, buyerBuilderId: buyer.builderId });
+    const second = await addPurchase(templateId, { buyerUserId: userId, buyerBuilderId: buyer.builderId });
+
+    const named = await review(templateId, buyer, { rating: 4, purchaseId: second });
+    expect(named.response.status).toBe(201);
+    expect(named.body.review.purchaseId).toBe(second);
+
+    // Naming the same order again, or someone else's, is refused in the caller's terms.
+    expect((await review(templateId, buyer, { rating: 3, purchaseId: second })).response.status).toBe(400);
+    expect((await review(templateId, stranger, { rating: 3, purchaseId: first })).response.status).toBe(400);
+
+    // With no order named it is still the oldest one left.
+    const rest = await review(templateId, buyer, { rating: 5 });
+    expect(rest.response.status).toBe(201);
+    expect(rest.body.review.purchaseId).toBe(first);
+    expect((await review(templateId, buyer, { rating: 5 })).response.status).toBe(400);
+  });
+
+  it('lists, per order, the product rating given and whether the order can still be rated', async () => {
+    const templateId = await createTemplate('review-order-list');
+    const buyer = await signupBuilder('review-order-list-buyer');
+    const userId = await userIdOf(buyer);
+    const rated = await addPurchase(templateId, { buyerUserId: userId, buyerBuilderId: buyer.builderId });
+    const open = await addPurchase(templateId, { buyerUserId: userId, buyerBuilderId: buyer.builderId });
+    const refunded = await addPurchase(templateId, { buyerUserId: userId, buyerBuilderId: buyer.builderId });
+    await env.DB.prepare("UPDATE purchases SET refunded_at = datetime('now') WHERE purchase_id = ?").bind(refunded).run();
+    await review(templateId, buyer, { rating: 2, text: 'Meh', purchaseId: rated });
+
+    const byId = Object.fromEntries((await mine(buyer)).body.purchases.map((p) => [p.purchaseId, p]));
+    expect(byId[rated]).toMatchObject({ templateId, canReviewProduct: false, productReview: { rating: 2, text: 'Meh' } });
+    expect(byId[open]).toMatchObject({ templateId, canReviewProduct: true, productReview: null });
+    expect(byId[refunded]).toMatchObject({ canReviewProduct: false, productReview: null });
+  });
+});

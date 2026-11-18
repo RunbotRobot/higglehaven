@@ -221,10 +221,12 @@ check(followFrame.longestGapMs < Number(process.env.E2E_MAX_FRAME_GAP_MS || 250)
 await moveTo([cx - (view.dx / heading) * 2.5, cy - (view.dy / heading) * 2.5]);
 await page.waitForTimeout(800);
 
-// More: Rate this Product and Return Policy open from the card.
-check(!(await page.locator('#product-card-review-btn').isVisible()), 'Rate this Product is tucked away until More is opened');
+// More: Return Policy opens from the card (Rate this Product too, with an unrated order, #3775).
+// #3775: Rate this Product is only drawn for a product the shopper has an unrated order of; this
+// shopper has bought nothing, so More holds the Return Policy alone.
+check(!(await page.locator('#product-card-review-btn').isVisible()), 'Rate this Product is not offered without an order of it');
 await page.click('#product-card-more-btn');
-check(await page.locator('#product-card-review-btn').isVisible(), 'More opens Rate this Product');
+check(!(await page.locator('#product-card-review-btn').isVisible()), 'More does not offer Rate this Product without an order of it');
 check(await page.locator('#product-card-return-policy-btn').isVisible(), 'More opens Return Policy');
 await page.click('#product-card-return-policy-btn');
 await page.waitForSelector('#refund-policy-modal.visible', { timeout: 5000 });

@@ -7,6 +7,7 @@ import { openLeaf, closeLeaf, addBudPetals } from './bud.js';
 import { MANUALS, buildManuals } from './helpManuals.js';
 import { parseHandbook } from '../../scripts/assistant-handbook-lib.mjs';
 import { openAssistantQuestions, warmAssistantThread } from '../shop/assistantChat.js';
+import { LOADING_TIPS } from './loadingTips.js';
 
 let pagesPromise = null;
 
@@ -40,6 +41,15 @@ function renderList(body) {
     item.appendChild(row);
     list.appendChild(item);
   }
+  // #3762 / #3763: every tip the opening screen shows, to be read at leisure (a tip that went by
+  // too fast can be found here). The lines are the opening screen's own (src/ui/loadingTips.js).
+  const tips = el('li');
+  const tipsRow = el('button', 'help-row', 'Tips');
+  tipsRow.type = 'button';
+  tipsRow.dataset.helpPage = 'tips';
+  tipsRow.addEventListener('click', () => renderTipsPage(body));
+  tips.appendChild(tipsRow);
+  list.appendChild(tips);
   const ask = el('li');
   const askRow = el('button', 'help-row', 'Ask an assistant');
   askRow.type = 'button';
@@ -53,6 +63,13 @@ function renderList(body) {
   warmAssistantThread(); // #3773: so most opens find the thread already fetched
   ask.appendChild(askRow);
   list.appendChild(ask);
+  body.appendChild(list);
+}
+
+function renderTipsPage(body) {
+  body.replaceChildren(backButton(body), el('h3', 'help-page-title', 'Tips'));
+  const list = el('ul', 'help-tips');
+  for (const tip of LOADING_TIPS) list.appendChild(el('li', null, tip.text));
   body.appendChild(list);
 }
 
