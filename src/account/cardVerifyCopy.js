@@ -44,6 +44,9 @@ export function describeCardRefusal(error) {
 
 // The two lines the card step opens with. They give the reason for the rule,
 // not just the rule.
+// An account that ticked the 18-or-older box at sign-up is not shown the tick again, so its intro
+// speaks only of the proof (#3734); an account that never ticked it sees both, below.
+export const VERIFY_INTRO_PROOF_ONLY = 'Building and selling on higglehaven takes proof that you are 18 or older: either a credit card or a government ID. A card is never charged; only its type is checked.';
 export const VERIFY_INTRO = 'Building and selling on higglehaven takes two things: confirming you are 18 or older, and proof of it, either a credit card or a government ID. A card is never charged; only its type is checked.';
 export const CARD_STEP_INTRO = 'Use a credit card. Credit cards are only issued to adults, so they work as proof of age. Debit, prepaid and gift cards (Apple Cash and Cash App included) can be held by people under 18, so they are not accepted.';
 export const ID_INSTEAD_LABEL = 'No credit card? Verify with a government ID instead';
