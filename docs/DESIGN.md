@@ -51,7 +51,7 @@ piece of interface has to earn the space it takes from it".)
    through fog; any text a user can read, they can copy; a destructive action
    is confirmed in its own in-app modal (restyled, never made easy to miss).
 
-## The direction: one bud
+## The direction: one flower
 
 The owner was shown three directions as pages to look at (fog and glass, signs in
 the world, one bud) and chose the third (2026-11-16, #3540):
@@ -62,33 +62,73 @@ the world, one bud) and chose the third (2026-11-16, #3540):
 > goal). Let's go full-force into the bud plan. The bud could have the
 > higglehaven logo.
 
-Recorded in AGENTS.md as "The interface is one bud". The living reference is
-`public/design-directions/c.html` (with `c.css` and `c.js`); A and B stay beside
-it as a record and are not built. The tracking issue is #3648, and the bud's own
-contract (the names and hooks every leaf builds on) is leaf 1, #3649, and is in
-"The bud" below (`src/ui/bud.js`); `c.css` stays the visual reference.
+Over the following two days the bud grew into a flower (2026-11-18, #3759): the
+bud is the flower's head and stays in the upper left for good, petals appear
+around it, and an open menu is a stem growing down from it with leaves on both
+sides. "Nothing stands on the world but the head" (#3769, #3772, #3770, #3774):
+no standing arrows, no compass, no lándlet line on the world; those live in the
+open menu. Both are recorded in AGENTS.md ("The interface is one bud", with its
+later refinements). The tracking issues are #3648 and #3759. The head does not
+move to the lower right; only a mode that cannot show a head in the upper left
+sets `body[data-bud-corner]`, and none does today.
+
+The living pictures are `public/design-directions/flower.html` (the flower as it
+is now and where it is going: head, petals, stem, leaves, help) and `c.html`
+(direction C, the record of the choice). A and B stay beside them as a record and
+are not built. The bud's contract (the names and hooks every leaf builds on) is
+"The bud" below (`src/ui/bud.js`).
 
 The resting state of the interface is absent. One small, alive, branded thing is
 the door to everything else, and findability is paid for by teaching, not by
-permanent controls. Four things are built with:
+permanent controls. Everything a person opens has a picture first and one small
+word under it ("an icon is a picture of the thing with its word always beside it,
+never a mark to be learned"), and a menu is the same wherever it is opened.
+
+### What is live today
+
+Four things are built with:
 
 | thing | what it is for | size and shape | how it arrives and leaves | never |
 |---|---|---|---|---|
-| **the bud** | the only standing piece of interface; carries the higglehaven logo; the door to every petal | `--bud-size` (56px), round, `--shadow-bud`; sits in the upper-left corner and stays there (it is the head of the flower, #3759); at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes | carry a count, a second control, or text that stays after it has been learned |
-| **a petal** | one way in: Settings, Friends, Chat, Purchases, Build and Sell, "?" | at least 44px tall and 104px wide, 15px label, `--radius-petal`, pale green fading to pale yellow, `--shadow-petal` | unfolds upward from the bud, 40ms apart, over `--motion-petal` with `--ease-bloom`; folds back when another thing opens | be more than one word, or sit anywhere but over the bud's own column |
-| **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
-| **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
+| **the head** (the bud) | the only standing piece of interface; carries the higglehaven logo; the door to everything else | `--bud-size` (56px), round, `--shadow-bud`; upper-left corner, always; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes; wears one mark for anything unread and, when something is announced, a word that is itself a door (#3774) | carry a count, a second control, or text that stays after it has been learned |
+| **a petal** | where a person is: Shop, Build and Sell, in a half-ring at the head; each is a picture (shop front, hammer, price tag) with its word | at least 44px, `--radius-petal`, pale green; the current mode green with `aria-current`; shadow `--shadow-petal` | grows out of the head when it is tapped (0.24s in all, a few tens of ms apart), stays lit while another mode loads, folds back when that mode's first screen is up | be a thing you open (those are leaves), or sit apart from the head |
+| **a leaf** | a thing you open from the head's menu: You, Notices, Friends, Purchases, Settings, Help; in Build, Add item, Lándlets, Levels, Undo, Tools; in Sell, My products, Add product | an icon with its one word under it, 76px wide, `--radius-leaf`, `--shadow-leaf`; leaves alternate right and left of a stem set 88px in from the edge | the stem grows from the head and the leaves open in turn (about a third of a second in all); the same way back | open on top of another leaf, or leave a leaf without an icon in `src/ui/budIcons.js` |
+| **a card that blooms beside a thing** | a product's name, price and Buy, or the item selected in Build with its actions; where the thing is | `--radius-bloom`, a short stem down to the thing, one yellow petal (`--petal-yellow`) for Buy | scales up out of the thing over `--motion-bloom`; goes when the person walks on | hide the thing it is about |
 
-Everything else is a gesture on the world itself: drag on the left half to walk, drag on
-the right half to look, double-tap to fly, tap a product to open its card. A gesture cannot be
-seen until it is taught once, so the bud teaches (it pulses and says Menu until
-first opened) and the instructions live in it, one tap away. Under
-`prefers-reduced-motion` nothing animates.
+A leaf that opens a sheet (Settings, a friend list, a chat) is a **sheet** that
+grows from the head's corner: `--radius-leaf`, `--shadow-leaf`, panel yellow over
+a soft white wash, no dimming scrim, close in its upper right, one at a time, no
+wider than the screen, scrolling inside itself.
 
-"Full-force" means no half-way: when a surface moves into the bud, the old
+Everything else is a gesture on the world itself: drag on the left half of the
+screen to walk, drag on the right half to look, double-tap to fly (the view's
+pitch is the climb: point it up to rise, down to descend), tap a product to open
+its card. A gesture cannot be seen until it is taught once, so the head teaches (it
+pulses and says Menu until first opened) and the instructions live in it, one tap
+away, under Help. Under `prefers-reduced-motion` nothing animates.
+
+### Still to come
+
+Not built yet; do not describe these to a person as if they exist:
+
+- **Four menus, one open at a time** (#3760): a general menu that never changes
+  and each mode's tools under that mode's petal, with a fourth petal for the menu.
+  Today the stem opened by the head holds both the general leaves and the current
+  mode's; the target is in `flower.html`.
+- **One help door** (#3762): a "?" leaf holding how to move, how higglehaven
+  works, the manuals for shopping, building and selling, and the way to an
+  assistant.
+- **The head's look** (#3754): five drawings are on `flower.html` for the owner to
+  choose from; until then the head is the pale circle with the logo.
+- **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
+  menu in lettering the builder chooses from a set.
+- **Loading tips that last** (#3763): paced for a slow reader, switchable off in
+  Settings, kept under Help.
+
+"Full-force" means no half-way: when a surface moves into the flower, the old
 control for it goes in the same change ("One model, not a hybrid" in AGENTS.md).
 A session that finds something that cannot be done by gesture, or cannot fit a
-petal, says so on #3648; it does not quietly keep the old control.
+leaf, says so on #3759; it does not quietly keep the old control.
 
 ## How to use the tokens
 
@@ -102,10 +142,10 @@ not on this system.
 
 The first pass of tokens carried the values the stylesheet already used, so
 adopting them changed nothing on screen (checked by substituting every token
-back and comparing with the old file). The owner has since chosen the bud (next
-section); its tokens are in `src/tokens.css` under "The bud". The old tokens keep
-their values until a bud leaf moves a surface onto the new ones; collapsing the
-near-duplicates listed under "Where the clutter is" is a separate reviewed pass.
+back and comparing with the old file). The owner then chose the bud, which became
+the flower (the section above); its tokens are in `src/tokens.css` under "The
+bud". The near-duplicates listed under "Where the clutter is" were collapsed in
+#3656; what is left there is a short list of literals, not a pass of its own.
 
 ## Colour
 
@@ -278,11 +318,13 @@ Nothing bounces, snaps or slides in from off screen.
 
 ## The bud
 
-The owner chose direction C, "one bud" (#3648). In Shop the only standing
-interface is one small, slowly glowing bud in a corner, carrying the
-higglehaven logo; until it has been opened once it pulses and says Menu.
-Tapping it unfolds petals; a petal runs an action or opens a leaf (a soft sheet
-by the bud, close control upper right, one at a time). Everything else is done
+The contract below is for the flower's head, still called the bud in code (`src/ui/bud.js`,
+`--bud-size`, `body[data-bud]`): internal names keep the plain word. In every
+mode the only standing interface is the head, one small, slowly glowing bud in the
+upper left, carrying the higglehaven logo; until it has been opened once it pulses
+and says Menu. Tapping it opens the menu: a stem with leaves, and the ring of mode
+petals; a leaf runs an action or opens a sheet (a soft sheet by the head, close
+control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
 - `registerBudPetals(mode, [{ id, label, run }])`: one definition per mode
