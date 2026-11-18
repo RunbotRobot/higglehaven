@@ -45,6 +45,7 @@ import { currentMode } from '../world/state.js';
 import { fetchMyEquippedAnimation } from '../api.js';
 import { pickAvatarClips, normalizeClipRoles } from '../avatarClipNames.js';
 import { findShopIdleInteractionTarget } from './flightMovement.js';
+import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import {
   SHOP_AFK_BLEND_PER_S, SHOP_AFK_DELAY_S, SHOP_AVATAR_ANIM_CROSSFADE_S,
   SHOP_AVATAR_ARM_LENGTH_M, SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_COLLISION_HALF_M,
@@ -346,6 +347,15 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null, 
     // __shopAvatarModelUrl/__shopAvatarMetrics already use — null when
     // `actions` itself is null (no clips from either source).
     animationSource: !actions ? null : (animationIsCompatible ? 'applied' : 'own'),
+    // #3777: an avatar with no clips of its own (and no applied animation that
+    // fits it) used to glide with a still body. It now wears a small built-in
+    // motion, applied to `container` (never to `group`, which carries the
+    // position and facing). null when it has clips: those, or an applied
+    // animation, replace the built-in motion entirely.
+    builtinMotion: actions ? null : createBuiltinMotion(),
+    builtinMotionTarget: container,
+    builtinMotionBaseZ: height / 2,
+    builtinMotionScaleM: height,
     // #2744: where the model's own glTF front (+Z) points in the world right
     // now, for the e2e diagnostic in flightMovement.js -- a function, not a
     // stored value, since the group turns every frame.
@@ -366,6 +376,16 @@ export let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPi
 export function setShopAvatar(avatar) {
   shopAvatar = avatar;
 }
+
+// #3777: what the built-in motion is doing to the avatar right now, for the e2e
+// that proves a clip-less custom avatar no longer glides with a still body.
+// null for the default body and for any avatar with clips. Always inert unless
+// a test calls it.
+window.__testShopAvatarBuiltinPose = () => {
+  const target = shopAvatar?.builtinMotionTarget;
+  if (!shopAvatar?.builtinMotion || !target) return null;
+  return { z: target.position.z - shopAvatar.builtinMotionBaseZ, leanRad: target.rotation.x, swayRad: target.rotation.y };
+};
 
 // #1091: the currently-equipped avatar's own measured size when it's a
 // custom model (measuredHeightM/measuredCollisionHalfM are null for the
@@ -468,6 +488,9 @@ export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {
   // #1165: same reasoning again — see createCustomShopAvatar's own
   // animationSource comment.
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
+  // #3777: whether this avatar is wearing the built-in motion (no clips of its
+  // own). Kept apart from __shopAvatarAnimationSource, which stays null for it.
+  window.__shopAvatarBuiltinMotion = !!shopAvatar.builtinMotion;
   await reportRendererMemoryDiagnostic();
 }
 
@@ -578,6 +601,20 @@ export function updateShopAvatarPose(moveMagnitude, dt) {
   // amplitude than the legs.
   shopAvatar.armPivotL.rotation.x = -swing * 0.7;
   shopAvatar.armPivotR.rotation.x = swing * 0.7;
+}
+
+// #3777: advances the built-in motion of a custom avatar that has no clips and
+// poses its model wrapper with the result: a bob up, a lean about the group's
+// own X axis (forward is negative) and a sway about its travel axis, all small.
+// A no-op for the default body and for any avatar with clips. Allocates nothing.
+export function updateShopAvatarBuiltinMotion(avatar, dt, state, moveMagnitude) {
+  const motion = avatar.builtinMotion;
+  if (!motion) return;
+  const pose = stepBuiltinMotion(motion, dt, state, moveMagnitude, avatar.builtinMotionScaleM);
+  const target = avatar.builtinMotionTarget;
+  target.position.z = avatar.builtinMotionBaseZ + pose.bobM;
+  target.rotation.x = pose.leanRad;
+  target.rotation.y = pose.swayRad;
 }
 
 // #682: crossfades a custom avatar's AnimationMixer from whichever named

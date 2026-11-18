@@ -1387,6 +1387,7 @@ export async function handleLandlets(request, db, route, url) {
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           landlet_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
           landlet_type = ?, biome = ?, elevation_m = ?, max_world_radius_m = ?,
+          wordmark_style = ?, wordmark_colors = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
         AND (
@@ -1401,7 +1402,9 @@ export async function handleLandlets(request, db, route, url) {
       // the response (built from the local `landlet` object, not a DB
       // re-read) reported success with the new value.
       landlet.elevationM ?? null,
-      landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
+      landletMaxWorldRadius(candidateRowFromLandlet(landlet)),
+      // #3781: the owner's wordmark choice (validated against shared/wordmark-set.js).
+      landlet.wordmarkStyle, landlet.wordmarkColors, route[1],
       existing.status, existing.owner_builder_id,
       renamingTo, renamingTo, route[1],
     ).run();

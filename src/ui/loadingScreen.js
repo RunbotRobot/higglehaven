@@ -21,6 +21,8 @@ export function hideLoadingScreen(doc = typeof document === 'undefined' ? null :
   if (!el || el.classList.contains('loading-screen-hidden') || loadingFailed()) return;
   markStartup('loading-screen-hidden');
   completeLoadingBar(doc);
+  // #3738: the first-open class (index.html) hides the old top controls until now.
+  doc.documentElement?.classList?.remove('first-open');
   stopLoadingTips();
   el.classList.add('loading-screen-hidden');
   // #3752: the mode is on screen; the bud's petals, held open while it loaded, fold back in.

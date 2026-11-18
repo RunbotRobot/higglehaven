@@ -12,8 +12,14 @@
 //   openLeaf({ id, title, render, onClose }) / closeLeaf()  one soft sheet at a time, close upper-right;
 //                                                  onClose runs as it goes (give back anything lent to it)
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
-//   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
-//                                                  conversation's name); "Menu" comes back when none is set
+//   setBudWord(key, text, { open, label }) / clearBudWord(key)
+//                                                  the bud wears a short word beside it (a minimised
+//                                                  conversation's name); "Menu" comes back when none is set.
+//                                                  A word that announces something carries its door:
+//                                                  `open` runs when the note is tapped (the owner of the
+//                                                  key clears the word once the thing is open), `label`
+//                                                  is what a screen reader says. With no `open` the word
+//                                                  is just a word, as before (#3774)
 //   beginBudModeSwitch(target)                     a mode petal was tapped (#3752): the chosen petal is lit at
 //                                                  once and the ring stays open across the reload; the new page
 //                                                  folds it when the mode is on screen
@@ -21,6 +27,8 @@
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
 // without being rebuilt, and the id the e2e suite drives is unchanged.
+
+import { iconKeyFor, svgIcon } from './budIcons.js';
 
 const FIRST_OPEN_KEY = 'hh_bud_opened';
 const registry = new Map();
@@ -161,6 +169,7 @@ function syncBud() {
       btn.hidden = petalMode !== mode;
     }
   }
+  scheduleStem();
   if (!mode) return;
   // A mode with a definition has the bud; without one its old controls are still its way in.
   document.body.dataset.bud = registry.has(mode) ? 'on' : 'off';
@@ -181,6 +190,66 @@ function placeModePetals(inBud, mode) {
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
   }
+}
+
+
+// #3761 (part of #3759): an open menu is a stem with leaves on both sides, and every leaf is an
+// icon with its word under it. This only decorates and places what is already in the panel: which
+// leaf is in which menu is decided elsewhere (registerBudPetals and friends), so it walks the
+// *visible* children, never :nth-child, and runs again whenever one is added, shown, hidden or has
+// its text replaced (Add item's "Cancel placing" does that).
+function decorateLeaf(el) {
+  // The sign-in leaf says "Log In / Sign Up" before an account and the person's name after it: an
+  // arrow into a door, then a person.
+  const key = el.id === 'account-auth-btn' && !/log in|sign up/i.test(el.textContent) ? 'person' : iconKeyFor(el);
+  const have = el.querySelector(':scope > .bud-icon');
+  if (have && have.dataset.icon === key) return;
+  have?.remove();
+  const icon = document.createElement('span');
+  icon.className = 'bud-icon';
+  icon.dataset.icon = key;
+  icon.setAttribute('aria-hidden', 'true');
+  icon.appendChild(svgIcon(key));
+  el.prepend(icon);
+}
+
+function layoutStem() {
+  const host = panel();
+  if (!host) return;
+  let index = 0;
+  let last = null;
+  for (const el of host.children) {
+    if (!el.matches('button, .bud-pair')) continue;
+    if (el.matches('.bud-pair')) el.querySelectorAll('button').forEach(decorateLeaf);
+    else decorateLeaf(el);
+    if (el.hidden || el.style.display === 'none') {
+      el.removeAttribute('data-side');
+      continue;
+    }
+    // Alternate: the first leaf on the right (the head is upper left, so the right has the room),
+    // then left, and so on; --leaf-i staggers the unfold from the stem's root outward.
+    el.setAttribute('data-side', index % 2 === 0 ? 'right' : 'left');
+    el.style.setProperty('--leaf-i', String(index));
+    last = el;
+    index += 1;
+  }
+  // The stem ends at the middle of the last leaf, so the notes under the leaves (the lándlet cap)
+  // are not struck through by it. Measured only while the panel is drawn.
+  const hostBox = host.getBoundingClientRect();
+  if (last && hostBox.height > 0) {
+    const box = last.getBoundingClientRect();
+    host.style.setProperty('--stem-h', `${Math.round(box.top + box.height / 2 - hostBox.top)}px`);
+  }
+}
+
+let stemPending = false;
+function scheduleStem() {
+  if (stemPending) return;
+  stemPending = true;
+  queueMicrotask(() => {
+    stemPending = false;
+    layoutStem();
+  });
 }
 
 let leafOnClose = null;
@@ -272,12 +341,52 @@ export function clearBudMark(key) {
 function showWord() {
   const wordEl = toggle()?.querySelector('.bud-word');
   const latest = [...words.values()].pop();
-  if (wordEl) wordEl.textContent = latest ?? MENU_WORD;
+  if (wordEl) wordEl.textContent = latest ? latest.text : MENU_WORD;
   document.body.toggleAttribute('data-bud-word', words.size > 0);
+  showNote(latest && latest.open ? latest : null);
 }
 
-export function setBudWord(key, text) {
-  words.set(key, String(text));
+// #3774: the note beside the head is a door when it announces something. It is its own button (a
+// button cannot sit inside the head's button), attached to the head, 44px tall, and grows out of
+// it and folds back like the petals. The plain word inside the head stays for words with no door.
+let noteEl = null;
+let noteTimer = null;
+function ensureNote() {
+  if (noteEl) return noteEl;
+  const host = document.getElementById('account-menu');
+  if (!host) return null;
+  noteEl = document.createElement('button');
+  noteEl.id = 'bud-note';
+  noteEl.type = 'button';
+  noteEl.hidden = true;
+  noteEl.addEventListener('click', () => {
+    const latest = [...words.values()].pop();
+    if (!latest || !latest.open) return;
+    foldBud();
+    latest.open();
+  });
+  host.appendChild(noteEl);
+  return noteEl;
+}
+function showNote(entry) {
+  const el = entry ? ensureNote() : noteEl;
+  if (!el) return;
+  clearTimeout(noteTimer);
+  if (entry) {
+    el.textContent = entry.text;
+    el.setAttribute('aria-label', entry.label || entry.text);
+    el.classList.remove('folding');
+    el.hidden = false;
+    document.body.setAttribute('data-bud-note', 'on');
+  } else if (!el.hidden) {
+    document.body.removeAttribute('data-bud-note');
+    el.classList.add('folding');
+    noteTimer = setTimeout(() => { el.hidden = true; el.classList.remove('folding'); }, 180);
+  }
+}
+
+export function setBudWord(key, text, { open = null, label = '' } = {}) {
+  words.set(key, { text: String(text), open: typeof open === 'function' ? open : null, label: String(label || '') });
   showWord();
 }
 
@@ -324,6 +433,10 @@ if (typeof document !== 'undefined') {
         setRing(null);
       }
     }).observe(panel(), { attributes: true, attributeFilter: ['class'] });
+  }
+  if (panel()) {
+    new MutationObserver(scheduleStem).observe(panel(), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    scheduleStem();
   }
   if (!learned()) document.body.setAttribute('data-bud-new', '');
   toggle()?.addEventListener('click', () => {

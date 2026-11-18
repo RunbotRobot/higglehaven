@@ -123,7 +123,9 @@ export function clampAnchorRadius(radiusPx) {
 // not for sale shows a Buy petal).
 //   inRange: the shopper is close enough to the product to act on it (the same
 //   gate the old panel used for Buy/Rate/Return Policy, SIGN_INTERACT_RADIUS_M).
-//   canReview: any product can be rated once the shopper can reach it.
+//   canReview: a product is rated from an order (#3775), so only when the shopper is within
+//   reach AND has an order of it that is not rated yet (`hasUnratedOrder`); otherwise the
+//   control is not drawn at all, rather than drawn to refuse.
 //   canReturnPolicy: only something with a price has a refund to describe.
 // #3680: the line under the price that says whose product it is. The name is the
 // seller's storefront name (a shop's name, not a person's); with no name known
@@ -138,26 +140,27 @@ export function sellerLine(label) {
 // good (an avatar or an animation they bought, src/shop/ownedProducts.js): the
 // card says so and offers no Buy, but they can still rate it and read its return
 // policy, since it is theirs.
-export function productCardState({ template, inRange, owned = false }) {
+export function productCardState({ template, inRange, owned = false, hasUnratedOrder = false }) {
   const reach = !!inRange;
+  const canRate = reach && !!hasUnratedOrder;
   const priced = template?.priceCents != null;
   if (template?.isTestModel) {
     return {
-      canBuy: false, canReview: reach, canReturnPolicy: false,
+      canBuy: false, canReview: canRate, canReturnPolicy: false,
       stateText: 'A testing model: not a real product and not for sale.',
     };
   }
   if (!priced) {
-    return { canBuy: false, canReview: reach, canReturnPolicy: false, stateText: 'Not for sale.' };
+    return { canBuy: false, canReview: canRate, canReturnPolicy: false, stateText: 'Not for sale.' };
   }
   if (owned) {
-    return { canBuy: false, canReview: reach, canReturnPolicy: reach, stateText: 'You already own this.' };
+    return { canBuy: false, canReview: canRate, canReturnPolicy: reach, stateText: 'You already own this.' };
   }
   if (template.stockQuantity === 0) {
-    return { canBuy: false, canReview: reach, canReturnPolicy: reach, stateText: 'Out of stock.' };
+    return { canBuy: false, canReview: canRate, canReturnPolicy: reach, stateText: 'Out of stock.' };
   }
   if (!reach) {
     return { canBuy: false, canReview: false, canReturnPolicy: false, stateText: 'Walk closer to buy this.' };
   }
-  return { canBuy: true, canReview: true, canReturnPolicy: true, stateText: '' };
+  return { canBuy: true, canReview: canRate, canReturnPolicy: true, stateText: '' };
 }

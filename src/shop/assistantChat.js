@@ -14,6 +14,7 @@ import {
   leaveAssistantQuestion, fetchAssistantQuestion, closeAssistantQuestion, fetchStandingAssistants,
 } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
+import { SHOPPER_MESSAGE_MAX_CHARS } from '../../shared/assistant-limits.js';
 import { setBudWord, clearBudWord, setBudMark, clearBudMark } from '../ui/bud.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
@@ -42,6 +43,7 @@ const statusEl = document.getElementById('assistant-chat-status');
 const formEl = document.getElementById('assistant-chat-form');
 const inputEl = document.getElementById('assistant-chat-input');
 const sendEl = document.getElementById('assistant-chat-send');
+const limitEl = document.getElementById('assistant-chat-limit');
 
 let assistant = null; // { userId, builderId, name } of whoever the panel is for
 let conversation = null; // the server's open conversation, or null
@@ -106,6 +108,40 @@ inputEl.addEventListener('blur', (event) => {
   if (event.relatedTarget && panelEl.contains(event.relatedTarget)) return;
   inputFocused = false;
   syncVisibleArea();
+});
+
+// #3750: the message box starts one line tall and grows with the text, up to about five lines on
+// a phone and then scrolls inside, so the conversation above stays in view with the keyboard up.
+// The limit is the server's own number (shared/assistant-limits.js), and a person who reaches it is
+// told the number beside the box.
+const MAX_INPUT_LINES = 5;
+inputEl.maxLength = SHOPPER_MESSAGE_MAX_CHARS;
+function autosizeInput() {
+  inputEl.style.height = 'auto';
+  const style = window.getComputedStyle(inputEl);
+  const line = parseFloat(style.lineHeight) || 20;
+  const pad = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const max = line * MAX_INPUT_LINES + pad;
+  inputEl.style.height = `${Math.min(inputEl.scrollHeight, max)}px`;
+  inputEl.style.overflowY = inputEl.scrollHeight > max ? 'auto' : 'hidden';
+  const atLimit = inputEl.value.length >= SHOPPER_MESSAGE_MAX_CHARS;
+  limitEl.hidden = !atLimit;
+  limitEl.textContent = atLimit ? `A message can be up to ${SHOPPER_MESSAGE_MAX_CHARS} characters.` : '';
+  // The box growing makes the log shorter: keep the newest message in view.
+  if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+function clearInput() {
+  inputEl.value = '';
+  autosizeInput();
+}
+inputEl.addEventListener('input', autosizeInput);
+// On a phone the keyboard's Enter key adds a line; with a desktop keyboard Enter sends and
+// Shift+Enter adds a line.
+const finePointer = window.matchMedia ? window.matchMedia('(pointer: fine)') : { matches: false };
+inputEl.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !finePointer.matches) return;
+  event.preventDefault();
+  formEl.requestSubmit();
 });
 
 const isOpen = () => !panelEl.hidden;
@@ -208,7 +244,11 @@ function render() {
   const tuckedLabel = pillLabel(title.name, unread);
   menuRowEl.hidden = !tucked;
   menuRowEl.textContent = tuckedLabel;
-  if (tucked) setBudWord('assistant', tuckedLabel); else clearBudWord('assistant');
+  if (tucked) {
+    // #3774: the note is a door: one tap brings the conversation back, at the newest message.
+    const who = title.name || 'the assistant';
+    setBudWord('assistant', tuckedLabel, { open: restorePanel, label: unread ? `${who} replied. Open the conversation.` : `Open the conversation with ${who}.` });
+  } else clearBudWord('assistant');
   if (tucked && unread) setBudMark('assistant'); else clearBudMark('assistant');
   // #3636 part 2: one quiet line while she is on shift and out of sight, with a way to walk there.
   const line = standing ? standingText(standing) : null;
@@ -481,7 +521,7 @@ formEl.addEventListener('submit', async (event) => {
     }
     if (token !== openToken) return;
     adopt(reply);
-    inputEl.value = '';
+    clearInput();
     startPolling();
   } catch (err) {
     if (token !== openToken) return;
@@ -514,7 +554,7 @@ async function leaveQuestion(text) {
   try {
     adoptQuestion(await leaveAssistantQuestion(text));
     canLeave = false;
-    inputEl.value = '';
+    clearInput();
   } catch (err) {
     if (token !== openToken) return;
     errorText = err.message;

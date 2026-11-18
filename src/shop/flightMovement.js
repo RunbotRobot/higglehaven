@@ -69,7 +69,7 @@ import { keepPairInside } from './rigidCameraPair.js';
 import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
-  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle,
+  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
   addShopIdleSwayYawOffset, shopIdleSwayYawOffset,
   shopSitYawOffset, shopSitHeightOffset, shopLeanBlend, shopLeanYawOffset, shopLeanPositionOffset,
 } from './avatar.js';
@@ -449,10 +449,10 @@ export function applyShopCameraOrientation() {
   camera.quaternion.copy(yawQuat).multiply(pitchQuat).multiply(SHOP_BASE_QUAT);
 }
 
-// #3650 (part of #3648, the bud): moving through the world by touching it, in
-// place of the two on-screen sticks and the fly button. A drag anywhere on the
-// world walks (a stick placed wherever the finger lands), a second finger
-// dragging looks, and a double-tap takes off or lands; the recogniser is
+// #3650, #3749 (part of #3648, the bud): moving through the world by touching it, in
+// place of the two on-screen sticks and the fly button. A drag that starts on the left
+// half of the screen walks (a stick placed wherever the thumb lands), one that starts on
+// the right half looks, and a double-tap takes off or lands; the recogniser is
 // src/shop/worldGestures.js and it feeds the same two raw stick states the
 // keyboard feeds, so everything downstream is unchanged. Touch and pen only:
 // a mouse keeps the keyboard and wheel. Each finger is captured on the canvas so
@@ -488,16 +488,22 @@ function bindWorldGestures(canvas) {
       toggleShopFlight();
       announceWorldGesture('fly');
     },
+    // Left half of the screen walks, right half looks (#3749).
+    splitX: () => window.innerWidth / 2,
   });
   // A mouse is not a gesture on a real device (it keeps the keyboard and wheel);
   // an automated browser (the e2e suite, scripts/live-site.mjs) has only a mouse
   // to drive a drag with, so there it counts, and nobody else is affected.
   const touching = (event) => event.pointerType === 'touch' || event.pointerType === 'pen'
     || (event.pointerType === 'mouse' && navigator.webdriver === true);
+  // When the finger touched, not when this handler got to run: a long task (a model loading, a
+  // slow frame) between the two taps of a double-tap must not make them look slower than they
+  // were (seen live: a double-tap dropped while a 400 ms task sat between its taps).
+  const eventTime = (event) => (event.timeStamp > 0 ? event.timeStamp : performance.now());
   canvas.addEventListener('pointerdown', (event) => {
     if (!shopActive || !touching(event)) return;
     try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
-    worldGestures.down(event.pointerId, event.clientX, event.clientY, performance.now());
+    worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event));
   });
   canvas.addEventListener('pointermove', (event) => {
     if (!shopActive || !touching(event)) return;
@@ -505,7 +511,7 @@ function bindWorldGestures(canvas) {
   });
   canvas.addEventListener('pointerup', (event) => {
     if (!touching(event)) return;
-    worldGestures.up(event.pointerId, performance.now(), event.clientX, event.clientY);
+    worldGestures.up(event.pointerId, eventTime(event), event.clientX, event.clientY);
   });
   canvas.addEventListener('pointercancel', (event) => {
     if (!touching(event)) return;
@@ -1814,7 +1820,12 @@ export function updateShopMovementCore(now) {
   // changed), setShopAvatarAnimationState only changes anything on an
   // actual state transition.
   shopAvatar.mixer?.update(dt);
-  setShopAvatarAnimationState(shopAvatar, airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle'));
+  const shopAvatarAnimState = airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle');
+  setShopAvatarAnimationState(shopAvatar, shopAvatarAnimState);
+  // #3777: an avatar with no clips of its own wears a small built-in motion so
+  // it does not glide with a still body (no-op for the default body and for
+  // any avatar that has clips or an applied animation).
+  updateShopAvatarBuiltinMotion(shopAvatar, dt, shopAvatarAnimState, airborne ? 0 : moveMagnitude);
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
   // instead of staying upright; landing eases it back to 0. The avatar

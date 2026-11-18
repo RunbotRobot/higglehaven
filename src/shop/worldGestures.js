@@ -1,11 +1,13 @@
-// #3650 (part of #3648, the bud): moving through the world by touching it.
-// A drag anywhere on the world walks (direction and speed from the drag, like a
-// stick placed wherever the finger lands), a second finger dragging looks the
-// same way, and a double-tap takes off or lands. This module is only the
-// recogniser: it takes raw pointer events and says what they mean. It knows
-// nothing about the DOM, the camera or the avatar (src/shop/flightMovement.js
-// wires it to the same two raw stick states the keyboard and the old sticks fed,
-// so everything downstream is unchanged).
+// #3650, #3749 (part of #3648, the bud): moving through the world by touching it.
+// Where a finger lands decides what it does: a drag that starts on the LEFT half of the
+// screen walks (direction and speed from the drag, like a stick placed wherever the thumb
+// lands), a drag that starts on the RIGHT half turns the camera, and a double-tap anywhere
+// takes off or lands. Each works alone (stand still and look around with one thumb) and the
+// two work together (one thumb each); which finger went down first does not matter. This
+// module is only the recogniser: it takes raw pointer events and says what they mean. It
+// knows nothing about the DOM, the camera or the avatar (src/shop/flightMovement.js wires it
+// to the same two raw stick states the keyboard and the old sticks fed, so everything
+// downstream is unchanged).
 //
 // What a tap is stays the browser's business: a finger that goes down and up
 // without moving more than TAP_SLOP_PX raises a click, which the world's own
@@ -38,59 +40,54 @@ export function deflection(dx, dy) {
 }
 
 // `handlers`: onMove(x, y) and onLook(x, y), called with -1..1 (0, 0 when the
-// finger lifts or returns to its start), and onDoubleTap().
+// finger lifts or returns to its start), onDoubleTap(), and splitX(), the x (in the same
+// units as the pointer positions) that divides the screen: left of it walks, right looks.
 export function createWorldGestures(handlers) {
-  const fingers = new Map(); // id -> { x0, y0, role, downAt }
+  const fingers = new Map(); // id -> { x0, y0, role, active, alone, downAt }
   let lastTap = null; // { x, y, at } of the last finished tap
 
   const roleHolder = (role) => [...fingers.values()].find((finger) => finger.role === role);
 
-  function report(role, finger, x, y) {
+  function report(finger, x, y) {
     const { x: dx, y: dy } = deflection(x - finger.x0, y - finger.y0);
-    if (role === 'walk') handlers.onMove(dx, dy);
+    if (finger.role === 'walk') handlers.onMove(dx, dy);
     else handlers.onLook(dx, dy);
   }
 
   function down(id, x, y, now) {
     if (fingers.has(id)) return;
-    const finger = { x0: x, y0: y, role: 'pending', downAt: now };
-    if (fingers.size === 0) {
-      fingers.set(id, finger);
-      return;
+    // The half it landed on decides the job; a second finger on a half that already has
+    // one does nothing (it is not a walker's helper and not a tap).
+    const wanted = x < handlers.splitX() ? 'walk' : 'look';
+    const finger = { x0: x, y0: y, role: roleHolder(wanted) ? 'ignored' : wanted, active: false, alone: fingers.size === 0, downAt: now };
+    if (fingers.size > 0) {
+      // Two fingers are never a tap, whatever they do.
+      for (const other of fingers.values()) other.alone = false;
+      lastTap = null;
     }
-    // A second finger: the first one is walking (even if it has not moved yet,
-    // so it stays put while the other looks), the new one looks. Neither is a
-    // tap any more.
-    for (const other of fingers.values()) if (other.role === 'pending') other.role = 'walk';
-    lastTap = null;
-    if (!roleHolder('look')) {
-      finger.role = 'look';
-      fingers.set(id, finger);
-    } else {
-      finger.role = 'ignored'; // a third finger does nothing
-      fingers.set(id, finger);
-    }
+    fingers.set(id, finger);
   }
 
   function move(id, x, y) {
     const finger = fingers.get(id);
-    if (!finger) return;
-    if (finger.role === 'pending') {
+    if (!finger || finger.role === 'ignored') return;
+    if (!finger.active) {
       if (Math.hypot(x - finger.x0, y - finger.y0) <= TAP_SLOP_PX) return;
-      finger.role = 'walk';
+      finger.active = true;
       lastTap = null;
     }
-    if (finger.role === 'walk' || finger.role === 'look') report(finger.role, finger, x, y);
+    report(finger, x, y);
   }
 
   function up(id, now, x = null, y = null) {
     const finger = fingers.get(id);
     if (!finger) return;
     fingers.delete(id);
-    if (finger.role === 'walk') handlers.onMove(0, 0);
-    else if (finger.role === 'look') handlers.onLook(0, 0);
-    else if (finger.role === 'pending' && fingers.size === 0) {
-      // A finger that went down and up without travelling: a tap.
+    if (finger.active) {
+      if (finger.role === 'walk') handlers.onMove(0, 0);
+      else handlers.onLook(0, 0);
+    } else if (finger.role !== 'ignored' && finger.alone) {
+      // A finger that went down and up without travelling, and without company: a tap.
       const px = x ?? finger.x0;
       const py = y ?? finger.y0;
       const quick = now - finger.downAt <= TAP_MAX_MS;
@@ -101,13 +98,11 @@ export function createWorldGestures(handlers) {
         lastTap = quick ? { x: px, y: py, at: now } : null;
       }
     }
-    // If the walking finger lifts while another is still down, that one simply
-    // keeps looking; nothing is handed over.
   }
 
   function cancel() {
-    const hadWalk = Boolean(roleHolder('walk'));
-    const hadLook = Boolean(roleHolder('look'));
+    const hadWalk = [...fingers.values()].some((finger) => finger.active && finger.role === 'walk');
+    const hadLook = [...fingers.values()].some((finger) => finger.active && finger.role === 'look');
     fingers.clear();
     lastTap = null;
     if (hadWalk) handlers.onMove(0, 0);

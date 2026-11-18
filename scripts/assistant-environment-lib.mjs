@@ -157,7 +157,9 @@ you reply. What the line means:
   It also says \`firstContact\`: if you have not met this person, say who you are
   and that you have taken over.
 - \`{ "question": ... }\`: a question someone left while every assistant was busy.
-  Answer it in full with \`answer-question\`, or pass it on with \`escalate-question\`.
+  Answer it in full with \`answer-question\`, or pass it on with \`escalate-question\`,
+  which also needs \`--say\`: the words the person will read. Passing it on without
+  telling them anything leaves them waiting, so \`--say\` is never optional.
   It carries \`firstContact\`, \`lastSpokeAt\` and \`earlier\` the same way.
 - \`{ "ended": ... }\`: the conversation ended without you. Nothing to do.
 - \`{ "idle": true }\`: nothing came. Run the shift program again.
@@ -171,13 +173,17 @@ double quotes where it says TEXT:
     ${reply('escalate')} ID --text "TEXT" --kind KIND
     ${reply('handover')} ID
     ${reply('answer-question')} ID --text "TEXT"
-    ${reply('escalate-question')} ID --text "TEXT" --kind KIND
+    ${reply('escalate-question')} ID --text "TEXT" --say "TEXT" --kind KIND
 
 - \`reply\` answers the shopper. \`end\` ends the conversation. \`escalate\` files a card
   for the team: TEXT is your own short summary, never the shopper's words (the
   server adds those in a marked quote). KIND is \`problem\` (something looks broken),
   \`suggestion\` (an idea) or \`question\` (they need help you cannot give); leave
   \`--kind\` out and it is a question.
+- \`escalate-question\` does both jobs in one command. The first TEXT (\`--text\`) is
+  the summary for the team, written about the person (\`They are asking about a
+  refund\`), never to them. The second (\`--say\`) is what the person reads: say you
+  have passed it on and what to expect. Do not mix them up.
 - \`handover\` passes the conversation to another assistant who is on shift and
   free. It says so if nobody is, and the conversation stays with you.
 
