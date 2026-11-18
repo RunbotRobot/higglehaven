@@ -45,6 +45,7 @@
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
 import * as THREE from 'three';
+import { failLoadingStage, markLoadingStage } from '../ui/loadingStages.js';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
 import { shopGroundUsesBiomeTexture } from './groundLook.js';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
@@ -407,6 +408,7 @@ export async function enterShopMode() {
       return;
     }
   }
+  markLoadingStage('signedin'); // #3738
 
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
@@ -521,8 +523,11 @@ export async function enterShopMode() {
     [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
+    // #3738: the opening screen says so too, and offers Try again.
+    failLoadingStage(`${err.message || 'The world did not load.'} Check your connection, then tap Try again.`);
     return;
   }
+  markLoadingStage('world'); // #3738
   // Builder display labels for updateShopLandletInfo — supplementary, so a
   // failure here just leaves shopBuilderLabels empty (falls back to "an
   // unknown builder" per-landlet) rather than blocking Shop mode itself.
@@ -632,6 +637,8 @@ export async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   setShopActive(true);
+  // #3738: the opening screen's last stage is the first frame the world draws.
+  requestAnimationFrame(() => markLoadingStage('frame'));
   // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
   // facing value for the compass (eases toward movement direction rather
   // than tracking the camera instantly, unlike every other mode's default
