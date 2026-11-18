@@ -285,8 +285,24 @@ Tapping it unfolds petals; a petal runs an action or opens a leaf (a soft sheet
 by the bud, close control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
-- `registerBudPetals(mode, [{ id, label, run }])`: one definition per mode
-  (`shop`, `build`, `sell`). A mode with none has no bud, and keeps its old
+- **Four menus, one open at a time (#3760, part of #3759).** Around the head are four
+  petals: Shop, Build, Sell and Menu. The bud opens on the general menu (Menu), which is
+  **the same in every mode**: the person, Notices, Friends, My Purchases, Settings and "?".
+  A place's own tools live under that place's petal: Build's (Add item, My Lándlets,
+  Levels, Undo and Redo, Tools, and the lándlet cap line), Sell's (My products, Add a
+  product), and Shop's, which has none, so its petal opens no stem. A tap on a place you
+  are not in takes you there (the page reloads and the ring stays out); a tap on the place
+  you are in opens that place's menu in place of the general one; a tap on Menu brings the
+  general one back; the head, Escape or the world closes whichever is open. Every leaf in
+  the stem carries the menu it belongs to (`data-bud-menu`) and is drawn only while that
+  menu is open (`body[data-bud-menu]`, `src/ui/bud.js`: `showMenu`, `currentBudMenu`). The
+  rules are in `src/ui/budMenuRules.js`: the general menu's members are a fixed list, and
+  registering a place's tool into it is refused (an error in development and in tests,
+  logged and skipped in the shipped app), so adding a member to the general menu is a
+  deliberate edit of that list and of this paragraph, never an accident. The ring's four
+  petals sit 30 degrees apart (6, 36, 66 and 96 degrees); the stem starts below them.
+- `registerBudPetals(mode, [{ id, label, run }])`: one definition per menu
+  (`shop`, `build`, `sell`, and `general` for the general menu's own members). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
 - `addBudPetals(mode, [petal])` (#3690): adds petals to a mode without

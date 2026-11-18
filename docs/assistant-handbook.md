@@ -248,20 +248,26 @@ everything else.
 ### How do I go between Shop, Build and Sell?
 
 1. Tap the round logo at the top left (the bud).
-2. Three petals grow out of it in an arc: "Shop", "Build" and "Sell". The one you
+2. Four petals grow out of it in an arc: "Shop", "Build", "Sell" and "Menu". The place you
    are in is shaded green.
-3. Tap the one you want.
+3. Tap the place you want. To open the menu of the place you are in, tap its own petal; to open the
+   general menu (your name, Notices, Friends, My Purchases, Settings and "?"), tap "Menu".
 
-**You will see:** the petal you tapped turns green at once and the petals stay out
-while that place loads; when it is on screen they fold back into the bud. The three
-petals are the same in all three places.
+**You will see:** a petal for another place turns green at once and the petals stay out while that
+place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
+opens that place's own menu instead (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
+products" and "Add a product"; Shop has none), and only one menu is open at a time. The bud always
+opens on the general menu, and that menu is the same in all three places.
 
 **If something goes wrong:**
 - The petals are not there: the bud is folded. Tap the round logo once.
-- Tapping the place you are already in only folds the petals back: that is expected.
+- A tool someone is looking for is not in the menu that opened: it lives under its own place's petal
+  (for example "Add item" is under "Build"), not in the general menu.
+- Tapping the round logo again, or tapping the world, folds everything away: that is expected.
 
 ```controls any
 .mode-nav-btn[data-mode="shop"] | Shop
+#bud-menu-general | Menu
 ```
 
 ### How do I walk around and look around?
@@ -610,7 +616,7 @@ The message box starts one line tall and grows as you type, up to about five lin
 **You will see:** the sheet goes away and you are standing on your own lándlet. The
 top left is the small round bud with the higglehaven logo: tap it and it unfolds.
 "Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
-are inside it.
+are inside it: tap the Build petal to see them (the bud opens on the general menu, and each place keeps its own tools under its own petal).
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -630,7 +636,7 @@ are inside it.
 ### How do I add an item to my lándlet?
 
 1. In Build, tap the small round bud with the higglehaven logo at the top left,
-   then tap "Add item". A short strip opens at the bottom: a "Search" box and a
+   then the Build petal, then tap "Add item". A short strip opens at the bottom: a "Search" box and a
    row of items to swipe, the ones used most recently first.
 2. Swipe along the row, or type in the "Search" box. For the whole list, tap
    "All items": "All", "Products" and "Bundles" narrow it to everything, single
@@ -646,7 +652,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
-  the round logo button at the top left, then "Undo" to take it back.
+  the round logo button at the top left, the Build petal, then "Undo" to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
@@ -677,7 +683,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - You want to line it up with something nearby: tap "More" on the card beside the
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
-- Wrong spot: the round logo button at the top left, then "Undo".
+- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
 
 ```controls build
 #mode-move | Move
@@ -696,7 +702,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **You will see:** the item turns as you drag, and the line at the top shows how far.
 
 **If something goes wrong:**
-- It turned the wrong way or too far: the round logo button at the top left, then "Undo".
+- It turned the wrong way or too far: the round logo button at the top left, the Build petal, then "Undo".
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 
@@ -709,7 +715,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
-2. Tap the bud, then "Tools", then "Paste" (it is only listed once something is
+2. Tap the bud, then the Build petal, then "Tools", then "Paste" (it is only listed once something is
    copied). With the item still selected, the copy appears
    right on top of it.
 3. To put the copy somewhere else instead, tap empty ground first so nothing is
@@ -722,7 +728,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
   reads "Cancel placing". Tap the bud, then that.
-- Wrong spot: the round logo button at the top left, then "Undo".
+- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
 
 ```controls build
 #copy-item | Copy
@@ -738,7 +744,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap the round logo button at the top left, then "Undo", straight away and it comes back.
+- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.
@@ -771,14 +777,14 @@ single item.
 
 ### How do I select several items at once?
 
-1. Tap the bud, then "Tools", then "Multi-Select". The sheet goes away and the bud
+1. Tap the bud, then the Build petal, then "Tools", then "Multi-Select". The sheet goes away and the bud
    says "Selecting" while it is on. A "Brush" slider is in the Tools sheet: tap
    the bud, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
    sweep is.
 3. The top of the screen says how many are chosen, for example "2 items
    selected".
-4. Tap the bud, "Tools", then "Multi-Select" again when you want to go back to
+4. Tap the bud, the Build petal, "Tools", then "Multi-Select" again when you want to go back to
    choosing one item at a time. The bud says "Menu" again.
 
 **You will see:** the same row of buttons as for one item, acting on all of them:
@@ -804,7 +810,7 @@ single item.
 3. To keep it for later, tap "Save Bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
    "Save".
-4. To use a saved bundle, tap the bud, then "Add item", then "All items", then
+4. To use a saved bundle, tap the bud, then the Build petal, then "Add item", then "All items", then
    "Bundles", and tap its name.
 5. To split one apart, select it and tap "Unbundle".
 
@@ -829,7 +835,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I build up or dig down to another level?
 
-1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then "Levels". A sheet
+1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then the Build petal, then "Levels". A sheet
    opens that says which level you are on: "You are on Ground" when you are on the
    ground level.
 2. Tap "Build Level Above" to add a level over the one you are on, or "Dig Level
@@ -865,7 +871,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I measure something?
 
-1. Tap the bud, then "Tools", then "Measure". The bud says "Measuring" while it is
+1. Tap the bud, then the Build petal, then "Tools", then "Measure". The bud says "Measuring" while it is
    on.
 2. Tap one point: an item's surface or the bare ground. Tap a second point.
 3. The top of the screen reads the straight-line distance and how much of it is
@@ -895,7 +901,7 @@ top of the screen.
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
 3. Nothing covers the showroom: walk around it as you would anywhere. To see your
-   list, tap the round logo at the top left (the bud), then "My products". Tap "Close"
+   list, tap the round logo at the top left (the bud), then the Sell petal, then "My products". Tap "Close"
    (the × at its top right) to put the list away again.
 
 **You will see:** your own products only. Nobody else's products and no real
@@ -917,7 +923,7 @@ lándlets are shown here.
 
 ### How do I put my own product up for sale?
 
-1. In Sell, tap the round logo at the top left (the bud), then "Add a product". A
+1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product". A
    small window opens under it and asks which way. Tap "Upload my own model". The
    window is now called "Upload Model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
@@ -956,7 +962,7 @@ your "My products" list).
 
 ### How do I sell a product someone else already made?
 
-1. In Sell, tap the round logo at the top left (the bud), then "Add a product", then
+1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product", then
    "Sell one that is already here".
 2. Look through the products, or type in "Search products". Tap the one you want to
    sell.
@@ -999,7 +1005,7 @@ price and stock. The original maker's listing is not changed.
   name or choose another.
 - A price above the limit is refused with a message naming the limit.
 - Something changed does not show up: close "My products" and open it again with
-  the round logo at the top left, then "My products"; if it is still wrong, ask
+  the round logo at the top left, the Sell petal, then "My products"; if it is still wrong, ask
   what they see and offer to pass it on.
 
 ```controls sell
