@@ -2125,10 +2125,8 @@
       /* #3328: why Edit is disabled; positioned like the status line (a
          normal flex row would grow the toolbar over the canvas). Selectable. */
       #edit-bundle-reason {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        right: 0;
+        /* #3692: now inside the item card, so it flows under the actions. */
+        display: block;
         margin-top: var(--space-xs);
         user-select: text;
         -webkit-user-select: text;
@@ -6501,10 +6499,26 @@
       #item-card.pass-through {
         pointer-events: none;
       }
-      #item-card.pass-through #item-card-actions,
       #item-card.pass-through #item-card-more,
       #item-card.pass-through #item-card-close-btn {
         display: none;
+      }
+      /* #3692: while painting a selection the card keeps the bundle actions (Bundle, Unbundle, Edit,
+         Save Bundle; the design's "several" card) and only those buttons take taps. */
+      #item-card.pass-through #copy-item,
+      #item-card.pass-through #delete-item {
+        display: none;
+      }
+      /* A bundle action that cannot be used yet is left out while painting, so the card covers as
+         little of the world as it can (#3574's rule). */
+      #item-card.pass-through #item-card-actions button:disabled {
+        display: none;
+      }
+      #item-card.pass-through #group-item,
+      #item-card.pass-through #ungroup-item,
+      #item-card.pass-through #edit-bundle-item,
+      #item-card.pass-through #save-bundle-item {
+        pointer-events: auto;
       }
       #item-card.pass-through #item-card-name {
         padding-right: 0;
