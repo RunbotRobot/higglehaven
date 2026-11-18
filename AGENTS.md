@@ -1111,6 +1111,39 @@ most likely to come up again.
   same thing every time, by where it starts, never by what another finger
   is doing. A session applies these to the next piece of the bud without
   asking.
+  **The bud becomes a flower (2026-11-18, #3759), from six more notes
+  the same evening.** The head stays in the upper left for good: "My
+  more recent suggestions have morphed it into a flower with the bud
+  becoming the flower head, with petals appearing around it and the stem
+  growing downward from it. So the bud should stay in the upper-left."
+  An opened menu is a stem with leaves: "I liked how the menu leaves
+  unfolded out from the bud in the mockup... Let's link them with a stem
+  that has leaves on both sides." Every leaf and petal is a picture
+  first: "I don't like the word-only menu options. I want icons. But
+  I've also been frustrated with sites having mysterious icons... make
+  the icons as self-explanatory as we possibly can... a single tiny word
+  under each one saying what it is. So the primary visual is the icon,
+  and the word is secondary." The menu never changes under a person:
+  "I've always found it frustrating when menus show different options
+  situationally. Let's make all menus always show the same options. That
+  means the buttons specific to Shop, Sell, and Build should each be
+  submenus, leaving the main menu static no matter which area the user is
+  in... a general menu that's a sibling to the sell, build, and shop
+  petals... a single menu openable at once, one of any of the four." And
+  help is one door: "'How to move' is a little too specific for the main
+  menu. Let's make that initial button a more general button such as a
+  '?' button", holding how to move, how higglehaven works, manuals for
+  shopping, building and selling, and the way to an assistant. The
+  principles, for anything the fleet draws next: a menu is the same
+  wherever a person opens it, and what belongs to one place lives under
+  that place; an icon is a picture of the thing with its word always
+  beside it, never a mark to be learned; help has one entrance; and a
+  design that has changed shape is renamed in every document that
+  described the old shape (the head does not move to the lower right).
+  (higglehaven1's reading where two notes meet, told to the owner: the
+  petal of a mode you are not in takes you there and the flower folds
+  when it has loaded; the petal of the mode you are in opens that mode's
+  stem.)
 
 - **A wait a person can see is first made short, and whatever is left
   shows that things are working.** (2026-11-17, #3735.) Opening the app
@@ -1135,6 +1168,16 @@ most likely to come up again.
   world is the product; every piece of interface has to earn the space it
   takes from it" applied to a single sentence: text that helps nobody act
   goes, and a session may remove such a line without asking.
+  **On the loading tips (2026-11-18, #3763):** "I've been frustrated in
+  games before when screens load so quickly that I can't read the tips...
+  At the very least, we should provide the option to toggle tips off in
+  settings. But we should assume that the vast majority of users won't
+  see or touch that toggle." So optional reading is paced for a slow
+  reader, can be seen again somewhere unhurried, and can be switched
+  off; and a default has to be right for the person who never opens
+  Settings. (higglehaven1's recommendation, told to the owner and open
+  to their correction: a tip is not made to wait for a tap, because a
+  required close would lengthen every open.)
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
