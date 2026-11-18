@@ -783,7 +783,7 @@ single item.
 ### How do I make a bundle, and use it again?
 
 1. Select two or more items (see the entry above).
-2. Tap "Bundle" in the row above them. They become one thing: one box around them,
+2. Tap "Bundle" on the card that opens beside them. They become one thing: one box around them,
    moved and turned together.
 3. To keep it for later, tap "Save Bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap

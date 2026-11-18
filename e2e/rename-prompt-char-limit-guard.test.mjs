@@ -117,9 +117,8 @@ await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).cl
 await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(800);
-await page.click('#toggle-multiselect');
-await page.waitForTimeout(300);
-
+// #3692: Save Bundle sits on the item card; while Multi-Select paints, the card leaves it out
+// until two items are picked, so this single placed item is saved from the plain selection.
 await page.click('#save-bundle-item');
 await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
 await page.fill('#bundle-name-input', OVERLONG);

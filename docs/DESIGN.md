@@ -308,6 +308,10 @@ by touching the world. The module is `src/ui/bud.js`:
   "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
   Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
   plan blooms it beside the selection; that is a later slice).
+- Bundles (#3692): Bundle, Unbundle, Edit and Save Bundle are buttons of the item card (the card that
+  blooms beside the selection), with the same ids and handlers; Edit's reason line shows under them.
+  While Multi-Select paints, the card keeps only the bundle actions that apply (Bundle and Save Bundle
+  from two items, Unbundle and Edit on a bundle) so it covers as little of the world as it can.
 - `setBudWord(key, text, { open, label })` and `clearBudWord(key)` (#3774): the word the bud
   wears beside it. A word that announces something carries its door: with `open`, the word is
   a real button (`#bud-note`, at least 44px tall, a pressed state, `label` for a screen
