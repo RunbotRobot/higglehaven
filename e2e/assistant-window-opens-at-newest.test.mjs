@@ -2,7 +2,7 @@
 // there as messages arrive, and leaves a reader who scrolled up where they are.
 // The history is served by a stubbed GET /api/assistant-chat/current (the real
 // endpoint is covered by worker/assistant-chat.test.js); the panel is real.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAssistantFromHelp, finish } from './helpers.mjs';
 
 const LABEL = 'Newest Message Shopper';
 const session = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -49,7 +49,7 @@ const position = () => page.evaluate(() => {
   };
 });
 
-await page.evaluate(() => document.getElementById('settings-assistant-btn').click());
+await openAssistantFromHelp(page);
 await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await page.waitForFunction(() => window.__assistantChat?.history?.length >= 40, null, { timeout: 5000 });
 await page.waitForTimeout(300);
@@ -62,7 +62,7 @@ check(opened.gap <= 2 && opened.lastInView, 'it opens at the newest message');
 await page.click('#assistant-chat-close');
 await page.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
 questionInLine = true;
-await page.evaluate(() => document.getElementById('settings-assistant-btn').click());
+await openAssistantFromHelp(page);
 await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await page.waitForFunction(() => window.__assistantChat?.question?.status === 'waiting', null, { timeout: 5000 });
 await page.waitForTimeout(300);

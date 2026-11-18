@@ -8,7 +8,7 @@
 // automated in this suite, so the panel is opened by the test hook the product
 // tap also goes through.
 import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAssistantFromHelp, finish } from './helpers.mjs';
 
 const LABEL_A = 'Assistant Chat Shopper';
 const LABEL_B = 'Assistant Chat Stand-in';
@@ -294,10 +294,7 @@ console.log('assistant was handed the left question:', handedQuestion.body.quest
 const answerPosted = await postJson(pageB, `/api/assistant-inbox/questions/${handedQuestion.body.question.questionId}/answer`, { text: 'Yes! Open Sell mode and add it.' });
 
 // The shopper comes back through Settings (no assistant needs to be in view) and reads it.
-await pageA.click('#account-menu-toggle');
-await pageA.click('#settings-btn');
-await pageA.waitForSelector('#settings-assistant-btn', { state: 'visible', timeout: 5000 });
-await pageA.click('#settings-assistant-btn');
+await openAssistantFromHelp(pageA);
 await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 // #3624: the answer is part of the thread, not a card to close.
 await pageA.waitForFunction(() => window.__assistantChat?.history?.some((row) => row.text === 'Yes! Open Sell mode and add it.'), null, { timeout: 5000 });

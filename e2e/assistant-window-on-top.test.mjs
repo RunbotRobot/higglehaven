@@ -6,7 +6,7 @@
 // the assistant window; (2) the computed stacking of every fixed element in the
 // page against the assistant window's, so a panel added later with a higher
 // z-index fails here.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, openAssistantFromHelp, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Window On Top', viewport: { width: 390, height: 844 } });
 
@@ -14,11 +14,8 @@ const { browser, page, errors } = await launchPage({ promptAnswer: 'Window On To
 await chooseIdentity(page, { mode: 'sell', label: 'Window On Top', isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
 
-// The owner's path: Settings, then Ask an assistant, with My Products open.
-await openAccountMenu(page);
-await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('#settings-assistant-btn');
+// The owner's path: the bud, "?", then Ask an assistant, with My Products open.
+await openAssistantFromHelp(page);
 await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 await page.waitForTimeout(500);
 

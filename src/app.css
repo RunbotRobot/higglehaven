@@ -980,6 +980,36 @@
         font-size: 24px;
         line-height: 1;
       }
+      /* The "?" leaf (#3762): a short list of pages, each page a few questions that open to their steps. */
+      .help-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
+      .help-row {
+        display: block;
+        width: 100%;
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-lg);
+        border: none;
+        border-radius: var(--radius-md);
+        background: rgb(var(--white-rgb) / 0.7);
+        color: var(--ink);
+        font: inherit;
+        text-align: left;
+      }
+      .help-back {
+        min-height: 36px;
+        margin: 0 0 var(--space-sm);
+        padding: 0 var(--space-sm);
+        border: none;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+      }
+      .bud-leaf .help-page-title { margin: 0 0 var(--space-sm); font-size: var(--text-lg); font-weight: 600; }
+      .help-entry { margin: 0 0 var(--space-sm); user-select: text; }
+      .help-entry summary { min-height: 36px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
+      .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; }
+      .help-steps li { margin: 0 0 var(--space-xs); }
+      .bud-leaf .help-see { color: rgb(var(--ink-rgb) / 0.75); }
+      .bud-leaf .help-note { margin: 0; }
       body[data-bud-mark] #account-menu-toggle::after {
         content: '';
         position: absolute;
@@ -4484,9 +4514,8 @@
         border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
         padding-top: var(--space-md);
       }
-      /* #3567: both utilities share one pill style (the assistant button used
-         to fall back to the browser's square default). */
-      #settings-assistant-btn,
+      /* #3567: the utilities share one pill style (the assistant button used
+         to fall back to the browser's square default; it has since moved under "?", #3762). */
       #settings-feedback-btn {
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);

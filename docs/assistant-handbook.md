@@ -134,7 +134,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 3. "General" holds "Units" (Meters or Feet), "Version", and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
 5. "Build" and "Sell" hold the settings for those modes, including the person's username (with "Rename") on "Build" and the payout account on "Sell".
-6. At the bottom of every tab are "Ask an assistant" and "Send feedback".
+6. At the bottom of every tab is "Send feedback".
 7. The "×" at the top right closes Settings.
 
 **You will see:** a window with the tab they chose; the tab's name is highlighted.
@@ -149,7 +149,6 @@ touches one ends by sending the assistant to the runbook's hand-off.
 #settings-tabs [data-section="shop"] | Shop
 #settings-tabs [data-section="build"] | Build
 #settings-tabs [data-section="sell"] | Sell
-#settings-assistant-btn | Ask an assistant
 #settings-feedback-btn | Send feedback
 #settings-close-btn | Close
 ```
@@ -213,6 +212,31 @@ touches one ends by sending the assistant to the runbook's hand-off.
 ```
 
 ## Getting around and Shop
+
+### What is higglehaven, and what can I do here?
+
+1. higglehaven is a world you walk around in. The lándlets, items and products in it
+   are made by the people who use it.
+2. In "Shop" you walk the world, look at products and buy them.
+3. In "Build" you claim a lándlet of your own and fill it with items.
+4. In "Sell" you put your own products up for sale.
+5. The round logo at the top left (the bud) is the menu. It opens "Shop", "Build"
+   and "Sell", your account, and "?", which holds these pages and a way to ask an
+   assistant.
+
+**You will see:** the world, with only the bud on top of it. Tap the bud to see
+everything else.
+
+**If something goes wrong:**
+- Someone asks about something this does not cover: use the other entries in this
+  handbook, and if none fits, say so and offer to pass the question to the team.
+
+```controls any
+.mode-nav-btn[data-mode="shop"] | Shop
+.mode-nav-btn[data-mode="build"] | Build
+.mode-nav-btn[data-mode="sell"] | Sell
+#bud-petal-shop-help | ?
+```
 
 ### How do I go between Shop, Build and Sell?
 
@@ -412,8 +436,7 @@ label:has(#verify-age-attest) | at least 18
 3. There is a limit on how many you can collect in a short time. When you reach it,
    a notice says how many you can collect and in how long you can collect more, for
    example "You can collect up to 20 orbs every 15 minutes. Try again in about 7
-   minutes." Read the numbers out from the person's own screen, since they can
-   change.
+   minutes." The numbers can change, so go by what your own screen says.
 
 **You will see:** a short note when you collect an orb, and a notice with a cross at
 its corner when you reach the limit.
@@ -515,8 +538,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 ### How do I talk to an assistant?
 
-1. Tap an assistant's bird in the world, or tap the gear, then "Settings", then "Ask
-   an assistant".
+1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
+   then "Ask an assistant".
 2. A small window opens. Type in the box that says "Ask a question…" and tap "Send".
 3. An assistant answers there. Keep going in the same window.
 4. To tuck it away without ending the chat, tap the minus at the top right of the
@@ -538,8 +561,7 @@ assistant's replies, each labelled with who wrote it.
   to the team.
 
 ```controls any
-#settings-btn | Settings
-#settings-assistant-btn | Ask an assistant
+#bud-petal-shop-help | ?
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise
@@ -1003,8 +1025,8 @@ nobody owns and nothing uses is removed completely.
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Sell" tab.
 2. "Payout Account" says whether one is set up. "Set up payout account" (or "Update
    payout account" if there already is one) opens the steps for it.
-3. Tax forms and identity checks, where they are asked for, are filled in by the
-   person themselves on those screens.
+3. Tax forms and identity checks, where they are asked for, are filled in by you on
+   those screens.
 
 **You will see:** the payout account's status at the top of the "Sell" tab.
 
