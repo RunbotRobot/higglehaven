@@ -4,18 +4,18 @@
 // borrows from that entry, so scripts/loading-tips.test.mjs can fail when the
 // interface changes the way a thing is done and only one of the two is updated.
 // Everything here is read by a person: "lándlet" always, with the accent, and
-// no internal words. When the movement gestures land, change the first line and
-// its handbook entry together.
+// no internal words. When the way of moving changes, change the first two lines
+// and their handbook entries together.
 export const LOADING_TIPS = [
   {
-    text: 'Push the pad at the bottom left to walk, and the one at the bottom right to look around.',
+    text: 'Drag a finger on the world to walk. Hold one there and drag a second to look around.',
     handbook: 'How do I walk around and look around?',
-    words: ['bottom left', 'bottom right'],
+    words: ['drag', 'second finger'],
   },
   {
-    text: 'Tap the bird button to come down to the ground, and again to fly back up.',
+    text: 'Double-tap the world to come down to the ground, and again to fly back up.',
     handbook: 'How do I fly, go up and come back down?',
-    words: ['bird button'],
+    words: ['double-tap the world'],
   },
   {
     text: 'Tap a product to read about it. A small card blooms beside it.',
