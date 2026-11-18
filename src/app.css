@@ -5154,7 +5154,16 @@
       .auth-form label.auth-checkbox-label {
         flex-direction: row;
         align-items: center;
-        gap: var(--space-sm);
+        gap: var(--space-md);
+        /* #3678: the age confirmation is the one line that says people must be adults, so it
+           is the line a thumb has to hit: a 44px row and a 24px box, where a 13px box was. */
+        min-height: 44px;
+      }
+      .auth-form label.auth-checkbox-label input[type='checkbox'] {
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+        margin: 0;
       }
       #auth-modal-content input[type='email'],
       #auth-modal-content input[type='password'],
