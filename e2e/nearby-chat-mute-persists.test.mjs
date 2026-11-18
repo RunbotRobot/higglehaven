@@ -4,7 +4,7 @@
 // chat panel offers Unmute. Same trustTier client-side-patch workaround and
 // mocked poll endpoint as nearby-chat-mute-and-report.test.mjs (muting itself
 // is purely local; nothing reaches the server).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, budClick } from './helpers.mjs';
 
 const LABEL = 'Nearby Chat Mute Persist Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: 'unused' });
@@ -37,8 +37,7 @@ const msg = (builderId) => `.shop-nearby-chat-message[data-builder-id="${builder
 async function openChat() {
   await page.waitForSelector('body.shop-ready', { timeout: 10000 });
   await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-  await page.waitForSelector('#shop-nearby-chat-btn.visible', { timeout: 10000 });
-  await page.click('#shop-nearby-chat-btn');
+  await budClick(page, '#bud-petal-shop-chat'); // #3556: the Chat petal of the flower
   await page.waitForSelector('#shop-nearby-chat-panel.open', { timeout: 5000 });
   await page.waitForSelector(msg(OTHER_BUILDER_ID), { timeout: 10000 });
 }

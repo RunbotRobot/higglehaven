@@ -1412,10 +1412,18 @@
         width: 48px;
         height: 48px;
       }
+      /* #3844: the sign had 91px on a phone (a 79px reserve on the right that nothing uses), so a name
+         broke inside a word and ran down over the stem. It now takes the room between the ring and the
+         compass (never wider than a leaf), breaks at spaces and only inside a word that alone is wider
+         than the sign, and stops above the stem: past that height it scrolls inside itself (a person
+         can still select all of it) with a quiet fade at the bottom while text is clipped. */
       body[data-bud="on"] #account-menu-landlet-info {
         box-sizing: border-box;
         width: max-content;
-        max-width: calc(100vw - var(--bud-size) - 104px - 13px - 66px - 48px - var(--space-lg));
+        max-width: min(320px, calc(100vw - var(--bud-size) - 104px - 13px - 48px - var(--space-lg)));
+        max-height: calc(var(--bud-size) + 8px + 92px - var(--space-sm));
+        overflow-y: auto;
+        scrollbar-width: none;
         display: flex;
         flex-direction: column;
         gap: var(--space-3xs);
@@ -1426,11 +1434,17 @@
         user-select: text;
       }
       body[data-bud="on"] #account-menu-landlet-info[hidden] { display: none; }
+      body[data-bud="on"] #account-menu-landlet-info::-webkit-scrollbar { display: none; }
+      body[data-bud="on"] #account-menu-landlet-info[data-clipped] {
+        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+      }
       .bud-place-name {
         font: 700 var(--text-xl)/1.1 Georgia, 'Times New Roman', serif;
         letter-spacing: 0.01em;
         color: var(--ink);
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word; /* spaces first; inside a word only when it alone is wider than the sign */
+        hyphens: manual;
       }
       .bud-place-by {
         font: var(--text-xs)/var(--leading-tight) var(--font-sans);
@@ -1521,41 +1535,20 @@
         border-radius: var(--radius-round);
         background: rgb(var(--pill-rgb) / 0.65);
       }
-      /* #2779: a small collapsed toggle, same shape/position column as
-         #compass-panel (top: 86px) above -- next free slot in that right-edge
-         stack. #3302: the Submit Feedback pill that used to sit between the
-         two moved into Settings, so this and everything below it moved up one
-         40px slot. */
-      #shop-nearby-chat-btn {
-        top: 142px;
-        right: 8px;
-        padding: var(--space-xs) var(--space-lg);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
-        cursor: pointer;
-      }
-      /* Deliberately its own open/closed state (not .shop-ui's own
-         .visible) -- #shop-nearby-chat-btn's visibility already tracks
-         trust-tier eligibility; this tracks "did the shopper tap it open,"
-         a fully independent axis. See src/shop/nearbyChat.js. */
+      /* #3556: the panel is shown only inside the Chat leaf (src/shop/nearbyChat.js lends it to
+         the leaf, which gives the box, the colour and the width); .open is that lending. */
       #shop-nearby-chat-panel {
         display: none;
-        position: fixed;
-        z-index: 16;
-        top: 222px;
-        right: 8px;
-        width: 220px;
-        background: rgb(var(--pill-rgb) / 0.85);
-        border-radius: var(--radius-md);
-        padding: var(--space-sm);
         flex-direction: column;
         gap: var(--space-xs);
       }
       #shop-nearby-chat-panel.open {
         display: flex;
+      }
+      .bud-leaf #shop-nearby-chat-log {
+        min-height: 96px;
+        max-height: 40vh;
+        font-size: var(--text-md);
       }
       #shop-nearby-chat-log {
         max-height: 160px;
@@ -2506,6 +2499,46 @@
       #catalog-picker.strip #catalog-picker-grid[hidden] { display: none; }
       #catalog-picker.strip .catalog-tile { flex: 0 0 64px; scroll-snap-align: start; }
       #catalog-picker.strip .catalog-thumb { width: 48px; height: 48px; }
+      /* #3577 (part of #3539, interface week): "All items" is the leaf that grows from the strip, not
+         a second, narrower panel. It takes the strip's width (a 220 px column left a 160 px sliver of
+         world beside it that nothing could use) and a capped height, so the world stays in view above
+         it. Manual and Prompt sit on the header row beside the close button instead of taking a row of
+         their own; Search and the scope chips share one row that stays on top while the single grid
+         under it scrolls. Same ids and handlers as before: only where things sit has changed. */
+      #catalog-picker.visible:not(.strip) {
+        width: min(calc(100vw - 16px), 360px);
+        /* The cap is for the whole leaf; this box is content-box (as the strip's is, so the two are
+           the same width), hence the padding comes off. */
+        max-height: calc(clamp(240px, 30vh, 380px) - 44px - var(--space-md));
+        padding: 44px var(--space-md) var(--space-md);
+      }
+      #catalog-picker.visible:not(.strip) #catalog-mode-tabs {
+        position: absolute;
+        top: var(--space-sm);
+        left: var(--space-sm);
+        margin: 0;
+      }
+      #catalog-search-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding-bottom: var(--space-sm);
+        background: rgb(var(--panel-rgb) / 0.97);
+      }
+      #catalog-search-row #catalog-search-input {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+        margin-bottom: 0;
+      }
+      #catalog-search-row #catalog-search-scope-tabs {
+        flex: 0 0 auto;
+        margin-bottom: 0;
+      }
+      #catalog-picker.strip #catalog-search-row { padding-bottom: 0; }
       #catalog-picker.visible {
         /* #2762: flex column so #catalog-manual-mode (the single
            scrolling region now -- see its own rule below) can use
@@ -2583,14 +2616,8 @@
          combined routinely exceeded #catalog-picker's own max-height,
          since nothing clipped the overflow. #catalog-manual-mode (see its
          own rule below) is the single scrolling region now, so this grid
-         goes back to a plain auto-height block. #prompt-mode-grid is a
-         sibling living directly under #catalog-picker, not inside that
-         scrolling wrapper, so it still needs its own budget-against-the-
-         viewport cap exactly as before. */
-      #prompt-mode-grid {
-        max-height: calc(50vh - 88px);
-        overflow-y: auto;
-      }
+         goes back to a plain auto-height block. #prompt-mode-grid is
+         plain too since #3577: #catalog-prompt-mode scrolls it. */
       /* #1082: the base rule above sets display unconditionally, which (per
          .catalog-tile[hidden]'s own precedent just below) outranks the
          browser's default [hidden] rule on specificity ties, broken by
@@ -2641,6 +2668,13 @@
          overflow-y: auto here is for. */
       #catalog-manual-mode {
         display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      /* #3577: prompt mode scrolls as one region too (as #catalog-manual-mode does); its result grid
+         used to cap itself against the viewport, which no longer fits inside the capped leaf. */
+      #catalog-prompt-mode {
         flex: 1;
         min-height: 0;
         overflow-y: auto;

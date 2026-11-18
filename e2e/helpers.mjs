@@ -389,6 +389,7 @@ const BUD_PETALS = new Set(['#add-item-btn', '#my-lands-btn']);
 export function budMenuOf(selector) {
   if (['#add-item-btn', '#my-lands-btn', '#undo-btn', '#redo-btn'].includes(selector) || selector.startsWith('#bud-petal-build-')) return 'build';
   if (selector.startsWith('#bud-petal-sell-')) return 'sell';
+  if (selector.startsWith('#bud-petal-shop-')) return 'shop'; // Chat
   return null;
 }
 // Open the bud and then the stem of `menu` ('build' or 'sell'): the ring petal of the place the page is in.

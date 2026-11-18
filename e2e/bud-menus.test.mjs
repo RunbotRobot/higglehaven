@@ -84,8 +84,11 @@ await page.waitForTimeout(400);
 const shopGeneral = await leaves();
 console.log('Shop, general:', JSON.stringify(shopGeneral));
 check(JSON.stringify(shopGeneral) === JSON.stringify(sellGeneral), 'the general menu is identical in Shop and in Sell');
+// Shop's own menu holds Chat (nearby chat is a Shop tool): the Shop petal opens it in place of the general one.
 await page.click('#bud-modes .mode-nav-btn[data-mode="shop"]');
 await page.waitForTimeout(300);
-check(JSON.stringify(await leaves()) === JSON.stringify(shopGeneral), "Shop's petal opens no stem of its own (it has no tools), so the general menu stays");
+const shopOwn = await leaves();
+console.log('Shop, own:', JSON.stringify(shopOwn));
+check(shopOwn.includes('bud-petal-shop-chat') && !shopOwn.includes('settings-btn'), "Shop's menu has Chat, and the general menu closed");
 
 await finish(browser, { pass: pass && errors.length === 0, label: 'bud menus: four menus, one open at a time (#3760)', errors });
