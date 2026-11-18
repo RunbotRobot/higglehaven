@@ -124,10 +124,23 @@ describe('clampAnchorRadius (#3651)', () => {
 describe('productCardState (#3651)', () => {
   const priced = { priceCents: 1200, isTestModel: false, stockQuantity: null };
 
-  it('offers Buy and Rate for a priced, in-stock product the shopper stands next to', () => {
+  it('offers Buy for a priced, in-stock product the shopper stands next to, and Rate only with an unrated order (#3775)', () => {
     expect(productCardState({ template: priced, inRange: true })).toEqual({
+      canBuy: true, canReview: false, canReturnPolicy: true, stateText: '',
+    });
+    expect(productCardState({ template: priced, inRange: true, hasUnratedOrder: true })).toEqual({
       canBuy: true, canReview: true, canReturnPolicy: true, stateText: '',
     });
+  });
+
+  it('never draws Rate without an unrated order, whatever else is true of the product (#3775)', () => {
+    for (const template of [priced, { priceCents: null }, { priceCents: 5, isTestModel: true }, { priceCents: 5, stockQuantity: 0 }]) {
+      for (const owned of [false, true]) {
+        expect(productCardState({ template, inRange: true, owned }).canReview).toBe(false);
+        expect(productCardState({ template, inRange: true, owned, hasUnratedOrder: true }).canReview).toBe(true);
+        expect(productCardState({ template, inRange: false, owned, hasUnratedOrder: true }).canReview).toBe(false);
+      }
+    }
   });
 
   it('says to walk closer, and offers nothing, when the shopper is too far away', () => {
@@ -151,8 +164,8 @@ describe('productCardState (#3651)', () => {
     }
   });
 
-  it('still lets a shopper rate a product that is not for sale, but describes no refund for it', () => {
-    const state = productCardState({ template: { priceCents: null }, inRange: true });
+  it('still lets a shopper rate a product that is not for sale (when they have an unrated order), but describes no refund for it', () => {
+    const state = productCardState({ template: { priceCents: null }, inRange: true, hasUnratedOrder: true });
     expect(state.canReview).toBe(true);
     expect(state.canReturnPolicy).toBe(false);
   });
@@ -173,12 +186,12 @@ describe('productCardState, a product the shopper already owns (#3681)', () => {
   const priced = { priceCents: 1200, isTestModel: false, stockQuantity: null };
 
   it('says so and offers no Buy, but still lets them rate it and read its return policy', () => {
-    expect(productCardState({ template: priced, inRange: true, owned: true })).toEqual({
+    expect(productCardState({ template: priced, inRange: true, owned: true, hasUnratedOrder: true })).toEqual({
       canBuy: false, canReview: true, canReturnPolicy: true, stateText: 'You already own this.',
     });
   });
   it('offers no rating or policy from out of reach, like the other states', () => {
-    const state = productCardState({ template: priced, inRange: false, owned: true });
+    const state = productCardState({ template: priced, inRange: false, owned: true, hasUnratedOrder: true });
     expect(state.canBuy).toBe(false);
     expect(state.canReview).toBe(false);
     expect(state.canReturnPolicy).toBe(false);

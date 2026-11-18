@@ -68,6 +68,13 @@
         --loading-progress: 0.12;
         overflow: hidden;
       }
+      /* #3738: the first opening shows the loading screen and nothing else.
+         #topbar-left and #mode-nav sit above it (z 21) on purpose for the
+         mode-switch splash, so on the first open they showed through for
+         seconds before any script ran. index.html's <html> starts with
+         first-open; hideLoadingScreen() removes it as the splash lifts. */
+      html.first-open #topbar-left,
+      html.first-open #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
@@ -1011,6 +1018,8 @@
       .help-entry summary { min-height: 36px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
       .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; }
       .help-steps li { margin: 0 0 var(--space-xs); }
+      .help-tips { margin: 0; padding-left: 20px; user-select: text; }
+      .help-tips li { margin: 0 0 var(--space-sm); }
       .bud-leaf .help-see { color: rgb(var(--ink-rgb) / 0.75); }
       .bud-leaf .help-note { margin: 0; }
       body[data-bud-mark] #account-menu-toggle::after {
@@ -1541,6 +1550,7 @@
       }
       #assistant-chat-form {
         display: flex;
+        align-items: flex-end; /* #3750: Send stays level with the bottom of the box as it grows */
         gap: var(--space-xs);
       }
       #assistant-chat-input {
@@ -1550,6 +1560,14 @@
         border-radius: var(--radius-md);
         border: none;
         font: var(--text-lg)/var(--leading-tight) var(--font-sans);
+        resize: none; /* #3750: it grows by itself, up to five lines (assistantChat.js) */
+        overflow-y: hidden;
+        box-sizing: border-box;
+      }
+      #assistant-chat-limit {
+        margin: 0;
+        font: var(--text-sm)/var(--leading-tight) var(--font-sans);
+        color: var(--pill-text);
       }
       #assistant-chat-send {
         padding: var(--space-sm) var(--space-lg);

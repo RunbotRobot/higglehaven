@@ -110,12 +110,14 @@ async function handleMyPurchases(request, env, url) {
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
            p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at,
            p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
-           t.name AS live_name, s.label AS live_seller_name,
-           f.rating AS feedback_rating, f.text AS feedback_text
+           p.template_id, t.name AS live_name, s.label AS live_seller_name,
+           f.rating AS feedback_rating, f.text AS feedback_text,
+           pr.review_id AS product_review_id, pr.rating AS product_review_rating, pr.text AS product_review_text
     FROM purchases p
     LEFT JOIN catalog_templates t ON t.template_id = p.template_id
     LEFT JOIN sellers s ON s.seller_id = p.seller_id
     LEFT JOIN seller_feedback f ON f.purchase_id = p.purchase_id
+    LEFT JOIN product_reviews pr ON pr.purchase_id = p.purchase_id
     WHERE ${conditions.join(' AND ')}
     ORDER BY p.created_at DESC, p.purchase_id DESC LIMIT ?
   `).bind(...bindings, limit + 1).all();
@@ -145,6 +147,14 @@ async function handleMyPurchases(request, env, url) {
         // refunded or paid out.
         canLeaveFeedback: !!row.seller_id && !row.refunded_at && !hasFeedback,
         feedback: hasFeedback ? { rating: row.feedback_rating, text: row.feedback_text } : null,
+        // #3775: rating a product is one-to-one with an order. The product on
+        // this order, the rating given for it (if any), and whether this order
+        // can still be rated (a product that still exists, not refunded, not yet rated).
+        templateId: row.template_id,
+        productReview: row.product_review_id
+          ? { reviewId: row.product_review_id, rating: row.product_review_rating, text: row.product_review_text }
+          : null,
+        canReviewProduct: row.live_name !== null && row.live_name !== undefined && !row.refunded_at && !row.product_review_id,
         canDispute: disputeBlock(row) === null,
       };
     }),

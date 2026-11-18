@@ -32,16 +32,15 @@ import { openProductReviewModal } from '../ui/productReviewModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import {
-  createProductReview, editProductReview, deleteProductReview,
+  createProductReview,
   purchaseInstance, clearPurchaseIdempotencyKey, finalizePurchase,
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
-import { currentAuthUser } from '../account/auth.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this Product), for focus return after a notice.
-import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase } from './productCard.js';
+import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders } from './productCard.js';
 
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const checkoutModalEl = document.getElementById('checkout-modal');
@@ -124,46 +123,25 @@ export async function handleShopProductReviewClick() {
   // prompt.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
-  // #1975 (owner decision): a shopper who already reviewed this product
-  // edits or removes that one review instead of being offered an unrelated
-  // second slot -- mirrors the sign-post hint's own myPost pattern (#1830)
-  // exactly, using review.userId (reviewFromRow, populated server-side from
-  // the posting session) rather than a free-text author match.
-  const myReview = currentAuthUser && review.reviews.find((r) => r.userId === currentAuthUser.userId);
-  // #3249: one in-app modal for write / edit / delete, not a chain of native
-  // prompt()/alert() calls (a suppressed native dialog answered each with
-  // "cancel", so Rate this Product did nothing and said nothing). Failures
-  // are thrown out of these callbacks and shown inside the modal.
+  // #3775 (owner, 2026-11-18): a rating belongs to one order. The card offers this only when
+  // the shopper has an order of the product that is not rated yet, so what it opens is always
+  // a new rating for the oldest such order (the server picks it); changing or removing a
+  // rating you gave is done on that order in My Purchases (#1975's edit/delete moved there).
+  // #3249: one in-app modal, not native prompt()/alert(); failures are thrown out of the
+  // callback and shown inside the modal.
   productCardReviewButton().disabled = true;
   try {
     await openProductReviewModal({
-      existing: myReview ? { rating: myReview.rating, text: myReview.text || '' } : null,
+      existing: null,
       returnFocusEl: productCardReviewButton(),
       onSubmit: async ({ rating, text }) => {
-        if (myReview) {
-          // An empty string clears the comment, same as before: the server's
-          // `text !== undefined` check keeps the old value only when omitted.
-          const updated = await editProductReview(review.templateId, myReview.reviewId, { rating, text });
-          invalidateProductReviews(review.templateId);
-          if (!shopReviews.includes(review)) return;
-          const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
-          if (index !== -1) review.reviews[index] = updated;
-        } else {
-          // A star rating alone is already a complete, useful review.
-          const posted = await createProductReview(review.templateId, { rating, text: text || undefined });
-          invalidateProductReviews(review.templateId);
-          // Same unloaded-landlet guard as the sign-post and calendar
-          // handlers (#426) -- registerShopReview's own fetch checks this.
-          if (!shopReviews.includes(review)) return;
-          review.reviews.push(posted);
-        }
-        rebuildReviewSprites(review);
-      },
-      onDelete: async () => {
-        await deleteProductReview(review.templateId, myReview.reviewId);
+        // A star rating alone is already a complete, useful review.
+        const posted = await createProductReview(review.templateId, { rating, text: text || undefined });
         invalidateProductReviews(review.templateId);
+        refreshRatedOrders();
+        // Same unloaded-landlet guard as the sign-post and calendar handlers (#426).
         if (!shopReviews.includes(review)) return;
-        review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
+        review.reviews.push(posted);
         rebuildReviewSprites(review);
       },
     });
