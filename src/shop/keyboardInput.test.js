@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 
 // #1319
 const down = (...codes) => new Set(codes);
@@ -73,5 +73,42 @@ describe('isNavigationKeyEvent (#1319)', () => {
     expect(isNavigationKeyEvent(event('KeyW', { ctrlKey: true }))).toBe(false);
     expect(isNavigationKeyEvent(event('ArrowLeft', { altKey: true }))).toBe(false);
     expect(isNavigationKeyEvent(event('KeyA', { metaKey: true }))).toBe(false);
+  });
+});
+
+describe('isFlightToggleKeyEvent (#3823)', () => {
+  const key = (code, extra = {}) => ({ code, target: { tagName: 'BODY' }, ...extra });
+
+  it('one press of T toggles flight', () => {
+    expect(isFlightToggleKeyEvent(key('KeyT'))).toBe(true);
+  });
+
+  it('is not a movement key, so it never feeds the walking vector', () => {
+    expect(isNavigationKeyEvent(key('KeyT'))).toBe(false);
+    expect(keyboardAxes(new Set(['KeyT']))).toEqual({ moveX: 0, moveY: 0, lookX: 0, lookY: 0 });
+  });
+
+  it('ignores other keys, including the movement keys and Space', () => {
+    for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyR', 'KeyF', 'Space', 'ArrowUp', 'Enter']) {
+      expect(isFlightToggleKeyEvent(key(code)), code).toBe(false);
+    }
+  });
+
+  it('holding the key is not a second press', () => {
+    expect(isFlightToggleKeyEvent(key('KeyT', { repeat: true }))).toBe(false);
+  });
+
+  it('leaves browser shortcuts and capital T alone', () => {
+    for (const mod of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey']) {
+      expect(isFlightToggleKeyEvent(key('KeyT', { [mod]: true })), mod).toBe(false);
+    }
+  });
+
+  it('never fires while typing in a field or answering a dialog', () => {
+    for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) {
+      expect(isFlightToggleKeyEvent({ code: 'KeyT', target: { tagName } }), tagName).toBe(false);
+    }
+    expect(isFlightToggleKeyEvent({ code: 'KeyT', target: { tagName: 'DIV', isContentEditable: true } })).toBe(false);
+    expect(isFlightToggleKeyEvent({ code: 'KeyT', target: { tagName: 'BUTTON', closest: (sel) => (sel === '[role="dialog"]' ? {} : null) } })).toBe(false);
   });
 });

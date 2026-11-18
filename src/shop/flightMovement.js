@@ -66,7 +66,7 @@ import {
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
 import { keepPairInside } from './rigidCameraPair.js';
-import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import { verticalRateM_S, horizontalForwardScale, bodyTiltOffsetRad, FLIGHT_BODY_TILT_RANGE_RAD } from './flightPitch.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
@@ -517,8 +517,8 @@ function bindWorldGestures(canvas) {
     worldGestures.cancel();
   });
 }
-// Flight (docs/SPEC.md §2): a double-tap on the world, or double-press space
-// on desktop, toggles takeoff/landing (toggleShopFlight). Climbing and
+// Flight (docs/SPEC.md §2): a double-tap on the world, double-press space
+// on desktop, or one press of T, toggles takeoff/landing (toggleShopFlight). Climbing and
 // descending while flying is steered by the view (#3769, see updateShopFlight
 // and flightPitch.js); there are no up/down buttons.
 
@@ -591,6 +591,16 @@ window.addEventListener('keydown', (event) => {
   } else {
     shopLastSpacePressAt = now;
   }
+});
+
+// #3823: one press of T takes off or lands, for anyone who cannot double-tap or
+// double-press precisely (found by the accessibility pass, #3818). The same toggle the
+// double-tap and the double-press of Space call, so a request made while a take-off or
+// landing is under way is ignored in the same way (see toggleShopFlight).
+window.addEventListener('keydown', (event) => {
+  if (!shopActive || !isFlightToggleKeyEvent(event)) return;
+  event.preventDefault();
+  toggleShopFlight();
 });
 
 // Zoom: narrows/widens the camera's own field of view rather than moving

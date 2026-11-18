@@ -294,14 +294,14 @@ animation you have applied (see the avatar entry below) replaces that motion.
 ### How do I fly, go up and come back down?
 
 1. You start each visit in the air. To come down, double-tap the world: two quick
-   taps in the same place.
+   taps in the same place. On a keyboard, press T once instead.
 2. While you are flying, you go where the view points. To climb, drag on the
    right half of the screen to look up, and drag on the left half to walk
    forward. To descend, look down and walk forward. A level view flies level,
    and when you stop walking you hold your height. On a keyboard, R looks up and
    F looks down.
 3. Walk and look by dragging, as usual.
-4. To go up again from the ground, double-tap the world again.
+4. To go up again from the ground, double-tap the world again, or press T.
 
 **You will see:** the bird tips its nose up or down with your view, and a
 double-tap switches between flying and standing. At the top of the sky, or as low
