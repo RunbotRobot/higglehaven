@@ -1,6 +1,7 @@
 // #1319: Shop mode used to be joystick-only. WASD / arrow keys now walk, Q/E
 // turn, an active joystick wins over the keyboard, keys typed into a text
 // field never move the avatar, and Space still belongs to the flight toggle.
+// #3823: one press of T takes off and lands (and is ignored while typing).
 // Drives real key presses in a real browser and reads the avatar's position
 // and camera yaw.
 import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, goToMode } from './helpers.mjs';
@@ -91,8 +92,44 @@ const afterTyping = await position();
 const ignoredInInput = hasPosition && dist(beforeTyping, afterTyping) < 0.05;
 console.log('typing W in a text field does not move the avatar (should be true):', ignoredInInput);
 
+// #3823: one press of T toggles flight. The spawn orbit ended above, so the avatar is flying.
+// (The text field from the check above is still focused, so T is first pressed there: it
+// must not change anything; then focus goes back to the page.)
+const flightState = () => page.evaluate(() => window.__testShopFlightState());
+const stateBeforeTyping = await flightState();
+await page.keyboard.press('KeyT');
+await page.waitForTimeout(300);
+const ignoredTypingT = (await flightState()) === stateBeforeTyping && stateBeforeTyping === 'flying';
+console.log('T typed into a text field does not change flight (should be true):', ignoredTypingT, stateBeforeTyping);
+await page.evaluate(() => { document.getElementById('kb-test-input')?.remove(); document.activeElement?.blur?.(); });
+
+await page.keyboard.press('KeyT');
+await page.waitForFunction(() => window.__testShopFlightState() === 'landing', null, { timeout: 5000 }).catch(() => {});
+const landedByT = (await flightState()) === 'landing';
+console.log('one press of T starts a landing (should be true):', landedByT);
+
+// A press during a landing resumes flight at once (the same toggle as a double-tap).
+await page.keyboard.press('KeyT');
+await page.waitForFunction(() => window.__testShopFlightState() === 'flying', null, { timeout: 5000 }).catch(() => {});
+const resumedByT = (await flightState()) === 'flying';
+console.log('a second press during the landing resumes flying (should be true):', resumedByT);
+
+// From the ground, one press takes off; once up, the next lands.
+const here = await position();
+await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y, 0), [here.x, here.y]);
+await page.waitForFunction(() => window.__testShopFlightState() === 'grounded', null, { timeout: 5000 }).catch(() => {});
+await page.keyboard.press('KeyT');
+await page.waitForFunction(() => window.__testShopFlightState() === 'takingOff', null, { timeout: 5000 }).catch(() => {});
+const tookOffByT = (await flightState()) === 'takingOff';
+await page.waitForFunction(() => window.__testShopFlightState() === 'flying', null, { timeout: 60000 }).catch(() => {});
+await page.keyboard.press('KeyT');
+await page.waitForFunction(() => window.__testShopFlightState() === 'landing', null, { timeout: 5000 }).catch(() => {});
+const landedAgainByT = (await flightState()) === 'landing';
+console.log('from the ground T takes off, and once up the next press lands (should be true, true):', tookOffByT, landedAgainByT);
+
 await finish(browser, {
-  pass: hasPosition && movedByW && stoppedOnRelease && movedByArrow && turnedRight && turnedLeft && ignoredInInput,
+  pass: hasPosition && movedByW && stoppedOnRelease && movedByArrow && turnedRight && turnedLeft && ignoredInInput
+    && ignoredTypingT && landedByT && resumedByT && tookOffByT && landedAgainByT,
   label: 'shop-keyboard-movement.test.mjs',
   errors,
 });

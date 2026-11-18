@@ -624,6 +624,9 @@
         opacity: 0;
         transition: opacity var(--motion-fade);
       }
+      /* The assistant window sits above the hint (z 32) and is translucent, so the hint read
+         through it; the hint waits while the window is open. */
+      body:has(#assistant-chat-panel:not([hidden])) #world-hint { visibility: hidden; }
       #world-hint.visible {
         opacity: 1;
         pointer-events: auto;
@@ -910,6 +913,14 @@
       body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
         animation: bud-pulse 1.6s ease-in-out infinite;
       }
+      /* #3762: on the first open ever, the "?" leaf pulses so the instructions are found. */
+      body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] {
+        border-radius: 50%;
+        animation: bud-pulse 1.6s ease-in-out 3;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: 0 0 0 4px rgb(var(--spring-green-rgb) / 0.35); }
+      }
       /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
          stem is set in from the screen edge (the head is in the upper left, so there is little
          room on the left): 88px in, with 76px leaves either side of it, the first on the right and
@@ -1082,11 +1093,18 @@
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
       body[data-bud="on"] #bud-modes .mode-nav-label {
-        display: block;
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
         pointer-events: none;
+        /* #3761: the picture first, its one small word under it. */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        font: var(--text-xs)/1 var(--font-sans);
       }
+      body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 8; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 46; animation-delay: 0.04s; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 84; animation-delay: 0.08s; }
@@ -1155,10 +1173,10 @@
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
       .bud-leaf-close {
         position: absolute;
-        top: 8px;
-        right: 10px;
-        width: 36px;
-        height: 36px;
+        top: 4px;
+        right: 6px;
+        width: 44px; /* #3818: a tap target of at least 44px */
+        height: 44px;
         border: none;
         border-radius: var(--radius-round);
         background: transparent;
@@ -1899,7 +1917,7 @@
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
-        font: 10px/1 sans-serif;
+        font: 12px/1 sans-serif; /* #3818: nothing under 12px */
         pointer-events: none;
       }
       .compass-label.compass-n {
@@ -2798,6 +2816,8 @@
       #paste-btn[hidden],
       #redo-btn[hidden],
       #ungroup-item[hidden],
+      #group-item[hidden],
+      #mode-trim[hidden],
       #edit-bundle-item[hidden] {
         display: none !important;
       }
@@ -4110,7 +4130,10 @@
         box-sizing: border-box;
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: as Settings: near-opaque, blurred behind, so the world does not show through text. */
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         border-radius: 30px 6px 30px 6px;
       }
@@ -4706,7 +4729,12 @@
         max-height: calc(100vh - 68px);
         max-height: calc(100dvh - 68px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: text sits on a card the world cannot show through (the corner of the old
+           gradient was 90% white, so the avatar's legs and the wall read through the labels):
+           near-opaque at both ends, and blurred behind it for the rest. */
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         /* The leaf's own shape (#3652), as the bud's leaves have it. */
         border-radius: 30px 6px 30px 6px;

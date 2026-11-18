@@ -19,7 +19,20 @@
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
-//   settings                              open the account menu, then Settings
+//   menu                                  open the flower's general menu (does nothing if it is open)
+//   petal:<shop|build|sell>               tap that mode's petal (opens the bud first if it is folded)
+//   leaf:<notices|friends|purchases|settings|help>
+//                                         open the menu if needed, then that leaf (help is the "?"
+//                                         petal of Shop and Build)
+//   settings                              the same as leaf:settings
+//   land                                  land from flight. Every Shop arrival starts in flight 80 m
+//                                         up, looking down (docs/SPEC.md #1175), and walking
+//                                         forward there descends: a look that wants to walk on the
+//                                         ground puts `land` first. Does nothing if already landed.
+//   burst:<name>:<count>:<ms>             take <count> stills <ms> apart (numbered files); add
+//                                         `:burst:<name>:<count>:<ms>` to the end of any step to take
+//                                         them while it runs (walk:forward:2000:burst:walk:4:500 shows
+//                                         the walk's legs; tap:... shows a leaf unfolding)
 //   idle                                  wait until the network and frames settle
 //   wait:<ms>                             wait
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
@@ -44,7 +57,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, THROTTLE_PROFILE,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, THROTTLE_PROFILE,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -157,8 +170,12 @@ async function clearLocalVerifyModal() {
 // in Build and Sell they are still the top row. Click the mode's button wherever it is.
 async function clickModeButton(page, mode, timeout) {
   const button = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
-  if (!(await button.isVisible())) await page.click('#account-menu-toggle', timeout ? { timeout } : undefined);
-  await button.click(timeout ? { timeout } : undefined);
+  // Whether the bud is open decides, not whether the petal "is visible": a folded petal is only transparent.
+  if ((await page.locator('#account-menu-toggle').getAttribute('aria-expanded')) !== 'true') {
+    await press(page.locator('#account-menu-toggle'));
+    await page.waitForTimeout(700);
+  }
+  await press(button);
 }
 
 // #3542: the page's own side of `cover`: every visible element that paints something itself,
@@ -276,9 +293,135 @@ async function doubleTapWorld() {
   ]);
 }
 
+// #3817: a control a step needs and cannot find is one plain line naming the step, within 40 s,
+// not a 30 s wait that ends the run with a message about a selector nobody typed.
+const CONTROL_WAIT_MS = 40000;
+// The first control step of a run waits for the app to have finished opening (the menu button is
+// the first piece of interface to appear), which on a slow load takes far longer than that.
+let appOpened = false;
+async function waitForAppOpen() {
+  if (appOpened) return;
+  try {
+    await page.locator('#account-menu-toggle').waitFor({ state: 'visible', timeout: 45000 });
+  } catch {
+    throw new Error('the app had not finished opening after 45 s (the menu button never appeared)');
+  }
+  // While the world is still loading, a slow phone's frames take seconds and a tap's checks hang
+  // (Playwright waits on frames): go on once four frames in a row arrive within 500 ms of each other, or after 60 s.
+  await page.evaluate(() => new Promise((resolve) => {
+    let quick = 0;
+    let last = performance.now();
+    const tick = (now) => {
+      quick = now - last < 500 ? quick + 1 : 0;
+      last = now;
+      if (quick >= 4) resolve();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    setTimeout(resolve, 60000);
+  })).catch(() => {});
+  appOpened = true;
+}
+async function controlOrFail(selector, what) {
+  await waitForAppOpen();
+  const control = page.locator(selector).first();
+  try {
+    await control.waitFor({ state: 'visible', timeout: CONTROL_WAIT_MS });
+  } catch {
+    throw new Error(`${what} is not on screen after ${CONTROL_WAIT_MS / 1000} s${what.includes(selector) ? '' : ` (${selector})`}`);
+  }
+  return control;
+}
+// A touch (or click) at the control's centre, sent straight to the page like a finger: Playwright's own
+// tap waits for stable frames first, which a slow phone's loading world can starve for tens of seconds.
+async function press(control) {
+  const box = await control.boundingBox({ timeout: CONTROL_WAIT_MS });
+  if (!box) throw new Error('the control has no place on screen');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  if (device.hasTouch) {
+    await sendTouch('touchStart', [{ id: 1, x, y }]);
+    await sendTouch('touchEnd', []);
+  } else await page.mouse.click(x, y);
+}
+async function menuIsOpen() {
+  return (await page.locator('#account-menu-toggle').getAttribute('aria-expanded')) === 'true';
+}
+async function ensureMenuOpen() {
+  if (await menuIsOpen()) return;
+  // A press that lands while the petals are still folding back after a mode loads can be swallowed,
+  // so a second press is made before giving up.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await press(await controlOrFail('#account-menu-toggle', 'the menu button'));
+    const opened = await page.waitForFunction(() => document.getElementById('account-menu-toggle')?.getAttribute('aria-expanded') === 'true', null, { timeout: attempt === 1 ? 4000 : CONTROL_WAIT_MS })
+      .then(() => true, () => false);
+    if (opened) {
+      await page.waitForTimeout(600);
+      return;
+    }
+  }
+  throw new Error('the menu did not open when its button was pressed');
+}
+async function takeBurst({ name, count, ms }, index) {
+  const files = [];
+  for (let k = 1; k <= count; k += 1) {
+    const started = Date.now();
+    const file = path.join(outDir, safeShotName(`${name}-${k}`, index));
+    await page.screenshot({ path: file, scale: 'css' });
+    result.screenshots.push(file);
+    files.push(file);
+    if (k < count) await page.waitForTimeout(Math.max(0, ms - (Date.now() - started)));
+  }
+  return files;
+}
+
+// A step with `:burst:` runs its action and the stills together.
 async function runStep(step, index) {
+  if (!step.burst) return runStepAction(step, index);
+  const [value] = await Promise.all([runStepAction(step, index), takeBurst(step.burst, index)]);
+  return value;
+}
+
+async function runStepAction(step, index) {
   const [a, b] = step.args;
   switch (step.command) {
+    case 'menu':
+      await ensureMenuOpen();
+      return null;
+    case 'petal':
+      await waitForAppOpen();
+      try {
+        await clickModeButton(page, a, CONTROL_WAIT_MS);
+      } catch (error) {
+        throw new Error(`the ${a} petal could not be pressed within ${CONTROL_WAIT_MS / 1000} s: ${String(error.message).split('\n')[0]}`);
+      }
+      await settle(); // like `mode`: a petal for another mode loads it, and the shot should not catch the loading screen
+      return null;
+    case 'leaf':
+      await ensureMenuOpen();
+      await press(await controlOrFail(LEAF_BUTTONS[a], `the ${a} leaf`));
+      await page.waitForTimeout(400);
+      return null;
+    case 'land':
+      if (!(await page.evaluate(() => document.body.classList.contains('shop-flying')))) return null;
+      await doubleTapWorld();
+      await page.waitForFunction(() => !document.body.classList.contains('shop-flying'), null, { timeout: 20000 })
+        .catch(() => { throw new Error('still flying 20 s after a double tap on the world'); });
+      // The flag clears when the descent starts; the avatar is down when its height stops changing.
+      {
+        let last = null;
+        const deadline = Date.now() + 45000;
+        for (;;) {
+          const z = await page.evaluate(() => window.__testShopAvatarPosition?.()?.z ?? null);
+          if (z !== null && last !== null && Math.abs(z - last) < 0.05) break;
+          if (Date.now() > deadline) throw new Error('the avatar was still descending 45 s after landing began');
+          last = z;
+          await page.waitForTimeout(500);
+        }
+      }
+      return null;
+    case 'burst':
+      return takeBurst({ name: a, count: b, ms: step.args[2] }, index);
     case 'walk':
       await holdWalk(a, b);
       return null;
@@ -296,8 +439,7 @@ async function runStep(step, index) {
     }
     case 'tap':
       if (typeof a === 'number') await (device.hasTouch ? page.touchscreen.tap(a, b) : page.mouse.click(a, b));
-      else if (device.hasTouch) await page.locator(a).first().tap();
-      else await page.locator(a).first().click();
+      else await press(await controlOrFail(a, `"${a}"`));
       return null;
     case 'mode':
       await clickModeButton(page, a);
@@ -307,9 +449,9 @@ async function runStep(step, index) {
       await doubleTapWorld();
       return null;
     case 'settings':
-      await page.click('#account-menu-toggle');
-      await page.click('#settings-btn');
-      await page.waitForTimeout(300);
+      await ensureMenuOpen();
+      await press(await controlOrFail(LEAF_BUTTONS.settings, 'the settings leaf'));
+      await page.waitForTimeout(400);
       return null;
     case 'idle':
       await settle();
@@ -429,7 +571,10 @@ try {
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
       result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}) });
     } catch (error) {
-      result.steps.push({ step: label, ok: false, error: error.message.split('\n')[0] });
+      // #3817: one plain line naming the step, on the screen as well as in the report.
+      const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
+      console.error(`live-site: ${line}`);
+      result.steps.push({ step: label, ok: false, error: line });
       break;
     }
   }
