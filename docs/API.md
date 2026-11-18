@@ -4203,6 +4203,14 @@ the same `status` and `ownerBuilderId` filters while following a cursor.
 
 Fetches one landlet.
 
+Every landlet record (this route, the list, and `PUT`/`PATCH`) carries
+`wordmarkStyle` and `wordmarkColors` (#3781): the builder's chosen lettering and
+colour pair for the lándlet's name, as ids from `shared/wordmark-set.js`, the one
+definition the Worker and the client both read. Both default to `"default"`.
+The owner sets them with `PATCH /api/landlets/:id`; an id outside the set is
+refused with `400` and a plain message. They ride on the record shoppers already
+fetch, so there is no extra request.
+
 ### `GET /api/far-placements?tile=x,y`
 
 Public, read-only (#3417). Every placement on every landlet whose centre lies in
@@ -8731,7 +8739,7 @@ enforce:
 
 **#3776:** an order is its own record. `productName`, `productKind` and
 `sellerName` come from a copy written onto the purchase when it was made
-(migration 0229), so a seller deleting or renaming the product, or leaving,
+(migration 0230), so a seller deleting or renaming the product, or leaving,
 changes nothing about an old order. An order made before the record existed
 was backfilled from the live product, or from the sold-out markers and
 suspended-seller snapshots where the product was already gone. Only an order
@@ -10774,9 +10782,11 @@ both scale with it and ease back to a neutral standing pose (rather than
 snapping) once the finger lifts.
 
 Input is touching the world (#3650, `src/shop/worldGestures.js`): a finger that
-drags walks (a stick placed wherever it lands, full speed at
-`FULL_DEFLECTION_PX` of travel), a second finger dragging looks, and a
-double-tap takes off or lands. A tap that does not move stays a click, read by
+drags from the left half of the screen walks (a stick placed wherever it lands, full speed at
+`FULL_DEFLECTION_PX` of travel), one that starts on the right half looks (each works alone and the
+two work together; the half a finger lands on decides, not which went down first), and a
+double-tap anywhere takes off or lands. A drag that starts on the bud, a leaf, a product card or the
+flying arrows belongs to them, not to the world. A tap that does not move stays a click, read by
 the world's tap handler. The first use of each gesture dispatches a
 `higglehaven:world-gesture` event on `window` (`detail.kind` is `walk`, `look`
 or `fly`) for the bud's first-visit hint. Touch and pen only; a mouse keeps the

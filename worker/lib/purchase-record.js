@@ -1,6 +1,6 @@
 // #3776: an order is its own record. What a purchase says it bought is the
 // product_name / product_kind / seller_name copied onto the row when the
-// purchase was made (migration 0229), never the live catalog row, so a seller
+// purchase was made (migration 0230), never the live catalog row, so a seller
 // deleting or renaming the product, or leaving, cannot change an old order.
 //
 // What an order with nothing surviving reads as. It has no bracketed
