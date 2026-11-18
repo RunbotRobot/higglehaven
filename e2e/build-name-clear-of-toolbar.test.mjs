@@ -35,7 +35,7 @@ check(!b.pill.shown, `the name is not also drawn in the top pill (${JSON.stringi
 check(b.name.left >= 0 && b.name.right <= 390 && b.name.top >= 0 && b.name.bottom <= 844, `the item card is wholly on screen (${JSON.stringify(b.name)})`);
 check(await page.evaluate(() => document.getElementById('item-card-name').textContent.includes('Tree')), 'the card is titled with the item name');
 check(b.name.bottom <= b.toolbar.top || b.name.top >= b.toolbar.bottom || b.name.right <= b.toolbar.left || b.name.left >= b.toolbar.right, `the card does not cover the toolbar row (${JSON.stringify({ name: b.name, toolbar: b.toolbar })})`);
-check(b.name.right <= b.compass.left || b.name.bottom <= b.compass.top || b.name.left >= b.compass.right, `the name does not run under the compass (${JSON.stringify({ name: b.name, compass: b.compass })})`);
+check(!b.compass.shown, `the compass is not standing on the world, so the name cannot run under it (#3772)`);
 check(b.name.top >= b.undo.bottom || b.name.right <= b.undo.left, `the name does not run under the Undo/Redo pair (${JSON.stringify({ name: b.name, undo: b.undo })})`);
 
 // Selecting nothing again: the toolbar row goes, and nothing is left behind that

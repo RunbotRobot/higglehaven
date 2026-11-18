@@ -166,7 +166,18 @@
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
-          <div id="account-menu-landlet-info" class="bud-place" hidden><span class="bud-place-name"></span><span class="bud-place-by"></span></div>
+          <div id="bud-head-row">
+            <div id="account-menu-landlet-info" class="bud-place" hidden><span class="bud-place-name"></span><span class="bud-place-by"></span></div>
+          <div id="compass-panel" title="Facing direction">
+            <div id="compass-dial">
+              <span class="compass-label compass-n">N</span>
+              <span class="compass-label compass-e">E</span>
+              <span class="compass-label compass-s">S</span>
+              <span class="compass-label compass-w">W</span>
+              <div id="compass-needle"></div>
+            </div>
+          </div>
+          </div>
         </div>
       </div>
     </div>
@@ -179,15 +190,6 @@
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled hidden>Redo</button>
       <button id="pending-restoration-btn" type="button" hidden>Removed Items</button>
-    </div>
-    <div id="compass-panel" title="Facing direction">
-      <div id="compass-dial">
-        <span class="compass-label compass-n">N</span>
-        <span class="compass-label compass-e">E</span>
-        <span class="compass-label compass-s">S</span>
-        <span class="compass-label compass-w">W</span>
-        <div id="compass-needle"></div>
-      </div>
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>

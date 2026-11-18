@@ -342,6 +342,10 @@ by touching the world. The module is `src/ui/bud.js`:
   grows from the top and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- The compass is not on the world (#3772). It sits in the open menu's head row, right of the lándlet's
+  sign (or alone in Sell, which has no sign), in every mode, and is not drawn while the menu is shut.
+  Every leaf (Settings, My products, Friends and the rest) runs to the same margin on the right as on
+  the left, because nothing stands in the upper right to leave room for.
 - The lándlet a person is on is named at the top of the open menu (#3770), before any leaf: a small
   sign in the same leaf shape in the head's row, to the right of the ring of modes. The name is a
   wordmark (a flourished serif in the ink green, the family of the higglehaven wordmark) with "by

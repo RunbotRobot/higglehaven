@@ -1015,8 +1015,7 @@
       /* The lines that are not leaves (the lándlet cap, the tax notice, where you are standing) go
          below the last leaf, not between two of them across the stem. */
       body[data-bud="on"] #account-menu-landcap,
-      body[data-bud="on"] #account-menu-tax-notice,
-      body[data-bud="on"] #account-menu-landlet-info {
+      body[data-bud="on"] #account-menu-tax-notice {
         order: 100;
         width: calc(var(--stem-x) + var(--leaf-w));
         box-sizing: border-box;
@@ -1249,13 +1248,27 @@
          on .bud-place-name only) and "by <builder>" small under it. It sits in the head's row, to the
          right of the ring of modes; text a person can select, nothing happens on a tap. The old
          three lines of grey text between Settings and How to move are gone. */
-      body[data-bud="on"] #account-menu-landlet-info {
+      /* #3772: the compass left the standing view (it stood in the upper right, and Settings stopped
+         short of the edge to leave it room). It is in the head's row of the open menu, beside the
+         lándlet's name, in every mode: the sign when there is one, then the dial. */
+      body[data-bud="on"] #bud-head-row {
         position: absolute;
         top: calc(-1 * (var(--bud-size) + 8px + 92px));
         left: calc(var(--bud-size) + 104px);
+        display: flex;
+        align-items: center;
+        gap: var(--space-lg);
+      }
+      body[data-bud="on"] #compass-panel {
+        position: static;
+        flex: none;
+        width: 48px;
+        height: 48px;
+      }
+      body[data-bud="on"] #account-menu-landlet-info {
         box-sizing: border-box;
         width: max-content;
-        max-width: calc(100vw - var(--bud-size) - 104px - 13px - 66px);
+        max-width: calc(100vw - var(--bud-size) - 104px - 13px - 66px - 48px - var(--space-lg));
         display: flex;
         flex-direction: column;
         gap: var(--space-3xs);
@@ -2846,7 +2859,6 @@
         box-sizing: border-box;
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
-        max-width: 316px;
         background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
         box-shadow: var(--shadow-card);
         border-radius: 30px 6px 30px 6px;
@@ -4032,8 +4044,8 @@
         padding: 76px var(--space-2xl) var(--space-2xl);
       }
       body[data-bud="on"] #seller-modal-content {
-        /* Narrow enough to leave the compass (top right, about 46px) uncovered at 390px. */
-        max-width: 316px;
+        /* #3772: the leaf runs to the same margin on the right as on the left; the compass no longer
+           stands in the upper right, so nothing needs to be left clear there. */
         box-sizing: border-box;
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
@@ -4615,8 +4627,7 @@
       body[data-bud="on"] #settings-modal-content {
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
-        /* Narrow enough to leave the compass (top right, about 46px) uncovered at 390px. */
-        max-width: 316px;
+        /* #3772: same margin on the right as on the left; nothing stands in the upper right now. */
       }
       #settings-modal.visible {
         display: flex;
