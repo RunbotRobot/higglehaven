@@ -4,7 +4,7 @@
 // the box returns to one line after the text is cleared. The panel is opened through the same
 // click handler Settings > Ask an assistant uses, with no conversation, as the sibling
 // assistant-panel e2e does.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAssistantFromHelp, finish } from './helpers.mjs';
 
 const LABEL = 'Input Grows Shopper';
 const session = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -16,7 +16,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await page.evaluate(() => document.getElementById('settings-assistant-btn').click());
+await openAssistantFromHelp(page); // "Ask an assistant" left Settings for the "?" petal (#3762)
 await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 
 const geometry = () => page.evaluate(() => {
