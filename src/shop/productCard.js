@@ -25,7 +25,9 @@
 import * as THREE from 'three';
 import { meshDimensions } from '../world/models.js';
 import { createWorldCard } from '../ui/worldCard.js';
-import { productInfoParts, setShopTappedProduct } from './worldSprites.js';
+import { productInfoParts, setShopTappedProduct, shopReviews } from './worldSprites.js';
+import { camera } from '../world/scene.js';
+import { nearestProducts, stepNearby, nearbyAnnouncement, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -182,9 +184,31 @@ export function closeProductCard() {
   card.close();
 }
 
+// #3824: the key way to a product. Opens the card of the next nearest product (or the previous with
+// `direction` -1), says its name and place in the list in a polite live region, and puts keyboard
+// focus on the card so Tab reaches its buttons and Escape folds it (focus goes back to the page).
+// Returns false when no product is near.
+const nearbyStatusEl = document.getElementById('shop-nearby-status');
+const scratchNearby = new THREE.Vector3();
+export function stepToNearbyProduct(direction = 1) {
+  const list = nearestProducts(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position));
+  const step = stepNearby(list, openReview, direction);
+  if (!step) {
+    if (nearbyStatusEl) nearbyStatusEl.textContent = NO_NEARBY_PRODUCTS;
+    return false;
+  }
+  setShopTappedProduct(step.item);
+  openProductCard(step.item);
+  if (nearbyStatusEl) nearbyStatusEl.textContent = nearbyAnnouncement(nameEl.textContent, step.position, step.total);
+  cardEl.focus({ preventScroll: true });
+  return true;
+}
+
 // A shopper folding the card away themselves (the close button, Escape): the
 // tapped product is forgotten too, so its highlight and its Rate/Buy gating go.
 function dismissProductCard() {
+  // #3824: focus on the card goes back to the page with it, not to nothing.
+  if (cardEl.contains(document.activeElement)) document.activeElement.blur();
   setShopTappedProduct(null);
   closeProductCard();
 }

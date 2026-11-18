@@ -1,4 +1,4 @@
-// Regression test for #1373: the Settings > Sell tab's Payouts field
+// Regression test for #1373 (now the bud's Payouts leaf, #3704; it was Settings > Sell): the Payouts field
 // (balance text + "Cash out" button) was only ever built once, during
 // renderSellSettingsSection's own initial render, gated on account.connected
 // as it stood at that moment. A first-time "Set up payout account" submit
@@ -16,7 +16,7 @@
 // idiom e2e/saved-layouts-load-more.test.mjs already uses for a response
 // shape otherwise unreachable in this environment) -- everything else under
 // test (the actual DOM rebuild behavior) is the real, unmodified app code.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openPayoutsLeaf, finish } from './helpers.mjs';
 
 const LABEL = 'Seller Stripe Onboarding Refresh Tester';
 
@@ -68,58 +68,45 @@ await page.route('**/api/sellers/me/payouts', async (route) => {
   });
 });
 
-await openAccountMenu(page);
-await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('.settings-tab-btn[data-section="sell"]');
-await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Payout Account')),
-  null,
-  { timeout: 30000 },
-);
-
-const payoutAccountField = page.locator('.settings-field', { hasText: 'Payout Account' });
-const submitBtn = payoutAccountField.locator('button', { hasText: 'Set up payout account' });
-// Anchored on the "Cash out" button itself, not a '.settings-field'
-// containing the word "Payouts" -- the Payout Account field's own
-// not-configured-yet status text ("Stripe payouts aren't set up...")
-// case-insensitively contains that same substring, so a field-level
-// hasText match would false-positive on it before onboarding even starts.
+// #3704: the payout account is the bud's Payouts leaf now, not Settings > Sell; the form is two
+// short steps (About you, then Where you live and Your bank).
+await openPayoutsLeaf(page);
+await page.waitForSelector('#bud-leaf-payouts .payout-form', { timeout: 30000 });
+const leaf = page.locator('#bud-leaf-payouts');
+const submitBtn = leaf.locator('button', { hasText: 'Set up payout account' });
+// Anchored on the "Cash out" button itself: the not-configured-yet status text ("Stripe payouts
+// aren't set up...") case-insensitively contains "payouts", so a text match on it would
+// false-positive before onboarding even starts.
 const payoutsFieldBeforeSubmit = await page.locator('button', { hasText: 'Cash out' }).count();
 console.log('Cash out button not present before onboarding (should be 0):', payoutsFieldBeforeSubmit);
 
-await payoutAccountField.locator('label', { hasText: 'First name' }).locator('input').fill('Grace');
-await payoutAccountField.locator('label', { hasText: 'Last name' }).locator('input').fill('Hopper');
-await payoutAccountField.locator('label', { hasText: 'Birth day' }).locator('input').fill('9');
-await payoutAccountField.locator('label', { hasText: 'Birth month' }).locator('input').fill('12');
-await payoutAccountField.locator('label', { hasText: 'Birth year' }).locator('input').fill('1980');
-await payoutAccountField.locator('label', { hasText: 'SSN' }).locator('input').fill('1234');
-await payoutAccountField.locator('label', { hasText: 'Street address' }).locator('input').fill('1 Compiler Lane');
-await payoutAccountField.locator('label', { hasText: 'City' }).locator('input').fill('Arlington');
-await payoutAccountField.locator('label', { hasText: 'State' }).locator('input').fill('VA');
-await payoutAccountField.locator('label', { hasText: 'ZIP code' }).locator('input').fill('22201');
-await payoutAccountField.locator('label', { hasText: 'Bank routing number' }).locator('input').fill('110000000');
-await payoutAccountField.locator('label', { hasText: 'Bank account number' }).locator('input').fill('000123456789');
+await leaf.locator('label', { hasText: 'First name' }).locator('input').fill('Grace');
+await leaf.locator('label', { hasText: 'Last name' }).locator('input').fill('Hopper');
+await leaf.locator('input[aria-label="Birth day"]').fill('9');
+await leaf.locator('input[aria-label="Birth month"]').fill('12');
+await leaf.locator('input[aria-label="Birth year"]').fill('1980');
+await leaf.locator('label', { hasText: 'SSN' }).locator('input').fill('1234');
+await leaf.locator('button', { hasText: 'Next' }).click();
+await leaf.locator('label', { hasText: 'Street address' }).locator('input').fill('1 Compiler Lane');
+await leaf.locator('label', { hasText: 'City' }).locator('input').fill('Arlington');
+await leaf.locator('label', { hasText: 'State' }).locator('input').fill('VA');
+await leaf.locator('label', { hasText: 'ZIP code' }).locator('input').fill('22201');
+await leaf.locator('label', { hasText: 'Bank routing number' }).locator('input').fill('110000000');
+await leaf.locator('label', { hasText: 'Bank account number' }).locator('input').fill('000123456789');
 
 await submitBtn.click();
 
-// The fix's own renderSettingsSection() redraw tears down and rebuilds the
-// whole tab -- wait for the real Cash out button to actually exist, same as
-// any other async-render assertion in this suite, rather than a fixed
-// sleep. (Not waiting on '.settings-field' text containing "Payouts" --
-// the Payout Account field's own not-configured-yet status text already
-// contains that substring before the fix even runs, which would resolve
-// this wait immediately regardless of whether the real field appeared.)
+// The submit redraws the whole leaf -- wait for the real Cash out button to actually exist rather
+// than a fixed sleep.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Cash out')),
+  () => [...document.querySelectorAll('#bud-leaf-payouts button')].some((b) => b.textContent.includes('Cash out')),
   null,
   { timeout: 30000 },
 );
 const cashOutBtnPresentAfterSubmit = await page.locator('button', { hasText: 'Cash out' }).count();
-console.log('Cash out button appears right after the first successful submit, no tab switch needed (should be 1 -- was the #1373 bug):', cashOutBtnPresentAfterSubmit);
+console.log('Cash out button appears right after the first successful submit, no reopening needed (should be 1 -- was the #1373 bug):', cashOutBtnPresentAfterSubmit);
 
-const relabeledSubmitBtn = page.locator('.settings-field', { hasText: 'Payout Account' }).locator('button', { hasText: 'Update payout account' });
-const relabeled = await relabeledSubmitBtn.count();
+const relabeled = await page.locator('#bud-leaf-payouts button', { hasText: 'Update payout account' }).count();
 console.log('Submit button relabeled to "Update payout account" after the first successful submit (should be 1):', relabeled);
 
 const pass =
