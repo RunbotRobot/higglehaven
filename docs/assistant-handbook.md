@@ -106,8 +106,8 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### Why am I asked to confirm I am 18, and how do I verify?
 
-1. The "Verify to continue" screen appears the first time a signed-in person goes into Build or Sell. Its first lines say why: building and selling take two things, confirming they are 18 or older, and proof of it, either a credit card or a government ID.
-2. Tick "I confirm I am at least 18 years old" and tap "Continue".
+1. The first time a signed-in person goes into Build or Sell, a "Verify to continue" screen asks for proof they are 18 or older. It is asked once, not every time. Someone who ticked "I confirm I am at least 18 years old" when they signed up is not asked to tick it again and goes straight to the proof: a credit card or a government ID. Only an account that never ticked it sees the tick first.
+2. If the tick is shown, they tick "I confirm I am at least 18 years old" and tap "Continue".
 3. On the card step, they enter a credit card. A card is never charged; only its type is checked. Credit cards are only issued to adults, which is why they count as proof of age. Debit, prepaid and gift cards (Apple Cash and Cash App included) are not accepted, because people under 18 can hold them.
 4. With no credit card, they tap "Verify with a government ID instead" (the button says "No credit card? Verify with a government ID instead") and follow the steps on the screen that opens. That check is done by the identity service on its own screen, never in the chat.
 5. "Log out instead" leaves the screen without verifying.
@@ -339,8 +339,9 @@ shows under "My Purchases".
 
 **If something goes wrong:**
 - A sheet titled "Verify to continue" appears instead. It is the adult check: it asks
-  the person to confirm they are at least 18 and to add a card or verify another
-  way, then tap "Continue". If it will not complete, use the runbook's hand-off. The
+  the person for proof they are 18 or older (a credit card, or a government ID instead).
+  It is shown once, and the tick to confirm they are at least 18 only appears if they never
+  gave it when signing up. They tap "Continue" once they have. If it will not complete, use the runbook's hand-off. The
   person can also tap "Log out instead".
 - The payment fails, the person is charged twice, or they want a refund: that is
   money. Say plainly that you cannot do it yourself, say you are sending it to the
@@ -552,7 +553,7 @@ assistant's replies, each labelled with who wrote it.
 
 1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
    "Shop", "Build" and "Sell". Tap "Build".
-2. The first time, a sheet opens with the title "Claim a" and a small map.
+2. The first time, a sheet opens with the title "Claim a lándlet" and a small map.
    Green squares are "Available", grey are "Claimed", blue is "Water".
 3. Tap an available green square on the map. The line under the map names it and
    its size, and the "Claim" button turns on.
@@ -573,7 +574,7 @@ are inside it.
 
 ```controls any
 .mode-nav-btn[data-mode="build"] | Build
-#claim-modal h2 | Claim a
+#claim-modal h2 | Claim a lándlet
 #claim-confirm-btn | Claim
 #claim-refresh-btn | Refresh
 ```
