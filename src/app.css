@@ -138,7 +138,10 @@
         color: var(--pill-text-soft);
         user-select: text;
         -webkit-user-select: text;
+        /* #3763: a tap shows the next tip. */
+        cursor: pointer;
       }
+      #loading-tip[hidden] { display: none; }
       #loading-tip.loading-tip-show { animation: loading-tip-in var(--motion-bloom) var(--ease-soft); }
       @keyframes loading-tip-in {
         from { opacity: 0; }

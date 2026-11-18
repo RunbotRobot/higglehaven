@@ -30,6 +30,7 @@ import { promptBundleName } from '../ui/bundleNameModal.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { openFeedbackModal } from '../feedback/submitFeedbackUI.js';
 import { getUnits, setUnits, unitSuffix } from '../settings.js';
+import { loadingTipsEnabled, setLoadingTipsEnabled } from '../ui/loadingTipPrefs.js';
 import { currentMode } from '../world/state.js';
 import { currentAuthUser, setCurrentAuthUser } from '../account/auth.js';
 import { fetchMyTaxEducation, fetchNotificationPreferences, updateNotificationPreferences, submitTaxIdForm, fetchTaxSummary } from '../api.js';
@@ -168,9 +169,28 @@ function renderGeneralSettingsSection() {
   versionField.appendChild(versionValue);
   settingsSectionEl.appendChild(versionField);
 
+  renderLoadingTipsField();
   renderTaxPaperworkField();
   renderTaxEducationField();
   renderNotificationPreferencesField();
+}
+
+// #3763 (part of #3759, #3738): the opening screen's tips can be switched off.
+// On by default and kept on this device only; nearly everyone will never open
+// this, so the tips are paced for a slow reader without it (src/ui/loadingTips.js).
+function renderLoadingTipsField() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('label');
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.id = 'settings-loading-tips';
+  box.checked = loadingTipsEnabled();
+  box.addEventListener('change', () => setLoadingTipsEnabled(box.checked));
+  label.appendChild(box);
+  label.appendChild(document.createTextNode('Show tips while the app opens'));
+  field.appendChild(label);
+  settingsSectionEl.appendChild(field);
 }
 
 // #2843 (sub-issue of #2841, docs/SPEC.md §7): general, jurisdiction-

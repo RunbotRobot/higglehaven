@@ -4,18 +4,18 @@
 // borrows from that entry, so scripts/loading-tips.test.mjs can fail when the
 // interface changes the way a thing is done and only one of the two is updated.
 // Everything here is read by a person: "lándlet" always, with the accent, and
-// no internal words. When the movement gestures land, change the first line and
-// its handbook entry together.
+// no internal words. When the way of moving changes, change the first lines and
+// their handbook entries together (the movement gestures landed in #3650).
 export const LOADING_TIPS = [
   {
-    text: 'Push the pad at the bottom left to walk, and the one at the bottom right to look around.',
+    text: 'Touch the world and drag to walk. Add a second finger and drag to look around.',
     handbook: 'How do I walk around and look around?',
-    words: ['bottom left', 'bottom right'],
+    words: ['one finger', 'second finger', 'drag'],
   },
   {
-    text: 'Tap the bird button to come down to the ground, and again to fly back up.',
+    text: 'Double-tap the world to come down to the ground, and double-tap again to fly back up.',
     handbook: 'How do I fly, go up and come back down?',
-    words: ['bird button'],
+    words: ['double-tap'],
   },
   {
     text: 'Tap a product to read about it. A small card blooms beside it.',
@@ -33,3 +33,16 @@ export const LOADING_TIPS = [
     words: ['higglehaven logo', 'build', 'lándlet'],
   },
 ];
+
+// #3763 (part of #3759, #3738): a tip stays up long enough to be read. The owner
+// is "an unusually slow reader" and has been frustrated by games whose tips go
+// before they can be read, so the time a tip is held is worked out from its own
+// length: two and a half words a second (a fast reader manages about four), and
+// never under six seconds. One function, so the pacing is tested in one place.
+export const TIP_WORDS_PER_SECOND = 2.5;
+export const TIP_MIN_MS = 6000;
+
+export function tipReadingMs(text) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(TIP_MIN_MS, Math.ceil((words / TIP_WORDS_PER_SECOND) * 1000));
+}

@@ -131,7 +131,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop", "Build" and "Sell".
-3. "General" holds "Units" (Meters or Feet), "Version", and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
+3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
 5. "Build" and "Sell" hold the settings for those modes, including the person's username (with "Rename") on "Build" and the payout account on "Sell".
 6. At the bottom of every tab are "Ask an assistant" and "Send feedback".
