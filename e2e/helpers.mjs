@@ -684,6 +684,9 @@ async function clickModeButton(page, mode) {
   // Clicking the mode you are already in was always a no-op; in Shop its button is not drawn.
   if (await page.evaluate(() => document.body.dataset.mode) === mode) return false;
   const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
+  // #3752: the petals are still drawn for the short fold after the bud closes (Escape, a leaf opening);
+  // judging them visible then and clicking would land as they vanish. Let the fold finish first.
+  await page.waitForFunction(() => document.body.dataset.budRing !== 'folding', null, { timeout: 5000 }).catch(() => {});
   if (!(await nav.isVisible())) await openAccountMenu(page);
   await nav.click();
   return true;

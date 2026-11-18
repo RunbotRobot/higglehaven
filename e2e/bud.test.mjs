@@ -4,9 +4,24 @@
 // every petal reaches what it should, a leaf opens with its close control upper right.
 // #3723: Shop, Build and Sell are a half-ring of three petals at the bud's corner, hidden until it
 // is unfolded, the same three in every mode with the current one marked.
+// #3752: the petals are shapes joined to the bud that grow out of it, the chosen one stays lit while
+// its mode loads (the ring held open across the reload), and they fold back when the mode is up.
 import { launchPage, chooseIdentity, openAccountMenu, goToMode, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Bud Tester', viewport: { width: 390, height: 844 } });
+// What the ring did across the mode switch: each distinct "state:lit petal" the page passed through,
+// kept in sessionStorage so it survives the reload (#3752).
+await page.addInitScript(() => {
+  const note = () => {
+    if (!document.body) return;
+    const state = document.body.getAttribute('data-bud-ring') || 'none';
+    const lit = [...document.querySelectorAll('#bud-modes .mode-nav-btn[aria-current="true"]')].map((b) => b.dataset.mode).join('+');
+    const log = JSON.parse(sessionStorage.getItem('ringlog') || '[]');
+    const entry = `${state}:${lit}`;
+    if (log[log.length - 1] !== entry) { log.push(entry); sessionStorage.setItem('ringlog', JSON.stringify(log)); }
+  };
+  new MutationObserver(note).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-bud-ring', 'aria-current', 'data-bud'] });
+});
 await chooseIdentity(page, { mode: 'shop', label: 'Bud Tester', isNew: true });
 await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 
@@ -26,7 +41,11 @@ const rest = {
 };
 console.log('at rest in Shop:', JSON.stringify(rest));
 
-await page.click('#account-menu-toggle');
+// #3752: the petals unfold from the bud: the tap starts their animation at once.
+const unfoldAnimations = await page.evaluate(() => {
+  document.getElementById('account-menu-toggle').click();
+  return [...document.querySelectorAll('#bud-modes .mode-nav-btn')].map((b) => b.getAnimations().map((a) => a.animationName).join());
+});
 await page.waitForSelector('#account-menu-panel.expanded');
 await page.waitForTimeout(500);
 const open = {
@@ -41,22 +60,42 @@ const open = {
 };
 console.log('unfolded:', JSON.stringify(open));
 
-// #3723: the ring. Three petals of their own, the current one marked, each clear of the bud and
-// of each other, inside the screen, and the column of things you open starts below them.
+// #3723, #3752: the ring. Three petals of their own, the current one marked, each a turned shape
+// whose base is joined to the bud (a point just outside the bud, along its angle, lands on the
+// petal), 44px wide at the widest, apart from each other, inside the screen, and the column of
+// things you open starts below them. The word beside the bud steps aside while they are out.
 const ring = await page.evaluate(() => {
   const r = (el) => el.getBoundingClientRect().toJSON();
   const mode = (m) => document.querySelector(`#bud-modes .mode-nav-btn[data-mode="${m}"]`);
-  const boxes = ['shop', 'build', 'sell'].map((m) => r(mode(m)));
-  const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  const modes = ['shop', 'build', 'sell'];
+  const boxes = modes.map((m) => r(mode(m)));
+  const centres = boxes.map((b) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }));
   const bud = r(document.getElementById('account-menu-toggle'));
+  const hub = { x: bud.left + bud.width / 2, y: bud.top + bud.height / 2 };
+  const angles = [8, 46, 84];
   const column = [...document.querySelectorAll('#account-menu-panel button')].filter((b) => b.offsetParent !== null).map((b) => r(b));
+  const word = document.querySelector('#account-menu-toggle .bud-word');
   return {
-    current: ['shop', 'build', 'sell'].filter((m) => mode(m).getAttribute('aria-current') === 'true'),
-    apart: !overlap(boxes[0], boxes[1]) && !overlap(boxes[1], boxes[2]) && !overlap(boxes[0], boxes[2]),
-    clearOfBud: boxes.every((b) => !overlap(b, bud)),
+    current: modes.filter((m) => mode(m).getAttribute('aria-current') === 'true'),
+    apart: [[0, 1], [1, 2], [0, 2]].every(([i, j]) => Math.hypot(centres[i].x - centres[j].x, centres[i].y - centres[j].y) >= 44),
+    joined: modes.every((m, i) => {
+      const t = (angles[i] * Math.PI) / 180;
+      const hit = document.elementFromPoint(hub.x + Math.cos(t) * 40, hub.y + Math.sin(t) * 40);
+      return hit && (hit === mode(m) || mode(m).contains(hit));
+    }),
+    tipsHit: modes.every((m, i) => {
+      const t = (angles[i] * Math.PI) / 180;
+      const hit = document.elementFromPoint(hub.x + Math.cos(t) * 90, hub.y + Math.sin(t) * 90);
+      return hit && (hit === mode(m) || mode(m).contains(hit));
+    }),
+    wide: modes.every((m) => mode(m).offsetHeight >= 44),
+    labelsUpright: modes.every((m) => {
+      const label = mode(m).querySelector('.mode-nav-label').getBoundingClientRect();
+      return label.width > label.height;
+    }),
     inside: boxes.every((b) => b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight),
-    rightAndBelow: boxes[0].left > bud.right - 1 && boxes[2].top > bud.bottom - 1,
     columnBelow: column.length > 0 && column.every((b) => b.top >= Math.max(...boxes.map((x) => x.bottom)) - 1),
+    wordHidden: word ? getComputedStyle(word).visibility === 'hidden' || !word.offsetParent : true,
     inColumn: document.querySelectorAll('#account-menu-panel .mode-nav-btn').length,
     group: document.getElementById('bud-modes').getAttribute('aria-label'),
   };
@@ -104,14 +143,22 @@ await page.click('#settings-close-btn');
 await page.reload();
 await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
-// Choosing another mode in the ring goes there and folds the bud.
+// Choosing another mode in the ring: the chosen petal is lit at once with the ring still out, the
+// page goes there, and when the mode is on screen the petals fold back into the bud (#3752).
+await page.evaluate(() => sessionStorage.removeItem('ringlog'));
 await page.click('#account-menu-toggle');
+await page.waitForTimeout(450);
 await page.click('#bud-modes .mode-nav-btn[data-mode="sell"]');
 await page.waitForSelector('body[data-mode="sell"]', { timeout: 30000 }); // the mode is decided after the page first paints
 await page.waitForSelector('body[data-bud="on"]', { timeout: 20000 });
+await page.waitForFunction(() => getComputedStyle(document.getElementById('bud-modes')).display === 'none', null, { timeout: 30000 });
+const ringLog = await page.evaluate(() => JSON.parse(sessionStorage.getItem('ringlog') || '[]'));
 const afterPick = {
   folded: (await page.locator('#account-menu-panel.expanded').count()) === 0,
-  ringHidden: !(await shown('#bud-modes')),
+  ringHidden: await page.evaluate(() => getComputedStyle(document.getElementById('bud-modes')).display === 'none'),
+  ringLog,
+  heldLit: ringLog.indexOf('held:sell') >= 0,
+  foldedAfterHeld: ringLog.indexOf('folding:sell') > ringLog.indexOf('held:sell') && ringLog[ringLog.length - 1] === 'none:sell',
 };
 await page.click('#account-menu-toggle');
 const inSell = await page.evaluate(() => ({
@@ -120,17 +167,26 @@ const inSell = await page.evaluate(() => ({
   all: ['shop', 'build', 'sell'].every((m) => document.querySelector(`#bud-modes .mode-nav-btn[data-mode="${m}"]`)?.offsetParent !== null),
   current: [...document.querySelectorAll('#bud-modes .mode-nav-btn[aria-current="true"]')].map((b) => b.dataset.mode),
 }));
-console.log('in Sell:', JSON.stringify({ afterPick, inSell }));
+// The mode you are already in has nothing to load: tapping its petal just folds the bud.
+const sameModeTap = await (async () => {
+  await page.click('#bud-modes .mode-nav-btn[data-mode="sell"]');
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('bud-modes')).display === 'none', null, { timeout: 5000 });
+  return { stayedOnSell: await page.evaluate(() => document.body.dataset.mode) };
+})();
+console.log('in Sell:', JSON.stringify({ afterPick, inSell, sameModeTap }));
 
 const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark && !rest.modeNav && !rest.ringAtRest
   && Math.round(rest.budBox.width) === 56 && rest.panelOpen === 0
   && open.expanded === 'true' && open.settings && open.friends && open.purchases && open.build && open.sell && open.shopPetal && open.help
-  && ring.current.join() === 'shop' && ring.apart && ring.clearOfBud && ring.inside && ring.rightAndBelow && ring.columnBelow
+  && ring.current.join() === 'shop' && ring.apart && ring.joined && ring.tipsHit && ring.wide && ring.labelsUpright
+  && ring.inside && ring.columnBelow && ring.wordHidden
+  && unfoldAnimations.length === 3 && unfoldAnimations.every((a) => a.includes('bud-grow'))
   && ring.inColumn === 0 && ring.group === 'Places'
-  && afterPick.folded && afterPick.ringHidden
+  && afterPick.folded && afterPick.ringHidden && afterPick.heldLit && afterPick.foldedAfterHeld
+  && sameModeTap.stayedOnSell === 'sell'
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload
   && leafInfo.title === 'Help' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
   && leafClosedByEscape && leafClosedByX
   && inSell.bud === 'on' && !inSell.modeNav && inSell.all && inSell.current.join() === 'sell'
   && errors.length === 0;
-await finish(browser, { pass, label: 'bud (#3649, #3723)', errors });
+await finish(browser, { pass, label: 'bud (#3649, #3723, #3752)', errors });
