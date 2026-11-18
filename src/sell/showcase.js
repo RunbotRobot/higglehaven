@@ -23,6 +23,8 @@ import { myProducts } from '../sell/mode.js';
 // click-handler (the currentMode === 'sell' branch of the main renderer's
 // click listener).
 export let sellerShowcaseMeshes = [];
+// e2e-only (#3702): how many products are standing on the shelf right now.
+window.__testSellerShowcaseCount = () => sellerShowcaseMeshes.length;
 // Array of arrays of catalog templates, computed once per Sell-mode entry
 // (or catalog refresh) by computeSellerShowcasePages — index 0 is always
 // the first page shown.
@@ -215,6 +217,14 @@ export function refreshSellerShowcase() {
   sellerShowcasePageIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
   updateSellerShowcasePagerUI();
   sellerShowcaseMeshesStale = true;
+  // #3702: with My products closed nothing would ever rebuild the shelf (closing the sheet used to
+  // be what did), so a product added from the bud's Add a product leaf, or deleted from its card,
+  // stayed or went missing until the sheet had been opened and closed. Rebuild now unless the sheet
+  // is open (the save-race reason above still holds while it is).
+  if (!document.getElementById('seller-modal')?.classList.contains('visible')) {
+    sellerShowcaseMeshesStale = false;
+    loadSellerShowcasePage(sellerShowcasePageIndex);
+  }
 }
 
 // Exported for src/main.js's own closeSellerModal, which checks this right
