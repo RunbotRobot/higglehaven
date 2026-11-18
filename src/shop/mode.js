@@ -724,7 +724,7 @@ export function renderShopSettingsSection() {
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
   // #3650: moving is done by touching the world (no sticks, no fly button).
-  note.textContent = 'Drag on the left half of the screen to walk (drag further to run). Drag on the right half to look around. Both work at once, one thumb each. Double-tap to take off or land (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, and double-press space to fly).';
+  note.textContent = 'Drag on the left half of the screen to walk (drag further to run). Drag on the right half to look around. Both work at once, one thumb each. Double-tap to take off or land. While flying you go where the view points: look up and walk forward to climb, look down to descend (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down, and double-press space to fly).';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 

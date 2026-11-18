@@ -283,24 +283,25 @@ are the same in all three places.
 
 1. You start each visit in the air. To come down, double-tap the world: two quick
    taps in the same place.
-2. While you are flying, two green arrows sit at the bottom right: tap the up
-   arrow ("Fly up") to climb and the down arrow ("Fly down") to sink.
+2. While you are flying, you go where the view points. To climb, drag on the
+   right half of the screen to look up, and drag on the left half to walk
+   forward. To descend, look down and walk forward. A level view flies level,
+   and when you stop walking you hold your height. On a keyboard, R looks up and
+   F looks down.
 3. Walk and look by dragging, as usual.
-4. To go up again from the ground, double-tap the world again and the arrows come
-   back. The arrows go away once you are on the ground.
+4. To go up again from the ground, double-tap the world again.
 
-**You will see:** the up and down arrows show only while the bird is flying, and a
-double-tap switches between flying and standing.
+**You will see:** the bird tips its nose up or down with your view, and a
+double-tap switches between flying and standing. At the top of the sky, or as low
+as you can fly, a short note says so and you stay there.
 
 **If something goes wrong:**
-- No arrows: you are on the ground. Double-tap the world to fly.
+- You do not climb: you are on the ground. Double-tap the world to fly.
 - A double-tap on a product opens that product instead: double-tap on open ground.
 - You cannot find the ground: double-tap the world and let it come down by itself.
 
 ```controls shop
 #app | (no words)
-#shop-up-btn | Fly up
-#shop-down-btn | Fly down
 ```
 
 ### How do I get back to where I was?

@@ -67,6 +67,7 @@ import {
 } from './movementWorld.js';
 import { keepPairInside } from './rigidCameraPair.js';
 import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { verticalRateM_S, horizontalForwardScale, bodyTiltOffsetRad, FLIGHT_BODY_TILT_RANGE_RAD } from './flightPitch.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
@@ -79,8 +80,7 @@ import {
   shopWorldRadiusM, shopDomeMesh, SHOP_MAX_PITCH,
   SHOP_WALL_HEIGHT_M, SHOP_DOME_CLEARANCE_MARGIN_M,
   SHOP_AVATAR_COLLISION_HALF_M,
-  shopLastLocationBtn, shopVerticalControlsEl,
-  shopUpBtn, shopDownBtn,
+  shopLastLocationBtn, shopStatusEl,
 } from '../main.js';
 import { createWorldGestures } from './worldGestures.js';
 // #2628: updateConfettiBursts now lives in src/shop/productCheckout.js.
@@ -158,7 +158,6 @@ const SHOP_MIN_HEIGHT_M = 1.5;
 const SHOP_FLIGHT_TAKEOFF_DURATION_S = 1; // spec's "~1s lift"
 const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
-const SHOP_FLIGHT_VERTICAL_SPEED_M_S = 8; // ascend/descend rate once actually flying (the up/down buttons)
 const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
 
 // docs/SPEC.md §1/§2 (#1175): every Shop-mode spawn (not just a first-ever
@@ -380,7 +379,7 @@ export function releaseShopMovementInput() {
 function applyShopStickInput() {
   const keys = keyboardAxes(shopKeysDown);
   const move = mergeStickInput(shopJoystickMove, { x: keys.moveX, y: keys.moveY });
-  const look = mergeStickInput(shopJoystickLook, { x: keys.lookX, y: 0 });
+  const look = mergeStickInput(shopJoystickLook, { x: keys.lookX, y: keys.lookY });
   shopMoveX = move.x;
   shopMoveY = move.y;
   shopLookX = look.x;
@@ -518,50 +517,10 @@ function bindWorldGestures(canvas) {
     worldGestures.cancel();
   });
 }
-// Flight (docs/SPEC.md §2): double-tap the fly button, or double-press
-// space on desktop, toggles takeoff/landing (toggleShopFlight). Ascend/
-// descend while actually flying is a separate, ordinary press-and-hold
-// pair — shopVerticalInput/bindShopVerticalButton, +1 while Up is held,
-// -1 while Down, consumed every frame in updateShopFlight exactly like
-// shopMoveX/Y already are for the move joystick.
-//
-// Each button's own held-state is tracked independently (shopUpHeld/
-// shopDownHeld) rather than shopVerticalInput itself recording "who's
-// holding" — holding both and releasing just one used to silently stick
-// the other off, since the second press's pointerdown would overwrite the
-// first's contribution to the one shared variable, and the first button's
-// own pointerup only ever cleared it if it still matched that button's own
-// direction. Deriving shopVerticalInput as a sum of both held-flags means
-// either button's press/release only ever touches its own flag.
-let shopUpHeld = false;
-let shopDownHeld = false;
-let shopVerticalInput = 0;
-function updateShopVerticalInput() {
-  shopVerticalInput = (shopUpHeld ? 1 : 0) + (shopDownHeld ? -1 : 0);
-}
-function bindShopVerticalButton(el, direction) {
-  let pointerId = null;
-  el.addEventListener('pointerdown', (event) => {
-    if (!shopActive) return;
-    event.stopPropagation();
-    pointerId = event.pointerId;
-    el.setPointerCapture(pointerId);
-    el.classList.add('active');
-    if (direction === 1) shopUpHeld = true;
-    else shopDownHeld = true;
-    updateShopVerticalInput();
-  });
-  const end = (event) => {
-    if (event.pointerId !== pointerId) return;
-    pointerId = null;
-    el.classList.remove('active');
-    if (direction === 1) shopUpHeld = false;
-    else shopDownHeld = false;
-    updateShopVerticalInput();
-  };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-}
+// Flight (docs/SPEC.md §2): a double-tap on the world, or double-press space
+// on desktop, toggles takeoff/landing (toggleShopFlight). Climbing and
+// descending while flying is steered by the view (#3769, see updateShopFlight
+// and flightPitch.js); there are no up/down buttons.
 
 // #1176: "Go to Last Location" — see startGoToLastLocation's own comment.
 // A plain click, not pointerdown like the fly button above: this one has
@@ -582,8 +541,6 @@ function bindShopVerticalButton(el, direction) {
 // ready, rather than left as top-level side effects here.
 export function initShopFlightInputBindings() {
   bindWorldGestures(renderer.domElement);
-  bindShopVerticalButton(shopUpBtn, 1);
-  bindShopVerticalButton(shopDownBtn, -1);
   shopLastLocationBtn.addEventListener('click', () => {
     if (!shopActive) return;
     startGoToLastLocation();
@@ -829,7 +786,15 @@ function shopAvatarFlightBodyReach() {
   // the FULL body height times sin(lean), not just the torso and head the
   // #1840 formula counted (0.78 m of a 1.64 m body). A custom avatar's
   // measured height flows through shopAvatarHeightM.
-  return flightBodyReach(shopAvatarHeightM(), SHOP_AVATAR_FLIGHT_PITCH_RAD, shopAvatarCollisionHalfM());
+  // #3769: the body tips up to FLIGHT_BODY_TILT_RANGE_RAD either side of the
+  // usual lean with the view; judge the farthest reach at the most forward tip
+  // and the greatest rise at the most upright one.
+  const h = shopAvatarHeightM();
+  const half = shopAvatarCollisionHalfM();
+  return {
+    forwardM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD - FLIGHT_BODY_TILT_RANGE_RAD, half).forwardM,
+    riseM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD + FLIGHT_BODY_TILT_RANGE_RAD, half).riseM,
+  };
 }
 
 function clampShopRadius(position, maxRadius, isCamera = false) {
@@ -905,18 +870,15 @@ function toggleShopFlight() {
   if (shopFlightState === 'grounded') {
     shopFlightState = 'takingOff';
     shopFlightTransitionElapsedS = 0;
-    // shop-flying on <body> gates #shop-vertical-controls' own visibility
-    // (index.html) — shown for the whole takingOff/flying span, not just
-    // once actually airborne, so the ascend/descend buttons are already in
-    // place the moment takeoff finishes rather than popping in afterward.
+    // shop-flying on <body> marks the whole takingOff/flying span (e2e and
+    // the live-site script read it).
     setShopFlyBtnFlying(true);
   } else if (shopFlightState === 'flying') {
     shopFlightLandingStartAltitudeM = shopFlightAltitudeM;
     shopFlightState = 'landing';
     shopFlightTransitionElapsedS = 0;
-    // Landing is an automatic descent (shopVerticalInput is only read
-    // while actually 'flying' — see updateShopFlight), so the ascend/
-    // descend controls hide the instant it starts, not once it finishes.
+    // Landing is an automatic descent (the view only steers height while
+    // actually 'flying' — see updateShopFlight).
     setShopFlyBtnFlying(false);
   } else if (shopFlightState === 'landing') {
     // #2446: shopFlightAltitudeM is already the live, current altitude —
@@ -1184,12 +1146,57 @@ function updateShopFlight(dt) {
       shopFlightState = 'grounded';
     }
   } else if (shopFlightState === 'flying') {
-    if (shopVerticalInput !== 0) {
-      shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
+    // #3769: the view steers height. Looking up and moving forward climbs,
+    // looking down descends, moving back reverses, a level view or no move
+    // gesture holds height. The rate is the flight speed the horizontal move
+    // uses, scaled by flightPitch.js's dead zone and ramp.
+    if (!shopGoToLastLocationPhase && shopMoveY !== 0) {
+      camera.getWorldDirection(shopViewDirection);
+      const viewPitchRad = Math.asin(THREE.MathUtils.clamp(shopViewDirection.z, -1, 1));
+      const speed = SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM);
+      shopFlightAltitudeM += verticalRateM_S(viewPitchRad, -shopMoveY, speed) * dt;
     }
+    // The limits are felt during the gesture: at the top of the sky and at the
+    // lowest hover (or the top of an item under the avatar) the avatar levels
+    // off and rests, never bounces, and says so once. It never lands by itself.
     const maxAltitudeM = shopMaxFlightAltitudeM();
-    shopFlightAltitudeM = THREE.MathUtils.clamp(shopFlightAltitudeM, SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5, maxAltitudeM);
+    const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
+    const hoverFloorM = SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5;
+    const minAltitudeM = obstructionTopZ === null
+      ? hoverFloorM
+      : hoverFloorM + obstructionTopZ - groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+        + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    const wantedM = shopFlightAltitudeM;
+    shopFlightAltitudeM = THREE.MathUtils.clamp(wantedM, minAltitudeM, Math.max(minAltitudeM, maxAltitudeM));
+    const hit = wantedM > shopFlightAltitudeM + 1e-6 ? 'ceiling' : (wantedM < shopFlightAltitudeM - 1e-6 ? 'floor' : null);
+    if (hit === null) {
+      if (flightLimitNoticed !== null
+        && Math.abs(shopFlightAltitudeM - (flightLimitNoticed === 'ceiling' ? maxAltitudeM : minAltitudeM)) > 0.5) {
+        flightLimitNoticed = null;
+      }
+    } else if (flightLimitNoticed !== hit) {
+      flightLimitNoticed = hit;
+      showFlightLimitNotice(hit);
+    }
   }
+}
+
+// #3769: which limit the avatar is resting against (so it is said once per
+// contact, not every frame), and the one plain sentence for each.
+let flightLimitNoticed = null;
+let flightLimitNoticeTimer = null;
+function showFlightLimitNotice(limit) {
+  shopStatusEl.textContent = limit === 'ceiling'
+    ? 'You are at the top of the sky. Look level to fly along.'
+    : 'You are as low as you can fly. Double-tap the world to land.';
+  shopStatusEl.classList.add('visible');
+  clearTimeout(flightLimitNoticeTimer);
+  flightLimitNoticeTimer = setTimeout(() => {
+    if (shopStatusEl.textContent.startsWith('You are ')) {
+      shopStatusEl.classList.remove('visible');
+      shopStatusEl.textContent = '';
+    }
+  }, 4000);
 }
 
 // #1631: the dome/wall's own world-z position sags below SHOP_WALL_HEIGHT_M
@@ -1651,11 +1658,11 @@ export function updateShopMovementCore(now) {
   // stops the spawn orbit immediately, the same frame it starts — the
   // discrete fly-button tap handles itself via toggleShopFlight's own
   // stopShopSpawnRotation() call. While the orbit is still running, the
-  // blocks below see shopLookX/shopMoveX/shopVerticalInput all still at 0
+  // blocks below see shopLookX/shopMoveX all still at 0
   // (that's exactly what "no navigation input yet" means) and simply don't
   // fire, so no extra guard is needed to keep them from fighting the orbit.
   if (shopSpawnRotating) {
-    if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 || shopVerticalInput !== 0) {
+    if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 ) {
       stopShopSpawnRotationForNavigation();
     } else {
       updateShopSpawnRotation(dt);
@@ -1711,9 +1718,17 @@ export function updateShopMovementCore(now) {
     // rather than jumping to full flight speed the instant takeoff
     // finishes): docs/SPEC.md §2's altitude/speed curve — see
     // shopFlightSpeedMultiplier and SHOP_FLIGHT_SPEED_EXPONENT's own comment.
-    const speed = airborne
+    let speed = airborne
       ? SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM) * moveMagnitude
       : THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
+    if (shopFlightState === 'flying' && shopMoveY !== 0) {
+      // #3769: a climbing or diving path spends part of the speed on height
+      // (updateShopFlight), so the forward part of the move keeps only the rest.
+      camera.getWorldDirection(shopViewDirection);
+      const forwardShare = Math.abs(shopMoveY) / Math.hypot(shopMoveX, shopMoveY);
+      const scale = horizontalForwardScale(Math.asin(THREE.MathUtils.clamp(shopViewDirection.z, -1, 1)));
+      speed *= 1 - (1 - scale) * forwardShare;
+    }
     shopMoveDir
       .set(0, 0, 0)
       .addScaledVector(shopForward, -shopMoveY)
@@ -1846,7 +1861,12 @@ export function updateShopMovementCore(now) {
   // (shopLeanBlend, same shape as shopSitBlend -- 0 whenever
   // shopIdleInteractionTarget is null or 'sit'), so this term is a harmless
   // no-op outside an actual lean.
-  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : SHOP_LEAN_PITCH_RAD * shopLeanBlend;
+  // #3769: the body tips with the view (nose up looking up, down looking down),
+  // a little either side of the usual lean, so it is clear which way it points.
+  const flightTiltRad = shopFlightState === 'flying'
+    ? bodyTiltOffsetRad(Math.asin(THREE.MathUtils.clamp(camera.getWorldDirection(shopViewDirection).z, -1, 1)))
+    : 0;
+  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD + flightTiltRad : SHOP_LEAN_PITCH_RAD * shopLeanBlend;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
   scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset + shopSitYawOffset + shopLeanYawOffset);
   scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
@@ -2081,9 +2101,7 @@ export function beginShopStanding(x, y, yaw) {
   shopFlightTransitionElapsedS = 0;
   shopFlightAltitudeM = 0;
   shopAvatarPosition.z = groundHeightAtM(x, y) - curvatureDropM(Math.hypot(x, y));
-  shopUpHeld = false;
-  shopDownHeld = false;
-  shopVerticalInput = 0;
+  flightLimitNoticed = null;
   setShopFlyBtnFlying(false);
   shopLastLocationHideTimerS = null;
   shopGoToLastLocationPhase = null;
@@ -2116,9 +2134,7 @@ export function beginShopSpawn(spawnOrbitRadiusM, yaw) {
   shopAvatarPosition.z = shopFlightAltitudeM
     + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
-  shopUpHeld = false;
-  shopDownHeld = false;
-  shopVerticalInput = 0;
+  flightLimitNoticed = null;
   setShopFlyBtnFlying(true);
   // #1176: the "Go to Last Location" button, offered only when there's
   // actually somewhere to offer — reset alongside the rest of this

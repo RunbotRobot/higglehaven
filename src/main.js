@@ -1040,18 +1040,14 @@ document.addEventListener('click', (event) => {
 // import, same shape as the other Shop DOM consts below.
 export const shopStatusEl = document.getElementById('shop-status');
 export const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
-export const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
-export const shopUpBtn = document.getElementById('shop-up-btn');
-export const shopDownBtn = document.getElementById('shop-down-btn');
 // #3650: the sticks and the fly button are gone (moving is done by touching the
 // world, src/shop/worldGestures.js); what remains of "the Shop controls are up"
 // is this flag on <body> (the voice button and the assistant panel read it, and
-// so do the e2e tests) and the flying arrows' own gate.
+// so do the e2e tests). #3769: the flying arrows are gone too (height follows the view).
 export function setShopControlsVisible(visible) {
   document.body.classList.toggle('shop-ready', visible);
-  shopVerticalControlsEl.classList.toggle('visible', visible);
 }
-// #2624: wires up the world gestures (#3650)/both vertical buttons/the
+// #2624: wires up the world gestures (#3650)/the
 // last-location click -- deferred into a function call (rather than left
 // as shop/flightMovement.js's own top-level side effects) so it runs after
 // the DOM consts just above are actually initialized; see that module's

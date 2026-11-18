@@ -2,7 +2,7 @@
 // (tap-to-toggle, takeoff, ascend/descend, landing) had zero e2e coverage
 // — src/flight.test.js now covers the pure altitude/speed math directly,
 // but the real tap gesture and DOM wiring (body.shop-flying,
-// #shop-vertical-controls) had never been exercised
+// the takeoff/landing plumbing) had never been exercised
 // end-to-end in a real browser. Doesn't attempt to measure the exact
 // altitude/speed-multiplier curve itself here — that's what
 // src/flight.test.js's direct unit tests are for; this proves the
@@ -11,7 +11,7 @@
 // #3650: the bird button is gone; a double-tap on the world (covered by
 // e2e/shop-world-gestures.test.mjs) or a double-press of space flies. This file
 // drives the same toggle through window.__testToggleShopFlight.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, flyByView } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Tester' });
 
@@ -59,7 +59,6 @@ await page.evaluate(() => window.__testToggleShopFlight());
 // synchronously on the tap that starts takeoff — not gated behind the ~1s
 // takeoff animation itself — so this should already be true immediately.
 const flyingClassRightAfterTakeoffTap = await isFlyingClassSet();
-const verticalControlsVisibleDuringTakeoff = await page.isVisible('#shop-vertical-controls');
 
 // Wait past SHOP_FLIGHT_TAKEOFF_DURATION_S (1s) so the internal state
 // machine has actually reached 'flying' — toggling again before that has
@@ -67,34 +66,22 @@ const verticalControlsVisibleDuringTakeoff = await page.isVisible('#shop-vertica
 // 'grounded' or 'flying', not mid-transition).
 await page.waitForTimeout(1500);
 
-// Hold the ascend button briefly — exercises bindShopVerticalButton's real
-// pointerdown/pointerup pair (not just a click) without asserting the
-// resulting altitude/speed numerically (see src/flight.test.js for that).
-const upBtnBox = await page.locator('#shop-up-btn').boundingBox();
-await page.mouse.move(upBtnBox.x + upBtnBox.width / 2, upBtnBox.y + upBtnBox.height / 2);
-await page.mouse.down();
-const upBtnActiveWhileHeld = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
-
-// #2361: the button is only 52x40px — a held thumb commonly drifts off its
-// small hit area without lifting. setPointerCapture keeps pointerup/
-// pointercancel routed to this element regardless of where the pointer
-// physically is, but per MDN's own documentation of setPointerCapture,
-// pointerleave still fires based on the pointer's actual screen position
-// — bindShopVerticalButton used to treat that as a release, silently
-// stopping ascent while the finger was still physically down. Chromium's
-// real input pipeline doesn't reliably reproduce a captured pointer
-// crossing a boundary from a simulated page.mouse.move in this harness,
-// so dispatch the actual pointerleave event the bug is about directly at
-// the button, exercising bindShopVerticalButton's own handler exactly as
-// the browser would if/when it fires one — same as a drifted touch would.
-await page.evaluate(() => {
-  document.getElementById('shop-up-btn').dispatchEvent(new PointerEvent('pointerleave', { pointerId: 1, bubbles: false }));
-});
-const upBtnActiveAfterDriftOff = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
-
+// #3769: no up/down arrows. The avatar goes where the view points: look up (R) and
+// walk forward (W) to climb, look down (F) and walk forward to descend, a level
+// view flies level, and with no move input the height is held.
+const altitude = () => page.evaluate(() => window.__testShopAvatarPosition().z);
+const arrowsGone = (await page.locator('#shop-up-btn, #shop-down-btn, #shop-vertical-controls').count()) === 0;
+const z0 = await altitude();
+await flyByView(page, 'up', { lookMs: 900, moveMs: 1500 });
+const zUp = await altitude();
 await page.waitForTimeout(500);
-await page.mouse.up();
-const upBtnActiveAfterRelease = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
+const zHeld = await altitude(); // no move input: height is held
+await flyByView(page, 'down', { lookMs: 1800, moveMs: 1500 }); // look from up past level to down
+const zDown = await altitude();
+// Level the view: R until the pitch is inside the dead zone is fiddly, so read the real view.
+const climbedByLooking = zUp > z0 + 1;
+const heldWhileNotMoving = Math.abs(zHeld - zUp) < 0.05;
+const descendedByLooking = zDown < zUp - 1;
 
 // Second tap, now genuinely 'flying' — starts landing. Same immediate
 // (not animation-gated) class removal as takeoff's own set.
@@ -109,10 +96,10 @@ const groundedAfterLanding = !(await isFlyingClassSet());
 console.log('flying immediately on spawn, no tap needed (should be true):', flyingOnSpawn);
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
-console.log('#shop-vertical-controls visible during takeoff (should be true):', verticalControlsVisibleDuringTakeoff);
-console.log('#shop-up-btn.active while held (should be true):', upBtnActiveWhileHeld);
-console.log('#shop-up-btn.active after drifting off the button while still held (should still be true — #2361):', upBtnActiveAfterDriftOff);
-console.log('#shop-up-btn.active after release (should be false):', upBtnActiveAfterRelease);
+console.log('no up/down arrows on the page (should be true):', arrowsGone);
+console.log('climbed by looking up and walking forward (should be true):', climbedByLooking, z0, zUp);
+console.log('height held with no move input (should be true):', heldWhileNotMoving, zUp, zHeld);
+console.log('descended by looking down and walking forward (should be true):', descendedByLooking, zUp, zDown);
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
@@ -120,10 +107,10 @@ const pass =
   flyingOnSpawn &&
   groundedBeforeTakeoff &&
   flyingClassRightAfterTakeoffTap &&
-  verticalControlsVisibleDuringTakeoff &&
-  upBtnActiveWhileHeld &&
-  upBtnActiveAfterDriftOff &&
-  !upBtnActiveAfterRelease &&
+  arrowsGone &&
+  climbedByLooking &&
+  heldWhileNotMoving &&
+  descendedByLooking &&
   !flyingClassRightAfterLandingTap &&
   groundedAfterLanding &&
   errors.length === 0;
