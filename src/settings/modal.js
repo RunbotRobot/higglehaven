@@ -41,7 +41,6 @@ import { trimUnitLabelEls } from '../main.js';
 import { renderShopSettingsSection } from '../shop/mode.js';
 import { renderBuildSettingsSection } from '../build/scene.js';
 import { renderSellSettingsSection } from '../sell/mode.js';
-import { openAssistantQuestions } from '../shop/assistantChat.js';
 
 // Settings: local, per-device display preferences — nothing here is ever
 // sent to the server (see settings.js). Four sections exist as fixed tabs
@@ -688,12 +687,8 @@ document.getElementById('settings-feedback-btn').addEventListener('click', () =>
   closeSettingsModal();
   openFeedbackModal({ el: settingsModalEl, close: closeSettingsModal });
 });
-// #3448: Ask an assistant, in every mode. Works with no assistant standing in
-// the world: the question goes in line, and an answer waits for the shopper.
-document.getElementById('settings-assistant-btn').addEventListener('click', () => {
-  closeSettingsModal();
-  openAssistantQuestions();
-});
+// #3448 / #3762: "Ask an assistant" is under "?" in the bud now (src/ui/helpLeaf.js), in every mode; it
+// is no longer a button here.
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {

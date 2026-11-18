@@ -732,6 +732,16 @@ export async function openAccountMenu(page) {
   }
 }
 
+// #3762: "Ask an assistant" is under the "?" petal of the bud (it left Settings): open the bud, the
+// "?" leaf, then the way to an assistant. Works in every mode; the window it opens is the same one.
+export async function openAssistantFromHelp(page) {
+  await openAccountMenu(page);
+  // The petal is registered once per mode and only the current mode's is drawn.
+  await page.locator('#account-menu-panel button:visible', { hasText: /^\?$/ }).first().click();
+  await page.waitForSelector('#help-ask-assistant-btn', { state: 'visible', timeout: 5000 });
+  await page.click('#help-ask-assistant-btn');
+}
+
 // #3690: in Build the level controls are the Levels petal's leaf, not a "Ground" pill. Open
 // the bud, tap Levels, and wait for the leaf. Unlike a petal's own click, the leaf does not
 // close on an inner button click (see src/build/budPetals.js), so callers only need this once
