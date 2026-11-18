@@ -1082,11 +1082,18 @@
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
       body[data-bud="on"] #bud-modes .mode-nav-label {
-        display: block;
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
         pointer-events: none;
+        /* #3761: the picture first, its one small word under it. */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        font: var(--text-xs)/1 var(--font-sans);
       }
+      body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 8; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 46; animation-delay: 0.04s; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 84; animation-delay: 0.08s; }
