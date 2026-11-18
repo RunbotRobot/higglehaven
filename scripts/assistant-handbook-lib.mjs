@@ -28,6 +28,14 @@ const BANNED = [
   { pattern: /\b(?:selector|endpoint|api|database|d1|stripe)\b/i, why: 'no internal vocabulary' },
 ];
 
+// A label or title that ends on a small joining word ("Claim a") was cut short, usually at an accented
+// letter (#3734: the claim sheet's title "Claim a lándlet" was written down as "Claim a"). No real label
+// or title ends like that.
+const DANGLING = /\b(?:a|an|the|of|to|for|and|or|your|my|with|this|that)$/i;
+export function looksCutOff(words) {
+  return DANGLING.test(String(words || '').trim());
+}
+
 // The controls fence: ```controls <mode> ... ```
 const FENCE = /^```controls\s+(\S+)\s*$/;
 
@@ -98,9 +106,14 @@ export function validateHandbook(entries) {
       if (!CONTROL_MODES.includes(control.mode)) problems.push(`${at}: line ${control.line}: the mode "${control.mode}" is not one of ${CONTROL_MODES.join(', ')}`);
       if (!control.selector) problems.push(`${at}: line ${control.line}: a control has no selector`);
       if (!control.words) problems.push(`${at}: line ${control.line}: "${control.selector}" has no words after the bar`);
-      else if (control.words !== NO_WORDS && !normal(entry.text).includes(normal(control.words))) {
+      else if (control.words !== NO_WORDS && looksCutOff(control.words)) {
+        problems.push(`${at}: line ${control.line}: "${control.words}" ends on a joining word, so it looks cut short (an accented letter dropped the rest?); write the whole label`);
+      } else if (control.words !== NO_WORDS && !normal(entry.text).includes(normal(control.words))) {
         problems.push(`${at}: the steps never name "${control.words}", which its controls list says they do`);
       }
+    }
+    for (const quoted of entry.text.matchAll(/\btitled?\s+"([^"\n]+)"/gi)) {
+      if (looksCutOff(quoted[1])) problems.push(`${at}: the quoted words "${quoted[1]}" end on a joining word, so they look cut short; write the whole label`);
     }
     for (const { pattern, why } of BANNED) {
       const found = pattern.exec(entry.text);
@@ -114,10 +127,16 @@ export function validateHandbook(entries) {
 // something a person reads on it (its text, its label, its placeholder or its
 // title) carries the words. Pure, so the unit test can try it without a browser;
 // e2e/assistant-handbook-controls.test.mjs feeds it what it reads from the page.
-export function controlMatches(reading, words) {
+// A title (a heading) must be written down whole: matching part of it let "Claim a" pass for "Claim a
+// lándlet" (#3734). Pass `whole: true` for those; other controls are matched on part of what they say.
+export function controlMatches(reading, words, { whole = false } = {}) {
   if (!reading || !reading.exists) return false;
   if (words === NO_WORDS) return true;
   const wanted = normal(words);
+  if (whole) return [reading.text, reading.ariaLabel, reading.title].some((candidate) => normal(candidate) === wanted);
   return [reading.text, reading.ariaLabel, reading.placeholder, reading.title, reading.value]
     .some((candidate) => normal(candidate).includes(wanted));
 }
+
+// Selectors that name a heading, whose words are matched whole.
+export const isHeadingSelector = (selector) => /(?:^|[\s>])h[1-6]\b[^\s>]*$/.test(String(selector || '').trim());

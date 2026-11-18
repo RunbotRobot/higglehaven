@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import handbook from '../docs/assistant-handbook.md?raw';
-import { parseHandbook, validateHandbook, controlMatches, NO_WORDS, SECTION_SEE, SECTION_WRONG } from './assistant-handbook-lib.mjs';
+import { parseHandbook, validateHandbook, controlMatches, looksCutOff, isHeadingSelector, NO_WORDS, SECTION_SEE, SECTION_WRONG } from './assistant-handbook-lib.mjs';
 
 // #3615 (part of #3614): the handbook assistants answer from stays in its format.
 // The format's rules live in scripts/assistant-handbook-lib.mjs; the walk against
@@ -88,5 +88,22 @@ describe('controlMatches', () => {
     expect(controlMatches({ exists: true, text: 'Remove' }, 'Add Item')).toBe(false);
     expect(controlMatches({ exists: false }, 'Add Item')).toBe(false);
     expect(controlMatches(null, 'Add Item')).toBe(false);
+  });
+});
+
+describe('a label cut short at an accented letter (#3734)', () => {
+  it('is refused in the steps and in the controls list', () => {
+    expect(looksCutOff('Claim a')).toBe(true);
+    expect(looksCutOff('Claim a lándlet')).toBe(false);
+    const cut = entry().replace('Tap "Go".', 'A sheet opens with the title "Claim a" and a map.');
+    expect(validateHandbook(parseHandbook(cut)).join('\n')).toContain('look cut short');
+    expect(looksCutOff('Log In')).toBe(false);
+    expect(validateHandbook(parseHandbook(entry('```controls build\n#go | Claim a\n```'))).join('\n')).toContain('looks cut short');
+  });
+  it('a heading must be matched whole, so a cut title does not pass for the real one', () => {
+    expect(isHeadingSelector('#claim-modal h2')).toBe(true);
+    expect(isHeadingSelector('#claim-confirm-btn')).toBe(false);
+    expect(controlMatches({ exists: true, text: 'Claim a lándlet' }, 'Claim a', { whole: true })).toBe(false);
+    expect(controlMatches({ exists: true, text: 'Claim a lándlet' }, 'Claim a lándlet', { whole: true })).toBe(true);
   });
 });
