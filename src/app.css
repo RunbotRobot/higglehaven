@@ -104,6 +104,13 @@
       #loading-screen.loading-screen-hidden #loading-content { opacity: 0; }
       /* Someone signing in is not waiting on the bar; keep the form clean. */
       body:has(#auth-modal.visible) #loading-content { opacity: 0; }
+      /* #3678: behind the sign-in card the world is the first thing on screen, not a
+         grey wash: the opening screen's own ground colour and fog step aside while the
+         card is up, so the canvas (ground and sky) shows through. The compass would
+         read as a stray control over a form, so it waits too. */
+      body:has(#auth-modal.visible) #loading-screen { background: transparent; }
+      body:has(#auth-modal.visible) #loading-fog { display: none; }
+      body:has(#auth-modal.visible) #compass-panel { visibility: hidden; }
       #loading-content img {
         width: min(240px, 60vw);
         height: auto;
