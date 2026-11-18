@@ -2,7 +2,7 @@
 // the bud; "Add item" is a petal of it (no separate button over the world); it opens the catalog
 // as a short strip (a search line and one row of items, recent ones first), and "All items" opens
 // the whole catalog. 390x844.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openBudMenuOf } from './helpers.mjs';
 
 const LABEL = 'Build Bud Add Item';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -28,6 +28,9 @@ check(!(await shown('#add-item-btn')), 'Add item is not drawn over the world whi
 // Open the bud: Add item is a petal, with Shop and Sell beside the account rows.
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+// #3760: the bud opens on the general menu; Add item is in Build's own menu, one tap on the Build petal away.
+check(!(await shown('#add-item-btn')), 'Add item is not in the general menu');
+await openBudMenuOf(page, 'build');
 check(await shown('#add-item-btn'), 'Add item is a petal of the open bud');
 check((await page.textContent('#add-item-btn')).trim() === 'Add item', 'its words are "Add item"');
 check(await shown('.mode-nav-btn[data-mode="shop"]') && await shown('.mode-nav-btn[data-mode="sell"]'), 'Shop and Sell are petals');
