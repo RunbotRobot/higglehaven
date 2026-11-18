@@ -792,7 +792,7 @@ export async function tellShopperWhatBecameOfCard(db, cardId, line) {
   return true;
 }
 
-async function escalationInput(request) {
+async function escalationInput(request, { withSay = false } = {}) {
   const input = await readJson(request);
   const summary = stringValue(input.summary, 'summary');
   if (summary.length > ESCALATION_SUMMARY_MAX_CHARS) {
@@ -802,7 +802,10 @@ async function escalationInput(request) {
   if (!ESCALATION_KINDS.includes(kind)) {
     throw new HttpError(`kind must be one of ${ESCALATION_KINDS.join(', ')}`, 400);
   }
-  return { summary, kind };
+  // #3748: passing a left question on also says something to the person, who is
+  // not in a conversation and would otherwise wait for an answer that never comes.
+  const say = withSay ? textValue({ text: input.say }, ASSISTANT_MESSAGE_MAX_CHARS) : null;
+  return { summary, kind, say };
 }
 
 async function handleEscalate(request, db, conversationId) {
@@ -880,16 +883,40 @@ async function clearReplyNotices(db, shopperUserId) {
 async function handleEscalateQuestion(request, db, questionId) {
   const user = await requireAssistant(request, db);
   await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
-  const { summary, kind } = await escalationInput(request);
+  const { summary, kind, say } = await escalationInput(request, { withSay: true });
   const question = await ownQuestion(db, user.user_id, questionId);
-  const cardId = await fileEscalationCard(db, user, {
-    summary,
-    kind,
-    shopperUserId: question.shopper_user_id,
-    reference: `left question ${questionId}`,
-    quotedTexts: [question.text],
-  });
-  return json({ cardId }, 201);
+  // #3748: one call answers the person and files the card, so a failure half
+  // way never leaves a card with no reply (the question would wait, claimed,
+  // until it timed out and was handed out again for a second card). The answer
+  // is claimed first, which also refuses a question that is no longer waiting;
+  // if filing then fails the question is put back as it was.
+  const answered = await db.prepare(`
+    UPDATE assistant_questions SET status = 'answered', answer_text = ?1, answered_at = ?2
+    WHERE question_id = ?3 AND claimed_by_user_id = ?4 AND status = 'claimed'
+  `).bind(say, isoNow(), questionId, user.user_id).run();
+  if (answered.meta.changes === 0) {
+    throw new HttpError('That question is no longer waiting for an answer.', 409, { questionClosed: true });
+  }
+  let cardId;
+  try {
+    cardId = await fileEscalationCard(db, user, {
+      summary,
+      kind,
+      shopperUserId: question.shopper_user_id,
+      reference: `left question ${questionId}`,
+      quotedTexts: [question.text],
+    });
+  } catch (error) {
+    await db.prepare(`
+      UPDATE assistant_questions SET status = 'claimed', answer_text = NULL, answered_at = NULL
+      WHERE question_id = ?1 AND claimed_by_user_id = ?2 AND status = 'answered'
+    `).bind(questionId, user.user_id).run();
+    throw error;
+  }
+  await recordSpoke(db, user.user_id, question.shopper_user_id);
+  const builderId = await builderIdForUser(db, question.shopper_user_id);
+  if (builderId) await fireReplyNotice(db, builderId, user.username);
+  return json({ cardId, answered: true }, 201);
 }
 
 export async function handleAssistantInbox(request, db, route) {
