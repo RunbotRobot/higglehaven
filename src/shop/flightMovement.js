@@ -66,7 +66,7 @@ import {
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
 import { keepPairInside } from './rigidCameraPair.js';
-import { isFlightToggleKeyEvent, isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import { verticalRateM_S, horizontalForwardScale, bodyTiltOffsetRad, FLIGHT_BODY_TILT_RANGE_RAD } from './flightPitch.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
@@ -109,7 +109,7 @@ import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // calendar-event trigger check now live in src/shop/worldSprites.js.
 import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
 // #3651: the tapped product's card follows the product, after the camera has moved.
-import { updateProductCard } from './productCard.js';
+import { updateProductCard, stepToNearbyProduct } from './productCard.js';
 
 // #3293: Shop's world as the movement core's default world. Getters, not
 // snapshots: shopLandlets/shopWorldRadiusM are live bindings that other
@@ -612,6 +612,14 @@ window.addEventListener('keydown', (event) => {
   if (!shopActive || !isFlightToggleKeyEvent(event)) return;
   event.preventDefault();
   toggleShopFlight();
+});
+
+// #3824: N opens the card of the next nearest product (Shift+N the previous), for anyone who
+// cannot tap a product in the world; the card is announced and takes keyboard focus.
+window.addEventListener('keydown', (event) => {
+  if (!shopActive || !isNearbyProductKeyEvent(event)) return;
+  event.preventDefault();
+  stepToNearbyProduct(event.shiftKey ? -1 : 1);
 });
 
 // Zoom: narrows/widens the camera's own field of view rather than moving

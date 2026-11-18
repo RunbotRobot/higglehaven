@@ -80,3 +80,13 @@ export function isFlightToggleKeyEvent(event) {
   if (event.repeat || event.shiftKey) return false;
   return !isModifiedOrTyping(event);
 }
+
+// #3824: N steps through the products near the shopper (Shift+N backwards) and opens each one's
+// card, for anyone who cannot tap a product in the world. Not held, and the same exclusions as
+// walking, so typing an "n" in a field never moves anything.
+export const NEARBY_PRODUCT_CODES = ['KeyN'];
+export function isNearbyProductKeyEvent(event) {
+  if (!NEARBY_PRODUCT_CODES.includes(event.code)) return false;
+  if (event.repeat) return false;
+  return !isModifiedOrTyping(event);
+}
