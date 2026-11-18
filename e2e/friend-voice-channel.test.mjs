@@ -56,7 +56,7 @@
 // GET/POST /api/voice/signal and GET /api/voice/ice-config -- it needs a
 // Node-side in-memory mock below rather than a real call.
 import { chromium } from 'playwright';
-import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
+import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -353,6 +353,8 @@ const bothTaggedWithChannelOwner =
 // auto-granted) and the recvonly-to-sendrecv transceiver upgrade, which is
 // what actually populates each side's own gainNode (attachRemoteStream,
 // fired from pc.ontrack once a real remote track arrives).
+await budClick(pageA, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
+await budClick(pageB, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
 await pageA.click('#shop-voice-btn');
 await pageB.click('#shop-voice-btn');
 await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });

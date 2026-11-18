@@ -29,7 +29,7 @@
 // coordinates directly, since this test needs them genuinely within voice
 // range of each other.
 import { chromium } from 'playwright';
-import { chooseIdentity, finish } from './helpers.mjs';
+import { chooseIdentity, finish, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -241,6 +241,8 @@ await waitForConnected(pageB, builderA.builderId);
 
 // Unmute both -- exercises the real getUserMedia prompt (fake device,
 // auto-granted) and the recvonly-to-sendrecv transceiver upgrade.
+await budClick(pageA, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
+await budClick(pageB, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
 await pageA.click('#shop-voice-btn');
 await pageB.click('#shop-voice-btn');
 await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });

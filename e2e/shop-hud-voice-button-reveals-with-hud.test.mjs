@@ -88,13 +88,13 @@ await page.waitForTimeout(500);
 
 const order = await page.evaluate(() => window.__hudOrder);
 const voiceDisplay = await page.evaluate(() => getComputedStyle(document.getElementById('shop-voice-btn')).display);
-console.log('voice button ever shown (should be true):', order.voiceEverShown);
+console.log('voice button ever shown on the world (should be false, #3556: it lives in the Chat leaf):', order.voiceEverShown);
 console.log('voice button shown before the fly button (should be false):', order.voiceShownBeforeFly);
-console.log('voice button display once the HUD is up (should be flex):', voiceDisplay);
+console.log('voice button display once the HUD is up (should be none: not in the leaf):', voiceDisplay);
 
-const pass = order.voiceEverShown && !order.voiceShownBeforeFly && voiceDisplay === 'flex' && errors.length === 0;
+const pass = !order.voiceEverShown && !order.voiceShownBeforeFly && voiceDisplay === 'none' && errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Shop HUD (#3248): the microphone button appears with the rest of the HUD, never ahead of it',
+  label: 'Shop HUD (#3248, #3556): the microphone button never stands on the world; it is drawn only in the Chat leaf',
   errors,
 });

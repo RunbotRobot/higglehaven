@@ -1869,14 +1869,10 @@
         font: var(--text-md)/var(--leading-tight) var(--font-sans);
         cursor: pointer;
       }
-      /* #2818: next free slot in the same right-edge stack as
-         #shop-nearby-chat-btn above -- a small round
-         icon button (no text pill) rather than matching their shape, since
-         its state is carried entirely by the icon/background color, not a
-         label. */
+      /* #2818, #3556: a small round icon button; its state is carried by the icon and the
+         background colour, and in the Chat leaf by the words beside it. */
       #shop-voice-btn {
-        top: 182px;
-        right: 8px;
+        flex: 0 0 auto;
         width: 32px;
         height: 32px;
         padding: 0;
@@ -1896,8 +1892,8 @@
          before the rest of the Shop HUD, and it alone led on page load.
          Same specificity as the id rule's own state classes below, so the
          .shop-ui gate stays authoritative until .visible is added. */
-      #shop-voice-btn.visible {
-        display: flex;
+      .bud-voice-row #shop-voice-btn.visible {
+        display: flex; /* #3556: drawn only inside the Chat leaf, never on the world */
       }
       /* Current-state convention (#2778's resolution) -- background color
          always reflects what the mic is doing right now. */
@@ -1914,24 +1910,22 @@
         opacity: 0.6;
         cursor: wait;
       }
-      /* #2819: anchored to the left of #shop-voice-btn (top: 182px, 32px
-         tall, right: 8px) rather than stacked into the #shop-nearby-chat-
-         panel's own vertical slot below it, so the two never collide when
-         both happen to be open at once. Same display:none/.open toggle
-         shape as #shop-nearby-chat-panel, just driven by "is anyone
-         connected" instead of a tap. */
+      /* #2819: shown only while someone is connected (the .open toggle), inside the Chat leaf. */
       #shop-voice-peers-panel {
         display: none;
-        position: fixed;
-        z-index: 16;
-        top: 182px;
-        right: 48px;
-        width: 180px;
-        background: rgb(var(--pill-rgb) / 0.85);
-        border-radius: var(--radius-md);
-        padding: var(--space-xs);
+        padding: var(--space-xs) 0;
       }
-      #shop-voice-peers-panel.open {
+      /* #3556: both live in the Chat leaf (src/shop/nearbyChat.js lends them): the microphone with
+         what it is doing in words beside it, and who is connected when anyone is. */
+      .bud-voice-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        margin-top: var(--space-sm);
+      }
+      .bud-voice-row #shop-voice-btn { position: static; }
+      .bud-voice-words { font: var(--text-md)/var(--leading-tight) var(--font-sans); }
+      .bud-leaf #shop-voice-peers-panel.open {
         display: block;
       }
       .shop-voice-peer-row {

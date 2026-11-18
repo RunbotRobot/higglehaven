@@ -512,11 +512,13 @@ appear in the same box.
 
 ### How do I talk to people nearby by voice?
 
-1. Tap the microphone button on the screen. Its label reads "Unmute microphone"
-   while you are muted.
+1. Tap the round logo at the top left (the bud), tap "Chat", and tap the microphone
+   button in the box that opens. Its label reads "Unmute microphone" while you are
+   muted.
 2. Your phone asks for permission to use the microphone. Allow it.
 3. The button shows what your microphone is doing right now. Tap it again to mute
-   yourself.
+   yourself. While your microphone is on, the logo says "Mic on": tap that to get back
+   to the box.
 4. People close to you can hear you, and you can hear them; voices get quieter the
    further away they are.
 
@@ -524,7 +526,7 @@ appear in the same box.
 are speaking.
 
 **If something goes wrong:**
-- There is no microphone button: like nearby chat, voice is only for people whose age
+- The box says chatting opens once their ID is verified, with no microphone button: like nearby chat, voice is only for people whose age
   and identity the app has checked. Use the runbook's hand-off if they ask how to
   get verified.
 - The button shows the microphone is blocked: the phone's own settings are stopping

@@ -20,7 +20,7 @@
 // apart and confirm the connection survives" section, since this bug has
 // nothing to do with distance.
 import { chromium } from 'playwright';
-import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
+import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -272,6 +272,7 @@ console.log('A muted B while B still has no real track/GainNode yet (should be t
 // fires A's pc.ontrack for the first time (A never unmutes at all, so the
 // only renegotiation in this test is the one B's own mic grant triggers),
 // running attachRemoteStream on A's side for its connection to B.
+await budClick(pageB, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
 await pageB.click('#shop-voice-btn');
 await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 
