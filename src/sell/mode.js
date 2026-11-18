@@ -434,6 +434,107 @@ function syncMetadataSaveButtonsDisabled(templateId) {
   for (const btn of row.querySelectorAll('.metadata-save-btn')) btn.disabled = busy;
 }
 
+// #3702 (Sell in the bud, 4/6): the actions on a whole product are one copy, used by the rows of
+// My products and by the card that blooms beside a product tapped in the showroom, so the
+// wording, the duplicate-name check, the save-busy guard and the refusal messages cannot drift
+// apart. Each returns what happened and leaves the showing of it to the caller.
+
+// Renames after the in-app name modal (#3249). inlineHost is where the duplicate-name question
+// is asked, beside the buttons that were tapped. Returns { changed } or { error }.
+export async function renameSellerProduct(template, inlineHost) {
+  const result = await promptBundleName({ title: 'Rename this product', initialName: template.name });
+  if (!result || result.name === template.name) return { changed: false };
+  const trimmedNext = result.name;
+  if (hasDuplicateProductName(trimmedNext, template.templateId)) {
+    const proceed = await inlineConfirm(
+      inlineHost,
+      `You already have another product named "${trimmedNext}". Rename anyway?`,
+      { yesLabel: 'Rename anyway' },
+    );
+    if (!proceed) return { changed: false };
+  }
+  try {
+    const updated = await updateCatalogTemplate(template.templateId, { name: trimmedNext });
+    Object.assign(template, updated);
+    buildCatalogPickerButtons();
+    return { changed: true };
+  } catch (err) {
+    return { error: err.message || 'Could not rename.' };
+  }
+}
+
+// Saves a price typed in dollars ("" leaves the product not priced). Serialised with every other
+// save on the product by the same busy flag as the row's own panels (#424, #457). Returns
+// { saved: true }, { noChange: true } or { error }.
+export async function saveSellerPrice(template, text) {
+  if (metadataSaveBusyByTemplateId.get(template.templateId) === true) return { busy: true };
+  const trimmed = String(text ?? '').trim();
+  let priceCents = null;
+  if (trimmed) {
+    const dollars = parsePriceInputDollars(trimmed);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      return { error: 'Price must be a non-negative number, or left blank.' };
+    }
+    if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+      return { error: `Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.` };
+    }
+    priceCents = Math.round(dollars * 100);
+  }
+  if (priceCents === template.priceCents) return { noChange: true };
+  metadataSaveBusyByTemplateId.set(template.templateId, true);
+  syncMetadataSaveButtonsDisabled(template.templateId);
+  try {
+    const updated = await updateCatalogTemplate(template.templateId, { priceCents });
+    Object.assign(template, updated);
+    return { saved: true };
+  } catch (err) {
+    return { error: err.message || 'Could not save.' };
+  } finally {
+    metadataSaveBusyByTemplateId.delete(template.templateId);
+    syncMetadataSaveButtonsDisabled(template.templateId);
+  }
+}
+
+// Deletes after its own in-app confirmation modal (#3249, #3278); the refusal wording (still
+// placed, still in a saved layout) is shown in that modal. Returns true when deleted.
+export async function deleteSellerProduct(template, returnFocusEl) {
+  const deleted = await confirmDestructive({
+    title: 'Delete this product?',
+    message: `Delete "${template.name}"? This can't be undone.`,
+    confirmLabel: 'Delete',
+    returnFocusEl,
+    restoreModalEl: sellerModalEl,
+    restoreCloseFn: closeSellerModal,
+    onConfirm: async () => {
+      try {
+        await deleteCatalogTemplate(template.templateId);
+      } catch (err) {
+        // #729: a saved-layout or landlet-version-history block (see the
+        // worker's assertCatalogTemplatesDeletable) has nothing placed to
+        // remove -- "remove those instances first" would send the seller
+        // looking for a fix that doesn't exist, so those get their own
+        // wording distinct from the generic "still in use" FK message.
+        if (err.message?.includes('referenced by a saved layout')) {
+          throw new Error("Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.");
+        } else if (err.message?.includes("referenced by a landlet's version history")) {
+          throw new Error("Used in a lándlet's past published version — it can't be deleted while that version history exists.");
+        } else if (err.message?.includes('still in use')) {
+          throw new Error('Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.');
+        }
+        throw new Error(err.message || 'Could not delete.');
+      }
+    },
+  });
+  if (!deleted) return false;
+  setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
+  buildCatalogPickerButtons();
+  refreshSellerShowcase();
+  // #1342: renderActiveSellerView() rather than renderSellerList() directly, so a deleted product
+  // does not keep showing (and staying tappable) in List view.
+  renderActiveSellerView();
+  return true;
+}
+
 function renderSellerList() {
   // Row DOM is about to be thrown away — an open preview would be left
   // pointing at a detached container, and any per-row event handler
@@ -1029,40 +1130,17 @@ function renderSellerList() {
       if (isMetadataSaveBusy()) return;
       priceStatus.textContent = '';
       priceStatus.classList.remove('error');
-      const trimmed = priceInput.value.trim();
-      let priceCents = null;
-      if (trimmed) {
-        const dollars = parsePriceInputDollars(trimmed);
-        if (!Number.isFinite(dollars) || dollars < 0) {
-          priceStatus.textContent = 'Price must be a non-negative number, or left blank.';
-          priceStatus.classList.add('error');
-          return;
-        }
-        if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
-          priceStatus.textContent = `Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`;
-          priceStatus.classList.add('error');
-          return;
-        }
-        priceCents = Math.round(dollars * 100);
-      }
-      if (priceCents === template.priceCents) {
+      const out = await saveSellerPrice(template, priceInput.value);
+      if (out.busy) return;
+      if (out.error) {
+        priceStatus.textContent = out.error;
+        priceStatus.classList.add('error');
+      } else if (out.noChange) {
         priceStatus.textContent = 'No change.';
-        return;
-      }
-      setMetadataSaveBusy(true);
-      for (const btn of metadataSaveButtons) btn.disabled = true;
-      try {
-        const updated = await updateCatalogTemplate(template.templateId, { priceCents });
-        Object.assign(template, updated);
+      } else if (out.saved) {
         refreshPriceText();
         priceStatus.textContent = 'Saved.';
         priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
-      } catch (err) {
-        priceStatus.textContent = err.message || 'Could not save.';
-        priceStatus.classList.add('error');
-      } finally {
-        setMetadataSaveBusy(false);
-        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     pricePanel.appendChild(priceSaveBtn);
@@ -1097,37 +1175,15 @@ function renderSellerList() {
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
     renameBtn.addEventListener('click', async () => {
-      // #3249: the in-app name modal (same one bundles use, #2761) instead
-      // of window.prompt(), and an inline confirm instead of
-      // window.confirm() for the duplicate-name warning -- a browser that
-      // suppresses native dialogs made both silently do nothing. The
-      // modal's input is maxlength 100, so the old length alert is gone.
-      const result = await promptBundleName({ title: 'Rename this product', initialName: template.name });
-      if (!result || result.name === template.name) return;
-      const trimmedNext = result.name;
-      if (hasDuplicateProductName(trimmedNext, template.templateId)) {
-        renameBtn.disabled = true;
-        const proceed = await inlineConfirm(
-          actions,
-          `You already have another product named "${trimmedNext}". Rename anyway?`,
-          { yesLabel: 'Rename anyway' },
-        );
-        renameBtn.disabled = false;
-        if (!proceed) return;
-      }
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       renameBtn.disabled = true;
-      try {
-        const updated = await updateCatalogTemplate(template.templateId, { name: trimmedNext });
-        Object.assign(template, updated);
-        label.textContent = template.name;
-        buildCatalogPickerButtons();
-      } catch (err) {
-        rowStatus.textContent = err.message || 'Could not rename.';
+      const out = await renameSellerProduct(template, actions);
+      renameBtn.disabled = false;
+      if (out.changed) label.textContent = template.name;
+      if (out.error) {
+        rowStatus.textContent = out.error;
         rowStatus.classList.add('error');
-      } finally {
-        renameBtn.disabled = false;
       }
     });
     actions.appendChild(renameBtn);
@@ -1228,42 +1284,7 @@ function renderSellerList() {
     deleteBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      const deleted = await confirmDestructive({
-        title: 'Delete this product?',
-        message: `Delete "${template.name}"? This can't be undone.`,
-        confirmLabel: 'Delete',
-        returnFocusEl: deleteBtn,
-        restoreModalEl: sellerModalEl,
-        restoreCloseFn: closeSellerModal,
-        onConfirm: async () => {
-          try {
-            await deleteCatalogTemplate(template.templateId);
-          } catch (err) {
-            // #729: a saved-layout or landlet-version-history block (see the
-            // worker's assertCatalogTemplatesDeletable) has nothing placed to
-            // remove -- "remove those instances first" would send the seller
-            // looking for a fix that doesn't exist, so those get their own
-            // wording distinct from the generic "still in use" FK message.
-            if (err.message?.includes('referenced by a saved layout')) {
-              throw new Error("Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.");
-            } else if (err.message?.includes("referenced by a landlet's version history")) {
-              throw new Error("Used in a lándlet's past published version — it can't be deleted while that version history exists.");
-            } else if (err.message?.includes('still in use')) {
-              throw new Error('Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.');
-            }
-            throw new Error(err.message || 'Could not delete.');
-          }
-        },
-      });
-      if (!deleted) return;
-      setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
-      buildCatalogPickerButtons();
-      refreshSellerShowcase();
-      // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
-      // instead of renderSellerList() directly, so a deleted product
-      // doesn't keep showing (and staying tappable) in List view if that
-      // was the active view when this await resolved.
-      renderActiveSellerView();
+      await deleteSellerProduct(template, deleteBtn);
     });
     actions.append(deleteBtn);
 
@@ -2043,6 +2064,14 @@ function renderSellerListView() {
 // the product. sellerModalEl itself is not opened here — a caller entering
 // this from the 3D array (which can be visible with the modal closed)
 // needs to show it first.
+// A tap on More on a showroom product's card: My products opens on that product's row (what a tap
+// on the product itself used to do before #3702).
+export function openSellerSheetOnProduct(templateId) {
+  sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
+  focusSellerManageRow(templateId);
+}
+
 export function focusSellerManageRow(templateId) {
   sellerActiveView = 'manage';
   updateSellerViewToggleUI();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeCardRefusal, VERIFY_INTRO, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
+import { describeCardRefusal, VERIFY_INTRO, VERIFY_INTRO_PROOF_ONLY, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
 
 // #3565: a refusal is never Stripe's sentence alone.
 describe('describeCardRefusal', () => {
@@ -29,12 +29,18 @@ describe('describeCardRefusal', () => {
     }
   });
   it('the copy carries no internals', () => {
-    for (const text of [describeCardRefusal({ code: 'card_declined' }), VERIFY_INTRO, CARD_STEP_INTRO, ID_INSTEAD_LABEL]) {
+    for (const text of [describeCardRefusal({ code: 'card_declined' }), VERIFY_INTRO, VERIFY_INTRO_PROOF_ONLY, CARD_STEP_INTRO, ID_INSTEAD_LABEL]) {
       expect(text).not.toMatch(/#\d|docs\/|API|stripe|SetupIntent|funding/i);
     }
   });
   it('the intro gives the reason for the rule', () => {
     expect(CARD_STEP_INTRO).toContain('only issued to adults');
     expect(VERIFY_INTRO).toContain('never charged');
+    expect(VERIFY_INTRO_PROOF_ONLY).toContain('never charged');
+  });
+  it('the intro for an account that already gave its age speaks only of the proof (#3734)', () => {
+    expect(VERIFY_INTRO).toContain('confirming you are 18');
+    expect(VERIFY_INTRO_PROOF_ONLY).not.toMatch(/confirming|two things/i);
+    expect(VERIFY_INTRO_PROOF_ONLY).toContain('18 or older');
   });
 });

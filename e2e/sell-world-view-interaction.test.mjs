@@ -122,7 +122,13 @@ scan: for (const fy of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7]) {
     // Slower than a double-tap (320 ms, #3650): two clicks this close together
     // are a double-tap, which flies, so the scan would never land on a product.
     await page.waitForTimeout(420);
-    if (await page.locator('#seller-modal.visible').isVisible()) { tapped = true; break scan; }
+    // #3702: a tap on a product blooms its card; More is what opens My products on its row.
+    if (await page.locator('#seller-product-card').isVisible()) {
+      await page.click('#seller-product-card-more-btn');
+      await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+      tapped = true;
+      break scan;
+    }
   }
 }
 console.log('tapping a product after walking opened Manage (should be true):', tapped);
