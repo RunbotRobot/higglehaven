@@ -390,7 +390,9 @@ A product is rated from a purchase: one rating for each thing someone bought.
    optional), and tap "Save product rating".
 
 The product's card also offers "Rate this Product" (under "More") when that person has a purchase
-of that product they have not rated yet. If they have none, the card does not offer it.
+of that product they have not rated yet; it opens a sheet titled "Review this product". They tap a
+rating, write a comment if they want, and tap "Post review". If they have no unrated purchase of it,
+the card does not offer it.
 
 **You will see:** the rating shown under the purchase and on the product.
 
@@ -406,7 +408,6 @@ of that product they have not rated yet. If they have none, the card does not of
 #product-review-modal-title | Review this product
 #product-review-save-btn | Post review
 #product-review-cancel-btn | Cancel
-#product-review-delete-btn | Delete review
 ```
 
 ### What are the glowing orbs, and what if I hit the limit?

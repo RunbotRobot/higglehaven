@@ -22,7 +22,7 @@ const state = {
 const calls = [];
 const json = (route, status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 await page.route('**/api/purchases/mine*', (route) => json(route, 200, { purchases: Object.values(state), nextCursor: null }));
-await page.route('**/api/catalog/*/reviews*', async (route) => {
+await page.route('**/api/catalog/*/reviews**', async (route) => {
   const url = new URL(route.request().url());
   const method = route.request().method();
   const parts = url.pathname.split('/');
