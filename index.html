@@ -690,6 +690,12 @@
         <div class="modal-heading-row">
           <h2>My products</h2>
           <button id="seller-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="seller-hint" aria-label="More info about this list">?</button>
+          <!-- #3701: the Manage / List view switch lives in the leaf's header, beside its title, so
+               the controls below the header are one row. -->
+          <div id="seller-view-toggle">
+            <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
+            <button type="button" class="seller-view-btn" data-view="list">List view</button>
+          </div>
         </div>
         <div id="seller-hint" class="info-tooltip-popup" hidden>
           Products you've uploaded as a seller. For now, only a product's extensible axis and minimum length can be
@@ -701,10 +707,6 @@
              real count to show. -->
         <div id="seller-feedback-summary" hidden></div>
         <div id="seller-feedback-list" class="seller-review-list"></div>
-        <div id="seller-view-toggle">
-          <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
-          <button type="button" class="seller-view-btn" data-view="list">List view</button>
-        </div>
         <div id="seller-filter-controls">
           <input type="text" id="seller-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search your products">
           <select id="seller-category-filter" class="seller-filter-control"><option value="">All categories</option></select>

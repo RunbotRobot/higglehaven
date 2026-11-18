@@ -36,11 +36,11 @@ console.log('Settings modal opens on top of the Seller modal (should be 1):', se
 await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
-// Closing Settings should leave the Seller modal exactly as it was —
-// this fix shouldn't have disturbed its own lifecycle.
-const sellerStillOpenAfter = await page.locator('#seller-modal.visible').count();
-console.log('Seller modal still open after closing Settings on top of it (should be 1):', sellerStillOpenAfter);
+// My products is a bud leaf (#3701) and stays open behind what is opened from the bud (#3626, #3721:
+// it fades, it does not fold), so closing Settings leaves Sell exactly as it was: the list still open.
+const sellerStillOpen = await page.locator('#seller-modal.visible').count();
+console.log('My products still open behind the bud after Settings (should be 1):', sellerStillOpen);
 
-const pass = panelExpandedOverSell === 1 && settingsOpenedOverSell === 1 && sellerStillOpenAfter === 1 &&
+const pass = panelExpandedOverSell === 1 && settingsOpenedOverSell === 1 && sellerStillOpen === 1 &&
   errors.length === 0;
 await finish(browser, { pass, label: '#539: the account menu (and modals opened from it) stay reachable while Sell mode is open', errors });
