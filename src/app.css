@@ -624,6 +624,9 @@
         opacity: 0;
         transition: opacity var(--motion-fade);
       }
+      /* The assistant window sits above the hint (z 32) and is translucent, so the hint read
+         through it; the hint waits while the window is open. */
+      body:has(#assistant-chat-panel:not([hidden])) #world-hint { visibility: hidden; }
       #world-hint.visible {
         opacity: 1;
         pointer-events: auto;
@@ -910,6 +913,14 @@
       body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
         animation: bud-pulse 1.6s ease-in-out infinite;
       }
+      /* #3762: on the first open ever, the "?" leaf pulses so the instructions are found. */
+      body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] {
+        border-radius: 50%;
+        animation: bud-pulse 1.6s ease-in-out 3;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: 0 0 0 4px rgb(var(--spring-green-rgb) / 0.35); }
+      }
       /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
          stem is set in from the screen edge (the head is in the upper left, so there is little
          room on the left): 88px in, with 76px leaves either side of it, the first on the right and
@@ -1088,7 +1099,15 @@
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
         pointer-events: none;
+        /* #3761: the picture first, its one small word under it. */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        font: var(--text-xs)/1 var(--font-sans);
       }
+      body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 6; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.04s; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.08s; }
@@ -1168,16 +1187,80 @@
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
       .bud-leaf-close {
         position: absolute;
-        top: 8px;
-        right: 10px;
-        width: 36px;
-        height: 36px;
+        top: 4px;
+        right: 6px;
+        width: 44px; /* #3818: a tap target of at least 44px */
+        height: 44px;
         border: none;
         border-radius: var(--radius-round);
         background: transparent;
         color: var(--ink);
         font-size: 24px;
         line-height: 1;
+      }
+      /* The Payouts leaf (#3704): labels above inputs at one width, the date of birth as one row, two short
+         steps, and the buttons in one row at the foot of the leaf, in view whichever step shows (#3590).
+         [hidden] needs its own rule: these author display rules would otherwise beat the attribute. */
+      .payout-account, .payout-balance { display: flex; flex-direction: column; gap: var(--space-sm); margin: 0 0 var(--space-lg); }
+      .payout-balance[hidden], .payout-form[hidden], .payout-step[hidden], .payout-btn[hidden] { display: none; }
+      .bud-leaf .payout-note { margin: 0; font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.8); }
+      .bud-leaf .payout-note.error { color: var(--danger-text); }
+      .payout-form { display: flex; flex-direction: column; gap: var(--space-sm); }
+      .payout-step { display: flex; flex-direction: column; gap: var(--space-sm); }
+      .bud-leaf .payout-step-title { margin: 0; font-size: var(--text-md); font-weight: 600; }
+      .bud-leaf .payout-why { margin: 0; font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.7); }
+      .payout-field { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
+      .payout-label { font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.75); }
+      .payout-field input {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-md);
+        border: none;
+        border-radius: var(--radius-md);
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      .payout-dob { display: flex; flex-direction: column; gap: var(--space-3xs); }
+      .payout-dob-row, .payout-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
+      .payout-dob-row { grid-template-columns: 1fr 1fr 1.4fr; }
+      .payout-dob-row .payout-label { display: none; }
+      .payout-dob-row .payout-field input { text-align: center; }
+      .payout-actions {
+        position: sticky;
+        bottom: calc(-1 * var(--space-lg));
+        display: flex;
+        gap: var(--space-sm);
+        margin: 0 calc(-1 * var(--space-lg)) calc(-1 * var(--space-lg));
+        padding: var(--space-sm) var(--space-lg) var(--space-lg);
+        background: linear-gradient(to top, rgb(var(--panel-rgb) / 0.98) 70%, rgb(var(--panel-rgb) / 0));
+      }
+      .payout-btn {
+        min-height: 44px;
+        padding: 0 var(--space-2xl);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border-radius: var(--radius-pill);
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      .payout-btn.payout-primary { flex: 1 1 auto; background: rgb(var(--ink-rgb) / 0.88); border-color: transparent; color: rgb(var(--white-rgb)); }
+      .payout-btn:disabled { opacity: 0.5; }
+
+      /* #3819: with a mouse, everything the head offers shows it can be clicked (the pointer, and a
+         slight dimming under it). Touch is unchanged: the hover rule only applies to a pointer that can hover. */
+      body[data-bud="on"] #account-menu-toggle,
+      body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-modes .mode-nav-btn,
+      body[data-bud="on"] #bud-note,
+      .bud-leaf button,
+      .help-row { cursor: pointer; }
+      @media (hover: hover) {
+        body[data-bud="on"] #account-menu-panel button:hover,
+        body[data-bud="on"] #bud-modes .mode-nav-btn:hover,
+        body[data-bud="on"] #bud-note:hover,
+        .help-row:hover { filter: brightness(0.96); }
       }
       /* The "?" leaf (#3762): a short list of pages, each page a few questions that open to their steps. */
       .help-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
@@ -1898,7 +1981,7 @@
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
-        font: 10px/1 sans-serif;
+        font: 12px/1 sans-serif; /* #3818: nothing under 12px */
         pointer-events: none;
       }
       .compass-label.compass-n {
@@ -2797,6 +2880,8 @@
       #paste-btn[hidden],
       #redo-btn[hidden],
       #ungroup-item[hidden],
+      #group-item[hidden],
+      #mode-trim[hidden],
       #edit-bundle-item[hidden] {
         display: none !important;
       }
@@ -4109,7 +4194,10 @@
         box-sizing: border-box;
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: as Settings: near-opaque, blurred behind, so the world does not show through text. */
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         border-radius: 30px 6px 30px 6px;
       }
@@ -4657,6 +4745,18 @@
         min-height: 18px;
       }
       /* Same modal shell as #upload-modal. */
+      /* #3824: read by a screen reader, never drawn (the product the N key has just opened). */
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
       #settings-modal {
         position: fixed;
         inset: 0;
@@ -4705,7 +4805,12 @@
         max-height: calc(100vh - 68px);
         max-height: calc(100dvh - 68px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: text sits on a card the world cannot show through (the corner of the old
+           gradient was 90% white, so the avatar's legs and the wall read through the labels):
+           near-opaque at both ends, and blurred behind it for the rest. */
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         /* The leaf's own shape (#3652), as the bud's leaves have it. */
         border-radius: 30px 6px 30px 6px;
@@ -6809,27 +6914,33 @@
          bootstrap() has resolved a landlet to build on, whenever this
          builder (see ensureBuilderIdentity in src/main.js) doesn't
          already own one. */
+      /* #3811 (part of #3654, the bud): the claim map is one large leaf, not a modal: a soft
+         sheet from the head's corner with no scrim over the world (the same shape as
+         .bud-leaf, only wider because the map wants the room; the elements and ids stay so
+         what leans on them, runClaimFlow and the claim e2e, still works). It is still the
+         mandatory first step for a builder with no lándlet (src/claim/flow.js), so it has no
+         way to be put away except its close button. */
       #claim-modal {
         position: fixed;
-        inset: 0;
+        top: 76px;
+        left: 12px;
         z-index: 30;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(440px, calc(100vw - 24px));
       }
       #claim-modal.visible {
-        display: flex;
+        display: block;
       }
       #claim-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 440px;
-        max-height: 90vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);

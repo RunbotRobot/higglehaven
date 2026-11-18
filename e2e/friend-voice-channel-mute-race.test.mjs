@@ -228,7 +228,12 @@ await pageB.evaluate(() => window.__testTeleportShopAvatar(10000, 0, 0));
 await pageA.waitForTimeout(2200);
 await pageB.waitForTimeout(2200);
 
-async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
+// #3835: this used to give up after 20 s, which on a loaded CI shard is one stalled 8 s negotiation
+// (src/shop/voiceChat.js's VOICE_NEGOTIATION_TIMEOUT_MS watchdog) plus one slow retry: the peer was
+// still being recreated, in state "new", when the clock ran out. 60 s allows several retry cycles
+// and still fails on a real hang. On a timeout it prints both sides, so a failure can be traced
+// instead of guessed at.
+async function waitForConnected(page, expectedBuilderId, timeoutMs = 60000) {
   const start = Date.now();
   let peers = null;
   while (Date.now() - start < timeoutMs) {
@@ -237,7 +242,11 @@ async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
     if (entry?.connectionState === 'connected') return entry;
     await page.waitForTimeout(300);
   }
-  console.log('waitForConnected timed out, last seen peers:', peers);
+  console.log(`waitForConnected timed out after ${timeoutMs} ms, last seen peers:`, peers);
+  for (const [name, p] of [['A', pageA], ['B', pageB]]) {
+    const state = await p.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, peers: window.__shopVoicePeers })).catch((e) => ({ error: e.message }));
+    console.log(`  page ${name}:`, JSON.stringify(state));
+  }
   return null;
 }
 

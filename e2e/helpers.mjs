@@ -779,6 +779,16 @@ export async function openAddProductLeaf(page, way = 'upload') {
   }
 }
 
+// #3704 (Sell in the bud, 6/6, slice 1): the payout account, balance and Cash out are the bud's
+// Payouts leaf, not the bottom of Settings > Sell. Replaces
+// `#settings-btn` then `.settings-tab-btn[data-section="sell"]` for anything about payouts.
+export async function openPayoutsLeaf(page) {
+  const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!expanded) await openAccountMenu(page);
+  await page.click('#bud-petal-sell-payouts');
+  await page.waitForSelector('#bud-leaf-payouts', { timeout: 5000 });
+}
+
 export async function openAccountMenu(page) {
   // #3650: a toggle click can be lost while the page is still re-laying out after a mode change
   // (saved-layout-preview failed twice on CI at this wait, never locally), and a panel that is

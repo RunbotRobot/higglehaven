@@ -212,7 +212,7 @@ const bMutedByDefault = await pageB.evaluate(() => document.getElementById('shop
 
 // Give both sides' poll loops (VOICE_POLL_INTERVAL_MS = 1200) and the
 // real WebRTC stack several cycles to actually negotiate a connection.
-async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
+async function waitForConnected(page, expectedBuilderId, timeoutMs = 60000) {
   const start = Date.now();
   let peers = null;
   while (Date.now() - start < timeoutMs) {

@@ -3,7 +3,7 @@
 // a petal runs an action or opens a leaf. This module is the small contract every other
 // leaf of that work builds on (docs/DESIGN.md, "The bud"):
 //
-//   registerBudPetals(mode, [{ id, label, run, domId? }])  one definition per mode; a mode with none has no bud
+//   registerBudPetals(mode, [{ id, label, name?, run, domId? }])  one definition per mode; a mode with none has no bud
 //   addBudPetals(mode, [petal])                    adds petals to a mode without replacing the others
 //                                                  (#3690: each Build slice adds its own); a petal with
 //                                                  `element` adopts that element instead of making a
@@ -58,7 +58,7 @@ let leafId = null;
 const toggle = () => document.getElementById('account-menu-toggle');
 const panel = () => document.getElementById('account-menu-panel');
 
-const copyPetal = (p) => ({ id: p.id, label: p.label, run: p.run, domId: p.domId, element: p.element, visible: p.visible });
+const copyPetal = (p) => ({ id: p.id, label: p.label, name: p.name, run: p.run, domId: p.domId, element: p.element, visible: p.visible });
 
 function refuse(message) {
   if (import.meta.env?.DEV) throw new Error(`bud: ${message}`);
@@ -205,6 +205,8 @@ function syncBud() {
         btn.className = 'bud-petal';
         btn.dataset.budMode = petalMode;
         btn.textContent = petal.label;
+        // A petal whose word is a symbol ("?") names itself for a screen reader (#3818).
+        if (petal.name) btn.setAttribute('aria-label', petal.name);
         btn.addEventListener('click', () => {
           foldBud();
           petal.run();
@@ -236,7 +238,21 @@ function placeModePetals(inBud, mode) {
     if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
+    if (inBud) decoratePetal(btn);
   }
+}
+
+// #3761 (part of #3759): each of the three mode petals is a picture first with its one small word
+// under it, like every leaf. The icon goes inside the petal's upright label, so it stays upright
+// with the word however the petal is turned. Once per button; the word is the label's own text.
+function decoratePetal(btn) {
+  const label = btn.querySelector('.mode-nav-label');
+  if (!label || label.querySelector('.bud-icon')) return;
+  const icon = document.createElement('span');
+  icon.className = 'bud-icon';
+  icon.dataset.icon = iconKeyFor(btn);
+  icon.appendChild(svgIcon(icon.dataset.icon));
+  label.prepend(icon);
 }
 
 
@@ -326,6 +342,7 @@ function modesRing() {
   menuWord.className = 'mode-nav-label';
   menuWord.textContent = 'Menu';
   menuBtn.appendChild(menuWord);
+  decoratePetal(menuBtn);
   ring.appendChild(menuBtn);
   // Another place: the page reloads and keeps the ring out (beginBudModeSwitch). The place you are
   // already in: nothing to load, so its petal opens that place's own menu (#3760); "Menu" opens the
@@ -371,6 +388,7 @@ export function closeLeaf() {
 }
 
 export function openLeaf({ id, title, render, onClose = null }) {
+  if (id === 'help') document.body.removeAttribute('data-bud-teach-help');
   closeLeaf();
   leafOnClose = onClose;
   foldBud();
@@ -378,6 +396,7 @@ export function openLeaf({ id, title, render, onClose = null }) {
   leaf.className = 'bud-leaf';
   leaf.id = `bud-leaf-${id}`;
   leaf.setAttribute('role', 'dialog');
+  leaf.setAttribute('aria-modal', 'true'); // #3818: with Tab kept inside it (below), nothing behind is reached
   leaf.setAttribute('aria-labelledby', `${leaf.id}-title`);
   const close = document.createElement('button');
   close.type = 'button';
@@ -408,6 +427,7 @@ export function currentLeafId() {
 
 function showMarks() {
   document.body.toggleAttribute('data-bud-mark', marks.size > 0);
+  nameHead();
 }
 
 export function setBudMark(key) {
@@ -422,9 +442,22 @@ export function clearBudMark(key) {
 
 // #3653: while a word is set the bud wears it (the last one set), whether or not the bud has
 // been opened before; with none set the default word and its first-visit rule apply again.
+// #3818: the head's name for a screen reader says what the sight shows: its word when it wears one
+// that is not a door (a door has its own button) and that something new is waiting.
+function nameHead() {
+  const head = toggle();
+  if (!head) return;
+  const latest = [...words.values()].pop();
+  const parts = ['Account menu'];
+  if (latest && !latest.open) parts.push(latest.label || latest.text);
+  if (marks.size > 0) parts.push('something new');
+  head.setAttribute('aria-label', parts.join(', '));
+}
+
 function showWord() {
   const wordEl = toggle()?.querySelector('.bud-word');
   const latest = [...words.values()].pop();
+  nameHead();
   if (wordEl) wordEl.textContent = latest ? latest.text : MENU_WORD;
   document.body.toggleAttribute('data-bud-word', words.size > 0);
   showNote(latest && latest.open ? latest : null);
@@ -486,6 +519,7 @@ function learned() {
 function markLearned() {
   try { localStorage.setItem(FIRST_OPEN_KEY, '1'); } catch { /* the word just stays */ }
   document.body.removeAttribute('data-bud-new');
+  document.body.removeAttribute('data-bud-teach-help');
 }
 
 if (typeof document !== 'undefined') {
@@ -534,8 +568,36 @@ if (typeof document !== 'undefined') {
     scheduleStem();
   }
   if (!learned()) document.body.setAttribute('data-bud-new', '');
-  toggle()?.addEventListener('click', () => {
+  toggle()?.setAttribute('aria-controls', 'account-menu-panel');
+  toggle()?.addEventListener('click', (event) => {
     if (panel()?.classList.contains('expanded')) markLearned();
+    // #3762: the first time the bud is opened ever, the "?" leaf pulses so a newcomer sees where the
+    // instructions are (the bud's own "Menu" word has gone while it is open). It stops when "?" is
+    // opened or the bud is closed, and is not shown again once learned. The menu's own click handler
+    // opens the panel after this one runs, hence the deferred check.
+    else if (!learned()) setTimeout(() => { if (panel()?.classList.contains('expanded') && !learned()) document.body.setAttribute('data-bud-teach-help', ''); }, 0);
+    // #3818: opened from the keyboard (Enter or Space gives a click with no pointer), focus goes
+    // into the menu, to its first leaf, so Tab reads it in order; a tap leaves focus where it was.
+    // Checked a frame later, for the same reason: the menu's own handler opens it after this one.
+    if (event.detail === 0) {
+      requestAnimationFrame(() => {
+        if (!panel()?.classList.contains('expanded')) return;
+        const first = [...panel().querySelectorAll('button')].find((b) => !b.hidden && b.getBoundingClientRect().width > 0);
+        first?.focus({ preventScroll: true });
+      });
+    }
+  });
+  // #3818: while a leaf is open Tab stays inside it: from its last control to its first, and back.
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab' || !leafEl) return;
+    const items = [...leafEl.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && !el.hidden && el.getBoundingClientRect().width > 0);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const here = document.activeElement;
+    if (event.shiftKey && (here === first || !leafEl.contains(here))) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && (here === last || !leafEl.contains(here))) { event.preventDefault(); first.focus(); }
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;

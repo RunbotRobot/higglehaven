@@ -7,7 +7,7 @@
 // render the way every sibling Settings-tab renderer already does. Same
 // "delay one endpoint, switch tabs during the gap" technique as
 // settings-tab-switch-race.test.mjs (#905) and seller-modal-reopen-race.test.mjs.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openPayoutsLeaf, finish } from './helpers.mjs';
 
 const LABEL = 'Sell Settings Tab Race Tester';
 
@@ -47,34 +47,19 @@ await page.route('**/api/sellers/me/payouts', async (route) => {
   });
 });
 
-await openAccountMenu(page);
-await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('.settings-tab-btn[data-section="sell"]');
+// #3704: the payout account is the bud's Payouts leaf now, so the race is "close the leaf while its
+// account fetch is still in flight": the superseded render must not paint into anything.
+await openPayoutsLeaf(page);
 await page.waitForTimeout(200);
-
-await page.click('.settings-tab-btn[data-section="general"]');
-await page.waitForTimeout(200);
-const generalTabHtmlRightAfterSwitch = await page.locator('#settings-section').innerHTML();
-console.log('General tab content right after switching away (should not yet mention Payout Account/Cash out):',
-  /Payout Account|Cash out/.test(generalTabHtmlRightAfterSwitch) ? 'MENTIONS THEM' : 'clean');
-
-// Wait past the delayed GET's own delay so the superseded Sell-tab render
-// actually resolves and (pre-fix) would have appended the Payouts field --
-// and, before that, the Payout Account field itself -- onto this tab.
-await page.waitForTimeout(2500);
-
-const stillOnGeneralTab = await page.locator('.settings-tab-btn[data-section="general"]').evaluate((el) => el.classList.contains('active'));
-console.log('still showing the General tab (should be true -- no tab-switch happened on our own):', stillOnGeneralTab);
-
-const generalTabHtmlAfterDelay = await page.locator('#settings-section').innerHTML();
-const leaked = /Payout Account|Cash out|Set up payout account/.test(generalTabHtmlAfterDelay);
-console.log('General tab content after the delayed stripe-account fetch resolves (should still be clean, not leaked):', leaked ? 'LEAKED' : 'clean');
+await page.click('#bud-leaf-payouts .bud-leaf-close');
+await page.waitForSelector('#bud-leaf-payouts', { state: 'detached', timeout: 5000 });
+await page.waitForTimeout(2800);
+const leaked = await page.evaluate(() => /Payout Account|Cash out|Set up payout account/.test(document.body.innerText));
+console.log('After the delayed stripe-account fetch resolves, nothing on screen mentions payouts (should be clean):', leaked ? 'LEAKED' : 'clean');
+const leafBack = await page.locator('#bud-leaf-payouts').count();
+console.log('Closed leaf did not come back (should be 0):', leafBack);
 
 await page.unroute('**/api/sellers/me/stripe-account');
-
-// Switching back to Sell afterward should still work normally -- the fix
-// only skips a superseded render, not a fresh, current one.
 await page.route('**/api/sellers/me/stripe-account', async (route) => {
   if (route.request().method() !== 'GET') {
     await route.continue();
@@ -86,26 +71,14 @@ await page.route('**/api/sellers/me/stripe-account', async (route) => {
     body: JSON.stringify({ configured: true, connected: true, status: 'complete', requirementsCurrentlyDue: [], updatedAt: new Date().toISOString() }),
   });
 });
-await page.click('.settings-tab-btn[data-section="sell"]');
-// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
-// arg, options) -- a bare (fn, { timeout }) call puts the options object in
-// the `arg` slot instead, so `options` stayed undefined and the real
-// applied timeout was always Playwright's actual default (30000ms), never
-// the smaller number written here. The explicit `null` arg reaches the
-// options slot, and the timeout itself is widened to 60000ms for real
-// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
-// wait.
+await openPayoutsLeaf(page);
 await page.waitForFunction(
-  () => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Cash out')),
+  () => [...document.querySelectorAll('#bud-leaf-payouts button')].some((b) => b.textContent.includes('Cash out')),
   null,
   { timeout: 60000 },
 );
-const sellTabWorksNormally = await page.locator('button', { hasText: 'Cash out' }).count();
-console.log('Sell tab still renders the Payouts field normally on a fresh, non-superseded switch (should be 1):', sellTabWorksNormally);
+const sellTabWorksNormally = await page.locator('#bud-leaf-payouts button', { hasText: 'Cash out' }).count();
+console.log('A fresh, non-superseded open still renders the balance and Cash out (should be 1):', sellTabWorksNormally);
 
-const pass = !/Payout Account|Cash out/.test(generalTabHtmlRightAfterSwitch) &&
-  stillOnGeneralTab &&
-  !leaked &&
-  sellTabWorksNormally === 1 &&
-  errors.length === 0;
-await finish(browser, { pass, label: '#1732: a Settings Sell-tab render superseded mid-load does not leak the Payout Account/Payouts fields onto another tab', errors });
+const pass = !leaked && leafBack === 0 && sellTabWorksNormally === 1 && errors.length === 0;
+await finish(browser, { pass, label: '#1732/#3704: a Payouts leaf closed mid-load does not leak the payout fields onto the world', errors });

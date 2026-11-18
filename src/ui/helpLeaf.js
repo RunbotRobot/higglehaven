@@ -117,5 +117,5 @@ export function openHelpLeaf() {
 // The petal is registered here (a module that imports the bud cannot be imported by it).
 if (typeof document !== 'undefined') {
   // #3760: "?" is a member of the general menu, registered once, the same in every mode.
-  addBudPetals('general', [{ id: 'help', label: '?', run: openHelpLeaf }]);
+  addBudPetals('general', [{ id: 'help', label: '?', name: 'Help', run: openHelpLeaf }]);
 }

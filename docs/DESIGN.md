@@ -380,6 +380,10 @@ by touching the world. The module is `src/ui/bud.js`:
   grows from the top and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- The three mode petals of the ring (#3761) are a picture first with their one small word under it, like every
+  leaf: a shop front, a hammer and a price tag, drawn in the same line weight (src/ui/budIcons.js, by the
+  petal's `data-mode`). The picture sits in the petal's upright label, so it stays upright with the word
+  however the petal is turned.
 - The compass is not on the world (#3772). It sits in the open menu's head row, right of the lándlet's
   sign (or alone in Sell, which has no sign), in every mode, and is not drawn while the menu is shut.
   Every leaf (Settings, My products, Friends and the rest) runs to the same margin on the right as on

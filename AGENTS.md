@@ -66,7 +66,17 @@ Steps: `walk:<forward|back|left|right>[:ms]`,
 the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
 looks at the sky; `look` drags the page and does not turn the camera in Shop),
 `look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
-`settings`, `idle`, `wait:<ms>`, `shot[:name]`, `stats`, `cover`. Read screenshots back
+`land` (every Shop arrival starts in flight 80 m up looking down, by design, and walking
+forward there descends; put `land` first to walk on the ground),
+`menu` (open the flower's general menu if it is closed),
+`petal:<shop|build|sell>`, `leaf:<notices|friends|purchases|settings|help>` (these find the
+control by what it is, not by where it sits; prefer them to `tap:<x>:<y>`), `settings`,
+`idle`, `wait:<ms>`, `shot[:name]`, `stats`, `cover`, and
+`burst:<name>:<count>:<ms>` (stills a few hundred ms apart; add `:burst:<name>:<count>:<ms>`
+to the end of any step to take them while it runs, as in
+`walk:forward:2000:burst:walk:4:500`, so legs moving or a leaf unfolding can be read from
+`NN-name-1.png`, `NN-name-2.png`, ...). A step whose control cannot be found fails within
+40 s with one line naming the step. Read screenshots back
 with the Read tool. Against a local `wrangler dev`, add
 `--url http://127.0.0.1:8787 --login local`.
 
@@ -88,8 +98,11 @@ Rules of conduct on the live site:
   your own account is for looking around). See "The fleet has a lándlet of
   its own in the live world" under "Standing owner decisions" for what it
   is for and what it must never become. (Claimed 2026-11-16 on the
-  owner's typed instruction, #3431. It starts empty. Until #3597's guards
-  are in, place nothing there that a shopper could buy.)
+  owner's typed instruction, #3431. It starts empty. #3597's guards are in
+  (a fleet account cannot redeem, bid or transfer higgles: #3604; no
+  featured, spawn or ranking treatment: #3638, #3661), so real catalog
+  products a shopper can buy may stand there; its sign (#3597 piece 4) is
+  the one piece still open.)
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.

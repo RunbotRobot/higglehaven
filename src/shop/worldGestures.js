@@ -54,12 +54,15 @@ export function createWorldGestures(handlers) {
     else handlers.onLook(dx, dy);
   }
 
-  function down(id, x, y, now) {
+  // `forcedRole` is for a pointer that has no halves: a computer's mouse (#3831) has one
+  // button and one meaning, so a drag with it always looks, wherever on the screen it starts.
+  // It also never counts toward a double-tap (a mouse's double-click is not "fly").
+  function down(id, x, y, now, forcedRole = null) {
     if (fingers.has(id)) return;
     // The half it landed on decides the job; a second finger on a half that already has
     // one does nothing (it is not a walker's helper and not a tap).
-    const wanted = x < handlers.splitX() ? 'walk' : 'look';
-    const finger = { x0: x, y0: y, role: roleHolder(wanted) ? 'ignored' : wanted, active: false, alone: fingers.size === 0, downAt: now };
+    const wanted = forcedRole || (x < handlers.splitX() ? 'walk' : 'look');
+    const finger = { x0: x, y0: y, role: roleHolder(wanted) ? 'ignored' : wanted, active: false, alone: fingers.size === 0 && !forcedRole, downAt: now };
     if (fingers.size > 0) {
       // Two fingers are never a tap, whatever they do.
       for (const other of fingers.values()) other.alone = false;

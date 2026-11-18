@@ -9,6 +9,17 @@ export const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, isMobil
 export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
+// #3817: steps named for what a person does with the flower, so a look does not depend on
+// where a control happens to sit this week. The selector is the leaf's button in the open menu.
+export const LEAF_BUTTONS = {
+  notices: '#notifications-btn',
+  friends: '#friends-btn',
+  purchases: '#my-purchases-btn',
+  settings: '#settings-btn',
+  help: '.bud-petal[id$="-help"]',
+};
+export const LEAVES = Object.keys(LEAF_BUTTONS);
+export const BURST_MAX_COUNT = 12;
 
 // Drag direction for a walk (a unit vector scaled by the caller)
 // (screen y grows downward, so "forward" is up).
@@ -122,7 +133,29 @@ export function coverTable(rows) {
 // A step is `command` or `command:arg:arg`. Returns { command, args } or throws
 // one plain line naming what is wrong.
 export function parseStep(token) {
-  const [command, ...args] = String(token).split(':');
+  const [command, ...allArgs] = String(token).split(':');
+  // #3817: any step may end in `:burst:<name>:<count>:<ms>`, which takes <count> stills <ms> apart
+  // while the step runs (a held walk, a tap's animation), so motion can be seen.
+  let args = allArgs;
+  let burst = null;
+  const burstAt = command === 'burst' ? -1 : allArgs.indexOf('burst');
+  if (burstAt >= 0) {
+    args = allArgs.slice(0, burstAt);
+    burst = parseBurst(token, allArgs.slice(burstAt + 1));
+  }
+  const parsed = parseStepWithoutBurst(token, command, args);
+  return burst ? { ...parsed, burst } : parsed;
+}
+
+function parseBurst(token, parts) {
+  const [name, count, ms] = parts;
+  if (parts.length !== 3 || !name) throw new Error(`step "${token}": burst needs a name, a count and milliseconds apart (burst:walk:4:500)`);
+  if (!(Number.isInteger(Number(count)) && Number(count) >= 1 && Number(count) <= BURST_MAX_COUNT)) throw new Error(`step "${token}": burst count must be a whole number from 1 to ${BURST_MAX_COUNT}`);
+  if (!(Number(ms) >= 50 && Number(ms) <= 5000)) throw new Error(`step "${token}": burst milliseconds apart must be from 50 to 5000`);
+  return { name, count: Number(count), ms: Number(ms) };
+}
+
+function parseStepWithoutBurst(token, command, args) {
   const need = (n) => {
     if (args.length < n) throw new Error(`step "${token}": "${command}" needs ${n} argument(s)`);
   };
@@ -155,8 +188,27 @@ export function parseStep(token) {
       need(1);
       if (!(Number(args[0]) >= 0)) throw new Error(`step "${token}": milliseconds must be a number`);
       return { command, args: [Number(args[0])] };
+    case 'key':
+      // key:KeyN, key:Escape, key:Shift+KeyN: one Playwright key name.
+      need(1);
+      if (!/^[A-Za-z0-9+]+$/.test(args[0])) throw new Error(`step "${token}": key needs a key name such as KeyN, Escape or Shift+KeyN`);
+      return { command, args: [args[0]] };
     case 'shot':
       return { command, args: [args[0] || ''] };
+    case 'burst': {
+      const { name, count, ms } = parseBurst(token, args);
+      return { command, args: [name, count, ms] };
+    }
+    case 'petal':
+      need(1);
+      if (!MODES.includes(args[0])) throw new Error(`step "${token}": petal must be one of ${MODES.join(', ')}`);
+      return { command, args: [args[0]] };
+    case 'leaf':
+      need(1);
+      if (!LEAVES.includes(args[0])) throw new Error(`step "${token}": leaf must be one of ${LEAVES.join(', ')}`);
+      return { command, args: [args[0]] };
+    case 'menu':
+    case 'land':
     case 'fly':
     case 'settings':
     case 'idle':
@@ -165,7 +217,7 @@ export function parseStep(token) {
     case 'pos':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats, cover, pos)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, key, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos)`);
   }
 }
 

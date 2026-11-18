@@ -16,7 +16,9 @@
 //   - tapping the neighbouring product moves the card to it, and an out-of-stock
 //     product says so and shows no Buy petal;
 //   - Escape and tapping the world fold the card away, and the old product-preview
-//     modal is gone.
+//     modal is gone;
+//   - #3824: N and Shift+N step through the nearby products without touching, announce each,
+//     and put keyboard focus on the card.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -310,5 +312,35 @@ if (emptyPoint) {
   await page.waitForTimeout(400);
   check(!(await cardOpen()), 'tapping the world folds the card away');
 }
+
+// #3824: without touching the world. N opens the card of the nearest product, N again the next
+// (wrapping), Shift+N goes back; each is announced by name, the card takes keyboard focus, and
+// Escape folds it and gives focus back to the page.
+await page.mouse.click(VIEWPORT.width * 0.5, VIEWPORT.height * 0.1);
+await page.waitForTimeout(300);
+const nameNow = async () => (await page.textContent('#product-card-name')).trim();
+const statusNow = async () => (await page.textContent('#shop-nearby-status')).trim();
+const focusInCard = () => page.evaluate(() => document.getElementById('product-card').contains(document.activeElement));
+await page.keyboard.press('KeyN');
+await page.waitForFunction(() => !document.getElementById('product-card').hidden, null, { timeout: 5000 });
+const firstByKey = await nameNow();
+check(['Card Crate', 'Card Crate Sold Out'].includes(firstByKey), `N opens a nearby product's card (${firstByKey})`);
+check(/^Card Crate.*, 1 of 2 nearby$/.test(await statusNow()), `the product is announced with its place in the list (${await statusNow()})`);
+check(await focusInCard(), 'keyboard focus is on the card');
+await page.keyboard.press('KeyN');
+await page.waitForTimeout(300);
+const secondByKey = await nameNow();
+check(secondByKey !== firstByKey && ['Card Crate', 'Card Crate Sold Out'].includes(secondByKey), `N again opens the next product (${secondByKey})`);
+check(/, 2 of 2 nearby$/.test(await statusNow()), 'and says it is the second of two');
+await page.keyboard.press('KeyN');
+await page.waitForTimeout(300);
+check((await nameNow()) === firstByKey, 'N wraps back round to the nearest');
+await page.keyboard.press('Shift+KeyN');
+await page.waitForTimeout(300);
+check((await nameNow()) === secondByKey, 'Shift+N steps back');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+check(!(await cardOpen()), 'Escape folds the card opened by key');
+check(!(await focusInCard()), 'and focus is no longer inside it');
 
 await finish(browser, { pass: pass && errors.length === 0, label: '#3651: a tapped product\'s card blooms beside it, follows it, offers Buy only when it can, and folds away', errors });

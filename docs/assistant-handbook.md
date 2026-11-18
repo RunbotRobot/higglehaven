@@ -279,6 +279,11 @@ opens on the general menu, and that menu is the same in all three places.
    on each side.
 3. Lift your finger and you stop. There are no buttons to find: the world itself is
    the control.
+4. On a computer, use the keyboard: W, A, S and D (or the arrow keys) walk, Q and E
+   turn, R looks up and F looks down, and double-pressing the space bar takes off or
+   comes back down (the flying entry says more). The mouse wheel zooms in and out.
+   With a mouse you can also hold the left button on the world and drag to look
+   around.
 
 **You will see:** your bird walks or turns as you drag, and the view follows. Every
 avatar has a simple motion of its own for walking, standing and flying: the
@@ -300,14 +305,14 @@ animation you have applied (see the avatar entry below) replaces that motion.
 ### How do I fly, go up and come back down?
 
 1. You start each visit in the air. To come down, double-tap the world: two quick
-   taps in the same place.
+   taps in the same place. On a keyboard, press T once instead.
 2. While you are flying, you go where the view points. To climb, drag on the
    right half of the screen to look up, and drag on the left half to walk
    forward. To descend, look down and walk forward. A level view flies level,
    and when you stop walking you hold your height. On a keyboard, R looks up and
    F looks down.
 3. Walk and look by dragging, as usual.
-4. To go up again from the ground, double-tap the world again.
+4. To go up again from the ground, double-tap the world again, or press T.
 
 **You will see:** the bird tips its nose up or down with your view, and a
 double-tap switches between flying and standing. At the top of the sky, or as low
@@ -351,6 +356,9 @@ ground.
    "Buy" button. "More" opens "Rate this Product" and "Return Policy".
 4. Tap anywhere else in the world, or the cross at the top right of the card, when
    you are done.
+5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
+   of the nearest product, and N again for the next nearest; Shift and N go back. The
+   product's name is read out, and Tab reaches the card's buttons. Escape closes it.
 
 **You will see:** a small card next to the product, with the world still moving
 behind it.

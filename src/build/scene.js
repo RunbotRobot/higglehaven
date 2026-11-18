@@ -3533,6 +3533,8 @@ export function updateSelectionUI() {
   modeRotateBtn.disabled = count !== 1 && !isSingleBundleSelection();
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
+  // #3574 -- a mode this item cannot use is left out, not greyed (the "gone when not needed" rule).
+  modeTrimBtn.hidden = modeTrimBtn.disabled;
   // Community Sign (docs/API.md's "Community signs") only makes sense for
   // one specific placed object at a time, same reasoning as Trim above —
   // disabled (not hidden) for a multi-item selection so the button row
@@ -3566,6 +3568,8 @@ export function updateSelectionUI() {
   // of that group is in the selection too, per selectOnly/toggleInSelection's
   // own expansion above, so this always targets a whole group).
   groupBtn.disabled = count < 2;
+  // #3574 -- nothing to bundle with one item: leave the control out.
+  groupBtn.hidden = groupBtn.disabled;
   ungroupBtn.disabled = ![...selectedMeshes].some((mesh) => mesh.userData.groupId);
   // #3574 -- nothing to unbundle in the selection: leave the control out.
   ungroupBtn.hidden = ungroupBtn.disabled;

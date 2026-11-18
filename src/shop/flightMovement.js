@@ -66,7 +66,7 @@ import {
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
 import { keepPairInside } from './rigidCameraPair.js';
-import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import { verticalRateM_S, horizontalForwardScale, bodyTiltOffsetRad, FLIGHT_BODY_TILT_RANGE_RAD } from './flightPitch.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
@@ -109,7 +109,7 @@ import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // calendar-event trigger check now live in src/shop/worldSprites.js.
 import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
 // #3651: the tapped product's card follows the product, after the camera has moved.
-import { updateProductCard } from './productCard.js';
+import { updateProductCard, stepToNearbyProduct } from './productCard.js';
 
 // #3293: Shop's world as the movement core's default world. Getters, not
 // snapshots: shopLandlets/shopWorldRadiusM are live bindings that other
@@ -499,26 +499,37 @@ function bindWorldGestures(canvas) {
   // slow frame) between the two taps of a double-tap must not make them look slower than they
   // were (seen live: a double-tap dropped while a 400 ms task sat between its taps).
   const eventTime = (event) => (event.timeStamp > 0 ? event.timeStamp : performance.now());
+  // #3831: a person's mouse looks around: hold the left button on the world and drag (a click
+  // that does not move is still a click, and selects). One button, one meaning, so no halves.
+  // (The automated browsers above already count a mouse as a finger with halves; they keep that.)
+  const mouseLooking = (event) => event.pointerType === 'mouse' && navigator.webdriver !== true;
   canvas.addEventListener('pointerdown', (event) => {
-    if (!shopActive || !touching(event)) return;
+    if (!shopActive) return;
+    if (mouseLooking(event)) {
+      if (event.button !== 0) return;
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
+      worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event), 'look');
+      return;
+    }
+    if (!touching(event)) return;
     try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
     worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event));
   });
   canvas.addEventListener('pointermove', (event) => {
-    if (!shopActive || !touching(event)) return;
+    if (!shopActive || !(touching(event) || mouseLooking(event))) return;
     worldGestures.move(event.pointerId, event.clientX, event.clientY);
   });
   canvas.addEventListener('pointerup', (event) => {
-    if (!touching(event)) return;
+    if (!(touching(event) || mouseLooking(event))) return;
     worldGestures.up(event.pointerId, eventTime(event), event.clientX, event.clientY);
   });
   canvas.addEventListener('pointercancel', (event) => {
-    if (!touching(event)) return;
+    if (!(touching(event) || mouseLooking(event))) return;
     worldGestures.cancel();
   });
 }
-// Flight (docs/SPEC.md §2): a double-tap on the world, or double-press space
-// on desktop, toggles takeoff/landing (toggleShopFlight). Climbing and
+// Flight (docs/SPEC.md §2): a double-tap on the world, double-press space
+// on desktop, or one press of T, toggles takeoff/landing (toggleShopFlight). Climbing and
 // descending while flying is steered by the view (#3769, see updateShopFlight
 // and flightPitch.js); there are no up/down buttons.
 
@@ -591,6 +602,24 @@ window.addEventListener('keydown', (event) => {
   } else {
     shopLastSpacePressAt = now;
   }
+});
+
+// #3823: one press of T takes off or lands, for anyone who cannot double-tap or
+// double-press precisely (found by the accessibility pass, #3818). The same toggle the
+// double-tap and the double-press of Space call, so a request made while a take-off or
+// landing is under way is ignored in the same way (see toggleShopFlight).
+window.addEventListener('keydown', (event) => {
+  if (!shopActive || !isFlightToggleKeyEvent(event)) return;
+  event.preventDefault();
+  toggleShopFlight();
+});
+
+// #3824: N opens the card of the next nearest product (Shift+N the previous), for anyone who
+// cannot tap a product in the world; the card is announced and takes keyboard focus.
+window.addEventListener('keydown', (event) => {
+  if (!shopActive || !isNearbyProductKeyEvent(event)) return;
+  event.preventDefault();
+  stepToNearbyProduct(event.shiftKey ? -1 : 1);
 });
 
 // Zoom: narrows/widens the camera's own field of view rather than moving
