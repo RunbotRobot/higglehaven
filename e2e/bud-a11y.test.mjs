@@ -64,7 +64,7 @@ await goToMode(page, 'shop');
 await page.waitForSelector('body[data-mode="shop"][data-bud="on"]', { timeout: 30000 });
 await page.click('#account-menu-toggle');
 await page.waitForTimeout(600);
-await page.click('#bud-petal-shop-help');
+await page.click('#bud-petal-general-help');
 await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 await page.waitForTimeout(500);
 check((await page.getAttribute('#bud-leaf-help', 'aria-modal')) === 'true', 'a leaf is modal');
