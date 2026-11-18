@@ -37,7 +37,7 @@ const open = {
   build: await shown('#bud-modes .mode-nav-btn[data-mode="build"]'),
   sell: await shown('#bud-modes .mode-nav-btn[data-mode="sell"]'),
   shopPetal: await shown('#bud-modes .mode-nav-btn[data-mode="shop"]'),
-  help: await shown('#bud-petal-shop-help'),
+  help: await shown('#bud-petal-general-help'),
 };
 console.log('unfolded:', JSON.stringify(open));
 
@@ -74,7 +74,7 @@ const wordAfterOpen = await shown('#account-menu-toggle .bud-word');
 
 // A leaf: "?" (Help).
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-shop-help');
+await page.click('#bud-petal-general-help');
 await page.waitForSelector('#bud-leaf-help');
 await page.waitForTimeout(500);
 const leaf = await box('#bud-leaf-help');
@@ -90,7 +90,7 @@ console.log('leaf:', JSON.stringify(leafInfo));
 await page.keyboard.press('Escape');
 const leafClosedByEscape = (await page.locator('#bud-leaf-help').count()) === 0;
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-shop-help');
+await page.click('#bud-petal-general-help');
 await page.click('#bud-leaf-help .bud-leaf-close');
 const leafClosedByX = (await page.locator('#bud-leaf-help').count()) === 0;
 

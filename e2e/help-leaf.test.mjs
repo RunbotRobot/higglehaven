@@ -68,7 +68,7 @@ perMode.sell = await page.locator('#account-menu-panel button:visible', { hasTex
 await page.keyboard.press('Escape');
 await goToMode(page, 'build', { openProducts: false });
 await page.waitForSelector('body[data-mode="build"][data-bud="on"]', { timeout: 30000 });
-perMode.build = (await page.locator('#bud-petal-build-help').count()) === 1;
+perMode.build = (await page.locator('#bud-petal-general-help').count()) === 1 && !(await page.locator('#bud-petal-build-help').count()); // #3760: one general petal, registered once
 console.log('"?" petal in Build and Sell:', JSON.stringify(perMode));
 
 const pass = JSON.stringify(rows) === JSON.stringify(['How to move', 'How higglehaven works', 'Shopping', 'Building', 'Selling', 'Tips', 'Ask an assistant'])

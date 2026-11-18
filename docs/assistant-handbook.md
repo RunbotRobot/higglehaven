@@ -235,7 +235,7 @@ everything else.
 .mode-nav-btn[data-mode="shop"] | Shop
 .mode-nav-btn[data-mode="build"] | Build
 .mode-nav-btn[data-mode="sell"] | Sell
-#bud-petal-shop-help | ?
+#bud-petal-general-help | ?
 ```
 
 ### How do I go between Shop, Build and Sell?
@@ -571,7 +571,7 @@ The message box starts one line tall and grows as you type, up to about five lin
   to the team.
 
 ```controls any
-#bud-petal-shop-help | ?
+#bud-petal-general-help | ?
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise

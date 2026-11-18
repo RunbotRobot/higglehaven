@@ -56,9 +56,7 @@ const BY_ID = {
   'bud-petal-build-tools': 'tools',
   'bud-petal-sell-my-products': 'crate',
   'bud-petal-sell-add-product': 'tagPlus',
-  'bud-petal-shop-help': 'help',
-  'bud-petal-build-help': 'help',
-  'bud-petal-sell-help': 'help',
+  'bud-petal-general-help': 'help',
 };
 const BY_MODE = { shop: 'shop', build: 'build', sell: 'sell' };
 

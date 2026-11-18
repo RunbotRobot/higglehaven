@@ -1041,7 +1041,8 @@
       }
       body[data-bud-corner="bottom-right"] #bud-modes { --ring-sx: -1; --ring-sy: -1; }
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes { display: block; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn {
+      body[data-bud="on"] #bud-modes .mode-nav-btn,
+      body[data-bud="on"] #bud-modes .bud-menu-btn {
         position: absolute;
         box-sizing: border-box;
         width: 52px;
@@ -1058,9 +1059,14 @@
         text-align: center;
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-x: 98.5px; --ring-y: 17.4px; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-x: 70.7px; --ring-y: 70.7px; animation-delay: 0.04s; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-x: 17.4px; --ring-y: 98.5px; animation-delay: 0.08s; }
+      /* #3760: four petals around the head (the three places and the general menu), 26 degrees apart
+         on the same arc. */
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-x: 99.5px; --ring-y: 10.5px; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-x: 84.8px; --ring-y: 53px; animation-delay: 0.04s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-x: 53px; --ring-y: 84.8px; animation-delay: 0.08s; }
+      body[data-bud="on"] #bud-modes .bud-menu-btn { --ring-x: 10.5px; --ring-y: 99.5px; animation-delay: 0.12s; }
+      /* Which stem is open: the petal of the open menu is the green one. */
+      body[data-bud="on"] #bud-modes button[aria-expanded="true"],
       body[data-bud="on"] #bud-modes .mode-nav-btn.active,
       body[data-bud="on"] #bud-modes .mode-nav-btn[aria-current="true"] {
         background: var(--brand-green);
@@ -1068,6 +1074,8 @@
         font-weight: 600;
       }
       body[data-bud="on"] #account-menu-panel { margin-top: 92px; }
+      /* #3760: only the open menu's leaves are drawn (src/ui/bud.js marks the rest). */
+      body[data-bud="on"] #account-menu-panel [data-menu-off] { display: none !important; }
       /* #3690: Undo and Redo are one petal with two halves (src/build/budPetals.js). */
       .bud-pair { display: flex; gap: var(--space-sm); }
       .bud-pair[hidden] { display: none; }
@@ -1081,7 +1089,8 @@
         body[data-bud="on"] #account-menu-toggle,
         body[data-bud="on"] #account-menu-panel button,
         body[data-bud="on"] #account-menu-panel::before,
-        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: none; }
+        body[data-bud="on"] #bud-modes .mode-nav-btn,
+        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: none; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {

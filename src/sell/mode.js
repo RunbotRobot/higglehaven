@@ -40,7 +40,6 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { registerBudPetals } from '../ui/bud.js';
-import { openHelpLeaf } from '../ui/helpLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
@@ -2262,14 +2261,13 @@ async function openAddProductFromPetal() {
 // #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
 // the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
 // two: My products reopens the product list (the bottom-right Products button it replaces is
-// gone), and "?" (#3762). Sell still opens onto My products and the list is still a sheet;
+// gone). "?" is in the general menu (#3760), not here. Sell still opens onto My products and the list is still a sheet;
 // slices 2 and 3 of #3655 change those.
 registerBudPetals('sell', [
   { id: 'my-products', label: 'My products', run: () => { void openSellerModal(); } },
   // #3703 (Sell in the bud, 5/6): one petal starts every way of adding a product. The leaf it opens
   // (src/catalog/upload.js) asks which way; the + Upload Model and Sell This Too buttons are gone.
   { id: 'add-product', label: 'Add a product', run: () => { void openAddProductFromPetal(); } },
-  { id: 'help', label: '?', run: openHelpLeaf },
 ]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
