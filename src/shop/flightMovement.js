@@ -499,21 +499,32 @@ function bindWorldGestures(canvas) {
   // slow frame) between the two taps of a double-tap must not make them look slower than they
   // were (seen live: a double-tap dropped while a 400 ms task sat between its taps).
   const eventTime = (event) => (event.timeStamp > 0 ? event.timeStamp : performance.now());
+  // #3831: a person's mouse looks around: hold the left button on the world and drag (a click
+  // that does not move is still a click, and selects). One button, one meaning, so no halves.
+  // (The automated browsers above already count a mouse as a finger with halves; they keep that.)
+  const mouseLooking = (event) => event.pointerType === 'mouse' && navigator.webdriver !== true;
   canvas.addEventListener('pointerdown', (event) => {
-    if (!shopActive || !touching(event)) return;
+    if (!shopActive) return;
+    if (mouseLooking(event)) {
+      if (event.button !== 0) return;
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
+      worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event), 'look');
+      return;
+    }
+    if (!touching(event)) return;
     try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
     worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event));
   });
   canvas.addEventListener('pointermove', (event) => {
-    if (!shopActive || !touching(event)) return;
+    if (!shopActive || !(touching(event) || mouseLooking(event))) return;
     worldGestures.move(event.pointerId, event.clientX, event.clientY);
   });
   canvas.addEventListener('pointerup', (event) => {
-    if (!touching(event)) return;
+    if (!(touching(event) || mouseLooking(event))) return;
     worldGestures.up(event.pointerId, eventTime(event), event.clientX, event.clientY);
   });
   canvas.addEventListener('pointercancel', (event) => {
-    if (!touching(event)) return;
+    if (!(touching(event) || mouseLooking(event))) return;
     worldGestures.cancel();
   });
 }

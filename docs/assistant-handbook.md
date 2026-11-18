@@ -273,6 +273,8 @@ petals are the same in all three places.
    on each side.
 3. Lift your finger and you stop. There are no buttons to find: the world itself is
    the control.
+4. On a computer, hold the left mouse button on the world and drag to look around;
+   the keys walk you (W A S D or the arrow keys).
 
 **You will see:** your bird walks or turns as you drag, and the view follows. Every
 avatar has a simple motion of its own for walking, standing and flying: the
