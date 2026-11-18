@@ -58,10 +58,8 @@ for (let i = 0; i < 60; i += 1) {
   if (s0.avatarZ - s0.domeBaseWorldZ < -3) break;
 }
 await page.keyboard.up('KeyW');
-// Level the view again so the runs below fly level.
-await page.keyboard.down('KeyR');
-await page.waitForTimeout(700);
-await page.keyboard.up('KeyR');
+// Level the view again (exactly) so the runs below fly level.
+await page.evaluate(() => window.__testSetShopPitch(0));
 const flying = await state();
 console.log('flying altitude check (avatar z minus dome base z, should be below the rim and above the ground):', (flying.avatarZ - flying.domeBaseWorldZ).toFixed(1));
 

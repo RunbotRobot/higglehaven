@@ -667,6 +667,9 @@ window.__testShopFlightState = () => shopFlightState;
 // real input (covered by e2e/shop-world-gestures.test.mjs), this is the same
 // toggle without needing two taps in a row.
 window.__testToggleShopFlight = () => toggleShopFlight();
+// #3769: e2e-only. Sets the view's pitch exactly (radians, positive is up), so a test can
+// fly level or at a known angle without timing a look key.
+window.__testSetShopPitch = (rad) => { shopPitch = rad; applyShopCameraOrientation(); };
 window.__testWorldGestureFingers = () => (worldGestures ? worldGestures.activeFingers() : 0);
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
