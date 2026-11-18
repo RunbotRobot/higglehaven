@@ -31,7 +31,7 @@ const quote = (value) => value.replace(/'/g, "''");
 await createGreenbeltLandletAsAdmin('standing-greenbelt');
 
 await chooseIdentity(pageA, { mode: 'shop', label: LABEL_A, isNew: true });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 20000 });
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 
 const userB = (await fetchJson(pageB, '/api/auth/me')).body.user;
@@ -67,7 +67,7 @@ check(Boolean(spot) && spot.name === 'Juniper', `the server lists her on shift (
 // Far away: the line and the walk. (The avatar drops in at spawn first; a teleport during the
 // drop is overwritten, so wait for it to land.)
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn');
+await pageA.evaluate(() => window.__testToggleShopFlight()); // #3650: the fly button is gone
 await pageA.waitForTimeout(2500);
 await pageA.evaluate(([x, y]) => window.__testTeleportShopAvatar(x + 60, y, 0), [spot.x, spot.y]);
 await pageA.waitForTimeout(500);
