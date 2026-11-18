@@ -7,14 +7,16 @@
 // no internal words. When the way of moving changes, change the first two lines and
 // their handbook entries together (#3650, #3749: left half walks, right half looks,
 // double-tap flies).
+import { WALK_WORDS, FLY_WORDS } from './gestureWords.js';
+
 export const LOADING_TIPS = [
   {
-    text: 'Drag on the left half of the screen to walk, and on the right half to look around.',
+    text: `${WALK_WORDS}, and on the right half to look around.`,
     handbook: 'How do I walk around and look around?',
     words: ['left half', 'right half'],
   },
   {
-    text: 'Double-tap the world to fly. Look up and walk forward to climb, look down to descend.',
+    text: `${FLY_WORDS}. Look up and walk forward to climb, look down to descend.`,
     handbook: 'How do I fly, go up and come back down?',
     words: ['double-tap the world', 'look up', 'look down'],
   },
