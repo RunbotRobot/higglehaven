@@ -77,7 +77,7 @@ const ring = await page.evaluate(() => {
   const word = document.querySelector('#account-menu-toggle .bud-word');
   return {
     current: modes.filter((m) => mode(m).getAttribute('aria-current') === 'true'),
-    apart: [[0, 1], [1, 2], [0, 2]].every(([i, j]) => Math.hypot(centres[i].x - centres[j].x, centres[i].y - centres[j].y) >= 34) // #3760: four petals 30 degrees apart; they meet only at their widest,
+    apart: [[0, 1], [1, 2], [0, 2]].every(([i, j]) => Math.hypot(centres[i].x - centres[j].x, centres[i].y - centres[j].y) >= 34), // #3760: four petals 30 degrees apart; they meet only at their widest,
     joined: modes.every((m, i) => {
       const t = (angles[i] * Math.PI) / 180;
       const hit = document.elementFromPoint(hub.x + Math.cos(t) * 40, hub.y + Math.sin(t) * 40);
