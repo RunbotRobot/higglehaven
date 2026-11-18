@@ -51,10 +51,14 @@ await page.click('#mode-rotate');
 await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt 0\.0° \(green ring\)/, 'single item at rest reads 0, 0, 0 in plain words');
 
 const box = await page.evaluate(() => document.getElementById('rotation-readout').getBoundingClientRect().toJSON());
-// #3640, #3573: it sits under the name and the toolbar row, so "at the top" means the top 45%.
-check(box.bottom <= 844 * 0.45 && box.left >= 0 && box.right <= 390, `the readout sits at the top and inside the viewport (${JSON.stringify(box)})`);
-// #3640, #3573, #3689: the top of Build is a stack: the toolbar row, then the
-// readout; the item's name is the item card's title beside the item now, so the
+// #3575: the readout is a line of the item's card (under its tool row), which sits beside the item.
+const inCard = await page.evaluate(() => {
+  const card = document.getElementById('item-card').getBoundingClientRect();
+  const r = document.getElementById('rotation-readout').getBoundingClientRect();
+  return r.left >= card.left - 1 && r.right <= card.right + 1 && r.top >= card.top - 1 && r.bottom <= card.bottom + 1;
+});
+check(inCard && box.left >= 0 && box.right <= 390 && box.top >= 0 && box.bottom <= 844, `the readout is a line of the item card and inside the viewport (${JSON.stringify(box)})`);
+// #3640, #3573, #3689, #3575: the card's tool row, then the readout under it; the item's name is the item card's title beside the item now, so the
 // readout is never pushed down by a wrapped name. The readout used to be drawn on
 // top of the toolbar buttons.
 const stack = await page.evaluate(() => {

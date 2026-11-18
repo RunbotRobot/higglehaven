@@ -2076,25 +2076,14 @@
          Sits just under #product-info at the top so it never covers the gizmo,
          stays up between drags, and its text is selectable (#3303). */
       #rotation-readout {
-        position: fixed;
-        top: 56px;
-        left: 50%;
-        transform: translateX(-50%);
-        /* left: 50% leaves only half the screen to shrink-wrap into; the readout
-           is as wide as its text, up to the screen's width, so it wraps to two
-           lines instead of three (#3573). */
-        width: max-content;
-        max-width: 94vw;
+        /* #3575: a line of the item's card, under the tool row; it was a pill standing at the top. */
+        margin-top: var(--space-xs);
         color: var(--pill-text);
-        background: rgb(var(--pill-rgb) / 0.65);
-        padding: var(--space-2xs) var(--space-lg);
-        border-radius: var(--radius-md);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
-        text-align: center;
+        text-align: left;
         pointer-events: auto;
         user-select: text;
         -webkit-user-select: text;
-        z-index: 10;
       }
       #rotation-readout[hidden] {
         display: none;
@@ -2119,34 +2108,14 @@
       body:has(#catalog-picker.visible) #item-card {
         visibility: hidden;
       }
+      /* #3575: Move, Rotate and Trim are a row of the item's own card, under its name, not a
+         row standing on the world (see index.html). Same element and ids. */
       #gizmo-mode-controls {
-        position: fixed;
-        /* #3573: never above the bottom of the item's name box (set by
-           placeBuildTopStack in src/build/scene.js), which wraps on a phone. */
-        top: max(64px, var(--product-info-bottom, 0px));
-        left: 50%;
-        transform: translateX(-50%);
         display: none;
         flex-wrap: wrap;
-        justify-content: center;
-        /* Both max-width AND width (not max-width alone) — a wrapping flex
-           row with only max-width shrinks to whatever "optimal line
-           breaking" width Chromium picks (empirically far narrower than
-           94vw once there are several buttons, since it minimizes total
-           line count rather than maximizing row width), which packs far
-           fewer buttons per row than the budget actually allows and grows
-           the panel much taller than necessary. That extra height isn't
-           just cosmetic on a phone-width viewport: it can reach down far
-           enough to sit on top of the 3D canvas itself and silently
-           swallow taps meant for it (found via e2e/bundles.test.mjs
-           failing to select a placed tree once this row had enough
-           buttons — see the Community Sign click handler's own comment in
-           src/main.js). Forcing the full budget-width used per row keeps
-           the panel as short as the button count actually requires. */
-        width: 94vw;
-        max-width: 94vw;
         gap: var(--space-sm);
-        z-index: 10;
+        align-items: center;
+        margin-top: var(--space-xs);
       }
       #gizmo-mode-controls.visible {
         display: flex;
@@ -2170,21 +2139,19 @@
         #product-info {
           top: 84px;
         }
-        #gizmo-mode-controls {
-          top: max(136px, var(--product-info-bottom, 0px));
-        }
       }
       #gizmo-mode-controls button {
-        padding: var(--space-sm) var(--space-2xl);
+        padding: var(--space-xs) var(--space-lg);
+        min-height: 32px;
         border-radius: var(--radius-pill);
         border: none;
-        background: rgb(var(--pill-rgb) / 0.5);
-        color: var(--pill-text-soft);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         transition: transform var(--motion-quick) var(--ease-soft), background-color var(--motion-quick) var(--ease-soft), color var(--motion-quick) var(--ease-soft);
       }
       #gizmo-mode-controls button.active {
-        background: var(--brand-green);
+        background: var(--petal-yellow);
         color: var(--ink);
       }
       /* Rotate has no group form, so it's disabled (not hidden) for a
@@ -2222,7 +2189,7 @@
       #edit-bundle-reason[hidden] { display: none; }
       #selection-action-status {
         position: absolute;
-        top: 100%;
+        top: 100%; /* #3575: under the item's card, where its tool row now is */
         left: 0;
         right: 0;
         margin-top: var(--space-xs);
@@ -6624,6 +6591,7 @@
       #item-card.pass-through #item-card-actions button:disabled {
         display: none;
       }
+      #item-card.pass-through #gizmo-mode-controls button,
       #item-card.pass-through #group-item,
       #item-card.pass-through #ungroup-item,
       #item-card.pass-through #edit-bundle-item,

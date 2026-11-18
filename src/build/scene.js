@@ -927,18 +927,11 @@ rotateControls.addEventListener('objectChange', () => {
 // reads as the orientation most of its members share (see referenceOrientation).
 // The text is selectable (#3303) and stays up between drags.
 const rotationReadoutEl = document.getElementById('rotation-readout');
-// #3640, #3573: the top of Build's screen is a stack of three boxes that used to
-// sit at fixed heights, which assumed the item's name box (#product-info) is one
-// line. On a phone a long name wraps to two or three lines, so the name ran into
-// the toolbar row under it (#3573) and the angle readout was drawn over the name
-// (#3640). They now stack: the name, then the toolbar row (its CSS top is
-// max(its usual top, --product-info-bottom)), then the readout under the toolbar.
-// The toolbar stays where it is when Rotate is tapped, so the button under a
-// finger never moves; only the readout, which appears then, comes below it.
-// Each box is measured, and followed when it resizes.
+// #3640, #3573, #3575: the name of a selected item is the title of its card (beside the item), and the
+// tool row and this readout are lines of that card, so the stack of boxes at the top of the screen is gone.
+// What is left here is where the bottom of #product-info (Measure's and Copy's lines) is, kept in
+// --product-info-bottom for whatever must sit under it.
 const productInfoEl = document.getElementById('product-info');
-const gizmoToolbarEl = document.getElementById('gizmo-mode-controls');
-const ROTATION_READOUT_DEFAULT_TOP_PX = 56;
 const STACK_GAP_PX = 4;
 function visibleBox(el) {
   const box = el.getBoundingClientRect();
@@ -952,17 +945,12 @@ function placeBuildTopStack() {
     if (nameBottom) rootStyle.setProperty('--product-info-bottom', nameBottom);
     else rootStyle.removeProperty('--product-info-bottom');
   }
-  // Read the toolbar after the name's variable is set, so its new top is in.
-  const toolbarBox = visibleBox(gizmoToolbarEl);
-  const anchor = toolbarBox || nameBox;
-  const top = anchor ? Math.round(anchor.bottom + STACK_GAP_PX) : ROTATION_READOUT_DEFAULT_TOP_PX;
-  const value = `${top}px`;
-  if (rotationReadoutEl.style.top !== value) rotationReadoutEl.style.top = value;
+  // #3575: the tool row and the rotation readout are lines of the item's card now (index.html),
+  // so nothing is stacked under the toolbar at the top any more; only the name's bottom is kept.
 }
 if (typeof ResizeObserver !== 'undefined') {
   const stackObserver = new ResizeObserver(placeBuildTopStack);
   stackObserver.observe(productInfoEl);
-  stackObserver.observe(gizmoToolbarEl);
 }
 function refreshRotationReadout() {
   const object = rotateControls.object;
