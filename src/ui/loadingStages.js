@@ -9,7 +9,8 @@
 // downloading; main.js and the shop's loader import the same module and report
 // the stages. It touches the page only through the elements it finds by id, and
 // takes the document as a parameter so a unit test can drive it.
-import { LOADING_TIPS } from './loadingTips.js';
+import { LOADING_TIPS, tipReadingMs } from './loadingTips.js';
+import { loadingTipsEnabled, nextTipIndex, rememberTipShown } from './loadingTipPrefs.js';
 
 // What has been reached, the bar's share at that point, and what is being
 // waited on next. "painted" is reached by the page itself: index.html's own CSS
@@ -22,11 +23,10 @@ export const LOADING_STAGES = [
   { id: 'frame', progress: 1, waitingOn: 'Ready' },
 ];
 
-export const TIP_INTERVAL_MS = 4500;
-
 const reached = new Set(['painted']);
 let failed = false;
 let tipTimer = null;
+let tipsStarted = false;
 
 export function loadingFailed() { return failed; }
 
@@ -79,24 +79,43 @@ export function failLoadingStage(sentence, doc = typeof document === 'undefined'
   if (problem) problem.hidden = false;
 }
 
-export function startLoadingTips(doc = typeof document === 'undefined' ? null : document, win = typeof window === 'undefined' ? null : window, startIndex = Math.floor(Math.random() * LOADING_TIPS.length)) {
+// #3763: one tip per load, held for as long as it takes to read (tipReadingMs),
+// and only replaced if the load is still going after that. A tap on the tip
+// shows the next one at once, so a fast reader is not kept waiting and a slow
+// one is never hurried. The world never waits for a tip: hideLoadingScreen stops
+// them and the screen hands over as before. With the Settings switch off there
+// is no tip at all (the bar and the words stay).
+export function startLoadingTips(doc = typeof document === 'undefined' ? null : document, win = typeof window === 'undefined' ? null : window, storage) {
   const el = doc && doc.getElementById('loading-tip');
-  if (!el || tipTimer !== null || !win) return;
-  let index = startIndex % LOADING_TIPS.length;
+  if (!el || tipsStarted || !win) return;
+  tipsStarted = true;
+  if (!loadingTipsEnabled(storage)) { el.hidden = true; return; }
+  el.hidden = false;
+  let index = nextTipIndex(LOADING_TIPS.length, storage);
   const show = () => {
-    el.textContent = LOADING_TIPS[index].text;
+    const tip = LOADING_TIPS[index];
+    el.textContent = tip.text;
     // Restart the soft fade-in each time the line changes.
     el.classList.remove('loading-tip-show');
     void el.offsetWidth;
     el.classList.add('loading-tip-show');
+    rememberTipShown(index, LOADING_TIPS.length, storage);
     index = (index + 1) % LOADING_TIPS.length;
+    if (tipTimer !== null) win.clearTimeout(tipTimer);
+    tipTimer = win.setTimeout(show, tipReadingMs(tip.text));
   };
   show();
-  tipTimer = win.setInterval(show, TIP_INTERVAL_MS);
+  el.addEventListener('click', () => {
+    if (!tipsStarted || tipTimer === null) return; // stopped: the screen is lifting
+    // Selecting a few words to copy is not a tap for the next tip.
+    const selection = win.getSelection ? String(win.getSelection()) : '';
+    if (selection) return;
+    show();
+  });
 }
 
 export function stopLoadingTips(win = typeof window === 'undefined' ? null : window) {
-  if (tipTimer !== null && win) win.clearInterval(tipTimer);
+  if (tipTimer !== null && win) win.clearTimeout(tipTimer);
   tipTimer = null;
 }
 
@@ -106,4 +125,5 @@ export function resetLoadingStagesForTest() {
   reached.add('painted');
   failed = false;
   tipTimer = null;
+  tipsStarted = false;
 }

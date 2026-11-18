@@ -4,8 +4,8 @@
 // borrows from that entry, so scripts/loading-tips.test.mjs can fail when the
 // interface changes the way a thing is done and only one of the two is updated.
 // Everything here is read by a person: "lándlet" always, with the accent, and
-// no internal words. When the movement gestures land, change the first line and
-// its handbook entry together.
+// no internal words. When the way of moving changes, change the first lines and
+// their handbook entries together (the movement gestures landed in #3650).
 export const LOADING_TIPS = [
   {
     text: 'Drag a finger on the world to walk. Add a second finger to look around.',
@@ -33,3 +33,16 @@ export const LOADING_TIPS = [
     words: ['higglehaven logo', 'build', 'lándlet'],
   },
 ];
+
+// #3763 (part of #3759, #3738): a tip stays up long enough to be read. The owner
+// is "an unusually slow reader" and has been frustrated by games whose tips go
+// before they can be read, so the time a tip is held is worked out from its own
+// length: two and a half words a second (a fast reader manages about four), and
+// never under six seconds. One function, so the pacing is tested in one place.
+export const TIP_WORDS_PER_SECOND = 2.5;
+export const TIP_MIN_MS = 6000;
+
+export function tipReadingMs(text) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(TIP_MIN_MS, Math.ceil((words / TIP_WORDS_PER_SECOND) * 1000));
+}

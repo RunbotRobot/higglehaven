@@ -1,7 +1,7 @@
 // #3738 (part of #3735): the opening screen is alive and tells the truth. While
 // the app waits for someone to sign in, the bar sits at the stage reached (never
 // on a timer), the words say what is being waited on, and a tip is showing and
-// changes; once the world is up the screen lifts with the bar full; and when the
+// stays put for a slow reader (a tap shows the next); once the world is up the screen lifts with the bar full; and when the
 // world cannot be fetched the screen stays up with a sentence a person can select
 // and a Try again that works.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
@@ -32,13 +32,40 @@ console.log('while waiting for sign-in:', waiting);
 const tipsText = LOADING_TIPS.map((tip) => tip.text);
 const waitingOk = waiting.exists && waiting.progress === 0.35 && waiting.stage === 'Signing you in'
   && waiting.hidden === false && waiting.opacity === 1 && waiting.animating && tipsText.includes(waiting.tip);
-const firstTip = waiting.tip;
-const tipChanged = await page.waitForFunction((was) => {
-  const now = document.getElementById('loading-tip')?.textContent;
-  return Boolean(now) && now !== was;
-}, firstTip, { timeout: 9000 }).then(() => true).catch(() => false);
+// #3763: the very first open on a device shows the tip about moving, and it is
+// held (not swapped every few seconds) so a slow reader can finish it.
+const firstOpenTip = waiting.tip === LOADING_TIPS[0].text;
+// Held: no change before six seconds have passed since the page opened (the
+// tips start within the first moments, and each is held at least six seconds).
+const heldFor = await page.evaluate(() => new Promise((resolve) => {
+  const el = document.getElementById('loading-tip');
+  const first = el.textContent;
+  let changedAt = null;
+  new MutationObserver(() => { if (changedAt === null && el.textContent !== first) changedAt = performance.now(); }).observe(el, { childList: true, characterData: true, subtree: true });
+  const wait = Math.max(0, 5800 - performance.now());
+  setTimeout(() => resolve({ changedAt, now: performance.now() }), wait);
+}));
+const stillHeld = heldFor.changedAt === null;
+console.log('held until at least six seconds after the page opened:', heldFor);
+// A tap on the tip shows the next one at once.
+const beforeTap = (await read()).tip;
+await page.evaluate(() => document.getElementById('loading-tip').click());
+const tipChanged = (await read()).tip !== beforeTap && tipsText.includes((await read()).tip);
 console.log('screen shows the stage reached, an animated bud and a tip (should be true):', waitingOk);
-console.log('tip changes on its own (should be true):', tipChanged);
+console.log('first open shows the tip about moving, and it is held (should be true):', firstOpenTip, stillHeld);
+console.log('a tap shows the next tip (should be true):', tipChanged);
+
+// 1b. The Settings switch (stored on this device) takes the tip away; the bar stays.
+await page.evaluate(() => localStorage.setItem('higglehaven.loadingTips.off', '1'));
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
+const switchedOff = await page.evaluate(() => {
+  const tip = document.getElementById('loading-tip');
+  return { hidden: getComputedStyle(tip).display === 'none', text: tip.textContent, stage: document.getElementById('loading-stage')?.textContent };
+});
+console.log('switched off: no tip, the stage words stay (should be true):', switchedOff);
+const switchOk = switchedOff.hidden && switchedOff.text === '' && switchedOff.stage === 'Signing you in';
+await page.evaluate(() => localStorage.removeItem('higglehaven.loadingTips.off'));
 
 // 2. Signed in: the world loads and the screen lifts with the bar full.
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
@@ -74,5 +101,5 @@ const recovered = await page.waitForFunction(() => document.getElementById('load
   .then(() => true).catch(() => false);
 console.log('failed screen says so, stays up, and Try again recovers (should be true):', failureOk, recovered);
 
-const pass = waitingOk && tipChanged && lifted && after.progress === 1 && failureOk && recovered;
+const pass = waitingOk && firstOpenTip && stillHeld && tipChanged && switchOk && lifted && after.progress === 1 && failureOk && recovered;
 await finish(browser, { pass, label: 'opening-screen-stages', errors: errors.filter((m) => !/Failed to load resource|ERR_FAILED|world/i.test(m)) });

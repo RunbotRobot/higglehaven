@@ -383,6 +383,9 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
 // is ready, goes through these two wrappers instead of knowing about the bud. Any other page a test
 // makes for itself can be passed through budAware too.
 const BUD_PETALS = new Set(['#add-item-btn']);
+// #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
+// they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
+const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
 export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
@@ -392,10 +395,24 @@ export function budAware(page) {
       await page.click('#account-menu-toggle');
       await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
     }
+    if (TOOL_CONTROLS.has(selector) && !(await page.locator(selector).isVisible())) {
+      // The leaf may be open already (with the control not drawn: Paste before a Copy); a leaf
+      // that is not the Tools one sits over the bud and swallows the tap on it.
+      if (!(await page.locator('#bud-leaf-tools').count())) {
+        if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
+        if (!(await page.locator('#account-menu-panel.expanded').count())) {
+          await click('#account-menu-toggle');
+          await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+        }
+        await click('#bud-petal-build-tools');
+        await page.waitForSelector('#bud-leaf-tools', { timeout: 5000 });
+      }
+    }
     return click(selector, options);
   };
   const wait = page.waitForSelector.bind(page);
   page.waitForSelector = async (selector, options = {}) => {
+    if (TOOL_CONTROLS.has(selector) && !options.state) return wait(selector, { ...options, state: 'attached' });
     if (BUD_PETALS.has(selector) && !options.state) return wait(`${selector}:not([hidden])`, { ...options, state: 'attached' });
     const handle = await wait(selector, options);
     // The catalog opens as a short strip; the many tests written against the whole catalog (its
@@ -730,6 +747,16 @@ export async function openAccountMenu(page) {
     if (!(await isOpen())) await page.click('#account-menu-toggle');
     await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
   }
+}
+
+// #3762: "Ask an assistant" is under the "?" petal of the bud (it left Settings): open the bud, the
+// "?" leaf, then the way to an assistant. Works in every mode; the window it opens is the same one.
+export async function openAssistantFromHelp(page) {
+  await openAccountMenu(page);
+  // The petal is registered once per mode and only the current mode's is drawn.
+  await page.locator('#account-menu-panel button:visible', { hasText: /^\?$/ }).first().click();
+  await page.waitForSelector('#help-ask-assistant-btn', { state: 'visible', timeout: 5000 });
+  await page.click('#help-ask-assistant-btn');
 }
 
 // #3690: in Build the level controls are the Levels petal's leaf, not a "Ground" pill. Open

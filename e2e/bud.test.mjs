@@ -56,7 +56,7 @@ const open = {
   build: await shown('#bud-modes .mode-nav-btn[data-mode="build"]'),
   sell: await shown('#bud-modes .mode-nav-btn[data-mode="sell"]'),
   shopPetal: await shown('#bud-modes .mode-nav-btn[data-mode="shop"]'),
-  howToMove: await shown('#bud-petal-shop-how-to-move'),
+  help: await shown('#bud-petal-shop-help'),
 };
 console.log('unfolded:', JSON.stringify(open));
 
@@ -111,14 +111,14 @@ await page.keyboard.press('Escape');
 const foldedByEscape = (await page.locator('#account-menu-panel.expanded').count()) === 0;
 const wordAfterOpen = await shown('#account-menu-toggle .bud-word');
 
-// A leaf: How to move.
+// A leaf: "?" (Help).
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-shop-how-to-move');
-await page.waitForSelector('#bud-leaf-how-to-move');
+await page.click('#bud-petal-shop-help');
+await page.waitForSelector('#bud-leaf-help');
 await page.waitForTimeout(500);
-const leaf = await box('#bud-leaf-how-to-move');
-const closeBox = await box('#bud-leaf-how-to-move .bud-leaf-close');
-const leafTitle = await page.textContent('#bud-leaf-how-to-move h2');
+const leaf = await box('#bud-leaf-help');
+const closeBox = await box('#bud-leaf-help .bud-leaf-close');
+const leafTitle = await page.textContent('#bud-leaf-help h2');
 const leafInfo = {
   title: leafTitle,
   closeUpperRight: closeBox.x + closeBox.width / 2 > leaf.x + leaf.width * 0.75 && closeBox.y + closeBox.height / 2 < leaf.y + 60,
@@ -127,11 +127,11 @@ const leafInfo = {
 };
 console.log('leaf:', JSON.stringify(leafInfo));
 await page.keyboard.press('Escape');
-const leafClosedByEscape = (await page.locator('#bud-leaf-how-to-move').count()) === 0;
+const leafClosedByEscape = (await page.locator('#bud-leaf-help').count()) === 0;
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-shop-how-to-move');
-await page.click('#bud-leaf-how-to-move .bud-leaf-close');
-const leafClosedByX = (await page.locator('#bud-leaf-how-to-move').count()) === 0;
+await page.click('#bud-petal-shop-help');
+await page.click('#bud-leaf-help .bud-leaf-close');
+const leafClosedByX = (await page.locator('#bud-leaf-help').count()) === 0;
 
 // Settings in two taps.
 await openAccountMenu(page);
@@ -177,7 +177,7 @@ console.log('in Sell:', JSON.stringify({ afterPick, inSell, sameModeTap }));
 
 const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark && !rest.modeNav && !rest.ringAtRest
   && Math.round(rest.budBox.width) === 56 && rest.panelOpen === 0
-  && open.expanded === 'true' && open.settings && open.friends && open.purchases && open.build && open.sell && open.shopPetal && open.howToMove
+  && open.expanded === 'true' && open.settings && open.friends && open.purchases && open.build && open.sell && open.shopPetal && open.help
   && ring.current.join() === 'shop' && ring.apart && ring.joined && ring.tipsHit && ring.wide && ring.labelsUpright
   && ring.inside && ring.columnBelow && ring.wordHidden
   && unfoldAnimations.length === 3 && unfoldAnimations.every((a) => a.includes('bud-grow'))
@@ -185,7 +185,7 @@ const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark 
   && afterPick.folded && afterPick.ringHidden && afterPick.heldLit && afterPick.foldedAfterHeld
   && sameModeTap.stayedOnSell === 'sell'
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload
-  && leafInfo.title === 'How to move' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
+  && leafInfo.title === 'Help' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
   && leafClosedByEscape && leafClosedByX
   && inSell.bud === 'on' && !inSell.modeNav && inSell.all && inSell.current.join() === 'sell'
   && errors.length === 0;

@@ -20,6 +20,7 @@
 // request as an ordinary inline error, not a crash.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { scene, camera, renderer, canvas } from '../world/scene.js';
+import { getStartupTimings } from '../ui/startupMarks.js';
 import { getRenderStateBuffer, clearRenderStateBuffer } from './renderStateBuffer.js';
 import { submitFeedbackBugReport } from '../api.js';
 import { currentAuthUser } from '../account/auth.js';
@@ -170,6 +171,11 @@ async function handleFeedbackSubmit() {
     // when they could not copy them. Remove only once #3303 is closed and no
     // report has needed it for a while.
     recentUserVisibleMessages: getRecentVisibleMessages(),
+    // added for #3736 (part of #3735, the slow first open) -- ms since navigation
+    // for each stage of opening the app (auth checked, catalog, world, avatar,
+    // loading screen hidden), so a "it took forever to open" report says which
+    // stage was slow. Remove only once #3735 is closed and no report has needed it.
+    startupTimings: getStartupTimings(),
   };
   const form = new FormData();
   if (feedbackScreenshotBlob) form.append('screenshot', feedbackScreenshotBlob, 'feedback.png');

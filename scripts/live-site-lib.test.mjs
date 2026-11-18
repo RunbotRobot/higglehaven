@@ -155,3 +155,12 @@ describe('coverTable and the cover flags', () => {
     expect(parseArgs(['--name', 'higglehaven3'], {}).options.coverReport).toBe(false);
   });
 });
+
+describe('the throttle flag (#3736)', () => {
+  it('is off unless asked for, and takes no value', () => {
+    expect(parseArgs(['--name', 'higglehaven3'], {}).options.throttle).toBe(false);
+    const { options, steps } = parseArgs(['--name', 'higglehaven3', '--throttle', 'idle'], {});
+    expect(options.throttle).toBe(true);
+    expect(steps).toHaveLength(1);
+  });
+});
