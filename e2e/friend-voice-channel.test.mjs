@@ -325,7 +325,9 @@ await pageB.waitForTimeout(2200);
 const otherAvatarsSeenByA = await pageA.evaluate(() => window.__shopOtherAvatars);
 console.log('builders A can see nearby while 10000 units apart from B (should NOT include B at all):', otherAvatarsSeenByA);
 
-async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
+// 60s, not 20s: on a loaded CI runner the friend channel's WebRTC handshake has taken longer than
+// 20s (PR #3730: two attempts timed out here, yet the same connection was up by the next check).
+async function waitForConnected(page, expectedBuilderId, timeoutMs = 60000) {
   const start = Date.now();
   let peers = null;
   while (Date.now() - start < timeoutMs) {
