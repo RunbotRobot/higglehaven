@@ -73,8 +73,10 @@ const VOICE_SPEAKING_RMS_THRESHOLD = 0.03;
 // own e2e test (see createPeer's own comment on the transceiver-timing
 // hypothesis this ruled out). Comfortably above how long a real handshake
 // normally takes (a couple of VOICE_POLL_INTERVAL_MS round trips), with
-// enough margin below this module's own e2e test's 20s per-connection wait
-// for a fresh retry to still succeed within that same test run.
+// enough margin below this module's own e2e test's 60s per-connection wait
+// for several fresh retries to still succeed within that same test run
+// (#3835: the wait was 20s, room for one retry, and a loaded CI runner can
+// stall the retry as well).
 const VOICE_NEGOTIATION_TIMEOUT_MS = 8000;
 
 // #2781 (sub-issue of #2777): "Group voice channels for friends regardless
