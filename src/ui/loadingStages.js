@@ -66,7 +66,7 @@ export function failLoadingStage(sentence, doc = typeof document === 'undefined'
   failed = true;
   stopLoadingTips();
   // #3752: the bud keeps the petals out and marks the mode the person is still in.
-  if (doc) doc.dispatchEvent(new Event('higglehaven:mode-failed'));
+  doc?.dispatchEvent?.(new Event('higglehaven:mode-failed'));
   const screen = doc && doc.getElementById('loading-screen');
   if (!screen) return;
   screen.classList.add('loading-screen-failed');

@@ -21,7 +21,7 @@ export function hideLoadingScreen(doc = typeof document === 'undefined' ? null :
   stopLoadingTips();
   el.classList.add('loading-screen-hidden');
   // #3752: the mode is on screen; the bud's petals, held open while it loaded, fold back in.
-  doc.dispatchEvent(new Event('higglehaven:mode-ready'));
+  doc.dispatchEvent?.(new Event('higglehaven:mode-ready'));
   // The fog's own fade ends last; a child's transition ending first must not
   // take the splash out early.
   const onEnd = (event) => {
