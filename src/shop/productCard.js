@@ -29,6 +29,7 @@ import { productInfoParts, setShopTappedProduct } from './worldSprites.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
+import { loadUnratedOrders, hasUnratedOrder } from './unratedOrders.js';
 
 const cardEl = document.getElementById('product-card');
 const nameEl = document.getElementById('product-card-name');
@@ -107,7 +108,7 @@ let lastInRange = false;
 // Read once per page load (and again after a purchase); the card opens at once and
 // says "You already own this." when the answer arrives, never waiting on it.
 function refreshOwnedState(review, { force = false } = {}) {
-  loadOwnedProducts({ force }).then(() => {
+  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force })]).then(() => {
     if (review === openReview) syncProductCardActions(review, lastInRange);
   });
 }
@@ -116,7 +117,13 @@ function refreshOwnedState(review, { force = false } = {}) {
 // open says so for what was just bought.
 export function refreshOwnedAfterPurchase() {
   if (openReview) refreshOwnedState(openReview, { force: true });
-  else loadOwnedProducts({ force: true });
+  else { loadOwnedProducts({ force: true }); loadUnratedOrders({ force: true }); }
+}
+
+// #3775: after a rating is saved, the order it used is no longer unrated.
+export function refreshRatedOrders() {
+  if (openReview) refreshOwnedState(openReview, { force: true });
+  else loadUnratedOrders({ force: true });
 }
 
 function fillCard(review) {
@@ -141,7 +148,7 @@ export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
   lastInRange = inRange;
   const template = review.mesh.userData.template;
-  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId) });
+  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId) });
   buyBtn.classList.toggle('visible', state.canBuy);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
