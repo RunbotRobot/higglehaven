@@ -18,7 +18,25 @@ export function showBudPlace({ name, builder }) {
   part('bud-place-name').textContent = name;
   part('bud-place-by').textContent = builder ? `by ${builder}` : '';
   el.hidden = !name;
+  watchClipping(el);
+  markClipped(el);
 }
+
+// #3844: past its height cap the sign scrolls inside itself; a fade says there is more. It is
+// measured when the name changes and whenever the sign is laid out again (it has no size while the
+// menu is folded, so opening the menu is what shows whether it is clipped).
+function markClipped(el) {
+  requestAnimationFrame(() => el.toggleAttribute('data-clipped', el.scrollHeight > el.clientHeight + 1));
+}
+let watching = null;
+function watchClipping(el) {
+  if (watching === el || typeof ResizeObserver === 'undefined') return;
+  watching = el;
+  new ResizeObserver(() => markClipped(el)).observe(el);
+}
+
+// e2e only (#3844): names the place without a lándlet to stand on, to try long names. Inert unless called.
+if (typeof window !== 'undefined') window.__testShowBudPlace = showBudPlace;
 
 export function hideBudPlace() {
   const el = placeEl();
