@@ -14,6 +14,9 @@
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
 //   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
 //                                                  conversation's name); "Menu" comes back when none is set
+//   beginBudModeSwitch(target)                     a mode petal was tapped (#3752): the chosen petal is lit at
+//                                                  once and the ring stays open across the reload; the new page
+//                                                  folds it when the mode is on screen
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
@@ -58,10 +61,60 @@ export function budPetalsFor(mode) {
   return registry.get(mode) || [];
 }
 
+// #3752: the three mode petals grow out of the bud and fold back into it. body[data-bud-ring]
+// says what the ring is doing beyond "the bud is unfolded" (src/app.css): "held" while a chosen
+// mode loads (open, still, the chosen petal lit) and "folding" for the short trip back in.
+const SWITCH_KEY = 'higglehaven.budSwitch';
+const SWITCH_FRESH_MS = 60000;
+const FOLD_MS = 300;
+let foldTimer = null;
+// The switch this page was opened by, if any: { target, from }.
+let switching = null;
+
+function setRing(state) {
+  if (state) document.body.setAttribute('data-bud-ring', state);
+  else document.body.removeAttribute('data-bud-ring');
+}
+
+function foldRing() {
+  clearTimeout(foldTimer);
+  setRing('folding');
+  foldTimer = setTimeout(() => {
+    if (document.body.getAttribute('data-bud-ring') === 'folding') setRing(null);
+  }, FOLD_MS);
+}
+
 function foldBud() {
+  const wasOpen = panel()?.classList.contains('expanded');
   panel()?.classList.remove('expanded');
   toggle()?.classList.remove('active');
   toggle()?.setAttribute('aria-expanded', 'false');
+  // The petals fold in instead of vanishing, unless a mode is still loading (they stay out then).
+  if (wasOpen && document.body.getAttribute('data-bud-ring') !== 'held') foldRing();
+}
+
+// Marks one mode's petal as the current one; the others are not.
+function litPetal(mode) {
+  for (const btn of document.querySelectorAll('.mode-nav-btn')) {
+    if (btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
+    else btn.removeAttribute('aria-current');
+  }
+}
+
+export function beginBudModeSwitch(target) {
+  const from = document.body.dataset.mode || null;
+  try { sessionStorage.setItem(SWITCH_KEY, JSON.stringify({ target, from, at: Date.now() })); } catch { /* the ring just folds as usual */ }
+  litPetal(target);
+}
+
+function readSwitch() {
+  let record = null;
+  try {
+    record = JSON.parse(sessionStorage.getItem(SWITCH_KEY) || 'null');
+    sessionStorage.removeItem(SWITCH_KEY);
+  } catch { return null; }
+  if (!record || typeof record.target !== 'string' || Date.now() - Number(record.at) > SWITCH_FRESH_MS) return null;
+  return { target: record.target, from: record.from };
 }
 
 // Petals registered for the current mode are buttons in the panel: created once, shown only
@@ -136,7 +189,12 @@ function modesRing() {
   ring.id = 'bud-modes';
   ring.setAttribute('role', 'group');
   ring.setAttribute('aria-label', 'Places');
-  ring.addEventListener('click', foldBud);
+  // Another mode: the page reloads and keeps the ring out (beginBudModeSwitch). The mode you are
+  // already in: nothing to load, so the bud just folds.
+  ring.addEventListener('click', (event) => {
+    const btn = event.target.closest?.('.mode-nav-btn');
+    if (btn && btn.dataset.mode === document.body.dataset.mode) foldBud();
+  });
   panel()?.after(ring);
   return ring;
 }
@@ -231,6 +289,28 @@ function markLearned() {
 
 if (typeof document !== 'undefined') {
   document.addEventListener('higglehaven:mode', syncBud);
+  // #3752: this page was opened by tapping a mode petal. The ring is already out with the chosen
+  // petal lit; it folds when the mode is on screen, or stays and says so when the mode will not load
+  // (the opening screen shows the reason in a sentence).
+  switching = readSwitch();
+  if (switching) setRing('held');
+  document.addEventListener('higglehaven:mode-ready', () => {
+    if (!switching) return;
+    switching = null;
+    foldRing();
+  });
+  document.addEventListener('higglehaven:mode-failed', () => {
+    if (switching) litPetal(switching.from);
+  });
+  // Opening the bud again while the petals are still folding cancels the fold.
+  if (panel()) {
+    new MutationObserver(() => {
+      if (panel().classList.contains('expanded') && document.body.getAttribute('data-bud-ring') === 'folding') {
+        clearTimeout(foldTimer);
+        setRing(null);
+      }
+    }).observe(panel(), { attributes: true, attributeFilter: ['class'] });
+  }
   if (!learned()) document.body.setAttribute('data-bud-new', '');
   toggle()?.addEventListener('click', () => {
     if (panel()?.classList.contains('expanded')) markLearned();

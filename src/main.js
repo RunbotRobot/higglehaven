@@ -651,7 +651,7 @@ import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
-import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
+import { beginBudModeSwitch } from './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
@@ -2122,6 +2122,8 @@ for (const btn of modeNavButtons) {
       b.setAttribute('aria-pressed', String(isTarget));
     }
     sessionStorage.setItem(START_MODE_KEY, target);
+    // #3752: the bud's ring stays out, the chosen petal lit, until the new mode is on screen.
+    beginBudModeSwitch(target);
     location.reload();
   });
 }

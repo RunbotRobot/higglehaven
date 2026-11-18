@@ -886,50 +886,88 @@
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
-      /* #3723: Shop, Build and Sell are a half-ring of three petals at the bud's corner, apart from
-         the column of things you open, hidden until the bud is unfolded. The arc opens away from
-         the screen edge: --ring-sx/--ring-sy are +1 for a bud in the top-left corner (the ring
-         goes right and down) and -1 for one in the bottom-right; whoever moves the bud sets
-         body[data-bud-corner="bottom-right"]. Centres sit 100px from the bud's centre at 10, 45
-         and 80 degrees, so no two petals touch. The column below starts 92px lower, under the ring. */
+      /* #3723, #3752: Shop, Build and Sell are three petals that grow out of the bud's corner,
+         apart from the column of things you open, hidden until the bud is unfolded. Each is a
+         button turned to point away from the bud's centre, its narrow base tucked under the bud
+         (the bud paints above the ring) so it reads as attached, widening to a soft tip; its
+         label is turned back upright. --ring-a is the petal's angle from the bud's centre and
+         the arc opens away from the screen edge: --ring-flip is 0 for a bud in the top-left
+         corner (the ring goes right and down) and 1 for one in the bottom-right; whoever moves
+         the bud sets body[data-bud-corner="bottom-right"]. The petals are 38 degrees apart, so
+         their 44px-wide bodies never touch. The column below starts 92px lower, under the ring.
+         States, set on <body data-bud-ring> by src/ui/bud.js: unset (shown while the bud is
+         unfolded), "held" (a mode is loading: open, no motion, the chosen petal lit) and
+         "folding" (the petals grow back into the bud). */
       #bud-modes {
-        --ring-sx: 1;
-        --ring-sy: 1;
+        --ring-flip: 0;
         display: none;
         position: absolute;
         top: 0;
         left: 0;
         width: 0;
         height: 0;
+        /* One shadow for the three shapes together: a clip-path would cut a box-shadow off. */
+        filter: drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.2));
       }
-      body[data-bud-corner="bottom-right"] #bud-modes { --ring-sx: -1; --ring-sy: -1; }
-      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes { display: block; }
+      body[data-bud-corner="bottom-right"] #bud-modes { --ring-flip: 1; }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes,
+      body[data-bud="on"][data-bud-ring] #bud-modes { display: block; }
+      /* The ring sits under the bud so every petal's base is tucked beneath it. */
+      body[data-bud="on"] #account-menu-toggle { z-index: 1; }
       body[data-bud="on"] #bud-modes .mode-nav-btn {
+        --petal-turn: calc(var(--ring-a) * 1deg + var(--ring-flip) * 180deg);
         position: absolute;
         box-sizing: border-box;
-        width: 52px;
+        /* The petal's pointed base starts at the bud's centre and is pushed out to the bud's edge,
+           so the ring follows --bud-size and any shape the bud takes, not a fixed circle. */
+        left: calc(var(--bud-size) / 2);
+        top: calc(var(--bud-size) / 2 - 22px);
+        width: 84px;
         height: 44px;
         padding: 0;
-        left: calc(2px + var(--ring-sx) * var(--ring-x));
-        top: calc(6px + var(--ring-sy) * var(--ring-y));
         border: none;
-        border-radius: 24px 5px 24px 5px;
+        /* The petal: a point at the bud, widest about two thirds out, a soft tip. The clip also
+           decides where a tap lands, so a tap on the empty corner of the box falls through. */
+        clip-path: path('M0 22 C 10 6, 34 0, 58 2 C 74 4, 84 13, 84 22 C 84 31, 74 40, 58 42 C 34 44, 10 38, 0 22 Z');
         background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
-        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
         color: var(--pill-text);
         font: var(--text-md)/1 var(--font-sans);
         text-align: center;
-        animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+        transform-origin: 0 22px;
+        transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2));
+        animation: bud-grow 0.24s var(--ease-soft) both;
       }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-x: 98.5px; --ring-y: 17.4px; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-x: 70.7px; --ring-y: 70.7px; animation-delay: 0.04s; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-x: 17.4px; --ring-y: 98.5px; animation-delay: 0.08s; }
+      /* The word stays upright however the petal is turned, and sits where the petal is wide. */
+      body[data-bud="on"] #bud-modes .mode-nav-label {
+        display: block;
+        margin-left: 30px;
+        transform: rotate(calc(var(--petal-turn) * -1));
+        pointer-events: none;
+      }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 8; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 46; animation-delay: 0.04s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 84; animation-delay: 0.08s; }
+      /* The chosen petal answers at once and stays lit while its mode loads (#3752). */
       body[data-bud="on"] #bud-modes .mode-nav-btn.active,
       body[data-bud="on"] #bud-modes .mode-nav-btn[aria-current="true"] {
         background: var(--brand-green);
         color: var(--ink);
         font-weight: 600;
       }
+      /* Held open while a mode loads: already out, so no motion on arrival. */
+      body[data-bud-ring="held"] #bud-modes .mode-nav-btn { animation: none; }
+      /* Folding back in: the reverse, a little faster, the last petal first. */
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn {
+        animation: bud-fold 0.2s var(--ease-soft) both;
+      }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.04s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="sell"] { animation-delay: 0s; }
+      /* The petals cover the word beside the bud and the Sell pager while they are out. */
+      body:has(#account-menu-panel.expanded) .bud-word,
+      body[data-bud-ring] .bud-word { visibility: hidden; }
+      body:has(#account-menu-panel.expanded) #seller-showcase-pager,
+      body[data-bud-ring] #seller-showcase-pager { visibility: hidden; }
       body[data-bud="on"] #account-menu-panel { margin-top: 92px; }
       /* #3690: Undo and Redo are one petal with two halves (src/build/budPetals.js). */
       .bud-pair { display: flex; gap: var(--space-sm); }
@@ -939,10 +977,16 @@
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(255 255 255 / 0.35); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+      /* The petals grow from the bud's centre: turned out from the base and scaled up. */
+      @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
+      @keyframes bud-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } }
+      @keyframes bud-fade { from { opacity: 0; } to { opacity: 1; } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
-        body[data-bud="on"] #account-menu-panel button,
-        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: none; }
+        body[data-bud="on"] #account-menu-panel button { animation: none; }
+        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: bud-fade 0.12s linear both; }
+        body[data-bud-ring="held"] #bud-modes .mode-nav-btn { animation: none; }
+        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn { animation: bud-fade 0.12s linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {
