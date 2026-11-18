@@ -24,6 +24,7 @@
 //   wait:<ms>                             wait
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
+//   pos                                   where the avatar stands now, and which mode and flags the page is in
 //   cover                                 how much of the screen the interface covers right now
 //                                         (share of the viewport, number of separate elements, the
 //                                         largest one); how it is counted is in live-site-lib.mjs
@@ -316,6 +317,15 @@ async function runStep(step, index) {
     }
     case 'stats':
       return frameStats();
+    case 'pos':
+      return page.evaluate(() => ({
+        avatar: window.__testShopAvatarPosition?.() ?? null,
+        mode: document.body.dataset.mode,
+        shopReady: document.body.classList.contains('shop-ready'),
+        flying: document.body.classList.contains('shop-flying'),
+        sellWorldView: window.__sellWorldViewActive?.() ?? null,
+        sellBounds: window.__sellWorldGroundBounds?.() ?? null,
+      }));
     case 'cover':
       return measureCover();
     default:
@@ -402,7 +412,7 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}) });
     } catch (error) {
       result.steps.push({ step: label, ok: false, error: error.message.split('\n')[0] });
       break;

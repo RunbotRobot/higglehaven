@@ -162,9 +162,10 @@ export function parseStep(token) {
     case 'idle':
     case 'stats':
     case 'cover':
+    case 'pos':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats, cover)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats, cover, pos)`);
   }
 }
 
