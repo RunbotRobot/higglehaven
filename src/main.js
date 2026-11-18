@@ -247,7 +247,7 @@ import {
 import {
   getShopCameraLockToFacing, setShopCameraLockToFacing, setShopFlyBtnFlying,
   applyShopCameraOrientation, positionShopCamera, setShopFov, updateShopMovement,
-  beginShopSpawn, initShopFlightInputBindings,
+  beginShopSpawn, initShopFlightInputBindings, goToShopLocation,
 } from './shop/flightMovement.js';
 // #2625 (leaf of #2563/#2504/#2500, depends on #2624 above): Shop mode's
 // sky dome/wall shader material and atmosphere-rise-with-altitude growth
@@ -282,7 +282,7 @@ import {
   shopOtherAvatars, assistantFromHit, assistantGroups,
 } from './shop/presenceAndContent.js';
 // #3447: tapping an assistant in the Shop world opens its chat panel.
-import { openAssistantChat, closeAssistantChat } from './shop/assistantChat.js';
+import { openAssistantChat, closeAssistantChat, setAssistantStandingHooks } from './shop/assistantChat.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
 // rendering now lives in src/shop/worldSprites.js -- see that module's own
@@ -1285,6 +1285,12 @@ export function setShopEquippedAvatarSkeletonSignature(value) {
 // dependency notes.
 
 export const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
+// #3636 part 2: the assistant window asks how far she is (only meaningful in the Shop world, so
+// NaN elsewhere: no walk is offered) and has the avatar taken to her.
+setAssistantStandingHooks({
+  distanceTo: (x, y) => (shopActive ? Math.hypot(shopAvatarPosition.x - x, shopAvatarPosition.y - y) : NaN),
+  goTo: (target) => goToShopLocation(target),
+});
 // #1829: read-only counterpart to the teleport hook above -- lets a test
 // confirm shopAvatarPosition actually changed (or didn't) after driving a
 // real move through moveShopAvatarWithCollision below, same "always inert
@@ -1642,6 +1648,10 @@ window.__testTapAssistantByUserId = (userId) => {
   openAssistantChat({ userId: found[1].userId, builderId: found[0], name: found[1].assistantName });
   return true;
 };
+
+// #3636 part 2: e2e-only, opens the panel for a named assistant without her being drawn in the
+// world (the standing line is about where she stands, not whether she is in view).
+window.__testOpenAssistant = (target) => openAssistantChat(target);
 
 window.__testTapShopProductByInstanceId = (instanceId) => {
   const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
