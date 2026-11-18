@@ -2428,6 +2428,46 @@
       #catalog-picker.strip #catalog-picker-grid[hidden] { display: none; }
       #catalog-picker.strip .catalog-tile { flex: 0 0 64px; scroll-snap-align: start; }
       #catalog-picker.strip .catalog-thumb { width: 48px; height: 48px; }
+      /* #3577 (part of #3539, interface week): "All items" is the leaf that grows from the strip, not
+         a second, narrower panel. It takes the strip's width (a 220 px column left a 160 px sliver of
+         world beside it that nothing could use) and a capped height, so the world stays in view above
+         it. Manual and Prompt sit on the header row beside the close button instead of taking a row of
+         their own; Search and the scope chips share one row that stays on top while the single grid
+         under it scrolls. Same ids and handlers as before: only where things sit has changed. */
+      #catalog-picker.visible:not(.strip) {
+        width: min(calc(100vw - 16px), 360px);
+        /* The cap is for the whole leaf; this box is content-box (as the strip's is, so the two are
+           the same width), hence the padding comes off. */
+        max-height: calc(clamp(240px, 30vh, 380px) - 44px - var(--space-md));
+        padding: 44px var(--space-md) var(--space-md);
+      }
+      #catalog-picker.visible:not(.strip) #catalog-mode-tabs {
+        position: absolute;
+        top: var(--space-sm);
+        left: var(--space-sm);
+        margin: 0;
+      }
+      #catalog-search-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding-bottom: var(--space-sm);
+        background: rgb(var(--panel-rgb) / 0.97);
+      }
+      #catalog-search-row #catalog-search-input {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+        margin-bottom: 0;
+      }
+      #catalog-search-row #catalog-search-scope-tabs {
+        flex: 0 0 auto;
+        margin-bottom: 0;
+      }
+      #catalog-picker.strip #catalog-search-row { padding-bottom: 0; }
       #catalog-picker.visible {
         /* #2762: flex column so #catalog-manual-mode (the single
            scrolling region now -- see its own rule below) can use
@@ -2505,14 +2545,8 @@
          combined routinely exceeded #catalog-picker's own max-height,
          since nothing clipped the overflow. #catalog-manual-mode (see its
          own rule below) is the single scrolling region now, so this grid
-         goes back to a plain auto-height block. #prompt-mode-grid is a
-         sibling living directly under #catalog-picker, not inside that
-         scrolling wrapper, so it still needs its own budget-against-the-
-         viewport cap exactly as before. */
-      #prompt-mode-grid {
-        max-height: calc(50vh - 88px);
-        overflow-y: auto;
-      }
+         goes back to a plain auto-height block. #prompt-mode-grid is
+         plain too since #3577: #catalog-prompt-mode scrolls it. */
       /* #1082: the base rule above sets display unconditionally, which (per
          .catalog-tile[hidden]'s own precedent just below) outranks the
          browser's default [hidden] rule on specificity ties, broken by
@@ -2563,6 +2597,13 @@
          overflow-y: auto here is for. */
       #catalog-manual-mode {
         display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      /* #3577: prompt mode scrolls as one region too (as #catalog-manual-mode does); its result grid
+         used to cap itself against the viewport, which no longer fits inside the capped leaf. */
+      #catalog-prompt-mode {
         flex: 1;
         min-height: 0;
         overflow-y: auto;

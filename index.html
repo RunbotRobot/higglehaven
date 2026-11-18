@@ -273,11 +273,13 @@
           <button class="catalog-mode-tab-btn" type="button" data-catalog-mode="prompt">Prompt</button>
         </div>
         <div id="catalog-manual-mode">
-          <input id="catalog-search-input" type="text" placeholder="Search…" aria-label="Search products" />
-          <div id="catalog-search-scope-tabs">
-            <button class="search-scope-btn active" type="button" data-search-scope="both">All</button>
-            <button class="search-scope-btn" type="button" data-search-scope="products">Products</button>
-            <button class="search-scope-btn" type="button" data-search-scope="bundles">Bundles</button>
+          <div id="catalog-search-row">
+            <input id="catalog-search-input" type="text" placeholder="Search…" aria-label="Search products" />
+            <div id="catalog-search-scope-tabs">
+              <button class="search-scope-btn active" type="button" data-search-scope="both">All</button>
+              <button class="search-scope-btn" type="button" data-search-scope="products">Products</button>
+              <button class="search-scope-btn" type="button" data-search-scope="bundles">Bundles</button>
+            </div>
           </div>
           <div id="catalog-picker-grid"></div>
           <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
