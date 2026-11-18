@@ -8,14 +8,14 @@
 // its handbook entry together.
 export const LOADING_TIPS = [
   {
-    text: 'Drag a finger on the world to walk, and put a second finger down to look around.',
+    text: 'Drag a finger on the world to walk. Add a second finger to look around.',
     handbook: 'How do I walk around and look around?',
-    words: ['drag', 'second finger'],
+    words: ['one finger', 'second finger'],
   },
   {
     text: 'Double-tap the world to come down to the ground, and again to fly back up.',
     handbook: 'How do I fly, go up and come back down?',
-    words: ['double-tap', 'ground'],
+    words: ['double-tap'],
   },
   {
     text: 'Tap a product to read about it. A small card blooms beside it.',
