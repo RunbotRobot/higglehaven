@@ -13400,6 +13400,13 @@ before this binding resolves to anything live; the endpoint 500s with a
 clear message if `env.FEEDBACK` isn't configured, same as every other R2
 binding check in this codebase.
 
+**#3736**: `metadata` may also carry `startupTimings`, an object of stage name
+to milliseconds since navigation start (`src/ui/startupMarks.js`: bootstrap
+start, auth checked, identity checked, catalog, last location, world, avatar
+mounted, loading screen hidden). Display-only: written into the card note as
+"Startup timings (ms)". The server keeps at most 20 numeric entries, names cut
+to 40 characters; anything else is dropped.
+
 **#3303**: `metadata` may also carry `recentUserVisibleMessages`, an array of
 `{ text, shownAt }` — the last few error/refusal strings the person was
 actually shown (`src/ui/visibleMessages.js`), so a report has the exact words

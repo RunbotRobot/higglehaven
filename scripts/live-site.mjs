@@ -31,6 +31,7 @@
 // Flags: --url (default https://higglehaven.com), --name (required; this
 // session's name), --desktop (1280x800 instead of phone), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
+// --throttle (CPU 4x slower, 150 ms round trip, 1.6/0.75 Mbps: a slow phone, #3736),
 // --cover-report (instead of steps: walk a fixed list of states and print one table of how
 // much of the screen the interface covers in each; for an interface change's before and after).
 //
@@ -42,7 +43,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, THROTTLE_PROFILE,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -83,6 +84,14 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 const result = { url: baseUrl, name: options.name, device: options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
+if (options.throttle) {
+  // Applied after sign-in would miss the sign-in, which is fine; applied here it covers every step.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE_PROFILE.cpuSlowdown });
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: THROTTLE_PROFILE.latencyMs, downloadThroughput: THROTTLE_PROFILE.downKbps * 1024 / 8, uploadThroughput: THROTTLE_PROFILE.upKbps * 1024 / 8 });
+  result.throttle = THROTTLE_PROFILE;
+}
 const timingSamples = new Map();
 page.on('pageerror', (error) => result.consoleErrors.push(error.message));
 page.on('console', (message) => {

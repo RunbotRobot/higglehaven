@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
+import { markStartup } from './ui/startupMarks.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
@@ -2219,6 +2220,7 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
 // Runs after animate() has already started so the (empty, for now) scene
 // renders immediately rather than waiting on the network.
 async function bootstrap() {
+  markStartup('bootstrap-start');
   // Set by #mode-nav just before its reload; consumed
   // once here. Nothing set — a plain fresh tab — lands on Shop, the
   // product's chosen default landing view (see START_MODE_KEY above).

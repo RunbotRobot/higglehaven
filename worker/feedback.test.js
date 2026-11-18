@@ -212,6 +212,21 @@ describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', (
     expect(bare.note).not.toContain('Last messages shown to the person');
   });
 
+  it('puts the startup timings into the card and bounds a malformed field (#3736)', async () => {
+    const response = await postBugReport({
+      metadata: metadataFor({ startupTimings: { 'bootstrap-start': 1200, 'catalog-loaded': 5300.4, bad: 'x', [`long-${'n'.repeat(80)}`]: 1 } }),
+    });
+    const task = await controlRoomTaskFor((await response.json()).reportId);
+    expect(task.note).toContain('Startup timings (ms): bootstrap-start 1200, catalog-loaded 5300,');
+    expect(task.note).not.toContain('bad ');
+    expect(task.note).not.toContain('n'.repeat(41));
+
+    const odd = await postBugReport({ metadata: metadataFor({ startupTimings: [1, 2] }) });
+    expect(odd.status).toBe(201);
+    const bare = await controlRoomTaskFor((await odd.json()).reportId);
+    expect(bare.note).not.toContain('Startup timings');
+  });
+
   it('defaults the card title when no description was given', async () => {
     const response = await postBugReport({ metadata: metadataFor({ description: undefined }) });
     const body = await response.json();

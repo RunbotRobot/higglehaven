@@ -1,3 +1,5 @@
+import { markStartup } from './startupMarks.js';
+
 // #1590: fades out the cold-start/mode-switch splash (#loading-screen, visible
 // by default in index.html's own markup). main.js calls it once bootstrap() has
 // settled, whichever mode it resolved into, including the declined-login dead
@@ -11,6 +13,7 @@
 export function hideLoadingScreen(doc = typeof document === 'undefined' ? null : document) {
   const el = doc && doc.getElementById('loading-screen');
   if (!el || el.classList.contains('loading-screen-hidden')) return;
+  markStartup('loading-screen-hidden');
   el.classList.add('loading-screen-hidden');
   el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
 }
