@@ -719,8 +719,17 @@ export async function openAddProductLeaf(page, way = 'upload') {
 }
 
 export async function openAccountMenu(page) {
+  // #3650: a toggle click can be lost while the page is still re-laying out after a mode change
+  // (saved-layout-preview failed twice on CI at this wait, never locally), and a panel that is
+  // already open must not be toggled shut. So: skip if open, and re-click once if the first
+  // click did not open it.
+  const isOpen = () => page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded') === true);
+  if (await isOpen()) return;
   await page.click('#account-menu-toggle');
-  await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+  if (!(await page.waitForSelector('#account-menu-panel.expanded', { timeout: 3000 }).then(() => true, () => false))) {
+    if (!(await isOpen())) await page.click('#account-menu-toggle');
+    await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+  }
 }
 
 // #3690: in Build the level controls are the Levels petal's leaf, not a "Ground" pill. Open
@@ -864,4 +873,18 @@ export async function captureNotices(page) {
       document.getElementById('notice-modal-ok-btn').click();
     }).observe(modal, { attributes: true, attributeFilter: ['class'] });
   });
+}
+
+// #3650: the on-screen sticks the e2e suite used to find by id are gone; moving is
+// a drag on the world. These boxes are where a stick used to sit, in the lower
+// left (walk) and lower right (look) of the page, so a test that held a mouse
+// drag there to give navigation input still does (the canvas is under both; an
+// automated browser's mouse counts as a finger, see bindWorldGestures).
+export async function shopStickBox(page) {
+  const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  return { x: 20, y: height - 24 - 108, width: 108, height: 108, pageWidth: width };
+}
+export async function shopLookStickBox(page) {
+  const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  return { x: width - 20 - 108, y: height - 24 - 108, width: 108, height: 108 };
 }

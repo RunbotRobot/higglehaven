@@ -90,7 +90,7 @@ console.log('landlet created at the default (0,0) center (status should be 201):
 // which defaults to Shop (see bootstrap's own comment), skipping that gate
 // entirely rather than fighting the now-open modal for the click.
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 // #688/#1175: `#shop-fly-btn.visible` is set at the *start* of
 // enterShopMode's post-gate world build, well before the random spawn
 // location/orbit this test is about to freeze gets set at the very *end*
@@ -105,7 +105,7 @@ await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', t
 // *landing*, not a takeoff -- confirmed directly: shopFlightState is
 // 'flying' (#shop-fly-btn.active/body.shop-flying both true) from the
 // very first frame after spawn, before any click at all.
-await pageA.click('#shop-fly-btn'); // freezes A's position (stops the orbit) and starts landing — see #1175 comment above
+await pageA.evaluate(() => window.__testToggleShopFlight()); // freezes A's position (stops the orbit) and starts landing — see #1175 comment above
 // docs/SPEC.md's "Flying avatars are invisible to other users" means GET
 // /api/presence now withholds a flying builder's row from anyone else —
 // wait past the landing animation's own fixed duration (same margin
@@ -152,9 +152,9 @@ const aRowSeenByB = presenceBeforeBJoins.body.avatars?.find((a) => a.builderId =
 // reasoning as builder A above (B's own 'build' entry opened its own claim
 // modal too, for its own still-unclaimed account).
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn'); // freezes B's position (stops the orbit) and starts landing — see #1175 comment above
+await pageB.evaluate(() => window.__testToggleShopFlight()); // freezes B's position (stops the orbit) and starts landing — see #1175 comment above
 // #2043: same reasoning as A's own freeze sequence above — B also spawns
 // already flying, so this one tap lands it; wait past the fixed landing
 // duration before B is genuinely grounded (and thus visible to A).

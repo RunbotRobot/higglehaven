@@ -13,7 +13,7 @@
 //
 // The loader builds items in small pieces inside a per-frame time budget, so a
 // partly loaded landlet is observable (an all-at-once loader never shows one).
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const LABEL = 'Load Never Blocks Tester';
@@ -80,7 +80,7 @@ for (let i = 0; i < COUNT; i += 100) {
 console.log(`seeded ${COUNT} items in ${statuses.length} batches (all 201):`, statuses.every((s) => s === 201));
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 await page.waitForTimeout(1000);
 
 const cx = landlet.center.x;
@@ -110,7 +110,7 @@ let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 
 // ---- 1. Load it with the joystick held ----
-const joystick = await page.locator('#shop-move-joystick').boundingBox();
+const joystick = await shopStickBox(page);
 const originX = joystick.x + joystick.width / 2;
 const originY = joystick.y + joystick.height / 2;
 reviewRequests = 0;
@@ -164,7 +164,7 @@ console.log(`steady state with the landlet loaded and nothing loading: longest f
 // whole landlet is an order of magnitude above it.
 const FLY_MAX_FRAME_GAP_MS = Number(process.env.E2E_FLY_MAX_FRAME_GAP_MS || 1500);
 await page.evaluate(() => window.__frameMonitor.reset());
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForTimeout(800);
 await page.mouse.move(originX, originY);
 await page.mouse.down();

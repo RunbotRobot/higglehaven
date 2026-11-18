@@ -87,7 +87,7 @@ console.log('elevationM on the freshly-claimed, never-reclassified landlet (shou
 
 async function enterShopAndForceLoad() {
   await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-  await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+  await page.waitForSelector('body.shop-ready', { timeout: 10000 });
   await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
   await page.evaluate(([x, y]) => {
     window.__testTeleportShopAvatar(x, y);

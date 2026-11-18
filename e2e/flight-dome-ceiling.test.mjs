@@ -69,7 +69,7 @@ const LABEL = 'Flight Dome Ceiling Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688/#1175: spawn state isn't settled until enterShopMode's post-fetch
 // tail finishes (same wait flight.test.mjs/shop-landlet-instance-leak.test.mjs rely on).
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });

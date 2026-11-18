@@ -36,7 +36,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,14 +129,14 @@ await pageFetchJson('/api/instances', {
 // of A's (which is suspended below).
 const { browser: browserB, page: pageB, errors: errorsB } = await launchPage({ promptAnswer: LABEL_B });
 await chooseIdentity(pageB, { mode: 'shop', label: LABEL_B, isNew: true });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 10000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // Same spawn-rotation-release gesture e2e/shop-landlet-instance-leak.test.mjs
 // and e2e/shop-landlet-record-refresh.test.mjs both use -- a fresh Shop-mode
 // spawn otherwise keeps overwriting shopAvatarPosition every frame via its
 // own hands-off orbit until real navigation input first arrives.
-const moveJoystickBox = await pageB.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(pageB);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await pageB.mouse.move(moveCenterX, moveCenterY);

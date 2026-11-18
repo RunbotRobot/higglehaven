@@ -3,7 +3,7 @@
 // field never move the avatar, and Space still belongs to the flight toggle.
 // Drives real key presses in a real browser and reads the avatar's position
 // and camera yaw.
-import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, goToMode } from './helpers.mjs';
 
 const LABEL = 'Keyboard Movement Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -12,7 +12,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 const position = () => page.evaluate(() => {
   const p = window.__testShopAvatarPosition?.();
@@ -23,7 +23,7 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 // A trivial joystick tap ends the hands-off spawn orbit so the avatar is
 // genuinely idle (same idiom as e2e/shop-afk-look-only-input.test.mjs).
-const moveBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveBox = await shopStickBox(page);
 const ox = moveBox.x + moveBox.width / 2;
 const oy = moveBox.y + moveBox.height / 2;
 await page.mouse.move(ox, oy);

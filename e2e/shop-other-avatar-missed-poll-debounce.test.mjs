@@ -55,9 +55,9 @@ console.log('landlet created (status should be 201):', landletCreated.status);
 // as e2e/multiplayer-presence.test.mjs's own setup -- see that file's
 // comments for why each step is needed.
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn');
+await pageA.evaluate(() => window.__testToggleShopFlight());
 await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now grounded
 await pageA.waitForTimeout(2500); // past SHOP_PRESENCE_REPORT_INTERVAL_MS (1500) once
 
@@ -72,9 +72,9 @@ await fetchJson(pageB, '/api/presence', {
 });
 
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn');
+await pageB.evaluate(() => window.__testToggleShopFlight());
 await pageB.waitForTimeout(2500);
 
 // Give A's own poll loop (SHOP_PRESENCE_POLL_INTERVAL_MS = 1000) a chance to

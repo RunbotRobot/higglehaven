@@ -101,7 +101,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.waitForTimeout(500);
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 await page.waitForTimeout(1000);
 
 let pass = true;
@@ -131,7 +131,7 @@ seeded = true;
 tileRequests = 0;
 await page.reload({ waitUntil: 'networkidle' });
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 await page.waitForTimeout(500);
 await page.evaluate(() => window.__frameMonitor.reset());
 await goToAltitude();

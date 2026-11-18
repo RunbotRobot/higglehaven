@@ -15,7 +15,7 @@ import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 const LABEL = 'Checkout Finalize Retry Suite Shopper';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 let finalizeCalls = 0;
 await page.route('**/api/purchases/finalize', async (route) => {

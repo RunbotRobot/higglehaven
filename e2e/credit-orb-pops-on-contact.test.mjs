@@ -8,7 +8,7 @@
 //      window, then comes back with a plain message
 //   C: 429 (the collect limit)       -> orb comes back, the notice shows the numbers
 //      (last: a 429 starts a 30 s collecting cooldown)
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Pop Tester';
 const LANDLET_ID = `credit-orb-pop-e2e-${Date.now()}`;
@@ -21,14 +21,14 @@ const orbIds = {};
 for (const [key, [x, y]] of Object.entries(spots)) orbIds[key] = await seedCreditOrbAsAdmin(LANDLET_ID, { x, y });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 const { landlets } = await page.evaluate(async () => (await fetch('/api/landlets?limit=100')).json());
 const myLandlet = landlets.find((l) => l.landletId === LANDLET_ID);
 
 // Break the hands-off spawn orbit with a brief real joystick deflection so the
 // teleport hook can drive the avatar (same sequence as credit-orb-collect).
-const joystick = await page.locator('#shop-move-joystick').boundingBox();
+const joystick = await shopStickBox(page);
 const cx = joystick.x + joystick.width / 2;
 const cy = joystick.y + joystick.height / 2;
 await page.mouse.move(cx, cy);

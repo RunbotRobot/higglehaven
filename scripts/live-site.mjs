@@ -10,13 +10,15 @@
 //   node scripts/live-site.mjs --url http://127.0.0.1:8787 --login local --name higglehaven10 idle shot
 //
 // Steps (each `name` or `name:arg:arg`):
-//   walk:<forward|back|left|right>[:ms]   hold the joystick that way (default 1000 ms)
-//   aim:<up|down|left|right>[:ms]        hold the look joystick that way (default 1000 ms):
-//                                         turns the camera, up and down are the pitch
+//   walk:<forward|back|left|right>[:ms]   put a finger on the world and hold it dragged that way
+//                                         (default 1000 ms); moving is a gesture, no sticks (#3650)
+//   aim:<up|down|left|right>[:ms]        a second finger dragged that way while the first
+//                                         rests (default 1000 ms): turns the camera, up and
+//                                         down are the pitch
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
 //   mode:<shop|build|sell>                switch mode
-//   fly                                   toggle flying
+//   fly                                   double-tap the world: takes off or lands
 //   settings                              open the account menu, then Settings
 //   idle                                  wait until the network and frames settle
 //   wait:<ms>                             wait
@@ -221,28 +223,59 @@ const settle = async () => {
   await page.waitForTimeout(500);
 };
 
-async function holdJoystick(direction, ms, { selector = '#shop-move-joystick', vectors = WALK_VECTORS } = {}) {
-  await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 }).catch(() => {});
-  const box = await page.locator(selector).boundingBox();
-  if (!box) throw new Error('the joystick is not on screen (is this Shop mode?)');
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  const [vx, vy] = vectors[direction];
-  await page.mouse.move(cx, cy);
-  await page.mouse.down();
-  await page.mouse.move(cx + (vx * box.width) / 2, cy + (vy * box.height) / 2, { steps: 4 });
+// #3650: moving is touching the world, so these send real touch events (Chrome
+// DevTools Protocol), the same input a phone sends. A walk is one finger dragged
+// from the lower middle of the screen; a look is a second finger, with the first
+// resting where it landed; a fly is two quick taps.
+let touchSession = null;
+async function sendTouch(type, points) {
+  touchSession ||= await page.context().newCDPSession(page);
+  await touchSession.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+}
+async function holdWalk(direction, ms) {
+  await page.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
+  const [vx, vy] = WALK_VECTORS[direction];
+  const x0 = device.width / 2;
+  const y0 = device.height * 0.65;
+  await sendTouch('touchStart', [{ id: 1, x: x0, y: y0 }]);
+  await sendTouch('touchMove', [{ id: 1, x: x0 + vx * 30, y: y0 + vy * 30 }]);
+  await sendTouch('touchMove', [{ id: 1, x: x0 + vx * 60, y: y0 + vy * 60 }]);
   await page.waitForTimeout(ms);
-  await page.mouse.up();
+  await sendTouch('touchEnd', []);
+}
+async function holdLook(direction, ms) {
+  await page.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
+  const [vx, vy] = AIM_VECTORS[direction];
+  const rest = { id: 1, x: device.width * 0.25, y: device.height * 0.65 };
+  const x0 = device.width * 0.7;
+  const y0 = device.height * 0.65;
+  await sendTouch('touchStart', [rest]);
+  await sendTouch('touchStart', [rest, { id: 2, x: x0, y: y0 }]);
+  await sendTouch('touchMove', [rest, { id: 2, x: x0 + vx * 30, y: y0 + vy * 30 }]);
+  await sendTouch('touchMove', [rest, { id: 2, x: x0 + vx * 60, y: y0 + vy * 60 }]);
+  await page.waitForTimeout(ms);
+  await sendTouch('touchEnd', []);
+}
+async function doubleTapWorld() {
+  const x = device.width / 2;
+  const y = device.height * 0.3;
+  touchSession ||= await page.context().newCDPSession(page);
+  // Sent back to back, not awaited one by one, so the gap is the page's and a
+  // slow round trip cannot stretch it past the double-tap window.
+  await Promise.all([
+    sendTouch('touchStart', [{ id: 1, x, y }]), sendTouch('touchEnd', []),
+    sendTouch('touchStart', [{ id: 1, x, y }]), sendTouch('touchEnd', []),
+  ]);
 }
 
 async function runStep(step, index) {
   const [a, b] = step.args;
   switch (step.command) {
     case 'walk':
-      await holdJoystick(a, b);
+      await holdWalk(a, b);
       return null;
     case 'aim':
-      await holdJoystick(a, b, { selector: '#shop-look-joystick', vectors: AIM_VECTORS });
+      await holdLook(a, b);
       return null;
     case 'look': {
       const startX = device.width / 2;
@@ -263,7 +296,7 @@ async function runStep(step, index) {
       await settle();
       return null;
     case 'fly':
-      await page.click('#shop-fly-btn');
+      await doubleTapWorld();
       return null;
     case 'settings':
       await page.click('#account-menu-toggle');
@@ -316,7 +349,7 @@ async function runCoverReport() {
     }
   };
   await measure('Shop, arrival (flying)');
-  await measure('Shop, walking', () => page.click('#shop-fly-btn'));
+  await measure('Shop, walking', () => doubleTapWorld());
   await measure('Settings, General tab', async () => {
     await page.click('#account-menu-toggle');
     await page.click('#settings-btn');

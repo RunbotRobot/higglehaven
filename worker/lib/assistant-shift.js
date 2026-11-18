@@ -8,6 +8,12 @@
 //     name, see fleet-agents.js) may call it; anyone else, a coding session's
 //     fleet account included, gets 403.
 //
+//   GET /api/assistant/standing   (#3636 part 2)
+//     Any signed-in person: who is on shift and where each one stands, so the
+//     assistant window can say so and offer to walk there. Nothing is pushed:
+//     it answers only when asked (the assistant is findable, never a place
+//     people are sent).
+//
 // While the heartbeat is fresh the assistant appears in GET /api/presence for
 // shoppers standing on its landlet; when it lapses the assistant is simply gone.
 import { json, HttpError } from './http.js';
@@ -48,6 +54,9 @@ export function assistantSpot(agentName, landlets) {
 }
 
 export async function handleAssistant(request, db, route) {
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'standing') {
+    return handleStanding(request, db);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'heartbeat') {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const account = await db.prepare('SELECT is_fleet, username FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first();
@@ -70,16 +79,13 @@ export async function handleAssistant(request, db, route) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Presence rows for the assistants on shift whose spot is this landlet, in the
-// shape handlePresence's other rows have (plus the fields avatarPresenceFromRow
-// reads for an assistant). Empty when none are on shift or the landlet is not an
-// assistant's spot.
-export async function onShiftAssistantRowsFor(db, landletId, excludeUserIds = []) {
+// One notion of "on shift" (#3636): a fresh in-world heartbeat OR a fresh inbox
+// poll (users.assistant_seen_at, the signal the chat panel already trusts) puts
+// an assistant in the world. Busy comes from the heartbeat when that is fresh,
+// otherwise from whether a conversation is open. Each carries its spot (null when
+// there is no public landlet to stand on).
+async function listOnShiftAssistants(db, excludeUserIds = []) {
   const staleBefore = new Date(Date.now() - ASSISTANT_SHIFT_STALE_AFTER_MS).toISOString();
-  // One notion of "on shift" (#3636): a fresh in-world heartbeat OR a fresh
-  // inbox poll (users.assistant_seen_at, the signal the chat panel already
-  // trusts) puts her in the world. Busy comes from the heartbeat when that is
-  // fresh, otherwise from whether a conversation is open.
   const { results: shifts } = await db.prepare(`
     SELECT users.user_id AS user_id,
       MAX(COALESCE(assistant_shifts.last_seen_at, ''), COALESCE(users.assistant_seen_at, '')) AS last_seen_at,
@@ -97,9 +103,17 @@ export async function onShiftAssistantRowsFor(db, landletId, excludeUserIds = []
   const { results: landlets } = await db.prepare(
     "SELECT landlet_id, center_x_m, center_y_m, elevation_m FROM landlets WHERE status = 'greenbelt'",
   ).all();
+  return onShift.map((shift) => ({ ...shift, spot: assistantSpot(shift.fleet_username, landlets) }));
+}
+
+// Presence rows for the assistants on shift whose spot is this landlet, in the
+// shape handlePresence's other rows have (plus the fields avatarPresenceFromRow
+// reads for an assistant). Empty when none are on shift or the landlet is not an
+// assistant's spot.
+export async function onShiftAssistantRowsFor(db, landletId, excludeUserIds = []) {
   const rows = [];
-  for (const shift of onShift) {
-    const spot = assistantSpot(shift.fleet_username, landlets);
+  for (const shift of await listOnShiftAssistants(db, excludeUserIds)) {
+    const spot = shift.spot;
     if (!spot || spot.landletId !== landletId) continue;
     rows.push({
       user_id: shift.user_id,
@@ -114,4 +128,25 @@ export async function onShiftAssistantRowsFor(db, landletId, excludeUserIds = []
     });
   }
   return rows;
+}
+
+// #3636 part 2: where each assistant on shift stands, for the assistant window.
+// Only the fields the window needs; the name is the same one the avatar's tag
+// shows (fleet username is the agent name).
+async function handleStanding(request, db) {
+  await requireSessionBuilder(request, db);
+  const assistants = [];
+  for (const shift of await listOnShiftAssistants(db)) {
+    if (!shift.spot) continue;
+    const agent = ASSISTANT_AGENT_NAMES.find((name) => name.toLowerCase() === String(shift.fleet_username).toLowerCase());
+    assistants.push({
+      userId: shift.user_id,
+      builderId: shift.builder_id,
+      name: agent || shift.fleet_username,
+      busy: shift.busy === 1,
+      landletId: shift.spot.landletId,
+      x: shift.spot.x, y: shift.spot.y, z: shift.spot.z, heading: shift.spot.heading,
+    });
+  }
+  return json({ assistants });
 }

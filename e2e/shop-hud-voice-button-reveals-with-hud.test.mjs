@@ -49,11 +49,12 @@ await page.addInitScript(() => {
   const isShown = (el) => el && getComputedStyle(el).display !== 'none';
   const check = () => {
     const voice = document.getElementById('shop-voice-btn');
-    const fly = document.getElementById('shop-fly-btn');
+    // #3650: the fly button is gone; "the HUD is up" is body.shop-ready.
+    const hudUp = document.body && document.body.classList.contains('shop-ready');
     if (!voice) return;
     if (isShown(voice)) {
       window.__hudOrder.voiceEverShown = true;
-      if (!isShown(fly)) window.__hudOrder.voiceShownBeforeFly = true;
+      if (!hudUp) window.__hudOrder.voiceShownBeforeFly = true;
     }
   };
   const start = () => {
@@ -81,7 +82,7 @@ await page.route('**/api/auth/me', async (route) => {
 });
 await page.reload({ waitUntil: 'domcontentloaded' });
 
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 await page.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
 await page.waitForTimeout(500);
 

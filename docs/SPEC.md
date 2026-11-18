@@ -79,7 +79,7 @@
 
 **Movement:**
 - Walking: 1.8 m/s. Running: 4.4704 m/s (10 mph, v17 — raised from 2.7 m/s/~6 mph, v16, which still read as a slow walk in practice; prioritizes "feels right" video-game pacing over real-world realism).
-- **Flight:** single tap on the bird button, or double-press spacebar (desktop) — the button needs no double-tap guard since, unlike spacebar, it isn't an overloaded gesture a stray press could trigger by accident. Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
+- **Flight:** double-tap on the world (touch; the bird button and the on-screen sticks went when the interface became the bud, #3648/#3650), or double-press spacebar (desktop) — both are double gestures because a single tap or press does other things and must never launch the player by accident. Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
 - Altitude/speed: **logarithmic** — each doubling of altitude ≈ 50% more max ground speed, diminishing at extremes. ~10x walking speed near building-height, up to ~100x at max altitude (~500m).
 - Flying avatars are invisible to other users.
 - **One way to move through the world (owner decision, 2026-11-08, #3253):** Sell mode's in-world view of a seller's own products uses this same movement, camera, HUD and compass, with the seller's equipped avatar, instead of a separate set of controls. The seller walks (or flies) among the page of products; there is no presence, chat or voice there.

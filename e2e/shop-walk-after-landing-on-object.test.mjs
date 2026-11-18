@@ -17,7 +17,7 @@
 // new window.__testMoveShopAvatarWithCollision/window.__testShopAvatarPosition
 // hooks, same "teleport + force the real per-frame logic" convention
 // e2e/shop-landlet-instance-leak.test.mjs (#1445/#1479) already established.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Shop Landing Walk Tester';
 
@@ -62,13 +62,13 @@ const treeWorldY = myLandlet.center.y + treeInstance.y;
 const treeTopZ = treeTemplate.dimensions.height;
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1445: a brief real joystick deflection breaks Shop-mode's own
 // hands-off spawn orbit, freeing shopAvatarPosition for the teleport hook
 // below to actually drive.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

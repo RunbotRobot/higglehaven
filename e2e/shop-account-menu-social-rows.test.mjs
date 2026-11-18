@@ -14,7 +14,7 @@ async function patch(route) {
 await page.route('**/api/auth/me', patch);
 await page.route('**/api/auth/signup', patch);
 await chooseIdentity(page, { mode: 'shop', label: 'SocialRows' + (Date.now() % 100000), isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 
 await openAccountMenu(page);
 const rows = await page.evaluate(() => ['notifications-btn', 'friends-btn'].map((id) => getComputedStyle(document.getElementById(id)).display !== 'none'));
@@ -32,7 +32,7 @@ await page.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 await page.click('#friends-close-btn');
 await page.waitForSelector('#friends-modal:not(.visible)', { state: 'attached', timeout: 5000 });
 
-const stillShop = await page.evaluate(() => !!document.querySelector('#shop-fly-btn.visible'));
+const stillShop = await page.evaluate(() => !!document.querySelector('body.shop-ready'));
 console.log('still in Shop:', stillShop);
 pass = pass && stillShop;
 await finish(browser, { pass, label: 'shop account menu social rows', errors });

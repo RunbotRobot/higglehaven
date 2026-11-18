@@ -33,9 +33,9 @@ const open = {
   howToMove: await shown('#bud-petal-sell-how-to-move'),
   shopHowToMove: await shown('#bud-petal-shop-how-to-move'),
   settings: await shown('#settings-btn'),
-  shop: await shown('.mode-nav-btn[data-mode="shop"]'),
-  build: await shown('.mode-nav-btn[data-mode="build"]'),
-  sellItself: await shown('.mode-nav-btn[data-mode="sell"]'),
+  shop: await shown('#bud-modes .mode-nav-btn[data-mode="shop"]'),
+  build: await shown('#bud-modes .mode-nav-btn[data-mode="build"]'),
+  sellItself: await shown('#bud-modes .mode-nav-btn[data-mode="sell"]'), // #3723: the ring shows all three modes, the current one marked
 };
 console.log('unfolded:', JSON.stringify(open));
 
@@ -63,7 +63,7 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 
 const pass = rest.bud && rest.logo && !rest.gear && !rest.wordmark && !rest.modeNav && rest.productsButton === 0
   && rest.panelOpen === 0
-  && open.myProducts && open.howToMove && !open.shopHowToMove && open.settings && open.shop && open.build && !open.sellItself
+  && open.myProducts && open.howToMove && !open.shopHowToMove && open.settings && open.shop && open.build && open.sellItself
   && foldedAfterPetal && leafTitle === 'How to move' && leafClosed
   && errors.length === 0;
 await finish(browser, { pass, label: 'Sell in the bud (#3699)', errors });

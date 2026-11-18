@@ -7,7 +7,7 @@
 // "Sit/lean proximity targeting (#2477)") -- no pose change to verify yet,
 // just that the right target (and the right world-space numbers) get
 // found.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Idle Sit Lean Targeting Builder';
 const LANDLET_ID = 'idle-sit-lean-targeting-landlet';
@@ -36,7 +36,7 @@ async function fetchJson(p, path, options) {
 // shopAvatarPosition.x/y every frame regardless of what this test teleports
 // it to.
 async function stopSpawnOrbit(p) {
-  const moveJoystickBox = await p.locator('#shop-move-joystick').boundingBox();
+  const moveJoystickBox = await shopStickBox(p);
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
   await p.mouse.move(moveCenterX, moveCenterY);
@@ -136,7 +136,7 @@ const expected = {
 };
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 await stopSpawnOrbit(page);
