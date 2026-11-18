@@ -873,6 +873,35 @@
         white-space: nowrap;
         pointer-events: none;
       }
+      /* #3774: a note that announces something (an assistant's reply) is a door: its own button beside
+         the head, at least 44px tall, growing out of the head and folding back. The plain word inside
+         the head steps aside for it. */
+      body[data-bud-note] .bud-word { display: none !important; }
+      body[data-bud="on"] #bud-note {
+        position: absolute;
+        left: calc(var(--bud-size) + var(--space-sm));
+        top: calc((var(--bud-size) - 44px) / 2);
+        min-height: 44px;
+        padding: 0 var(--space-2xl);
+        border: 0;
+        border-radius: var(--radius-word);
+        background: rgb(var(--white-rgb) / 0.85);
+        box-shadow: var(--shadow-card);
+        color: var(--ink);
+        font: var(--text-xs)/1 var(--font-sans);
+        white-space: nowrap;
+        cursor: pointer;
+        transform-origin: left center;
+        animation: bud-note-grow 0.2s ease-out both;
+      }
+      body[data-bud="on"] #bud-note:active { background: rgb(var(--spring-green-rgb) / 0.55); transform: scale(0.97); }
+      body[data-bud="on"] #bud-note.folding { animation: bud-note-fold 0.18s ease-in both; pointer-events: none; }
+      body[data-bud="on"] #account-menu-toggle.active ~ #bud-note { display: none; }
+      @keyframes bud-note-grow { from { opacity: 0; transform: scaleX(0.2); } to { opacity: 1; transform: scaleX(1); } }
+      @keyframes bud-note-fold { from { opacity: 1; transform: scaleX(1); } to { opacity: 0; transform: scaleX(0.2); } }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"] #bud-note, body[data-bud="on"] #bud-note.folding { animation: none; }
+      }
       /* #3723: the first-visit word steps aside while the bud is open, where the mode petals now
          fan out over its right edge. */
       body[data-bud="on"] #account-menu-toggle.active .bud-word { display: none; }

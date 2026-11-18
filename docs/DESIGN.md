@@ -79,8 +79,8 @@ permanent controls. Four things are built with:
 | **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
 | **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
 
-Everything else is a gesture on the world itself: drag to walk, a second finger
-to look, double-tap to fly, tap a product to open its card. A gesture cannot be
+Everything else is a gesture on the world itself: drag on the left half to walk, drag on
+the right half to look, double-tap to fly, tap a product to open its card. A gesture cannot be
 seen until it is taught once, so the bud teaches (it pulses and says Menu until
 first opened) and the instructions live in it, one tap away. Under
 `prefers-reduced-motion` nothing animates.
@@ -308,6 +308,12 @@ by touching the world. The module is `src/ui/bud.js`:
   "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
   Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
   plan blooms it beside the selection; that is a later slice).
+- `setBudWord(key, text, { open, label })` and `clearBudWord(key)` (#3774): the word the bud
+  wears beside it. A word that announces something carries its door: with `open`, the word is
+  a real button (`#bud-note`, at least 44px tall, a pressed state, `label` for a screen
+  reader) that grows out of the head and folds back, and a tap folds the bud and runs `open`;
+  the key's owner clears the word once the thing is open (an assistant's reply opens the
+  conversation at the newest message). With no `open` it is only a word, as before.
 - `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
   unread mark; it clears when none are left.
 - The bud is the existing account toggle and its petals are the buttons of the

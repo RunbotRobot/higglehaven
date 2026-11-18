@@ -10,11 +10,11 @@
 //   node scripts/live-site.mjs --url http://127.0.0.1:8787 --login local --name higglehaven10 idle shot
 //
 // Steps (each `name` or `name:arg:arg`):
-//   walk:<forward|back|left|right>[:ms]   put a finger on the world and hold it dragged that way
-//                                         (default 1000 ms); moving is a gesture, no sticks (#3650)
-//   aim:<up|down|left|right>[:ms]        a second finger dragged that way while the first
-//                                         rests (default 1000 ms): turns the camera, up and
-//                                         down are the pitch
+//   walk:<forward|back|left|right>[:ms]   put a finger on the left half of the world and hold it
+//                                         dragged that way (default 1000 ms); moving is a
+//                                         gesture, no sticks (#3650, #3749)
+//   aim:<up|down|left|right>[:ms]         the same from the right half (default 1000 ms): turns
+//                                         the camera, up and down are the pitch
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
 //   mode:<shop|build|sell>                switch mode
@@ -24,6 +24,7 @@
 //   wait:<ms>                             wait
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
+//   pos                                   where the avatar stands now, and which mode and flags the page is in
 //   cover                                 how much of the screen the interface covers right now
 //                                         (share of the viewport, number of separate elements, the
 //                                         largest one); how it is counted is in live-site-lib.mjs
@@ -234,8 +235,8 @@ const settle = async () => {
 
 // #3650: moving is touching the world, so these send real touch events (Chrome
 // DevTools Protocol), the same input a phone sends. A walk is one finger dragged
-// from the lower middle of the screen; a look is a second finger, with the first
-// resting where it landed; a fly is two quick taps.
+// from the left half of the screen; a look is one finger dragged from the right half
+// (#3749: the half it lands on decides, so each works alone); a fly is two quick taps.
 let touchSession = null;
 async function sendTouch(type, points) {
   touchSession ||= await page.context().newCDPSession(page);
@@ -244,7 +245,7 @@ async function sendTouch(type, points) {
 async function holdWalk(direction, ms) {
   await page.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
   const [vx, vy] = WALK_VECTORS[direction];
-  const x0 = device.width / 2;
+  const x0 = device.width * 0.25;
   const y0 = device.height * 0.65;
   await sendTouch('touchStart', [{ id: 1, x: x0, y: y0 }]);
   await sendTouch('touchMove', [{ id: 1, x: x0 + vx * 30, y: y0 + vy * 30 }]);
@@ -255,13 +256,11 @@ async function holdWalk(direction, ms) {
 async function holdLook(direction, ms) {
   await page.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
   const [vx, vy] = AIM_VECTORS[direction];
-  const rest = { id: 1, x: device.width * 0.25, y: device.height * 0.65 };
-  const x0 = device.width * 0.7;
+  const x0 = device.width * 0.65;
   const y0 = device.height * 0.65;
-  await sendTouch('touchStart', [rest]);
-  await sendTouch('touchStart', [rest, { id: 2, x: x0, y: y0 }]);
-  await sendTouch('touchMove', [rest, { id: 2, x: x0 + vx * 30, y: y0 + vy * 30 }]);
-  await sendTouch('touchMove', [rest, { id: 2, x: x0 + vx * 60, y: y0 + vy * 60 }]);
+  await sendTouch('touchStart', [{ id: 1, x: x0, y: y0 }]);
+  await sendTouch('touchMove', [{ id: 1, x: x0 + vx * 30, y: y0 + vy * 30 }]);
+  await sendTouch('touchMove', [{ id: 1, x: x0 + vx * 60, y: y0 + vy * 60 }]);
   await page.waitForTimeout(ms);
   await sendTouch('touchEnd', []);
 }
@@ -327,6 +326,15 @@ async function runStep(step, index) {
     }
     case 'stats':
       return frameStats();
+    case 'pos':
+      return page.evaluate(() => ({
+        avatar: window.__testShopAvatarPosition?.() ?? null,
+        mode: document.body.dataset.mode,
+        shopReady: document.body.classList.contains('shop-ready'),
+        flying: document.body.classList.contains('shop-flying'),
+        sellWorldView: window.__sellWorldViewActive?.() ?? null,
+        sellBounds: window.__sellWorldGroundBounds?.() ?? null,
+      }));
     case 'cover':
       return measureCover();
     default:
@@ -419,7 +427,7 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}) });
     } catch (error) {
       result.steps.push({ step: label, ok: false, error: error.message.split('\n')[0] });
       break;
