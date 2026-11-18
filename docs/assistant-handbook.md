@@ -641,8 +641,10 @@ are inside it.
    then tap "Add item". A short strip opens at the bottom: a "Search" box and a
    row of items to swipe, the ones used most recently first.
 2. Swipe along the row, or type in the "Search" box. For the whole list, tap
-   "All items": "All", "Products" and "Bundles" narrow it to everything, single
-   items or saved bundles.
+   "All items": a wider panel opens with the "Search" box and, on the same row,
+   "All", "Products" and "Bundles", which narrow it to everything, single items
+   or saved bundles. The items scroll underneath; "Manual" and "Prompt" are at
+   the top, beside the close button.
 3. Tap an item's name. The list closes and the top of the screen says "Tap a spot
    to place" and the item's name.
 4. Tap the ground where you want it.
