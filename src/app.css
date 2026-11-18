@@ -1173,10 +1173,10 @@
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
       .bud-leaf-close {
         position: absolute;
-        top: 8px;
-        right: 10px;
-        width: 36px;
-        height: 36px;
+        top: 4px;
+        right: 6px;
+        width: 44px; /* #3818: a tap target of at least 44px */
+        height: 44px;
         border: none;
         border-radius: var(--radius-round);
         background: transparent;
@@ -1903,7 +1903,7 @@
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
-        font: 10px/1 sans-serif;
+        font: 12px/1 sans-serif; /* #3818: nothing under 12px */
         pointer-events: none;
       }
       .compass-label.compass-n {
