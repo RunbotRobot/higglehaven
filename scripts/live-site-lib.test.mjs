@@ -12,7 +12,7 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('aim:left')).toEqual({ command: 'aim', args: ['left', 1000] });
     expect(parseStep('look:40:-20')).toEqual({ command: 'look', args: [40, -20] });
     expect(parseStep('tap:120:300')).toEqual({ command: 'tap', args: [120, 300] });
-    expect(parseStep('tap:#shop-fly-btn')).toEqual({ command: 'tap', args: ['#shop-fly-btn'] });
+    expect(parseStep('tap:#shop-up-btn')).toEqual({ command: 'tap', args: ['#shop-up-btn'] });
     expect(parseStep('tap:button:has-text("Settings")')).toEqual({ command: 'tap', args: ['button:has-text("Settings")'] });
     expect(parseStep('mode:build')).toEqual({ command: 'mode', args: ['build'] });
     expect(parseStep('shot:after-fly')).toEqual({ command: 'shot', args: ['after-fly'] });

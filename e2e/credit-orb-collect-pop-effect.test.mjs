@@ -8,7 +8,7 @@
 // the same "expose a minimal hook purely for test verification" convention
 // window.__testActiveCreditOrbIds (#2264) already uses, since
 // creditOrbPopEffects isn't otherwise observable from a test.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Pop Effect Tester';
 const LANDLET_ID = `credit-orb-pop-e2e-${Date.now()}`;
@@ -25,7 +25,7 @@ async function fetchJson(path) {
 }
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 const { landlets } = await fetchJson('/api/landlets?limit=100');
@@ -35,7 +35,7 @@ console.log('seeded landlet found via the API (should be true):', !!myLandlet);
 // #1445: a brief real joystick deflection breaks Shop mode's own hands-off
 // spawn orbit, freeing shopAvatarPosition for the teleport hook to drive --
 // same sequence e2e/credit-orb-collect.test.mjs uses.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

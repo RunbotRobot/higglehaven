@@ -35,19 +35,6 @@
       <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
     </div>
     </div>
-    <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <!-- #506/N45 history (see this button's own CSS comment below for the
-         fuller account): native bird emoji glyphs kept reading as a species/
-         color mismatch between the grounded and flying states across
-         platforms, so N45 settled for one unchanging dove glyph plus a CSS
-         tilt to carry the state instead. Owner-supplied custom artwork
-         (Control Room, 2026-10-01) replaces both emoji with a matching
-         flying/standing pair of the same bird, same style, same colors --
-         the actual problem N45 was working around -- so the glyph can go
-         back to carrying the state itself; see setShopFlyBtnFlying in
-         src/main.js for the swap. -->
-    <button id="shop-fly-btn" class="shop-ui" type="button" aria-label="Toggle flying"><img id="shop-fly-btn-icon" src="/bird-standing.png" alt="" /></button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button" aria-label="Fly up">&#9650;</button>
       <button id="shop-down-btn" type="button" aria-label="Fly down">&#9660;</button>

@@ -24,7 +24,7 @@
 // collision half, so it reads as clear ground. A then lands for real (click
 // #shop-fly-btn, wait past the landing duration) and should end up resting
 // on top of the tree, not clipped into it at the stale pre-nudge floor.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL_A = 'Landing Item Collision Builder A';
 const LABEL_B = 'Landing Item Collision Builder B';
@@ -42,7 +42,7 @@ const pageB = sessionB.page;
 // convention e2e/shop-walk-after-landing-on-object.test.mjs's own header
 // comment documents and uses.
 async function stopSpawnOrbit(page) {
-  const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+  const moveJoystickBox = await shopStickBox(page);
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
   await page.mouse.move(moveCenterX, moveCenterY);
@@ -84,7 +84,7 @@ const landletCreated = await fetchJson(pageA, '/api/landlets', {
 console.log('landlet created at the default (0,0) center (status should be 201):', landletCreated.status);
 
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // Place a Tree (placeholder-tree, migrations/0001_initial.sql) via the real
@@ -127,7 +127,7 @@ const expectedNudgeY = by;
 
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 // Exact, deterministic placement (unlike A's own real landing below) --
 // this is purely the "occupant" B drives into position, not the thing under
@@ -146,7 +146,7 @@ await pageB.waitForTimeout(500);
 await pageA.waitForTimeout(3000);
 
 await chooseIdentity(pageA, { mode: 'shop', label: LABEL_A, isNew: false });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 10000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // Teleport A (2-arg -- leaves z/flightState untouched, so A stays 'flying',
@@ -163,7 +163,7 @@ await pageA.waitForTimeout(500);
 const othersSeenByA = await pageA.evaluate(() => window.__shopOtherAvatars);
 console.log('B as seen by A right before landing (should be a real {x, y, ...} at bx/by):', othersSeenByA);
 
-await pageA.click('#shop-fly-btn'); // starts landing from A's current (bx, by)
+await pageA.evaluate(() => window.__testToggleShopFlight()); // starts landing from A's current (bx, by)
 // #2423: a fixed real-time wait here (the convention this test originally
 // copied from e2e/shop-landing-spot-avatar-collision.test.mjs) assumes
 // SHOP_FLIGHT_LANDING_DURATION_S (2s) of *simulated* flight time reliably

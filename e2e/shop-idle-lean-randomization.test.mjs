@@ -8,7 +8,7 @@
 // instant. Target-selection randomization itself (findShopIdleInteractionTarget)
 // is already proven kind-agnostic by the sit test, so this file only
 // covers the settle-delay timing half, for lean.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Idle Lean Randomization Builder';
 const LANDLET_ID = 'idle-lean-randomization-landlet';
@@ -36,7 +36,7 @@ async function fetchJson(p, path, options) {
 // below, between idle episodes, to force real movement input and re-arm
 // the idle timer for the next episode.
 async function deflectMoveJoystick(p) {
-  const moveJoystickBox = await p.locator('#shop-move-joystick').boundingBox();
+  const moveJoystickBox = await shopStickBox(p);
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
   await p.mouse.move(moveCenterX, moveCenterY);
@@ -101,7 +101,7 @@ const placed = await fetchJson(page, '/api/instances/batch', {
 console.log('wall instance placed (status should be 201):', placed.status, placed.body);
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 await deflectMoveJoystick(page);

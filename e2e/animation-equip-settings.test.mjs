@@ -88,7 +88,7 @@ console.log('purchase response (status should be 201):', purchased.status);
 // "no real skeleton to compare against" case). ---
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 const productInfoText = await page.evaluate(() => document.getElementById('product-card')?.textContent || '');
 console.log('Shop product card text before any tap (diagnostic only):', productInfoText);

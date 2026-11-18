@@ -15,7 +15,7 @@ const LABEL = 'Feedback Suite Tester';
 const { browser, page, errors } = await launchPage();
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 
 // #3302: the entry point moved from a Shop HUD pill to Send feedback in
 // Settings (every mode). The all-modes flow is covered by

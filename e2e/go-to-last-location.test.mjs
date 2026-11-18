@@ -12,14 +12,14 @@
 //      reading the position back from the server once the client's own
 //      report loop has had a chance to send it, not by guessing from the
 //      client alone.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Last Location Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688/#1175: see e2e/flight.test.mjs's own identical comment — the spawn
 // state (including whether a last location exists to show this button for)
 // isn't settled until enterShopMode's post-fetch tail finishes.
@@ -44,7 +44,7 @@ async function seedPresence(x, y, heading) {
 async function reenterShop() {
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
-  await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+  await page.waitForSelector('body.shop-ready', { timeout: 10000 });
   await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 
@@ -58,7 +58,7 @@ const visibleAfterSeedA = await lastLocationVisible();
 // listens for) — a brief deflection and release is enough:
 // stopShopSpawnRotationForNavigation fires once on the first nonzero
 // reading, regardless of how long the deflection is held afterward.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

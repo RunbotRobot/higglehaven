@@ -120,7 +120,7 @@ console.log('placeholder pre-equip response (status should be 200):', placeholde
 
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 await openAccountMenu(page);
 await page.click('#settings-btn');

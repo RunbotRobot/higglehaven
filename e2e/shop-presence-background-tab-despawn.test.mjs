@@ -99,9 +99,9 @@ console.log('landlet created (status should be 201):', landletCreated.status);
 // (random spawn-orbit, flying-avatars-are-invisible, the fixed landing
 // duration margin).
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn');
+await pageA.evaluate(() => window.__testToggleShopFlight());
 await pageA.waitForTimeout(2500);
 await pageA.waitForTimeout(2500); // past reportOwnPresenceIfNeeded's own first-report throttle
 
@@ -117,9 +117,9 @@ await fetchJson(pageB, '/api/presence', {
 });
 
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn');
+await pageB.evaluate(() => window.__testToggleShopFlight());
 await pageB.waitForTimeout(2500);
 
 // Give both poll loops (SHOP_PRESENCE_POLL_INTERVAL_MS = 1000) a couple of

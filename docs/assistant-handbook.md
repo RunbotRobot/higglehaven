@@ -16,8 +16,8 @@ from this one and a test can check them:
 
 - **A title that is the person's question**, ending in a question mark.
 - **Numbered steps.** Each step names the control by the words on it, in quotes
-  ("Add item"), or by what it looks like when it has no words (the bird button, the
-  gear). It says what to tap, not where the code keeps it. Where the app's own
+  ("Add item"), or by what it looks like when it has no words (the gear, the world
+  itself). It says what to tap, not where the code keeps it. Where the app's own
   words are not yet spelled the way the product spells them, quote only the part
   that is, so the step stays true when the spelling is fixed.
 - **`**You will see:**`** one or two sentences on what changes on screen after the
@@ -234,44 +234,46 @@ are the same in all three places.
 
 ### How do I walk around and look around?
 
-1. Put your left thumb on the round pad at the bottom left and push it in the
-   direction you want to go. The further you push, the faster you move.
-2. Put your right thumb on the round pad at the bottom right and push it to turn
-   the view and look around.
-3. Let go of a pad and you stop.
+1. Put one finger on the world anywhere and drag it in the direction you want to
+   go. The further you drag, the faster you move.
+2. To look around, keep that first finger down and put a second finger on the
+   world, then drag the second finger to turn the view.
+3. Lift your finger and you stop. There are no buttons to find: the world itself is
+   the control.
 
-**You will see:** your bird walks or turns as you push, and the view follows.
+**You will see:** your bird walks or turns as you drag, and the view follows.
 
 **If something goes wrong:**
-- Nothing moves: tap the screen once so the page has your touch, then try again. If
-  the pads are not on screen at all, ask what they see at the bottom of the
-  screen and offer to pass it to the team.
+- Nothing moves: a quick tap does not move you, so keep the finger down and drag a
+  little further, then try again.
+- Looking needs two fingers at once, so it can be awkward with one thumb: rest the
+  first finger anywhere and turn with the second.
 - You want to go up in the air: see the flying entry below.
 
 ```controls shop
-#shop-move-joystick | (no words)
-#shop-look-joystick | (no words)
+#app | (no words)
 ```
 
 ### How do I fly, go up and come back down?
 
-1. You start each visit in the air. Two green arrows sit just above the round bird
-   button at the bottom centre: tap the up arrow ("Fly up") to climb and the down
-   arrow ("Fly down") to sink.
-2. Walk and look with the two pads as usual.
-3. To come back down, tap the bird button. The arrows go away once you are on the
-   ground.
-4. To go up again, tap the bird button again and the arrows come back.
+1. You start each visit in the air. To come down, double-tap the world: two quick
+   taps in the same place.
+2. While you are flying, two green arrows sit at the bottom right: tap the up
+   arrow ("Fly up") to climb and the down arrow ("Fly down") to sink.
+3. Walk and look by dragging, as usual.
+4. To go up again from the ground, double-tap the world again and the arrows come
+   back. The arrows go away once you are on the ground.
 
-**You will see:** the up and down arrows show only while the bird is flying, and the
-bird button's picture changes when you tap it.
+**You will see:** the up and down arrows show only while the bird is flying, and a
+double-tap switches between flying and standing.
 
 **If something goes wrong:**
-- No arrows: you are on the ground. Tap the bird button to fly.
-- You cannot find the ground: tap the bird button and let it come down by itself.
+- No arrows: you are on the ground. Double-tap the world to fly.
+- A double-tap on a product opens that product instead: double-tap on open ground.
+- You cannot find the ground: double-tap the world and let it come down by itself.
 
 ```controls shop
-#shop-fly-btn | (no words)
+#app | (no words)
 #shop-up-btn | Fly up
 #shop-down-btn | Fly down
 ```

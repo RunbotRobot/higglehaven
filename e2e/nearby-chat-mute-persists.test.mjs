@@ -35,7 +35,7 @@ await page.route('**/api/nearby-chat?*', async (route) => {
 const msg = (builderId) => `.shop-nearby-chat-message[data-builder-id="${builderId}"]`;
 
 async function openChat() {
-  await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+  await page.waitForSelector('body.shop-ready', { timeout: 10000 });
   await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
   await page.waitForSelector('#shop-nearby-chat-btn.visible', { timeout: 10000 });
   await page.click('#shop-nearby-chat-btn');

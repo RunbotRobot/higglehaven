@@ -819,11 +819,11 @@ setInterval(() => {
 export function updateShopVoiceChatIfNeeded(now) {
   const available = hasIdVerifiedSession();
   // #3248: the owner wants the Shop HUD to appear as one group once the world
-  // is ready, so the mic button waits for the fly button (revealed by
+  // is ready, so the mic button waits for the Shop controls (revealed by
   // src/shop/mode.js at the same moment as Feedback and the vertical
   // controls) instead of showing on the first render tick. Looked up by id
   // rather than imported, to avoid a voiceChat <-> mode import cycle.
-  const hudRevealed = Boolean(document.getElementById('shop-fly-btn')?.classList.contains('visible'));
+  const hudRevealed = Boolean(document.body.classList.contains('shop-ready'));
   voiceBtnEl?.classList.toggle('visible', available && hudRevealed);
   if (!available) {
     teardownAllPeers();

@@ -8,7 +8,7 @@ import { launchPage, chooseIdentity, openAccountMenu, goToMode, finish } from '.
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Bud Tester', viewport: { width: 390, height: 844 } });
 await chooseIdentity(page, { mode: 'shop', label: 'Bud Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 
 const shown = (selector) => page.locator(selector).isVisible();
 const box = (selector) => page.locator(selector).boundingBox();
@@ -102,7 +102,7 @@ await page.click('#settings-close-btn');
 
 // Sell has the bud too, and the same ring.
 await page.reload();
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
 // Choosing another mode in the ring goes there and folds the bud.
 await page.click('#account-menu-toggle');

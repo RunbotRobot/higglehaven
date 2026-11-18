@@ -31,7 +31,7 @@ await claimLandlet(page);
 // procedural body is what's live-rendered.
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 const baseline = await page.evaluate(() => window.__shopAvatarMetrics);
 console.log('baseline metrics (default body, should be the fixed constants):', baseline);
 
@@ -97,7 +97,7 @@ const modelResponsePromise = page.waitForResponse(
 );
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await modelResponsePromise;
 const equippedMetrics = await page.evaluate(() => window.__shopAvatarMetrics);
 console.log('metrics after equipping a custom avatar (should differ from baseline):', equippedMetrics);
