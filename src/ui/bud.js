@@ -189,7 +189,21 @@ function placeModePetals(inBud, mode) {
     if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
+    if (inBud) decoratePetal(btn);
   }
+}
+
+// #3761 (part of #3759): each of the three mode petals is a picture first with its one small word
+// under it, like every leaf. The icon goes inside the petal's upright label, so it stays upright
+// with the word however the petal is turned. Once per button; the word is the label's own text.
+function decoratePetal(btn) {
+  const label = btn.querySelector('.mode-nav-label');
+  if (!label || label.querySelector('.bud-icon')) return;
+  const icon = document.createElement('span');
+  icon.className = 'bud-icon';
+  icon.dataset.icon = iconKeyFor(btn);
+  icon.appendChild(svgIcon(icon.dataset.icon));
+  label.prepend(icon);
 }
 
 
