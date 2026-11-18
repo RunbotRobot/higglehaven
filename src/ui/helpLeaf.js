@@ -6,7 +6,7 @@
 import { openLeaf, closeLeaf, addBudPetals } from './bud.js';
 import { MANUALS, buildManuals } from './helpManuals.js';
 import { parseHandbook } from '../../scripts/assistant-handbook-lib.mjs';
-import { openAssistantQuestions } from '../shop/assistantChat.js';
+import { openAssistantQuestions, warmAssistantThread } from '../shop/assistantChat.js';
 
 let pagesPromise = null;
 
@@ -44,10 +44,13 @@ function renderList(body) {
   const askRow = el('button', 'help-row', 'Ask an assistant');
   askRow.type = 'button';
   askRow.id = 'help-ask-assistant-btn';
-  askRow.addEventListener('click', () => {
+  askRow.addEventListener('click', async () => {
+    // #3773: the row stays, marked busy, until the window is up with its conversation in it.
+    askRow.setAttribute('aria-busy', 'true');
+    try { await openAssistantQuestions(); } finally { askRow.removeAttribute('aria-busy'); }
     closeLeaf();
-    openAssistantQuestions();
   });
+  warmAssistantThread(); // #3773: so most opens find the thread already fetched
   ask.appendChild(askRow);
   list.appendChild(ask);
   body.appendChild(list);

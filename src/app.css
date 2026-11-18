@@ -1528,7 +1528,8 @@
       }
       #assistant-chat-offer,
       #assistant-chat-leave,
-      #assistant-chat-withdraw {
+      #assistant-chat-withdraw,
+      #assistant-chat-retry {
         align-self: flex-start;
         min-height: 36px;
         padding: 0 var(--space-lg);
@@ -1539,6 +1540,12 @@
         font: var(--text-sm)/var(--leading-none) var(--font-sans);
         cursor: pointer;
       }
+      /* #3773: a tap that opens the assistant window is answered at once and the answer stays until
+         the window is shown with its conversation in it: the head breathes, the "?" row says so, and
+         the cursor is a wait cursor over the world (the assistant in the world has no control to mark). */
+      body.assistant-opening { cursor: progress; }
+      body.assistant-opening #account-menu-toggle { animation: bud-pulse 1.1s ease-in-out infinite; }
+      #help-ask-assistant-btn[aria-busy="true"] { opacity: 0.7; }
       #assistant-chat-form {
         display: flex;
         gap: var(--space-xs);

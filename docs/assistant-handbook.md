@@ -540,7 +540,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
    then "Ask an assistant".
-2. A small window opens. Type in the box that says "Ask a question…" and tap "Send".
+2. A small window opens once your earlier messages are in it (a moment after the tap, while the
+   "Ask an assistant" row or the bud shows it is working). Type in the box that says "Ask a question…" and tap "Send".
 3. An assistant answers there. Keep going in the same window.
 4. To tuck it away without ending the chat, tap the minus at the top right of the
    window ("Minimise"). While it is tucked away the little bud in the corner shows
@@ -552,6 +553,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 assistant's replies, each labelled with who wrote it.
 
 **If something goes wrong:**
+- The window opens and says "We couldn't load your conversation. Check your connection and try
+  again." with a "Try again" button: nothing is lost, the messages are just not loaded yet.
 - No assistant is free: the window says so, and the message waits in line. It is
   answered when one is free.
 - The assistant is on shift but somewhere else in the world: a line at the top of the window says which lándlet she is standing on, with a "Take me there" button that walks them to her. The line is not shown when she is close by or off shift.
