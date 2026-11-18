@@ -198,3 +198,25 @@ describe('cancel', () => {
     expect(gestures.activeFingers()).toBe(0);
   });
 });
+
+describe('a computer mouse (#3831)', () => {
+  it('looks wherever on the screen the drag starts, left half included', () => {
+    const { events, gestures } = rig();
+    gestures.down(9, 50, 400, 0, 'look');
+    gestures.move(9, 50 + FULL_DEFLECTION_PX, 400);
+    expect(events.at(-1)[0]).toBe('look');
+    expect(events.at(-1)[1]).toBeCloseTo(1);
+    expect(events.some((e) => e[0] === 'move')).toBe(false);
+    gestures.up(9, 400);
+    expect(events.at(-1)).toEqual(['look', 0, 0]);
+  });
+
+  it('a click that does not move is not a drag, and two clicks are never a double-tap', () => {
+    const { events, gestures } = rig();
+    gestures.down(9, 300, 400, 0, 'look');
+    gestures.up(9, 60, 300, 400);
+    gestures.down(9, 300, 400, 120, 'look');
+    gestures.up(9, 180, 300, 400);
+    expect(events).toEqual([]);
+  });
+});

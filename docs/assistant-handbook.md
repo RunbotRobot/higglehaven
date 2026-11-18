@@ -276,6 +276,8 @@ petals are the same in all three places.
 4. On a computer, use the keyboard: W, A, S and D (or the arrow keys) walk, Q and E
    turn, R looks up and F looks down, and double-pressing the space bar takes off or
    comes back down (the flying entry says more). The mouse wheel zooms in and out.
+   With a mouse you can also hold the left button on the world and drag to look
+   around.
 
 **You will see:** your bird walks or turns as you drag, and the view follows. Every
 avatar has a simple motion of its own for walking, standing and flying: the
