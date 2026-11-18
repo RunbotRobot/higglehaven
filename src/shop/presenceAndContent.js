@@ -75,6 +75,8 @@ import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
+import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
+import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
   normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
@@ -951,16 +953,21 @@ export async function pollNearbyPresenceIfNeeded(now) {
       // lives inside it as entry.body so it can be swapped for the builder's
       // equipped custom model without disturbing anything holding the entry.
       // Always starts as the default procedural body -- a custom model only
-      // replaces it once it has loaded (reconcileOtherAvatarBodies). Limb/arm
-      // pose and animation clips aren't driven for these, only root
-      // position/heading, which is all the presence row carries.
+      // replaces it once it has loaded (reconcileOtherAvatarBodies). The presence
+      // row carries only root position/heading, so limb pose and clips are
+      // driven client-side from the movement observed between polls (#3230,
+      // #3777: see stepOtherAvatarMotion).
       const group = new THREE.Group();
-      const body = createShopAvatar().group;
+      const defaultAvatar = createShopAvatar();
+      const body = defaultAvatar.group;
       group.add(body);
       scene.add(group);
       entry = {
         group,
         body,
+        // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
+        // replaced whenever the visible body is, by installOtherAvatarBody.
+        motion: defaultOtherAvatarMotion(defaultAvatar),
         bodyTemplateId: null, // the template the visible body was built from; null = default body
         bodyRequestedTemplateId: null, // latest template asked for (incl. one still loading)
         bodySwapToken: 0,
@@ -1058,7 +1065,8 @@ function reconcileOtherAvatarBodies(now) {
     entry.bodyRequestedTemplateId = desiredId;
     const myToken = ++entry.bodySwapToken;
     if (!desired) {
-      installOtherAvatarBody(entry, createShopAvatar().group, null);
+      const defaultAvatar = createShopAvatar();
+      installOtherAvatarBody(entry, defaultAvatar.group, null, defaultAvatar);
       continue;
     }
     loadOtherAvatarCustomBody(desired.modelUrl)
@@ -1083,20 +1091,76 @@ function reconcileOtherAvatarBodies(now) {
           // A previous custom model may still be showing (the builder switched
           // avatars and the new one failed): never leave the old one up as if
           // it were current.
-          if (entry.bodyTemplateId !== null) installOtherAvatarBody(entry, createShopAvatar().group, null);
+          if (entry.bodyTemplateId !== null) {
+            const defaultAvatar = createShopAvatar();
+            installOtherAvatarBody(entry, defaultAvatar.group, null, defaultAvatar);
+          }
           refreshOtherShopAvatarsDiagnostic();
         }
       });
   }
 }
 
-function installOtherAvatarBody(entry, body, templateId) {
+function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
   entry.group.remove(entry.body);
   disposeOtherAvatarClips(entry); // the mixer was bound to the body being removed
   disposeObject3D(entry.body);
   entry.group.add(body);
   entry.body = body;
   entry.bodyTemplateId = templateId;
+  entry.motion = templateId === null ? defaultOtherAvatarMotion(defaultAvatar) : customOtherAvatarMotion(body);
+}
+
+// #3777: what another person's avatar does with its body on your screen,
+// since presence carries only a position. A default body swings its limbs, the
+// way your own does; a custom body with no clips of its own (the rigid case:
+// it used to glide) wears the same small whole-body motion your own does. A
+// custom body that does get clips plays those instead (see stepOtherAvatarMotion).
+function defaultOtherAvatarMotion(defaultAvatar) {
+  if (!defaultAvatar) return null;
+  return { kind: 'limbs', limbs: defaultAvatar, state: createOtherLimbMotion() };
+}
+
+function customOtherAvatarMotion(body) {
+  const target = body.children[0]; // the wrapper loadOtherAvatarCustomBody put the model in, centred at half its height
+  if (!target) return null;
+  const baseZ = target.position.z;
+  return { kind: 'rigid', target, baseZ, scaleM: baseZ * 2, state: createBuiltinMotion(), applied: false };
+}
+
+// One frame of that motion for one avatar. Allocates nothing. `state` is the
+// 'walk' or 'idle' updateOtherShopAvatars already worked out for this avatar.
+function stepOtherAvatarMotion(entry, dt, state) {
+  const motion = entry.motion;
+  if (motion.kind === 'rigid' && entry.actions) {
+    // Clips arrived after the rigid pose was applied: put the wrapper back
+    // where the model's own animation expects it, once, and leave it to them.
+    if (motion.applied) {
+      motion.target.position.z = motion.baseZ;
+      motion.target.rotation.x = 0;
+      motion.target.rotation.y = 0;
+      motion.applied = false;
+    }
+    return;
+  }
+  // Far away or hidden: keep the last pose rather than spend this frame's work
+  // on something too small to read (#3396).
+  if (!shouldAnimateOtherAvatar(shopAvatarPosition.x - entry.group.position.x, shopAvatarPosition.y - entry.group.position.y, entry.group.visible)) return;
+  const walking = state === 'walk';
+  if (motion.kind === 'limbs') {
+    const limbs = stepOtherLimbMotion(motion.state, dt, walking);
+    const avatar = motion.limbs;
+    avatar.legPivotL.rotation.x = limbs.legL;
+    avatar.legPivotR.rotation.x = limbs.legR;
+    avatar.armPivotL.rotation.x = limbs.armL;
+    avatar.armPivotR.rotation.x = limbs.armR;
+  } else {
+    const pose = stepBuiltinMotion(motion.state, dt, walking ? 'walk' : 'idle', walking ? OTHER_AVATAR_WALK_MAGNITUDE : 0, motion.scaleM);
+    motion.target.position.z = motion.baseZ + pose.bobM;
+    motion.target.rotation.x = pose.leanRad;
+    motion.target.rotation.y = pose.swayRad;
+    motion.applied = true;
+  }
 }
 
 // A cloned custom model with its feet at local z=0, matching the default
@@ -1259,6 +1323,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
 }
 
@@ -1273,6 +1338,10 @@ window.__testShopOtherAvatarPoses = () => [...shopOtherAvatars.values()].map((en
   offsetX: entry.idleOffsetX ?? 0, offsetY: entry.idleOffsetY ?? 0, // the wander alone, relative to the placed spot
   x: entry.group.position.x, y: entry.group.position.y, heading: entry.group.rotation.z,
   spotX: entry.toX, spotY: entry.toY,
+  // added for #3777 -- the pose this avatar is drawn in this frame, to check that others walk instead of gliding
+  motion: !entry.motion ? null : entry.motion.kind === 'limbs'
+    ? { kind: 'limbs', legL: entry.motion.limbs.legPivotL.rotation.x, armL: entry.motion.limbs.armPivotL.rotation.x }
+    : { kind: 'rigid', bobM: entry.motion.target.position.z - entry.motion.baseZ, leanRad: entry.motion.target.rotation.x, swayRad: entry.motion.target.rotation.y, applied: entry.motion.applied },
 }));
 
 // #1100: lerps every tracked other-avatar from its previous poll snapshot
@@ -1309,11 +1378,14 @@ export function updateOtherShopAvatars(now) {
       entry.idleOffsetY = idle.y;
     }
     // #3230: clips follow the movement the lerp above is already showing.
+    const locomotion = idle ? (idle.moving ? 'walk' : 'idle') : locomotionStateFor(entry.fromX, entry.fromY, entry.toX, entry.toY, entry.lerpDurationMs, t);
+    const dt = entry.lastFrameAt === null ? 0 : Math.min((now - entry.lastFrameAt) / 1000, 0.1); // same clamp the other per-frame dt uses
     if (entry.mixer) {
-      setShopAvatarAnimationState(entry, idle ? (idle.moving ? 'walk' : 'idle') : locomotionStateFor(entry.fromX, entry.fromY, entry.toX, entry.toY, entry.lerpDurationMs, t));
-      const dt = entry.lastFrameAt === null ? 0 : Math.min((now - entry.lastFrameAt) / 1000, 0.1); // same clamp the other per-frame dt uses
+      setShopAvatarAnimationState(entry, locomotion);
       entry.mixer.update(dt);
     }
+    // #3777: a body with no clips of its own walks too, instead of gliding.
+    if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
