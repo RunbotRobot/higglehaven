@@ -19,12 +19,23 @@ environment setup-script field (at most 100 lines of 200 bytes).
 The environment's network must allow the host `raw.githubusercontent.com` (plus the
 live site). Nothing else is fetched.
 
-A change to the handbook reaches assistants the same way as a change to a program:
-only when the environment's setup script is moved to a newer commit. A handbook
-edit on `main` does nothing for a running assistant until then.
+The three programs reach an assistant only when the environment's setup script is
+moved to a newer commit. To move to a new version: merge the change, run `node
+scripts/assistant-environment.mjs setup --commit <merged sha>`, paste the output over
+the environment's setup script.
 
-To move to a new version: merge the change, run `node scripts/assistant-environment.mjs
-setup --commit <merged sha>`, paste the output over the environment's setup script.
+**The handbook does not wait for that (#3800).** The live site serves it as
+`/assistant-handbook.md`, built from `docs/assistant-handbook.md` in the same deploy
+as the app (`scripts/vite-assistant-handbook.mjs`). `assistant-shift.mjs` fetches it
+from the live site at the start of a shift and again just before it hands over a
+shopper's message, and replaces `/opt/assistant/assistant-handbook.md` when it
+differs, so what an assistant says always matches the deployed app. If the fetch
+fails, the answer is not plausibly the handbook (an error page, not starting with
+its title, over 300 KB) or the file cannot be written, the pinned and checksummed
+copy stays and the shift goes on. It is the same host as every other request, the
+file is the one the read rule already names, and no program is fetched this way, so
+the permission rules and the network allow-list are unchanged. A test asserts the
+served file equals the repository's.
 
 ## Permission rules
 
