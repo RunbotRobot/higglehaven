@@ -2045,6 +2045,11 @@ const jsonPost = (path, body) => requestJson(path, {
 export function startAssistantChat({ assistantUserId, text }) {
   return jsonPost('/assistant-chat/start', { assistantUserId, text });
 }
+// #3636 part 2: who is on shift and where each one stands (asked for, never pushed).
+export async function fetchStandingAssistants() {
+  const { assistants } = await requestJson('/assistant/standing');
+  return assistants;
+}
 export function fetchAssistantChat({ afterSeq = 0 } = {}) {
   return requestJson(`/assistant-chat/current?afterSeq=${encodeURIComponent(afterSeq)}`);
 }

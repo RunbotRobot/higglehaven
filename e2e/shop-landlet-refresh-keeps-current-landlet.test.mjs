@@ -46,9 +46,9 @@ console.log('landlet created (status should be 201):', created.status);
 
 // Same land-on-the-landlet sequence as e2e/shop-presence-background-tab-despawn.test.mjs.
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForTimeout(2500);
 
 const standingOn = async () => page.evaluate(() => window.__testShopCurrentLandletId());

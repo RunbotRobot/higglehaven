@@ -2,7 +2,7 @@
 // reached, touching an orb leaves it in place (no pop, no toast, no collect
 // request) and shows the limit with the time it lifts; and two notices shown
 // at once are both readable, neither covering the other.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Standing Tester';
 const LANDLET_ID = `credit-orb-standing-e2e-${Date.now()}`;
@@ -23,7 +23,7 @@ async function fetchJson(path, options) {
 }
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 const { body: { landlets } } = await fetchJson('/api/landlets?limit=100');
 const myLandlet = landlets.find((l) => l.landletId === LANDLET_ID);
@@ -35,7 +35,7 @@ console.log('server standing at the limit (remaining should be 0):', JSON.string
 
 // Free the avatar from the spawn orbit, ground it, load the landlet (its orb
 // list and the standing arrive with it), then step onto the orb.
-const joy = await page.locator('#shop-move-joystick').boundingBox();
+const joy = await shopStickBox(page);
 const jx = joy.x + joy.width / 2;
 const jy = joy.y + joy.height / 2;
 await page.mouse.move(jx, jy);

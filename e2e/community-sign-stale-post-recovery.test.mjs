@@ -11,7 +11,7 @@
 // Both branches are driven through the real UI: stale edit, then (after the
 // recovery lets a fresh note be created) stale delete. (#3359: the note flow is
 // an in-app modal now, so this drives that modal and reads the notice.)
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Sign Stale Post Tester';
 const ORIGINAL_TEXT = 'Original note left on this sign.';
@@ -55,10 +55,10 @@ await fetchJson(postsUrl, {
 });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

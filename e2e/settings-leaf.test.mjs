@@ -6,7 +6,7 @@ import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.m
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Settings Leaf', viewport: { width: 390, height: 844 } });
 await chooseIdentity(page, { mode: 'shop', label: 'Settings Leaf', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };

@@ -1,0 +1,11 @@
+{
+  "name": "higglehaven",
+  "short_name": "higglehaven",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef4e0",
+  "theme_color": "#eef4e0",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -33,7 +33,7 @@ await page.click('#auth-signup-form button[type="submit"]');
 // "fresh" account here means fresh above the credit-card floor, not
 // fresh above `none` the way a pre-N44 signup was.
 await clearVerifyModalIfShown(page);
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 
 await openAccountMenu(page);
 // #1067: refreshAccountAuthUI (re-run on every account-auth-btn click,

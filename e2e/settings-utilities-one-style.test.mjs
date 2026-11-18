@@ -9,7 +9,7 @@ import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.m
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Utilities Style Tester', viewport: { width: 390, height: 844 } });
 
 await chooseIdentity(page, { mode: 'shop', label: 'Utilities Style Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await page.waitForSelector('body.shop-ready', { timeout: 20000 });
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });

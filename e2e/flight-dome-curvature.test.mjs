@@ -18,13 +18,13 @@
 // shrunk) radius at that altitude, and confirm the avatar/camera stay
 // inside the dome's actual curved surface rather than just under its flat
 // apex.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Flight Dome Curvature Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688/#1175: spawn state isn't settled until enterShopMode's post-fetch
 // tail finishes (same wait flight-dome-ceiling.test.mjs/flight.test.mjs rely on).
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
@@ -43,7 +43,7 @@ await page.mouse.up();
 // this altitude (SHOP_FLIGHT_MAX_SPEED_MULTIPLIER), so this comfortably
 // covers even a freshly-seeded dev world's full radius well within the
 // hold.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveOriginX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveOriginY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveOriginX, moveOriginY);

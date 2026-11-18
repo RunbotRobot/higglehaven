@@ -348,3 +348,26 @@ jobs:
             tail -c 50000 "$f"
             echo "::endgroup::"
           done
+
+  # #3727: when the run on `main` goes red, say so with the failing files named (one open issue,
+  # "main is red: ..."); when it is green again, close it. On 2026-11-17 two tests went red on
+  # main after one merge and stayed red for hours while every PR's run failed on the same files
+  # and nothing said so. Runs only for a push to main, after the unit and e2e jobs have finished
+  # (always(): a failed needs would otherwise skip it). A cancelled run (superseded by a newer
+  # push) changes nothing. The workflow's own token is enough: no secret to add.
+  main-red-alert:
+    needs: [unit-tests, e2e-tests]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/main-red-alert.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

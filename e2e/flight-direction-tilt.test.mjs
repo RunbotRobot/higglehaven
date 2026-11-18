@@ -13,12 +13,12 @@
 // src/**/*.test.js), so this is the verification the issue itself asked
 // for: fly in two clearly different directions and confirm the tilt leans
 // with whichever way the avatar is actually facing, not a fixed direction.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Tilt Tester' });
 
 await chooseIdentity(page, { mode: 'shop', label: 'Flight Tilt Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // #1175: every Shop-mode spawn is already flying (above a random world
@@ -56,7 +56,7 @@ await page.waitForFunction(
 // ms (SHOP_AVATAR_TURN_EASE_PER_S) regardless of whether the stick is still
 // held.
 async function dragMoveJoystick(dxPx, dyPx) {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const originX = box.x + box.width / 2;
   const originY = box.y + box.height / 2;
   await page.mouse.move(originX, originY);

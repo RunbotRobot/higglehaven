@@ -10,7 +10,7 @@
 // return the same chair out of several, and a statistical check that the
 // randomized settle delay actually varies across repeated idle episodes
 // (not just "some fixed delay every time").
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Idle Sit Randomization Builder';
 const LANDLET_ID = 'idle-sit-randomization-landlet';
@@ -39,7 +39,7 @@ async function fetchJson(p, path, options) {
 // teleports it to. Reused below, between idle episodes, to force real
 // movement input and re-arm the idle timer for the next episode.
 async function deflectMoveJoystick(p) {
-  const moveJoystickBox = await p.locator('#shop-move-joystick').boundingBox();
+  const moveJoystickBox = await shopStickBox(p);
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
   await p.mouse.move(moveCenterX, moveCenterY);
@@ -124,7 +124,7 @@ for (let i = 0; i < CHAIR_COUNT; i++) {
 }
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 await deflectMoveJoystick(page);

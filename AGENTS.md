@@ -1092,6 +1092,25 @@ most likely to come up again.
   builds it without asking. (higglehaven1's reading, not the owner's
   words: all three modes show whichever mode you are in, with the current
   one marked.)
+  **Refined again 2026-11-18 (#3752, #3749), an hour after the half-ring
+  and the gestures went live.** On the petals: "Let's make the
+  shop/build/sell buttons look more like flower petals and less like
+  leaves. They should also be physically connected to the bud." "When the
+  bud is closed and we click it, let's have the shop, build, and sell
+  petals unfold from it with an animation." "Let's highlight the
+  shop/build/sell button when any one of them is clicked. Then keep
+  build/shop/sell highlighted while the new screen loads. Once it loads,
+  have an animation fold the petals back into the bud." On moving, where
+  the first finger walked and a second finger looked: "Maybe the left
+  side of the screen should always be for moving, and the right should
+  always be for camera pivoting. Then I can look around w/o moving." The
+  principle in all four: the bud is one living thing, so its parts are
+  attached to it and arrive and leave by growing and folding, never by
+  appearing beside it; a tap is answered at once and the answer stays on
+  screen until the thing asked for has happened; and a gesture means the
+  same thing every time, by where it starts, never by what another finger
+  is doing. A session applies these to the next piece of the bud without
+  asking.
 
 - **A wait a person can see is first made short, and whatever is left
   shows that things are working.** (2026-11-17, #3735.) Opening the app
@@ -1752,6 +1771,13 @@ retry re-runs only the files that failed on attempt 1, not the whole
 shard, so one flaky file costs about one file's runtime rather than
 doubling the shard; a shard that fails before reporting which files
 failed (a build error, a crash) still retries in full.
+
+**A red `main` announces itself (#3727).** When the CI run on a push to `main` fails,
+the `main-red-alert` job (`scripts/main-red-alert.mjs`) opens one GitHub issue titled
+"main is red: <files>" naming the failing test files, updates it while `main` stays red, and
+closes it when a run on `main` is green again. If you see one open, fix `main` first, or tell
+the session already on it: a PR whose run fails on exactly those files is not at fault, and
+another two-hour run on it cannot pass.
 
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 

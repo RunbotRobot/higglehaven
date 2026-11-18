@@ -11,14 +11,14 @@
 // someone who walked away.
 import {
   startAssistantChat, fetchAssistantChat, sendAssistantChat, endAssistantChat,
-  leaveAssistantQuestion, fetchAssistantQuestion, closeAssistantQuestion,
+  leaveAssistantQuestion, fetchAssistantQuestion, closeAssistantQuestion, fetchStandingAssistants,
 } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { setBudWord, clearBudWord, setBudMark, clearBudMark } from '../ui/bud.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
   canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
-  keyboardInset, threadRows,
+  keyboardInset, threadRows, standingText, shouldOfferWalk, standingFor,
 } from './assistantChatLogic.js';
 
 // A left question is not a live chat, so it is checked less often.
@@ -31,6 +31,9 @@ const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
 const minimizeEl = document.getElementById('assistant-chat-minimize');
 const menuRowEl = document.getElementById('assistant-menu-btn'); // #3653: the way back to a minimised conversation
+const standingEl = document.getElementById('assistant-chat-standing'); // #3636 part 2
+const standingTextEl = document.getElementById('assistant-chat-standing-text');
+const goEl = document.getElementById('assistant-chat-go');
 const offerEl = document.getElementById('assistant-chat-offer');
 const leaveEl = document.getElementById('assistant-chat-leave');
 const withdrawEl = document.getElementById('assistant-chat-withdraw');
@@ -55,6 +58,15 @@ let assistantsOnShift = null; // how many are on the floor; from the server
 let canLeave = false; // the last refusal said an assistant was busy or off shift
 let minimized = false; // #3529: the panel is tucked away as a pill; the conversation stays open
 let unread = false; // #3529: a reply arrived while minimised
+let standing = null; // #3636 part 2: where the assistant stands, from the server, or null (off shift / unknown)
+let standingTimer = null;
+// The Shop world answers "how far is she" and does the walk; main.js hands those
+// in so this module imports nothing from the world (no import cycle).
+let standingHooks = { distanceTo: () => NaN, goTo: () => false };
+export function setAssistantStandingHooks(hooks) {
+  standingHooks = { ...standingHooks, ...hooks };
+  render();
+}
 let pollTimer = null;
 let questionTimer = null;
 let inFlight = false;
@@ -198,6 +210,11 @@ function render() {
   menuRowEl.textContent = tuckedLabel;
   if (tucked) setBudWord('assistant', tuckedLabel); else clearBudWord('assistant');
   if (tucked && unread) setBudMark('assistant'); else clearBudMark('assistant');
+  // #3636 part 2: one quiet line while she is on shift and out of sight, with a way to walk there.
+  const line = standing ? standingText(standing) : null;
+  const walk = Boolean(standing) && shouldOfferWalk({ entry: standing, distanceM: standingHooks.distanceTo(standing.x, standing.y) });
+  standingEl.hidden = !(line && walk && isOpen());
+  standingTextEl.textContent = line || '';
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
   renderLog();
@@ -220,7 +237,31 @@ function render() {
     // added for #3529: the minimised state and what its stand-in shows (#3653: the bud's word and the menu row)
     minimized,
     pill: tucked ? { text: tuckedLabel, unread } : null,
+    standing: standingEl.hidden ? null : { text: standingTextEl.textContent }, // added for #3636 part 2
   };
+}
+
+// #3636 part 2: ask where she stands, now and once a minute while the window is
+// open (she may go off shift). Failing to ask is not an error a shopper needs to see.
+async function refreshStanding() {
+  try {
+    standing = standingFor(await fetchStandingAssistants(), assistant);
+  } catch {
+    standing = null;
+  }
+  render();
+}
+function startStandingChecks() {
+  clearInterval(standingTimer);
+  standing = null;
+  if (!assistant) return;
+  refreshStanding();
+  standingTimer = setInterval(refreshStanding, 60000);
+}
+function stopStandingChecks() {
+  clearInterval(standingTimer);
+  standingTimer = null;
+  standing = null;
 }
 
 function stopPolling() {
@@ -357,6 +398,7 @@ export async function openAssistantChat(target) {
   panelEl.hidden = false;
   stickToBottom = true; // #3658
   render();
+  startStandingChecks();
   inputEl.focus();
   try {
     const reply = await fetchAssistantChat();
@@ -394,6 +436,7 @@ export async function closeAssistantChat() {
   stopPolling();
   stopQuestionPolling();
   const wasOpen = conversationOpen();
+  stopStandingChecks();
   panelEl.hidden = true;
   minimized = false;
   unread = false;
@@ -520,6 +563,17 @@ withdrawEl.addEventListener('click', async () => {
 });
 
 closeEl.addEventListener('click', () => { closeAssistantChat(); });
+
+// #3636 part 2: "Take me there" walks the shopper's avatar to where she stands
+// (the same fade and landing as Go to Last Location), then tucks the window
+// away so the world is in view. The conversation stays open.
+goEl.addEventListener('click', () => {
+  if (!standing) return;
+  if (!standingHooks.goTo({ x: standing.x, y: standing.y, heading: standing.heading })) return;
+  inputEl.blur();
+  minimized = true;
+  render();
+});
 
 // #3529: minimising is not ending. The conversation, its polling and the
 // 10-minute idle rule are untouched; only the panel is tucked away, so the

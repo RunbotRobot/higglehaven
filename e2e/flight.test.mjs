@@ -2,17 +2,15 @@
 // (tap-to-toggle, takeoff, ascend/descend, landing) had zero e2e coverage
 // — src/flight.test.js now covers the pure altitude/speed math directly,
 // but the real tap gesture and DOM wiring (body.shop-flying,
-// #shop-fly-btn.active, #shop-vertical-controls) had never been exercised
+// #shop-vertical-controls) had never been exercised
 // end-to-end in a real browser. Doesn't attempt to measure the exact
 // altitude/speed-multiplier curve itself here — that's what
 // src/flight.test.js's direct unit tests are for; this proves the
 // click/DOM plumbing around that math actually works.
 //
-// Owner (u7rvtz1jn1wchfsz6c1o): the bird button toggles flight on a single
-// tap now, not a double-tap — see bindShopFlyToggle in src/main.js. The
-// spacebar gesture (desktop) still requires a double-press and is covered
-// separately; this file only exercises the button.
-import sharp from 'sharp';
+// #3650: the bird button is gone; a double-tap on the world (covered by
+// e2e/shop-world-gestures.test.mjs) or a double-press of space flies. This file
+// drives the same toggle through window.__testToggleShopFlight.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Tester' });
@@ -26,7 +24,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Teste
 // really the one that opened automatically the moment enterShopMode's own
 // gate (ensureShopperIdentity) ran on this page's initial load.
 await chooseIdentity(page, { mode: 'shop', label: 'Flight Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688: `#shop-fly-btn.visible` (and `#shop-status.visible`, "Loading the
 // world…") both get set at the *start* of enterShopMode's post-gate world
 // build (src/main.js), well before the spawn-flight state this test is
@@ -42,65 +40,30 @@ await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
-const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-fly-btn').classList.contains('active'));
-// #1589: the icon shows the action a press performs, not the current state
-// — a standing bird (press to take off) while grounded, a flying bird
-// (press to land) while flying.
-const flyBtnIconFile = () => page.evaluate(() => document.getElementById('shop-fly-btn-icon').src.split('/').pop());
-// #3369: the icons are the bird alone, sized to sit inside the button's
-// circle (pinned by scripts/check-fly-button-icons.mjs), so nothing zooms or
-// crops them any more (#1815, #2750 did, and the bird kept getting clipped).
-// Confirms no transform is applied, and that in the real rendered button the
-// outermost ring inside the circle is still plain button background -- no bird
-// pixel touches the edge -- in both states.
-const flyBtnIconHasNoTransform = () => page.evaluate(() => getComputedStyle(document.getElementById('shop-fly-btn-icon')).transform === 'none');
-// Screenshot the button and check a ring just inside its circular edge (radius
-// 26.5..27px of 28px) is uniformly its own background colour.
-const flyBtnEdgeRingIsBackground = async () => {
-  const bg = await page.evaluate(() => getComputedStyle(document.getElementById('shop-fly-btn')).backgroundColor.match(/\d+/g).slice(0, 3).map(Number));
-  const png = await page.locator('#shop-fly-btn').screenshot();
-  const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const cx = info.width / 2, cy = info.height / 2;
-  const scale = info.width / 56;
-  let bad = 0;
-  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) {
-    const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / scale;
-    if (d < 26.5 || d > 27) continue;
-    const p = (y * info.width + x) * 3;
-    if (Math.max(Math.abs(data[p] - bg[0]), Math.abs(data[p + 1] - bg[1]), Math.abs(data[p + 2] - bg[2])) > 16) bad++;
-  }
-  return bad;
-};
 
 // #1175: every spawn (not just a first-ever visit) now spawns already
 // flying, above a random world location — no tap needed at all.
 const flyingOnSpawn = await isFlyingClassSet();
-const flyBtnActiveOnSpawn = await isFlyBtnActive();
-const flyBtnIconOnSpawn = await flyBtnIconFile();
 
 // The rest of this file is about the manual tap-to-toggle takeoff/landing
 // flow, not the spawn-flying behavior above — land the spawn's own flight
 // with a single tap and wait past the landing duration so it starts from
 // the ordinary grounded baseline the takeoff flow below expects.
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s)
 
 const groundedBeforeTakeoff = !(await isFlyingClassSet());
 
-await page.click('#shop-fly-btn');
-// toggleShopFlight sets body.shop-flying and #shop-fly-btn.active
+await page.evaluate(() => window.__testToggleShopFlight());
+// toggleShopFlight sets body.shop-flying
 // synchronously on the tap that starts takeoff — not gated behind the ~1s
 // takeoff animation itself — so this should already be true immediately.
 const flyingClassRightAfterTakeoffTap = await isFlyingClassSet();
-const flyBtnActiveRightAfterTakeoffTap = await isFlyBtnActive();
-const flyBtnIconRightAfterTakeoffTap = await flyBtnIconFile();
-const flyBtnIconNoTransformAfterTakeoffTap = await flyBtnIconHasNoTransform();
-const flyBtnEdgeBadPixelsStanding = await flyBtnEdgeRingIsBackground();
 const verticalControlsVisibleDuringTakeoff = await page.isVisible('#shop-vertical-controls');
 
 // Wait past SHOP_FLIGHT_TAKEOFF_DURATION_S (1s) so the internal state
 // machine has actually reached 'flying' — toggling again before that has
-// no effect (bindShopFlyToggle/toggleShopFlight only handle a tap from
+// no effect (toggleShopFlight only handles a tap from
 // 'grounded' or 'flying', not mid-transition).
 await page.waitForTimeout(1500);
 
@@ -135,12 +98,8 @@ const upBtnActiveAfterRelease = await page.evaluate(() => document.getElementByI
 
 // Second tap, now genuinely 'flying' — starts landing. Same immediate
 // (not animation-gated) class removal as takeoff's own set.
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 const flyingClassRightAfterLandingTap = await isFlyingClassSet();
-const flyBtnActiveRightAfterLandingTap = await isFlyBtnActive();
-const flyBtnIconRightAfterLandingTap = await flyBtnIconFile();
-const flyBtnIconNoTransformAfterLandingTap = await flyBtnIconHasNoTransform();
-const flyBtnEdgeBadPixelsFlying = await flyBtnEdgeRingIsBackground();
 
 // Wait past SHOP_FLIGHT_LANDING_DURATION_S (2s) so the internal state
 // machine has actually settled back to 'grounded' before the page closes.
@@ -148,42 +107,24 @@ await page.waitForTimeout(2500);
 const groundedAfterLanding = !(await isFlyingClassSet());
 
 console.log('flying immediately on spawn, no tap needed (should be true):', flyingOnSpawn);
-console.log('#shop-fly-btn.active on that same spawn (should be true):', flyBtnActiveOnSpawn);
-console.log('#shop-fly-btn-icon while flying on spawn (should be bird-standing.png, i.e. "press to land"):', flyBtnIconOnSpawn);
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
-console.log('#shop-fly-btn.active immediately after the takeoff tap (should be true):', flyBtnActiveRightAfterTakeoffTap);
-console.log('#shop-fly-btn-icon right after the takeoff tap (should be bird-standing.png, i.e. "press to land"):', flyBtnIconRightAfterTakeoffTap);
-console.log('#shop-fly-btn-icon has no transform, and bird pixels touching the circle edge, showing bird-standing.png (should be true, 0 -- #3369):', flyBtnIconNoTransformAfterTakeoffTap, flyBtnEdgeBadPixelsStanding);
 console.log('#shop-vertical-controls visible during takeoff (should be true):', verticalControlsVisibleDuringTakeoff);
 console.log('#shop-up-btn.active while held (should be true):', upBtnActiveWhileHeld);
 console.log('#shop-up-btn.active after drifting off the button while still held (should still be true — #2361):', upBtnActiveAfterDriftOff);
 console.log('#shop-up-btn.active after release (should be false):', upBtnActiveAfterRelease);
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
-console.log('#shop-fly-btn.active cleared immediately after the landing tap (should be false):', flyBtnActiveRightAfterLandingTap);
-console.log('#shop-fly-btn-icon right after the landing tap (should be bird-flying.png, i.e. "press to take off"):', flyBtnIconRightAfterLandingTap);
-console.log('#shop-fly-btn-icon has no transform, and bird pixels touching the circle edge, showing bird-flying.png (should be true, 0 -- #3369):', flyBtnIconNoTransformAfterLandingTap, flyBtnEdgeBadPixelsFlying);
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
 const pass =
   flyingOnSpawn &&
-  flyBtnActiveOnSpawn &&
-  flyBtnIconOnSpawn === 'bird-standing.png' &&
   groundedBeforeTakeoff &&
   flyingClassRightAfterTakeoffTap &&
-  flyBtnActiveRightAfterTakeoffTap &&
-  flyBtnIconRightAfterTakeoffTap === 'bird-standing.png' &&
-  flyBtnIconNoTransformAfterTakeoffTap &&
-  flyBtnEdgeBadPixelsStanding === 0 &&
   verticalControlsVisibleDuringTakeoff &&
   upBtnActiveWhileHeld &&
   upBtnActiveAfterDriftOff &&
   !upBtnActiveAfterRelease &&
   !flyingClassRightAfterLandingTap &&
-  !flyBtnActiveRightAfterLandingTap &&
-  flyBtnIconRightAfterLandingTap === 'bird-flying.png' &&
-  flyBtnIconNoTransformAfterLandingTap &&
-  flyBtnEdgeBadPixelsFlying === 0 &&
   groundedAfterLanding &&
   errors.length === 0;
 await finish(browser, { pass, label: 'shop-mode flight takeoff/ascend/landing', errors });

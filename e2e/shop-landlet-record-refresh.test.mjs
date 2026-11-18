@@ -48,7 +48,7 @@
 // same three checkpoints the label already uses: loaded while still owned by
 // A, still (wrongly) loaded right after reassignment with no refresh yet,
 // then unloaded once the forced refresh runs.
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const LABEL_A = 'Record Refresh Suite Owner A';
@@ -154,14 +154,14 @@ console.log('builder B found:', !!builderB);
 // window.__testForceShopProximityCheck, avoiding a real but imprecise
 // joystick walk).
 await chooseIdentity(page, { mode: 'shop', label: LABEL_A, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // Same spawn-rotation-release gesture e2e/shop-landlet-instance-leak.test.mjs
 // uses -- a fresh Shop-mode spawn otherwise keeps overwriting
 // shopAvatarPosition every frame via its own hands-off orbit until real
 // navigation input first arrives.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

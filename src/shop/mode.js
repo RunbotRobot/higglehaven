@@ -45,6 +45,7 @@
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
 import * as THREE from 'three';
+import { failLoadingStage, markLoadingStage } from '../ui/loadingStages.js';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
 import { shopGroundUsesBiomeTexture } from './groundLook.js';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
@@ -68,7 +69,7 @@ import {
 import { createWorldEnclosure } from './enclosure.js';
 import {
   SHOP_HIDDEN_BUILDER_UI_IDS, showShopAccessGate,
-  shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl,
+  shopStatusEl, setShopControlsVisible,
   shopSignHintEl, shopCalendarHintEl,
   SHOP_PLOT_COLORS, plotColorKeyForLandlet, shapeForLandlet, pointInPolygonXY,
   shopAvatarPosition, shopAvatarFacing,
@@ -407,6 +408,7 @@ export async function enterShopMode() {
       return;
     }
   }
+  markLoadingStage('signedin'); // #3738
 
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
@@ -521,8 +523,11 @@ export async function enterShopMode() {
     [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
+    // #3738: the opening screen says so too, and offers Try again.
+    failLoadingStage(`${err.message || 'The world did not load.'} Check your connection, then tap Try again.`);
     return;
   }
+  markLoadingStage('world'); // #3738
   // Builder display labels for updateShopLandletInfo — supplementary, so a
   // failure here just leaves shopBuilderLabels empty (falls back to "an
   // unknown builder" per-landlet) rather than blocking Shop mode itself.
@@ -620,13 +625,9 @@ export async function enterShopMode() {
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
-  // #3442: the joysticks join the fly button and vertical controls here, so
-  // the whole control cluster arrives together rather than the joysticks
-  // leading (they used to be marked visible at the top of this function).
-  shopMoveJoystickEl.classList.add('visible');
-  shopLookJoystickEl.classList.add('visible');
-  shopFlyBtn.classList.add('visible');
-  shopVerticalControlsEl.classList.add('visible');
+  // #3442/#3650: the Shop controls (the flying arrows, and the flag the voice
+  // button and the assistant panel read) arrive together, here.
+  setShopControlsVisible(true);
   // Not just clearing the text — an empty .visible pill still shows its
   // own padding/background as a small blank rectangle, which sat directly
   // on top of the wordmark (both anchored at the same top:10/left:12 spot)
@@ -636,6 +637,8 @@ export async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   setShopActive(true);
+  // #3738: the opening screen's last stage is the first frame the world draws.
+  requestAnimationFrame(() => markLoadingStage('frame'));
   // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
   // facing value for the compass (eases toward movement direction rather
   // than tracking the camera instantly, unlike every other mode's default
@@ -713,18 +716,8 @@ export function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  // #3530: the fly button's own picture, copied from the button as it is right
-  // now (the HUD swaps it between a perched and a flying robin with the flight
-  // state, src/shop/flightMovement.js), not an emoji dove, so the words
-  // describe what is actually on screen and cannot drift from it.
-  note.appendChild(document.createTextNode('Left stick to walk (push further to run) — right stick to look — double-tap '));
-  const flyIcon = document.createElement('img');
-  flyIcon.className = 'settings-fly-icon';
-  const hudFlyIcon = document.getElementById('shop-fly-btn-icon');
-  flyIcon.src = (hudFlyIcon && hudFlyIcon.getAttribute('src')) || '/bird-standing.png';
-  flyIcon.alt = 'the bird button';
-  note.appendChild(flyIcon);
-  note.appendChild(document.createTextNode(' (or double-press space) to fly.'));
+  // #3650: moving is done by touching the world (no sticks, no fly button).
+  note.textContent = 'Drag anywhere on the world to walk (drag further to run). Put a second finger down and drag it to look. Double-tap to take off or land (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, and double-press space to fly).';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
