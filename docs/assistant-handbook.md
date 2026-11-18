@@ -550,6 +550,7 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 **You will see:** a window at the bottom of the screen with your message and the
 assistant's replies, each labelled with who wrote it.
+The message box starts one line tall and grows as you type, up to about five lines. On a phone the keyboard's Enter key starts a new line, and "Send" sends; with a computer keyboard, Enter sends and Shift+Enter starts a new line. A message can be up to 280 characters, and the window says so when you reach it.
 
 **If something goes wrong:**
 - No assistant is free: the window says so, and the message waits in line. It is
