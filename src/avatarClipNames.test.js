@@ -122,8 +122,9 @@ describe('describeNoAnimationsForAvatar (#2744)', () => {
   it('says so plainly when a clip-less model is listed as an avatar', () => {
     const text = describeNoAnimationsForAvatar(0, true);
     expect(text).toContain('no animations');
-    expect(text).toContain('slide around without walking');
-    expect(text).toContain('applies an animation');
+    expect(text).toContain('small built-in bob and lean');
+    expect(text).not.toContain('slide');
+    expect(text).toContain('apply an animation');
   });
 
   it('stays quiet for an ordinary product that is not listed as an avatar', () => {

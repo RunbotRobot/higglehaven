@@ -161,6 +161,13 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 **You will see:** their character in the world changes to the avatar. The row they chose says it is equipped.
 
+**What it does when it moves:** every avatar walks, stands and flies with a simple
+motion of its own, so none of them glides. The starting avatar swings its legs and
+arms. An avatar that carries no motion of its own gets a small bob and lean. An
+avatar that carries its own motion uses that. An animation they apply under "My
+Animations" replaces the simple motion, so a bought animation is a different
+motion, not the only way to move. Other people see the same.
+
 **If something goes wrong:**
 - "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
 - A message says it could not equip the avatar: read it out; try once more, then offer to pass it to the team.
@@ -267,7 +274,11 @@ petals are the same in all three places.
 3. Lift your finger and you stop. There are no buttons to find: the world itself is
    the control.
 
-**You will see:** your bird walks or turns as you drag, and the view follows.
+**You will see:** your bird walks or turns as you drag, and the view follows. Every
+avatar has a simple motion of its own for walking, standing and flying: the
+starting bird swings its legs and arms as it walks, and an avatar you have bought
+that carries no motion of its own gets a small bob and lean instead of sliding. An
+animation you have applied (see the avatar entry below) replaces that motion.
 
 **If something goes wrong:**
 - Nothing moves: a quick tap does not move you, so keep the finger down and drag a

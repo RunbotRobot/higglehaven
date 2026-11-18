@@ -143,10 +143,12 @@ export function describeAvatarClips(clipNames) {
 // avatar, say so plainly. Stays quiet for an ordinary product (a chair has no
 // walk cycle and does not need telling) and until the file's clips are known
 // (clipCount null). Without clips the avatar still moves, as a rigid whole:
-// it slides around rather than walking.
+// it moves as a rigid whole. #3777: that whole now wears a small built-in bob and
+// lean (src/shop/builtinMotion.js) instead of sliding, and an applied animation
+// replaces it, so the text below says what a person sees now.
 export function describeNoAnimationsForAvatar(clipCount, listedAsAvatar) {
   if (!listedAsAvatar || clipCount !== 0) return null;
-  return 'This model has no animations. As an avatar it will slide around without walking, unless a buyer applies an animation to it.';
+  return 'This model has no animations. As an avatar it will get a small built-in bob and lean when it moves, and a buyer can apply an animation to replace that.';
 }
 
 // #3315 (part of #3301): the upload wizard's "Which motion is this clip?"
