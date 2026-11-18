@@ -69,7 +69,7 @@ Anything about *using* the world, in a shopper's terms:
   dragging on the right half looks around (alone, or both at once), and a double-tap takes off or lands (there are no
   on-screen sticks or fly button). In Shop, the round higglehaven logo
   button at the top left (it says Menu until it has been opened once) opens a short
-  menu with Build, Sell, Settings, Friends, My Purchases and How to move. In Build
+  menu with Build, Sell, Settings, Friends, My Purchases and "?" (how to move, how higglehaven works, short manuals, and Ask an assistant). In Build
   and Sell, the three buttons at the top (Shop, Build, Sell) switch what you are
   doing, and the gear opens the account menu and Settings.
 - **Finding things.** Where to look for products, how to tap a product to see it,

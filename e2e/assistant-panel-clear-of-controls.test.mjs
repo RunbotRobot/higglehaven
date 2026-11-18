@@ -5,7 +5,7 @@
 // and it can be minimised from the first moment. A real tap on a pixel is not
 // automated in this suite, so the panel is opened through the same click
 // handler Settings > Ask an assistant uses.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAssistantFromHelp, finish } from './helpers.mjs';
 
 const LABEL = 'Panel Clear Shopper';
 const LANDLET_ID = 'assistant-panel-clear-landlet';
@@ -58,8 +58,8 @@ const covered = () => page.evaluate(() => {
   return { hit, panel: panel.toJSON(), vh: window.innerHeight };
 });
 
-// Open the panel with no conversation, the way Settings > Ask an assistant does.
-await page.evaluate(() => document.getElementById('settings-assistant-btn').click());
+// Open the panel with no conversation, the way the "?" leaf's Ask an assistant does.
+await openAssistantFromHelp(page);
 await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
 // Shop spawns the person flying above the world, so the first state is usually
 // "flying" (arrows showing); one tap of the fly button switches it. Check both.

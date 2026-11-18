@@ -242,34 +242,13 @@ if (typeof document !== 'undefined') {
   });
 }
 
-// How to move: one leaf, shared by every mode that walks the world with Shop's controls.
-export function openHowToMoveLeaf() {
-  openLeaf({
-    id: 'how-to-move',
-    title: 'How to move',
-    render: (body) => {
-      const lines = [
-        'Walk: drag on the left half of the screen, or W A S D / the arrow keys.',
-        'Look: drag on the right half, or Q and E to turn. Both at once, one thumb each.',
-        'Fly: double-tap the world, or press Space twice.',
-        'Tap a product to look at it.',
-      ];
-      for (const text of lines) {
-        const p = document.createElement('p');
-        p.textContent = text;
-        body.appendChild(p);
-      }
-    },
-  });
-}
-
 // Shop's petals. Settings, Friends and My Purchases are rows of the same panel already;
-// the modes are the half-ring (#3723); How to move is a leaf. (Chat arrives with the
+// the modes are the half-ring (#3723); "?" is a leaf that adds itself to Shop and Build from
+// src/ui/helpLeaf.js (#3762: it holds how to move and the manuals; this file cannot import it, since it
+// imports this one). (Chat arrives with the
 // leaf that moves the chat controls, so there is never a second way in.) Sell's own petals are
 // registered by src/sell/mode.js, next to the product list they open (#3699).
-registerBudPetals('shop', [
-  { id: 'how-to-move', label: 'How to move', run: openHowToMoveLeaf },
-]);
+registerBudPetals('shop', []);
 
 // Build's petals. The modes are the same half-ring as everywhere. Add item
 // adopts the old "+ Add Item" button, so there is no second control for it: it sits in the bud and

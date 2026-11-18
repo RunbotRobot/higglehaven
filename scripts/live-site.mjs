@@ -378,6 +378,12 @@ async function runCoverReport() {
   // The claim sheet sits over the mode buttons; close it to reach the next mode.
   await page.click('#claim-back-btn', { timeout: 3000 }).catch(() => {});
   await measure('Sell, idle', () => switchMode('sell'));
+  // #3701: My products is a leaf of the bud; open it from its petal (the old Products button is gone).
+  await measure('Sell, My products open', async () => {
+    await page.click('#account-menu-toggle');
+    await page.click('#bud-petal-sell-my-products');
+    await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+  });
   rows.push({ state: 'Shop, a product open', note: 'needs a product in view; not automated' });
   rows.push({ state: 'Build, an item selected', note: 'needs a placed item; not automated' });
   rows.push({ state: 'Assistant panel', note: 'needs an assistant on shift; not automated' });

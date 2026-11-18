@@ -134,7 +134,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 3. "General" holds "Units" (Meters or Feet), "Version", and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
 5. "Build" and "Sell" hold the settings for those modes, including the person's username (with "Rename") on "Build" and the payout account on "Sell".
-6. At the bottom of every tab are "Ask an assistant" and "Send feedback".
+6. At the bottom of every tab is "Send feedback".
 7. The "×" at the top right closes Settings.
 
 **You will see:** a window with the tab they chose; the tab's name is highlighted.
@@ -149,7 +149,6 @@ touches one ends by sending the assistant to the runbook's hand-off.
 #settings-tabs [data-section="shop"] | Shop
 #settings-tabs [data-section="build"] | Build
 #settings-tabs [data-section="sell"] | Sell
-#settings-assistant-btn | Ask an assistant
 #settings-feedback-btn | Send feedback
 #settings-close-btn | Close
 ```
@@ -213,6 +212,31 @@ touches one ends by sending the assistant to the runbook's hand-off.
 ```
 
 ## Getting around and Shop
+
+### What is higglehaven, and what can I do here?
+
+1. higglehaven is a world you walk around in. The lándlets, items and products in it
+   are made by the people who use it.
+2. In "Shop" you walk the world, look at products and buy them.
+3. In "Build" you claim a lándlet of your own and fill it with items.
+4. In "Sell" you put your own products up for sale.
+5. The round logo at the top left (the bud) is the menu. It opens "Shop", "Build"
+   and "Sell", your account, and "?", which holds these pages and a way to ask an
+   assistant.
+
+**You will see:** the world, with only the bud on top of it. Tap the bud to see
+everything else.
+
+**If something goes wrong:**
+- Someone asks about something this does not cover: use the other entries in this
+  handbook, and if none fits, say so and offer to pass the question to the team.
+
+```controls any
+.mode-nav-btn[data-mode="shop"] | Shop
+.mode-nav-btn[data-mode="build"] | Build
+.mode-nav-btn[data-mode="sell"] | Sell
+#bud-petal-shop-help | ?
+```
 
 ### How do I go between Shop, Build and Sell?
 
@@ -413,8 +437,7 @@ label:has(#verify-age-attest) | at least 18
 3. There is a limit on how many you can collect in a short time. When you reach it,
    a notice says how many you can collect and in how long you can collect more, for
    example "You can collect up to 20 orbs every 15 minutes. Try again in about 7
-   minutes." Read the numbers out from the person's own screen, since they can
-   change.
+   minutes." The numbers can change, so go by what your own screen says.
 
 **You will see:** a short note when you collect an orb, and a notice with a cross at
 its corner when you reach the limit.
@@ -516,8 +539,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 ### How do I talk to an assistant?
 
-1. Tap an assistant's bird in the world, or tap the gear, then "Settings", then "Ask
-   an assistant".
+1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
+   then "Ask an assistant".
 2. A small window opens. Type in the box that says "Ask a question…" and tap "Send".
 3. An assistant answers there. Keep going in the same window.
 4. To tuck it away without ending the chat, tap the minus at the top right of the
@@ -539,8 +562,7 @@ assistant's replies, each labelled with who wrote it.
   to the team.
 
 ```controls any
-#settings-btn | Settings
-#settings-assistant-btn | Ask an assistant
+#bud-petal-shop-help | ?
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise
@@ -560,10 +582,10 @@ assistant's replies, each labelled with who wrote it.
    its size, and the "Claim" button turns on.
 4. Tap "Claim". The sheet closes and you are standing on your own lándlet.
 
-**You will see:** the sheet goes away and the Build buttons appear: "Multi-Select"
-and "Measure" at the bottom left. The top left is the small round bud with the
-higglehaven logo: tap it and it unfolds. "Add item", "Levels" and, once you have
-done something, "Undo" and "Redo" are inside it.
+**You will see:** the sheet goes away and you are standing on your own lándlet. The
+top left is the small round bud with the higglehaven logo: tap it and it unfolds.
+"Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
+are inside it.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -662,10 +684,11 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
-2. Tap "Paste" at the bottom left. With the item still selected, the copy appears
+2. Tap the bud, then "Tools", then "Paste" (it is only listed once something is
+   copied). With the item still selected, the copy appears
    right on top of it.
 3. To put the copy somewhere else instead, tap empty ground first so nothing is
-   selected, then tap "Paste". The top of the screen says "Tap a spot to paste 1
+   selected, then tap "Paste" the same way. The top of the screen says "Tap a spot to paste 1
    item": tap the ground where it should go.
 4. The copy is selected, so use "Move" to place it exactly.
 
@@ -723,14 +746,15 @@ single item.
 
 ### How do I select several items at once?
 
-1. Tap "Multi-Select" at the bottom left so it turns green. A "Brush" slider
-   appears.
+1. Tap the bud, then "Tools", then "Multi-Select". The sheet goes away and the bud
+   says "Selecting" while it is on. A "Brush" slider is in the Tools sheet: tap
+   the bud, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
    sweep is.
 3. The top of the screen says how many are chosen, for example "2 items
    selected".
-4. Tap "Multi-Select" again when you want to go back to choosing one item at a
-   time.
+4. Tap the bud, "Tools", then "Multi-Select" again when you want to go back to
+   choosing one item at a time. The bud says "Menu" again.
 
 **You will see:** the same row of buttons as for one item, acting on all of them:
 "Move", "Rotate", "Copy", "Delete" and the rest.
@@ -816,22 +840,24 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I measure something?
 
-1. Tap "Measure" at the bottom left so it turns green.
+1. Tap the bud, then "Tools", then "Measure". The bud says "Measuring" while it is
+   on.
 2. Tap one point: an item's surface or the bare ground. Tap a second point.
 3. The top of the screen reads the straight-line distance and how much of it is
    across, along and up, for example "5.83m — Δx 0.55m, Δy 5.80m, Δz 0.00m".
 4. Drag either point to adjust it, or tap somewhere else to start a new
-   measurement. Tap "Measure" again to turn it off.
+   measurement. Turn it off the same way: bud, "Tools", "Measure".
 
 **You will see:** two small markers joined by a dashed line, and the numbers at the
 top of the screen.
 
 **If something goes wrong:**
-- Nothing is read out: tap "Measure" first, then both points.
-- Taps select items instead: "Measure" is off. Tap it so it is green.
+- Nothing is read out: turn "Measure" on first, then tap both points.
+- Taps select items instead: "Measure" is off. The bud should say "Measuring".
 
 ```controls build
 #toggle-measure | Measure
+#bud-petal-build-tools | Tools
 ```
 
 ## Sell
@@ -1000,8 +1026,8 @@ nobody owns and nothing uses is removed completely.
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Sell" tab.
 2. "Payout Account" says whether one is set up. "Set up payout account" (or "Update
    payout account" if there already is one) opens the steps for it.
-3. Tax forms and identity checks, where they are asked for, are filled in by the
-   person themselves on those screens.
+3. Tax forms and identity checks, where they are asked for, are filled in by you on
+   those screens.
 
 **You will see:** the payout account's status at the top of the "Sell" tab.
 
