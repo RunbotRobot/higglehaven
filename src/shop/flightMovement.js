@@ -69,7 +69,7 @@ import { keepPairInside } from './rigidCameraPair.js';
 import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
-  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle,
+  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
   addShopIdleSwayYawOffset, shopIdleSwayYawOffset,
   shopSitYawOffset, shopSitHeightOffset, shopLeanBlend, shopLeanYawOffset, shopLeanPositionOffset,
 } from './avatar.js';
@@ -1820,7 +1820,12 @@ export function updateShopMovementCore(now) {
   // changed), setShopAvatarAnimationState only changes anything on an
   // actual state transition.
   shopAvatar.mixer?.update(dt);
-  setShopAvatarAnimationState(shopAvatar, airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle'));
+  const shopAvatarAnimState = airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle');
+  setShopAvatarAnimationState(shopAvatar, shopAvatarAnimState);
+  // #3777: an avatar with no clips of its own wears a small built-in motion so
+  // it does not glide with a still body (no-op for the default body and for
+  // any avatar that has clips or an applied animation).
+  updateShopAvatarBuiltinMotion(shopAvatar, dt, shopAvatarAnimState, airborne ? 0 : moveMagnitude);
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
   // instead of staying upright; landing eases it back to 0. The avatar

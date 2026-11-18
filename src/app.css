@@ -68,6 +68,13 @@
         --loading-progress: 0.12;
         overflow: hidden;
       }
+      /* #3738: the first opening shows the loading screen and nothing else.
+         #topbar-left and #mode-nav sit above it (z 21) on purpose for the
+         mode-switch splash, so on the first open they showed through for
+         seconds before any script ran. index.html's <html> starts with
+         first-open; hideLoadingScreen() removes it as the splash lifts. */
+      html.first-open #topbar-left,
+      html.first-open #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
@@ -138,7 +145,10 @@
         color: var(--pill-text-soft);
         user-select: text;
         -webkit-user-select: text;
+        /* #3763: a tap shows the next tip. */
+        cursor: pointer;
       }
+      #loading-tip[hidden] { display: none; }
       #loading-tip.loading-tip-show { animation: loading-tip-in var(--motion-bloom) var(--ease-soft); }
       @keyframes loading-tip-in {
         from { opacity: 0; }

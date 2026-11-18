@@ -45,6 +45,7 @@
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
 import * as THREE from 'three';
+import { markStartup } from '../ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from '../ui/loadingStages.js';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
 import { shopGroundUsesBiomeTexture } from './groundLook.js';
@@ -388,6 +389,7 @@ export async function enterShopMode() {
   // design (previously only actually applied to Build/Sell's own entry
   // points, not Shop's).
   await authInitPromise;
+  markStartup('auth-checked');
   // A verify-email/password-reset/Didit-return link visit already opened
   // its own specific #auth-modal (or #verify-modal) view as part of
   // authInitPromise above — this gate skips itself entirely rather than
@@ -398,6 +400,7 @@ export async function enterShopMode() {
   // gate existed — only the login/verification prompt itself is skipped.
   if (!accountRecoveryFlowActive) {
     const shopper = await ensureShopperIdentity();
+    markStartup('identity-checked');
     if (!shopper) {
       // Declined login or verification — this is now a genuine dead end
       // until the next fresh mode-nav reload retries the gate (see
@@ -472,6 +475,7 @@ export async function enterShopMode() {
 
   try {
     setActiveCatalog(await fetchCatalog());
+    markStartup('catalog-loaded');
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
   }
@@ -512,6 +516,7 @@ export async function enterShopMode() {
   if (currentAuthUser && !accountRecoveryFlowActive) {
     try {
       setShopLastLocation(await fetchOwnLastPresence());
+      markStartup('last-location-loaded');
     } catch (err) {
       console.warn('Could not fetch last known location:', err);
     }
@@ -521,6 +526,7 @@ export async function enterShopMode() {
   let allLandlets;
   try {
     [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
+    markStartup('world-loaded');
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
     // #3738: the opening screen says so too, and offers Try again.
@@ -612,6 +618,7 @@ export async function enterShopMode() {
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
   });
+  markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the

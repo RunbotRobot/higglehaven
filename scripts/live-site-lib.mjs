@@ -211,6 +211,10 @@ export function gateRefusalMessage(status) {
 
 // The flags: --url, --name, --desktop, --login, --out, --timing (repeatable), --cover-report.
 // Everything else is a step.
+// #3736: `--throttle` -- a slow phone on a slow connection, so a wait that is
+// invisible on fast hardware shows up. The standard "slow 4G" mobile profile.
+export const THROTTLE_PROFILE = { cpuSlowdown: 4, latencyMs: 150, downKbps: 1600, upKbps: 750 };
+
 export function parseArgs(argv, env = {}) {
   const options = {
     url: env.LIVE_SITE_URL || 'https://higglehaven.com',
@@ -220,6 +224,7 @@ export function parseArgs(argv, env = {}) {
     out: env.LIVE_SITE_OUT || null,
     timing: [],
     coverReport: false,
+    throttle: false,
   };
   const steps = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -236,6 +241,7 @@ export function parseArgs(argv, env = {}) {
     else if (arg === '--out') options.out = value();
     else if (arg === '--timing') options.timing.push(value());
     else if (arg === '--cover-report') options.coverReport = true;
+    else if (arg === '--throttle') options.throttle = true;
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
     else steps.push(parseStep(arg));
   }
