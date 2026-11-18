@@ -1145,6 +1145,60 @@ most likely to come up again.
   when it has loaded; the petal of the mode you are in opens that mode's
   stem.)
 
+  **Nothing stands on the world but the head (2026-11-18, #3769, #3772,
+  #3770, #3774), from a morning of using it.** On flight: "Let's eliminate
+  the up and down arrows from flight. Instead, flying down will be done by
+  pointing the avatar more downward using the camera angle gesture, and
+  flying up will be done by angling the avatar more upward." On Settings
+  stopping short of the right edge to leave room for the compass: "which I
+  think we should move to the menu view or eliminate entirely in favor of a
+  fully clean view." On the line that names the lándlet a person is on:
+  "very plain. Let's give it a prominent placement in the menu and [bring]
+  its design branding in line with the rest of the higglehaven theme... We
+  should also give builders the ability to customize their lándlet's
+  wordmark" (#3771). On the note the head wears when an assistant replies:
+  "Let's make that clickable so the user can get to the answer quickly."
+  So: a control that a gesture can replace goes, and the gesture takes its
+  meaning (the view's pitch is the climb); a readout that is not needed
+  every moment lives in the open menu, not on the world; a panel never
+  gives up space to dodge something that should not be standing there;
+  where a person is deserves the brand's care, and then the builder's own;
+  and anything the head announces is a door to it, one tap. (higglehaven1's
+  choices, told to the owner and open to correction: the compass shows in
+  the open menu rather than going altogether; a builder's wordmark is first
+  a choice from a set of lettering and colours with no uploaded image,
+  because an upload shown to every visitor needs the reporting and removal
+  every other upload has.)
+
+- **A surface opens with its contents in it; an empty one reads as loss.**
+  (2026-11-18, #3773.) "When I click the assistant button, the subsequent
+  modal opens before the chat conversation has loaded, which initially
+  makes it appear that the conversation history has been lost. Let's not
+  display the modal until the chat history has been populated (or at least
+  enough of the most recent portion to fill the window)." So a window that
+  holds a person's own things (a conversation, their orders, what they
+  own) is shown once those things are in it. The control that was tapped
+  shows it is working in the meantime, because a tap is still answered at
+  once; and if the contents cannot be loaded the window says so. A loading
+  state never looks like an empty state. This sits beside "A wait a person
+  can see is first made short".
+
+- **An order is its own record: what a person bought stays named for
+  good, and what they may do about it starts from the order.**
+  (2026-11-18, #3776, #3775.) On an order that read "(removed product)":
+  "Products should have their records retained for purposes such as this
+  after a seller deletes the product." And, finding "Rate this Product" on
+  a card: "Didn't we decide to make rating a product follow a one-to-one
+  correspondence with a purchase?" (The server already stored one rating
+  per purchase; the card offered it to anyone standing near.) So a
+  purchase carries its own copy of the product's name, kind, seller and
+  price from the moment it is made, and nothing done to the product later
+  changes what the order says. A rating belongs to one order: it is
+  offered on the order, and on the product only to someone who has an
+  order not yet rated. More widely: a control is not drawn for a person it
+  can only refuse. This extends "No silent loss" and the delist-not-delete
+  rule of #3279 from digital goods to every order.
+
 - **A wait a person can see is first made short, and whatever is left
   shows that things are working.** (2026-11-17, #3735.) Opening the app
   from the owner's home-screen tile took about ten seconds, then less,
