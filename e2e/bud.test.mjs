@@ -126,7 +126,7 @@ const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark 
   && Math.round(rest.budBox.width) === 56 && rest.panelOpen === 0
   && open.expanded === 'true' && open.settings && open.friends && open.purchases && open.build && open.sell && open.shopPetal && open.help
   && ring.current.join() === 'shop' && ring.apart && ring.clearOfBud && ring.inside && ring.rightAndBelow && ring.columnBelow
-  && ring.inColumn === 0 && ring.group === 'Places'
+  && ring.inColumn === 0 && ring.group === 'Places and menu'
   && afterPick.folded && afterPick.ringHidden
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload
   && leafInfo.title === 'Help' && leafInfo.closeUpperRight && leafInfo.panelFolded && leafInfo.insideViewport
