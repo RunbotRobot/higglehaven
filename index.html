@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="first-open">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -113,9 +113,10 @@
       <button id="assistant-chat-leave" type="button" hidden></button>
       <button id="assistant-chat-withdraw" type="button" hidden></button>
       <form id="assistant-chat-form">
-        <input id="assistant-chat-input" type="text" maxlength="280" placeholder="Ask a question…" autocomplete="off" />
+        <textarea id="assistant-chat-input" rows="1" placeholder="Ask a question…" autocomplete="off"></textarea>
         <button id="assistant-chat-send" type="submit">Send</button>
       </form>
+      <p id="assistant-chat-limit" hidden></p>
     </div>
     <!-- #3529: the minimised panel. A small pill at the left edge, clear of the
          joysticks, the fly button and the mode buttons; the conversation stays

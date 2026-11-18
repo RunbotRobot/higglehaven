@@ -15,8 +15,10 @@
 // A question left for the assistants (the shift program prints it as
 // { "question": ... }) is answered or passed on by its id:
 //   node scripts/assistant-reply.mjs --name juniper answer-question   <questionId> --text "Open Sell mode ..."
-//   node scripts/assistant-reply.mjs --name juniper escalate-question <questionId> --text "They are asking about a refund."
+//   node scripts/assistant-reply.mjs --name juniper escalate-question <questionId> --text "They are asking about a refund." --say "I have passed this to the team."
 //
+// `escalate-question` also needs `--say`: what the person reads, because a person who left a question is
+// not in a conversation and hears nothing else (#3748). `--text` is for the team, `--say` is for them.
 // `--kind problem|suggestion|question` says what the card is (a bug, an idea, or
 // a request for help; left out, it is a question), so the team can tell them
 // apart (#3532). `escalate` files a card for the team; --text is YOUR short summary of what is
@@ -33,7 +35,7 @@ const fail = (message) => {
 
 let parsed;
 try {
-  parsed = parseArgs(process.argv.slice(2), ['name', 'url', 'text', 'kind']);
+  parsed = parseArgs(process.argv.slice(2), ['name', 'url', 'text', 'kind', 'say']);
 } catch (error) { fail(error.message); }
 const { options, positional } = parsed;
 const [action, conversationId] = positional; // the id is a conversation's, or a question's for the two *-question commands
@@ -43,8 +45,11 @@ if (!['reply', 'end', 'escalate', 'handover', 'answer-question', 'escalate-quest
 }
 if (!conversationId || !/^[A-Za-z0-9_-]+$/.test(conversationId)) fail('an id is required after the command');
 if (action !== 'end' && action !== 'handover' && !(options.text || '').trim()) fail(`${action} needs --text "..."`);
-if (options.text !== undefined) {
-  const problem = checkCommandText(options.text);
+if (action === 'escalate-question' && !(options.say || '').trim()) fail('escalate-question needs --say "...": what the person will read, as well as --text for the team');
+if (options.say !== undefined && action !== 'escalate-question') fail('--say goes only with escalate-question');
+for (const value of [options.text, options.say]) {
+  if (value === undefined) continue;
+  const problem = checkCommandText(value);
   if (problem) fail(problem);
 }
 if (options.kind !== undefined && !['problem', 'suggestion', 'question'].includes(options.kind)) fail('--kind must be problem, suggestion or question');
@@ -59,7 +64,16 @@ if (needsProxyRelaunch(baseUrl, process.env)) {
 
 try {
   const client = createClient({ baseUrl, loginName: loginNameFor(options.name), localFleetKey: process.env.LIVE_SITE_FLEET_KEY });
-  await client.login();
+  // #3748: a 5xx (a deploy landing at the wrong second) on sign-in or on the call is tried once
+  // more after a short pause; a 4xx never is.
+  const retryOnce = async (fn) => {
+    try { return await fn(); } catch (error) {
+      if (!(error?.status >= 500)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return fn();
+    }
+  };
+  await retryOnce(() => client.login());
   const id = encodeURIComponent(conversationId);
   const path = {
     reply: `/api/assistant-inbox/conversations/${id}/reply`,
@@ -71,8 +85,8 @@ try {
   }[action];
   // #3613: what a shopper will read gets the lándlet accent restored if the model dropped it.
   const shopperText = options.text === undefined ? undefined : accentLandlets(options.text);
-  const body = { reply: { text: shopperText }, 'answer-question': { text: shopperText }, escalate: { summary: options.text, kind: options.kind }, 'escalate-question': { summary: options.text, kind: options.kind } }[action];
-  const result = await client.call('POST', path, body);
+  const body = { reply: { text: shopperText }, 'answer-question': { text: shopperText }, escalate: { summary: options.text, kind: options.kind }, 'escalate-question': { summary: options.text, kind: options.kind, say: options.say === undefined ? undefined : accentLandlets(options.say) } }[action];
+  const result = await retryOnce(() => client.call('POST', path, body));
   process.stdout.write(`${JSON.stringify(result ?? { ok: true })}\n`);
 } catch (error) {
   fail(error.message);

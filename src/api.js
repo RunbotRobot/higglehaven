@@ -1674,11 +1674,11 @@ function clearProductReviewIdempotencyKey(templateId) {
 // #1113: authorLabel is no longer accepted here -- the server derives it
 // from the session (closing #893's spoofing gap), so a caller needs a real
 // session (ensureBuilderIdentity()) before this will ever succeed.
-export async function createProductReview(templateId, { rating, text } = {}) {
+export async function createProductReview(templateId, { rating, text, purchaseId } = {}) {
   const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rating, text, idempotencyKey: productReviewIdempotencyKey(templateId) }),
+    body: JSON.stringify({ rating, text, ...(purchaseId ? { purchaseId } : {}), idempotencyKey: productReviewIdempotencyKey(templateId) }),
   });
   clearProductReviewIdempotencyKey(templateId);
   return review;
