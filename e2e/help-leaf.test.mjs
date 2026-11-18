@@ -16,8 +16,14 @@ async function openHelp() {
   await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 }
 
+// #3762: the first time the bud is ever opened, the "?" leaf is marked to pulse; it stops once "?" is opened.
+await openAccountMenu(page);
+const teachOnFirstOpen = await page.evaluate(() => document.body.hasAttribute('data-bud-teach-help'));
+await page.keyboard.press('Escape');
+
 // Shop: the list.
 await openHelp();
+const teachGoneAfterHelp = await page.evaluate(() => !document.body.hasAttribute('data-bud-teach-help'));
 const rows = await page.$$eval('#bud-leaf-help .help-row', (els) => els.map((el) => el.textContent.trim()));
 console.log('rows:', JSON.stringify(rows));
 const noOldPetal = (await page.locator('#account-menu-panel button', { hasText: 'How to move' }).count()) === 0;
@@ -73,5 +79,5 @@ console.log('"?" petal in Build and Sell:', JSON.stringify(perMode));
 
 const pass = JSON.stringify(rows) === JSON.stringify(['How to move', 'How higglehaven works', 'Shopping', 'Building', 'Selling', 'Tips', 'Ask an assistant'])
   && tipLines.length >= 4 && noOldPetal && entries.length >= 4 && stepCount >= 2 && leafGone && settingsAskGone
-  && perMode.build && perMode.sell && errors.length === 0;
+  && perMode.build && perMode.sell && teachOnFirstOpen && teachGoneAfterHelp && errors.length === 0;
 await finish(browser, { pass, label: '"?" leaf: pages from the handbook, Ask an assistant, in every mode (#3762)', errors });

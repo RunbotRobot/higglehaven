@@ -910,6 +910,14 @@
       body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
         animation: bud-pulse 1.6s ease-in-out infinite;
       }
+      /* #3762: on the first open ever, the "?" leaf pulses so the instructions are found. */
+      body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] {
+        border-radius: 50%;
+        animation: bud-pulse 1.6s ease-in-out 3;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: 0 0 0 4px rgb(var(--spring-green-rgb) / 0.35); }
+      }
       /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
          stem is set in from the screen edge (the head is in the upper left, so there is little
          room on the left): 88px in, with 76px leaves either side of it, the first on the right and

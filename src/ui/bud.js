@@ -287,6 +287,7 @@ export function closeLeaf() {
 }
 
 export function openLeaf({ id, title, render, onClose = null }) {
+  if (id === 'help') document.body.removeAttribute('data-bud-teach-help');
   closeLeaf();
   leafOnClose = onClose;
   foldBud();
@@ -402,6 +403,7 @@ function learned() {
 function markLearned() {
   try { localStorage.setItem(FIRST_OPEN_KEY, '1'); } catch { /* the word just stays */ }
   document.body.removeAttribute('data-bud-new');
+  document.body.removeAttribute('data-bud-teach-help');
 }
 
 if (typeof document !== 'undefined') {
@@ -440,7 +442,12 @@ if (typeof document !== 'undefined') {
   }
   if (!learned()) document.body.setAttribute('data-bud-new', '');
   toggle()?.addEventListener('click', () => {
-    if (panel()?.classList.contains('expanded')) markLearned();
+    if (panel()?.classList.contains('expanded')) { markLearned(); return; }
+    // #3762: the first time the bud is opened ever, the "?" leaf pulses so a newcomer sees where the
+    // instructions are (the bud's own "Menu" word has gone while it is open). It stops when "?" is
+    // opened or the bud is closed, and is not shown again once learned. The menu's own click handler
+    // opens the panel after this one runs, hence the deferred check.
+    if (!learned()) setTimeout(() => { if (panel()?.classList.contains('expanded') && !learned()) document.body.setAttribute('data-bud-teach-help', ''); }, 0);
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
