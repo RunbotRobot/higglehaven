@@ -27,6 +27,18 @@ await page.waitForTimeout(400);
 const ring = await page.evaluate(() => [...document.querySelectorAll('#bud-modes button')].map((b) => b.dataset.mode ?? b.dataset.menu));
 check(ring.length === 4 && ['shop', 'build', 'sell', 'general'].every((m) => ring.includes(m)), `four petals around the head (${ring})`);
 
+const apart = await page.evaluate(() => {
+  const boxes = [...document.querySelectorAll('#bud-modes button')].map((b) => b.getBoundingClientRect());
+  const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  return boxes.every((a, i) => boxes.every((b, j) => i === j || !overlap(a, b))) && boxes.every((b) => b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight);
+});
+check(apart, 'the four petals do not touch each other and stay on screen');
+const stemBelowRing = await page.evaluate(() => {
+  const ringBottom = Math.max(...[...document.querySelectorAll('#bud-modes button')].map((b) => b.getBoundingClientRect().bottom));
+  return [...document.querySelectorAll('#account-menu-panel > button')].filter((b) => b.offsetParent !== null).every((b) => b.getBoundingClientRect().top >= ringBottom - 1);
+});
+check(stemBelowRing, 'the stem starts below the ring');
+
 // It opens on the general menu: the person, notices, friends, purchases, settings, "?".
 const sellGeneral = await leaves();
 console.log('Sell, general:', JSON.stringify(sellGeneral));
