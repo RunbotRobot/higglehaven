@@ -38,6 +38,7 @@ const goEl = document.getElementById('assistant-chat-go');
 const offerEl = document.getElementById('assistant-chat-offer');
 const leaveEl = document.getElementById('assistant-chat-leave');
 const withdrawEl = document.getElementById('assistant-chat-withdraw');
+const retryEl = document.getElementById('assistant-chat-retry'); // #3773: try loading the conversation again
 const logEl = document.getElementById('assistant-chat-log');
 const statusEl = document.getElementById('assistant-chat-status');
 const formEl = document.getElementById('assistant-chat-form');
@@ -73,6 +74,33 @@ let pollTimer = null;
 let questionTimer = null;
 let inFlight = false;
 let openToken = 0; // a stale open() must not write into a newer one
+// #3773: the window is shown only once the conversation is in it, so a person with a history never sees
+// an empty thread that reads as "my messages are gone". Whatever way in (the "?" leaf, the assistant in
+// the world, the bud's note) comes through openAssistantChat, so there is one rule. `lastThread` is the
+// last thing fetched (warmed when the "?" leaf opens), so most opens show the thread at once and refresh
+// it in place; with none, the tapped control shows it is working (body.assistant-opening) until it is in.
+const THREAD_FRESH_MS = 120000;
+let lastThread = null; // { chat, questionReply, at }
+let opening = false;
+let loadFailed = false; // the thread could not be loaded: the window says so and offers to try again
+export const LOAD_FAILED_TEXT = "We couldn't load your conversation. Check your connection and try again.";
+function setOpening(on) {
+  opening = on;
+  document.body.classList.toggle('assistant-opening', on);
+}
+async function fetchThread() {
+  const chat = await fetchAssistantChat();
+  const open = Boolean(chat.conversation && chat.conversation.status === 'open');
+  // #3448: a question the shopper left earlier (an answer may be waiting). Part of the thread, so
+  // failing to get it is a failed load, never a thread that looks shorter than it is.
+  const questionReply = open ? null : await fetchAssistantQuestion();
+  return { chat, questionReply, at: Date.now() };
+}
+// Fills lastThread ahead of a tap. Never an error a person needs to see.
+export async function warmAssistantThread() {
+  if (lastThread && Date.now() - lastThread.at < THREAD_FRESH_MS) return;
+  try { lastThread = await fetchThread(); } catch { /* the open itself reports a failed load */ }
+}
 
 // #3608: with the phone keyboard up, the panel drops to just above it and is
 // never taller than what is visible, so its header (title, minimise, close)
@@ -235,6 +263,7 @@ function render() {
   leaveEl.hidden = !(canLeave && question === null);
   leaveEl.textContent = leaveLabel;
   withdrawEl.hidden = !(question && questionInLine(question));
+  retryEl.hidden = !loadFailed;
   withdrawEl.textContent = withdrawLabel;
   blockEl.hidden = !assistant?.builderId;
   panelEl.classList.toggle('minimized', minimized);
@@ -415,12 +444,41 @@ function startPolling() {
 
 // Opens the panel for an assistant. If the shopper already has an open
 // conversation (this tab or another) it resumes that one: there is only ever one.
+// Puts a fetched thread into the panel. `refresh` is true when the panel was opened from an older copy
+// and this is the newer one arriving: it updates in place (the log keeps a reader where they are).
+function applyThread(snapshot, { refresh = false } = {}) {
+  const { chat, questionReply } = snapshot;
+  history = chat.history || []; // #3624
+  if (chat.conversation && chat.conversation.status === 'open') {
+    adopt(chat);
+    startPolling();
+  } else if (refresh && conversationOpen()) {
+    // The conversation the older copy showed has ended since.
+    if (chat.messages) messages = mergeMessages(messages, chat.messages);
+    conversation = chat.conversation || null;
+    endedText = chat.conversation ? endedNotice(chat.conversation, assistant?.name) : 'This conversation has ended.';
+    stopPolling();
+  }
+  if (questionReply && !conversationOpen()) adoptQuestion(questionReply);
+}
+
+function showPanel() {
+  panelEl.hidden = false;
+  stickToBottom = true; // #3658
+  render();
+  startStandingChecks();
+  inputEl.focus();
+}
+
+// Opens the panel for an assistant. If the shopper already has an open
+// conversation (this tab or another) it resumes that one: there is only ever one.
 export async function openAssistantChat(target) {
   if (isOpen() && conversationOpen()) {
     if (minimized) restorePanel(); // #3529: tapping the assistant again brings the panel back
     else inputEl.focus();
     return;
   }
+  if (opening) return; // already on its way: the tap was answered
   const token = ++openToken;
   stopPolling();
   assistant = target ? { userId: target.userId, builderId: target.builderId ?? null, name: target.name } : null;
@@ -434,35 +492,56 @@ export async function openAssistantChat(target) {
   canLeave = false;
   minimized = false;
   unread = false;
+  loadFailed = false;
   stopQuestionPolling();
-  panelEl.hidden = false;
-  stickToBottom = true; // #3658
-  render();
-  startStandingChecks();
-  inputEl.focus();
-  try {
-    const reply = await fetchAssistantChat();
-    if (token !== openToken) return;
-    history = reply.history || []; // #3624
-    if (reply.conversation && reply.conversation.status === 'open') {
-      adopt(reply);
-      startPolling();
-    }
-  } catch {
-    // Nothing to resume; the first send reports any real problem.
-  }
-  // #3448: a question the shopper left earlier (an answer may be waiting).
-  if (!conversationOpen()) {
+  const cached = lastThread && Date.now() - lastThread.at < THREAD_FRESH_MS ? lastThread : null;
+  if (cached) {
+    applyThread(cached);
+    showPanel();
+    // The newer copy arrives in place; failing to get it leaves what is shown (it is not empty).
     try {
-      const reply = await fetchAssistantQuestion();
+      const fresh = await fetchThread();
+      lastThread = fresh;
       if (token !== openToken) return;
-      adoptQuestion(reply);
-    } catch {
-      // The first send reports any real problem.
-    }
+      applyThread(fresh, { refresh: true });
+    } catch { /* what is on screen stays */ }
+    render();
+    return;
   }
-  render();
+  setOpening(true);
+  try {
+    const fresh = await fetchThread();
+    lastThread = fresh;
+    if (token !== openToken) return;
+    applyThread(fresh);
+  } catch {
+    if (token !== openToken) return;
+    loadFailed = true;
+    errorText = LOAD_FAILED_TEXT;
+  } finally {
+    if (token === openToken) setOpening(false);
+  }
+  showPanel();
 }
+
+retryEl.addEventListener('click', async () => {
+  if (!loadFailed || opening) return;
+  const token = openToken;
+  retryEl.disabled = true;
+  try {
+    const fresh = await fetchThread();
+    lastThread = fresh;
+    if (token !== openToken) return;
+    loadFailed = false;
+    errorText = null;
+    applyThread(fresh);
+  } catch {
+    // the sentence stays, and so does the button
+  } finally {
+    retryEl.disabled = false;
+    if (token === openToken) render();
+  }
+});
 
 // #3448: the Settings entry. Asking from here needs no assistant to be standing
 // in the world: the question goes in line and the first free assistant takes it.
@@ -489,10 +568,14 @@ export async function closeAssistantChat() {
   offer = null;
   question = null; // a question left in line stays there: closing the panel keeps the place
   canLeave = false;
+  loadFailed = false;
+  setOpening(false);
+  lastThread = null; // #3773: closing changes the thread (an ended conversation joins the history)
   render();
   if (wasOpen) {
     try { await endAssistantChat(); } catch { /* the server ends an idle conversation by itself */ }
   }
+  warmAssistantThread();
 }
 
 formEl.addEventListener('submit', async (event) => {
