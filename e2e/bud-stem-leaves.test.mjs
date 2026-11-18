@@ -27,6 +27,7 @@ async function inspect(label) {
         side: el.dataset.side,
         box: rect(el),
         icons: buttons.map((b) => b.querySelectorAll(':scope > .bud-icon svg').length),
+        kinds: buttons.map((b) => b.querySelector(':scope > .bud-icon')?.dataset.icon),
         words: buttons.map((b) => b.textContent.trim()),
         iconSize: buttons.map((b) => { const s = b.querySelector(':scope > .bud-icon svg'); return s ? s.getBoundingClientRect().height : 0; }),
         wordSize: buttons.map((b) => parseFloat(getComputedStyle(b).fontSize)),
@@ -44,6 +45,7 @@ async function inspect(label) {
   report.rows.forEach((row, i) => {
     check(row.side === (i % 2 === 0 ? 'right' : 'left'), `${label}: leaf ${row.id} alternates (${row.side} at ${i})`);
     check(row.icons.every((n) => n === 1), `${label}: ${row.id} has one icon (${row.icons})`);
+    check(row.kinds.every((k) => k && k !== 'leaf'), `${label}: ${row.id} has its own picture, not the plain-leaf fallback (${row.kinds})`);
     check(row.words.every((w) => w.length > 0), `${label}: ${row.id} has its word (${row.words})`);
     check(row.iconSize.every((s, k) => s >= 24 && s > row.wordSize[k] * 1.5), `${label}: ${row.id} icon is the main thing (${row.iconSize} vs ${row.wordSize})`);
     check(row.tap.every(([w, h]) => w >= 44 && h >= 44), `${label}: ${row.id} tap size ${JSON.stringify(row.tap)}`);

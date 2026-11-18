@@ -30,6 +30,7 @@ const PATHS = {
   layers: 'M12 3.5l9 4.8-9 4.8-9-4.8z M3 12.5l9 4.8 9-4.8 M3 16.8l9 4.7 9-4.7',
   undo: 'M9 13.5 4 8.5l5-5 M4 8.5h10a5.5 5.5 0 0 1 0 11h-3.5',
   redo: 'M15 13.5l5-5-5-5 M20 8.5H10a5.5 5.5 0 0 0 0 11h3.5',
+  tools: 'M14.5 6.2a4 4 0 0 0-5.1 5.1L3.6 17.1a1.7 1.7 0 0 0 2.4 2.4l5.8-5.8a4 4 0 0 0 5.1-5.1l-2.6 2.6-2.4-.6-.6-2.4z',
   // Sell
   crate: 'M3.5 4h17v4.5h-17z M5 8.5V20h14V8.5 M10 12.5h4',
   tagPlus: 'M3 3h8l10 10-8 8L3 11z M7 4.8v4.4 M4.8 7h4.4',
@@ -52,9 +53,12 @@ const BY_ID = {
   'bud-petal-shop-how-to-move': 'move',
   'bud-petal-sell-how-to-move': 'move',
   'bud-petal-build-levels': 'layers',
+  'bud-petal-build-tools': 'tools',
   'bud-petal-sell-my-products': 'crate',
   'bud-petal-sell-add-product': 'tagPlus',
-  'bud-help': 'help',
+  'bud-petal-shop-help': 'help',
+  'bud-petal-build-help': 'help',
+  'bud-petal-sell-help': 'help',
 };
 const BY_MODE = { shop: 'shop', build: 'build', sell: 'sell' };
 
