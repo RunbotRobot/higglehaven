@@ -26,7 +26,8 @@ import { requireCurrentUser, userBlockExistsBetween, builderIdForUser, notBlocke
 import { fireNotification } from './notifications.js';
 import { isAssistantUsername } from './fleet-agents.js';
 
-export const SHOPPER_MESSAGE_MAX_CHARS = 280;
+import { SHOPPER_MESSAGE_MAX_CHARS } from '../../shared/assistant-limits.js';
+export { SHOPPER_MESSAGE_MAX_CHARS };
 export const ASSISTANT_MESSAGE_MAX_CHARS = 1000;
 // Same send budget as nearby chat (NEARBY_CHAT_SEND_RATE_LIMIT_MAX).
 const SHOPPER_SEND_RATE_LIMIT_MAX = 60;

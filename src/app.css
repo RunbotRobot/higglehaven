@@ -1505,6 +1505,7 @@
       }
       #assistant-chat-form {
         display: flex;
+        align-items: flex-end; /* #3750: Send stays level with the bottom of the box as it grows */
         gap: var(--space-xs);
       }
       #assistant-chat-input {
@@ -1514,6 +1515,14 @@
         border-radius: var(--radius-md);
         border: none;
         font: var(--text-lg)/var(--leading-tight) var(--font-sans);
+        resize: none; /* #3750: it grows by itself, up to five lines (assistantChat.js) */
+        overflow-y: hidden;
+        box-sizing: border-box;
+      }
+      #assistant-chat-limit {
+        margin: 0;
+        font: var(--text-sm)/var(--leading-tight) var(--font-sans);
+        color: var(--pill-text);
       }
       #assistant-chat-send {
         padding: var(--space-sm) var(--space-lg);
