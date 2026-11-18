@@ -597,6 +597,32 @@
         user-select: text;
         -webkit-user-select: text;
       }
+      /* #3657: the first-visit hint (src/ui/firstVisitHints.js): one line low in the
+         world, not a modal, gone the moment the person does what it says. Click-through
+         when hidden; selectable while shown (#3303). */
+      #world-hint {
+        position: fixed;
+        z-index: 17;
+        bottom: 96px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100vw - 32px);
+        background: rgb(var(--pill-rgb) / 0.92);
+        padding: var(--space-sm) var(--space-2xl);
+        border-radius: var(--radius-md);
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        text-align: center;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity var(--motion-fade);
+      }
+      #world-hint.visible {
+        opacity: 1;
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
+      }
       #shop-credit-orb-toast {
         position: fixed;
         z-index: 16;

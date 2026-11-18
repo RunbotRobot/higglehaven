@@ -656,6 +656,8 @@ import './ui/copyableErrors.js'; // #3303: record modal error lines for bug repo
 import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
+import { startFirstVisitHints } from './ui/firstVisitHints.js'; // #3657: one quiet hint at a time the first time on a touch screen
+startFirstVisitHints();
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/
