@@ -6591,6 +6591,8 @@
       #item-card.pass-through #item-card-actions button:disabled {
         display: none;
       }
+      /* #3575: the refusal notice is in the card now, and stays selectable and dismissable (#3303). */
+      #item-card.pass-through #selection-action-status,
       #item-card.pass-through #gizmo-mode-controls button,
       #item-card.pass-through #group-item,
       #item-card.pass-through #ungroup-item,
