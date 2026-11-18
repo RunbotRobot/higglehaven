@@ -75,6 +75,12 @@
          first-open; hideLoadingScreen() removes it as the splash lifts. */
       html.first-open #topbar-left,
       html.first-open #mode-nav { visibility: hidden; }
+      /* #3678: while the sign-in card is up, the bar and the bud behind its
+         scrim cannot be used and read as a second, broken interface. They are
+         not drawn until the card closes; closing it brings them back, so a
+         person who declines still has the Log In row. */
+      body:has(#auth-modal.visible) #topbar-left,
+      body:has(#auth-modal.visible) #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
