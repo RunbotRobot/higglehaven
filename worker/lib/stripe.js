@@ -14,6 +14,7 @@
 // directional-except-for-genuinely-shared-state shape
 // worker/lib/builder-profile.js's own comment documents for its own
 // templateFromRow/recomputeLandCap imports (#2535).
+import { purchaseProductName } from './purchase-record.js';
 import { json, HttpError, ERROR_CODES } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -304,8 +305,7 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
   ).bind(purchase.total_cents, isDisputeWithdrawal ? purchase.refunded_amount_cents : null, purchase.purchase_id).run();
   if (guard.meta.changes === 0) return;
 
-  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-    .bind(purchase.template_id).first();
+  const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
   await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
 }
 
@@ -375,8 +375,7 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
   // reinstated sale counts toward the land-cap window again.
   await db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
     .bind(`earnings-${crypto.randomUUID()}`, purchase.builder_id, creditBackCents, purchase.purchase_id).run();
-  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-    .bind(purchase.template_id).first();
+  const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
   await fireNotification(db, purchase.builder_id,
     `"${template?.name || 'A product'}" dispute resolved in your favor -- ${formatCents(creditBackCents)} commission reinstated.`);
 }
@@ -475,8 +474,7 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
 
   await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
     .bind(clawbackCents, purchase.builder_id).run();
-  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-    .bind(purchase.template_id).first();
+  const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
   await fireNotification(db, purchase.builder_id,
     `"${template?.name || 'A product'}" partially refunded -- ${formatCents(clawbackCents)} commission clawed back.`);
 }

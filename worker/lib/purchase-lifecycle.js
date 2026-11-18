@@ -12,6 +12,7 @@
 // creation" leaf, #2614, since this leaf's own functions only call it, not
 // the other way around): purchaseFromRow, handlePurchaseFinalize, and
 // every other helper exclusive to that leaf.
+import { purchaseProductName, ORPHANED_PRODUCT_NAME, ORPHANED_SELLER_NAME } from './purchase-record.js';
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
@@ -108,7 +109,8 @@ async function handleMyPurchases(request, env, url) {
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
            p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at,
-           p.template_id, t.name AS product_name, s.label AS seller_name,
+           p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
+           p.template_id, t.name AS live_name, s.label AS live_seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text,
            pr.review_id AS product_review_id, pr.rating AS product_review_rating, pr.text AS product_review_text
     FROM purchases p
@@ -128,8 +130,12 @@ async function handleMyPurchases(request, env, url) {
       return {
         purchaseId: row.purchase_id,
         createdAt: row.created_at,
-        productName: row.product_name || '(removed product)',
-        sellerName: row.seller_name || '(former seller)',
+        // #3776: the order's own record first (written when it was made),
+        // then the live row for an order not yet backfilled; nothing
+        // surviving reads plainly, beside the order's own date and price.
+        productName: row.recorded_name || row.live_name || ORPHANED_PRODUCT_NAME,
+        productKind: row.recorded_kind || null,
+        sellerName: row.recorded_seller_name || row.live_seller_name || ORPHANED_SELLER_NAME,
         quantity: row.quantity,
         totalCents: row.total_cents,
         isDigitalGood: !!row.is_digital_good,
@@ -148,7 +154,7 @@ async function handleMyPurchases(request, env, url) {
         productReview: row.product_review_id
           ? { reviewId: row.product_review_id, rating: row.product_review_rating, text: row.product_review_text }
           : null,
-        canReviewProduct: row.product_name !== null && row.product_name !== undefined && !row.refunded_at && !row.product_review_id,
+        canReviewProduct: row.live_name !== null && row.live_name !== undefined && !row.refunded_at && !row.product_review_id,
         canDispute: disputeBlock(row) === null,
       };
     }),
@@ -348,8 +354,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   // SET NULL), so skipped silently rather than erroring, same guard
   // clawBackPurchaseCommission uses for its own nullable builder_id.
   if (purchase.buyer_builder_id) {
-    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-      .bind(purchase.template_id).first();
+    const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     await fireNotification(db, purchase.buyer_builder_id,
       `"${template?.name || 'A product'}" has shipped!`);
   }
@@ -402,8 +407,7 @@ async function handlePurchaseConfirmDelivery(request, env) {
     // dangling seller_id (same guard handleProductReviews' own notification
     // code uses) simply has nobody to notify.
     if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
-      const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-        .bind(purchase.template_id).first();
+      const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
       const owner = await db.prepare(`
         SELECT b.builder_id AS builder_id FROM sellers s
         JOIN builders b ON b.user_id = s.user_id
@@ -444,8 +448,7 @@ export async function notifySellerOfSaleChange(db, purchase, messageFor) {
       WHERE s.seller_id = ?
     `).bind(purchase.seller_id).first();
     if (!owner) return;
-    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-      .bind(purchase.template_id).first();
+    const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     const message = messageFor(template?.name || 'A product');
     if (message) await fireNotification(db, owner.builder_id, message);
   } catch (err) {
@@ -461,8 +464,7 @@ export async function notifySellerOfSaleChange(db, purchase, messageFor) {
 export async function notifyBuyerOfRefund(db, purchase, amountCents, { partial = false } = {}) {
   try {
     if (!purchase.buyer_builder_id || !(amountCents > 0)) return;
-    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-      .bind(purchase.template_id).first();
+    const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     const name = template?.name || 'Your purchase';
     await fireNotification(db, purchase.buyer_builder_id,
       `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.`);
@@ -803,7 +805,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
     throw new HttpError('This product\'s seller does not accept returns', 400);
   }
-  const templateName = template?.name || 'A product';
+  const templateName = (await purchaseProductName(db, purchase)) || 'A product';
 
   // Run alone, not batched with the balance/notification statements below,
   // since D1's db.batch doesn't support skipping later statements based on

@@ -32,6 +32,7 @@ async function hostBuilderId() {
 async function addPurchase(buyer, {
   templateId = `template-${crypto.randomUUID()}`, sellerId = null, createdAt = new Date().toISOString(),
   refundedAt = null, paidOutAt = null, totalCents = 500, quantity = 1, digital = 0, linkBuilder = true,
+  productName = null, productKind = null, sellerName = null,
 } = {}) {
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   const userId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(buyer.builderId).first()).user_id;
@@ -39,10 +40,10 @@ async function addPurchase(buyer, {
     INSERT INTO purchases
       (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id, buyer_user_id,
        unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
-       is_digital_good, created_at, refunded_at, paid_out_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 5, 5, ?, ?, ?, ?)
+       is_digital_good, created_at, refunded_at, paid_out_at, product_name, product_kind, seller_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 5, 5, ?, ?, ?, ?, ?, ?, ?)
   `).bind(purchaseId, `instance-${crypto.randomUUID()}`, templateId, await hostBuilderId(), sellerId, buyer.builder.label,
-    linkBuilder ? buyer.builderId : null, userId, totalCents, quantity, totalCents, digital, createdAt, refundedAt, paidOutAt).run();
+    linkBuilder ? buyer.builderId : null, userId, totalCents, quantity, totalCents, digital, createdAt, refundedAt, paidOutAt, productName, productKind, sellerName).run();
   return purchaseId;
 }
 
@@ -98,11 +99,12 @@ describe('GET /api/purchases/mine (#3196)', () => {
     expect(byId[named]).toMatchObject({
       productName: 'A Lovely Lamp', sellerName: seller.seller.label, quantity: 2, totalCents: 1000, isDigitalGood: true,
     });
-    expect(byId[orphan]).toMatchObject({ productName: '(removed product)', sellerName: '(former seller)' });
+    // #3776: nothing surviving reads plainly, never as a bracketed placeholder.
+    expect(byId[orphan]).toMatchObject({ productName: 'A product the seller has since deleted', sellerName: 'A seller who has since left' });
 
     // The list must not become a way to read anything the buyer did not already see.
     const allowed = [
-      'purchaseId', 'createdAt', 'productName', 'sellerName', 'quantity', 'totalCents', 'isDigitalGood', 'shippedAt',
+      'purchaseId', 'createdAt', 'productName', 'productKind', 'sellerName', 'quantity', 'totalCents', 'isDigitalGood', 'shippedAt',
       'refundedAt', 'refundedAmountCents', 'canLeaveFeedback', 'feedback', 'canDispute', 'templateId', 'productReview', 'canReviewProduct',
     ].sort();
     for (const purchase of res.body.purchases) expect(Object.keys(purchase).sort()).toEqual(allowed);
@@ -179,5 +181,45 @@ describe('GET /api/purchases/mine flags agree with the feedback and dispute endp
     expect(await flags(buyer)).toMatchObject({ canLeaveFeedback: false, canDispute: true });
     expect((await postFeedback(buyer, purchaseId)).response.status).toBe(400);
     expect((await postDispute(buyer, purchaseId)).response.status).toBe(200);
+  });
+});
+
+describe('an order is its own record (#3776)', () => {
+  it('keeps naming what was bought after the product row and the seller are gone', async () => {
+    const buyer = await signupBuilder('mine-record');
+    const id = await addPurchase(buyer, {
+      templateId: 'template-never-existed-anymore', sellerId: 'seller-long-gone',
+      productName: 'Avatar Attempt 3', productKind: 'avatar', sellerName: 'Moss & Co',
+    });
+    const row = (await mine(buyer)).body.purchases.find((p) => p.purchaseId === id);
+    expect(row).toMatchObject({ productName: 'Avatar Attempt 3', productKind: 'avatar', sellerName: 'Moss & Co' });
+  });
+
+  it('prefers the order\'s own record to the live product, so a rename later changes nothing', async () => {
+    const buyer = await signupBuilder('mine-record-rename');
+    const templateId = await createTemplate('mine-record-rename-template', 'Renamed Later');
+    const id = await addPurchase(buyer, { templateId, productName: 'Name At Purchase Time' });
+    const row = (await mine(buyer)).body.purchases.find((p) => p.purchaseId === id);
+    expect(row.productName).toBe('Name At Purchase Time');
+  });
+
+  it('delists, never deletes, a product that has a purchase, of any kind', async () => {
+    const buyer = await signupBuilder('mine-record-delist');
+    const templateId = await createTemplate('mine-record-delist-template', 'Bought Crate');
+    await addPurchase(buyer, { templateId, productName: 'Bought Crate' });
+
+    const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true, delisted: true });
+    const kept = await env.DB.prepare('SELECT delisted_at FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    expect(kept?.delisted_at).toBeTruthy();
+  });
+
+  it('still hard-deletes a product nobody has bought', async () => {
+    const templateId = await createTemplate('mine-record-unbought-template', 'Never Sold');
+    const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    expect(deleted.body).toEqual({ deleted: true, delisted: false });
+    const gone = await env.DB.prepare('SELECT 1 AS one FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    expect(gone).toBeNull();
   });
 });
