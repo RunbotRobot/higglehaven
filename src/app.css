@@ -996,6 +996,17 @@
         overflow-wrap: anywhere;
       }
       body[data-bud="on"] #account-menu-panel .bud-pair button { flex: 1; min-width: 44px; padding: var(--space-xs); }
+      /* #3761: the Person leaf's word is the account's name, which can be long: one line, cut with an
+         ellipsis at the leaf's edge, not broken in the middle of a word ("higglehaven1" over "0"). A
+         block rather than a column so the cut can be drawn. */
+      body[data-bud="on"] #account-menu-panel #account-auth-btn {
+        display: block;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
       body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
       body[data-bud="on"] #account-menu-panel .bud-icon svg { display: block; }
       /* A mark (unread notices, a friend request) sits on the leaf's corner. */
