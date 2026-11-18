@@ -28,7 +28,7 @@
 // detail last, in a run whose own total output this suite's current shard
 // sizes keep well under that ceiling, guarantees it survives instead.
 import { execSync, spawn } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -249,17 +249,39 @@ async function waitForServer(timeoutMs = 30000) {
   throw new Error(`wrangler dev did not become ready within ${timeoutMs}ms`);
 }
 
+// #3727: see runOneTest. Per process, so a retried shard (a new process) rebuilds it.
+const MIGRATED_STATE_TEMPLATE = path.join(os.tmpdir(), `hh-e2e-migrated-state-${process.pid}`);
+let migratedStateReady = false;
+process.on('exit', () => { try { rmSync(MIGRATED_STATE_TEMPLATE, { recursive: true, force: true }); } catch { /* best effort */ } });
+
 async function runOneTest(testFile) {
   const startedAt = Date.now();
   let log = `\n=== ${testFile} ===\n`;
   killWranglerFamily();
   await new Promise((resolve) => setTimeout(resolve, 1000));
   sh('rm -rf .wrangler/state');
-  const migrationResult = execCapture('npx wrangler d1 migrations apply higglehaven-db --local');
-  log += migrationResult.output;
-  if (migrationResult.failed) {
-    log += `\nFAILED: ${testFile} (migration apply itself failed, before the test ever ran)\n`;
-    return { passed: false, log, elapsedMs: Date.now() - startedAt };
+  // #3727: applying all the migrations to a fresh local D1 took ~83 s of the ~93 s a file with
+  // no test in it costs, i.e. nearly all of the suite's time. The first file of a run applies
+  // them and keeps a copy of the migrated, still-empty state; every later file starts from a
+  // copy of that. Each file still gets its own pristine database (the copy is taken before any
+  // wrangler dev has touched it), and the template is made from this checkout's own
+  // migrations in this same process, so it cannot be stale.
+  if (migratedStateReady) {
+    sh(`cp -a "${MIGRATED_STATE_TEMPLATE}" .wrangler/state`);
+  } else {
+    const migrationResult = execCapture('npx wrangler d1 migrations apply higglehaven-db --local');
+    log += migrationResult.output;
+    if (migrationResult.failed) {
+      log += `\nFAILED: ${testFile} (migration apply itself failed, before the test ever ran)\n`;
+      return { passed: false, log, elapsedMs: Date.now() - startedAt };
+    }
+    try {
+      rmSync(MIGRATED_STATE_TEMPLATE, { recursive: true, force: true });
+      sh(`cp -a .wrangler/state "${MIGRATED_STATE_TEMPLATE}"`);
+      migratedStateReady = true;
+    } catch (error) {
+      log += `\n(could not keep a migrated-state copy, applying migrations for each file: ${error.message})\n`;
+    }
   }
 
   const wranglerLogFilesBefore = listWranglerLogFiles();

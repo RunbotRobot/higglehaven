@@ -559,10 +559,10 @@ assistant's replies, each labelled with who wrote it.
    its size, and the "Claim" button turns on.
 4. Tap "Claim". The sheet closes and you are standing on your own lándlet.
 
-**You will see:** the sheet goes away and the Build buttons appear: "Multi-Select"
-and "Measure" at the bottom left. The top left is the small round bud with the
-higglehaven logo: tap it and it unfolds. "Add item", "Levels" and, once you have
-done something, "Undo" and "Redo" are inside it.
+**You will see:** the sheet goes away and you are standing on your own lándlet. The
+top left is the small round bud with the higglehaven logo: tap it and it unfolds.
+"Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
+are inside it.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -661,10 +661,11 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
-2. Tap "Paste" at the bottom left. With the item still selected, the copy appears
+2. Tap the bud, then "Tools", then "Paste" (it is only listed once something is
+   copied). With the item still selected, the copy appears
    right on top of it.
 3. To put the copy somewhere else instead, tap empty ground first so nothing is
-   selected, then tap "Paste". The top of the screen says "Tap a spot to paste 1
+   selected, then tap "Paste" the same way. The top of the screen says "Tap a spot to paste 1
    item": tap the ground where it should go.
 4. The copy is selected, so use "Move" to place it exactly.
 
@@ -722,14 +723,15 @@ single item.
 
 ### How do I select several items at once?
 
-1. Tap "Multi-Select" at the bottom left so it turns green. A "Brush" slider
-   appears.
+1. Tap the bud, then "Tools", then "Multi-Select". The sheet goes away and the bud
+   says "Selecting" while it is on. A "Brush" slider is in the Tools sheet: tap
+   the bud, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
    sweep is.
 3. The top of the screen says how many are chosen, for example "2 items
    selected".
-4. Tap "Multi-Select" again when you want to go back to choosing one item at a
-   time.
+4. Tap the bud, "Tools", then "Multi-Select" again when you want to go back to
+   choosing one item at a time. The bud says "Menu" again.
 
 **You will see:** the same row of buttons as for one item, acting on all of them:
 "Move", "Rotate", "Copy", "Delete" and the rest.
@@ -815,22 +817,24 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I measure something?
 
-1. Tap "Measure" at the bottom left so it turns green.
+1. Tap the bud, then "Tools", then "Measure". The bud says "Measuring" while it is
+   on.
 2. Tap one point: an item's surface or the bare ground. Tap a second point.
 3. The top of the screen reads the straight-line distance and how much of it is
    across, along and up, for example "5.83m — Δx 0.55m, Δy 5.80m, Δz 0.00m".
 4. Drag either point to adjust it, or tap somewhere else to start a new
-   measurement. Tap "Measure" again to turn it off.
+   measurement. Turn it off the same way: bud, "Tools", "Measure".
 
 **You will see:** two small markers joined by a dashed line, and the numbers at the
 top of the screen.
 
 **If something goes wrong:**
-- Nothing is read out: tap "Measure" first, then both points.
-- Taps select items instead: "Measure" is off. Tap it so it is green.
+- Nothing is read out: turn "Measure" on first, then tap both points.
+- Taps select items instead: "Measure" is off. The bud should say "Measuring".
 
 ```controls build
 #toggle-measure | Measure
+#bud-petal-build-tools | Tools
 ```
 
 ## Sell
