@@ -74,7 +74,7 @@ permanent controls. Four things are built with:
 
 | thing | what it is for | size and shape | how it arrives and leaves | never |
 |---|---|---|---|---|
-| **the bud** | the only standing piece of interface; carries the higglehaven logo; the door to every petal | `--bud-size` (56px), round, `--shadow-bud`; sits in the bottom-right corner clear of the thumb's resting place; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes | carry a count, a second control, or text that stays after it has been learned |
+| **the bud** | the only standing piece of interface; carries the higglehaven logo; the door to every petal | `--bud-size` (56px), round, `--shadow-bud`; sits in the upper-left corner and stays there (it is the head of the flower, #3759); at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes | carry a count, a second control, or text that stays after it has been learned |
 | **a petal** | one way in: Settings, Friends, Chat, Purchases, Build and Sell, How to move | at least 44px tall and 104px wide, 15px label, `--radius-petal`, pale green fading to pale yellow, `--shadow-petal` | unfolds upward from the bud, 40ms apart, over `--motion-petal` with `--ease-bloom`; folds back when another thing opens | be more than one word, or sit anywhere but over the bud's own column |
 | **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
 | **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
@@ -315,10 +315,21 @@ by touching the world. The module is `src/ui/bud.js`:
   Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, hidden until the bud
   is unfolded, the same three in every mode with the current one green and `aria-current`.
   They sit 100px from the bud's centre at 10, 45 and 80 degrees, so no two touch, and the
-  column of things you open starts 92px lower, under them. The arc opens away from the
-  screen edge: the ring's two direction variables are +1 for a top-left bud and -1 for one in the
-  bottom-right (set `body[data-bud-corner="bottom-right"]`). A mode is never a petal of the
-  column, and the ring is last in reading order.
+  column of things you open starts 92px lower, under them. The head stays in the upper left,
+  so the arc opens right and down. A mode is never a petal of the column, and the ring is last in
+  reading order.
+- An open menu is a stem with leaves on both sides (#3761, the flower). The stem is set 88px in
+  from the screen edge, because the head is in the upper left and the left-hand leaves need
+  room; leaves are 76px wide, the first on the right and then alternating, their pitch about
+  half a leaf's height so a left leaf sits between two right ones. Each leaf is an icon with
+  its one small word under it: the picture is the main thing and the word is always there,
+  never a tooltip. Icons are inline SVG in src/ui/budIcons.js, one line weight, drawn in the ink
+  colour; a leaf with no icon there gets a plain leaf and a console warning, so a new leaf cannot
+  ship as words only. src/ui/bud.js places the stem by walking the *visible* leaves (never
+  :nth-child) and again whenever one is added, shown, hidden or has its text replaced. The stem
+  grows from the top and the leaves open in turn (about a third of a second in all); under
+  reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
+  the last leaf.
 - The glow, never a scale, is the bud's breath: a control that moves is hard to
   tap, and cannot be clicked by a test.
 
