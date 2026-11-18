@@ -80,7 +80,7 @@ let shopperIdentityFlowPromise = null;
 export async function ensureShopperIdentity() {
   if (!shopperIdentityFlowPromise) {
     shopperIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) — age verification is required to use higglehaven.');
+      let user = await requireLogin('signup');
       if (!user) return null;
       return requireVerification(user);
     })();
