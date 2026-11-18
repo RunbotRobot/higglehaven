@@ -856,6 +856,27 @@
       </div>
       <button id="item-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>
+    <!-- #3702 (Sell in the bud, 4/6): the card of a product tapped in the showroom. It blooms beside
+         the product (the same shared world-card mechanism as Shop's product card and Build's item
+         card); the actions on the product sit directly under its name, the price is on the card, and
+         More opens My products on that product's row for everything else. All its text can be
+         selected. -->
+    <div id="seller-product-card" class="world-card" role="region" aria-label="Your product" data-state="closed" hidden>
+      <div id="seller-product-card-name"></div>
+      <div id="seller-product-card-price"></div>
+      <div id="seller-product-card-actions">
+        <button id="seller-product-card-rename-btn" type="button">Rename</button>
+        <button id="seller-product-card-price-btn" type="button" aria-expanded="false" aria-controls="seller-product-card-price-edit">Price</button>
+        <button id="seller-product-card-delete-btn" type="button" class="danger">Delete</button>
+        <button id="seller-product-card-more-btn" type="button">More</button>
+      </div>
+      <div id="seller-product-card-price-edit" hidden>
+        <input id="seller-product-card-price-input" type="text" inputmode="decimal" autocomplete="off" aria-label="Price in dollars">
+        <button id="seller-product-card-price-save-btn" type="button">Save</button>
+      </div>
+      <div id="seller-product-card-status" role="status"></div>
+      <button id="seller-product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+    </div>
     <!-- #2718 (sub-issue of #2715): src/feedback/submitFeedbackUI.js owns
          every element below -- open/close, the screenshot capture, and the
          submit flow to POST /api/feedback/bug-report (#2719). -->
