@@ -4203,6 +4203,14 @@ the same `status` and `ownerBuilderId` filters while following a cursor.
 
 Fetches one landlet.
 
+Every landlet record (this route, the list, and `PUT`/`PATCH`) carries
+`wordmarkStyle` and `wordmarkColors` (#3781): the builder's chosen lettering and
+colour pair for the lándlet's name, as ids from `shared/wordmark-set.js`, the one
+definition the Worker and the client both read. Both default to `"default"`.
+The owner sets them with `PATCH /api/landlets/:id`; an id outside the set is
+refused with `400` and a plain message. They ride on the record shoppers already
+fetch, so there is no extra request.
+
 ### `GET /api/far-placements?tile=x,y`
 
 Public, read-only (#3417). Every placement on every landlet whose centre lies in
