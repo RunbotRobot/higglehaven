@@ -1,5 +1,6 @@
 // #3574 (part of #3539, Build mode audit): Paste, Redo, Unbundle and Edit are
-// left out until they can be used, instead of sitting greyed in the toolbar.
+// left out until they can be used, instead of sitting greyed in the toolbar. Bundle (needs two items)
+// and Trim (needs a trimmable item) follow the same rule.
 import { launchPage, chooseIdentity, claimLandlet, finish, budClick, budShows } from './helpers.mjs';
 
 const LABEL = 'Hidden Controls Tester';
@@ -22,7 +23,10 @@ await page.waitForTimeout(300);
 await page.mouse.click(200, 380);
 await page.waitForTimeout(800);
 
-const selected = { unbundle: await shown('#ungroup-item'), edit: await shown('#edit-bundle-item') };
+const selected = { unbundle: await shown('#ungroup-item'), edit: await shown('#edit-bundle-item'), bundle: await shown('#group-item') };
+// A Tree is not trimmable, so Trim is left out too; the toolbar's own Move and Rotate stay.
+const trimShown = await shown('#mode-trim');
+const moveShown = await shown('#mode-move');
 await page.click('#copy-item');
 await page.waitForTimeout(300);
 const pasteAfterCopy = await pasteOffered();
@@ -31,5 +35,5 @@ await page.waitForTimeout(800);
 const redoAfterUndo = await budShows(page, '#redo-btn');
 console.log('before:', JSON.stringify(before), 'one tree selected:', JSON.stringify(selected), 'paste after copy:', pasteAfterCopy, 'redo after undo:', redoAfterUndo);
 
-const pass = !before.paste && !before.redo && !selected.unbundle && !selected.edit && pasteAfterCopy && redoAfterUndo && errors.length === 0;
-await finish(browser, { pass, label: '#3574: Paste, Redo, Unbundle and Edit appear only when usable', errors });
+const pass = !before.paste && !before.redo && !selected.unbundle && !selected.edit && !selected.bundle && !trimShown && moveShown && pasteAfterCopy && redoAfterUndo && errors.length === 0;
+await finish(browser, { pass, label: '#3574: Paste, Redo, Bundle, Trim, Unbundle and Edit appear only when usable', errors });

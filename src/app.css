@@ -2802,6 +2802,8 @@
       #paste-btn[hidden],
       #redo-btn[hidden],
       #ungroup-item[hidden],
+      #group-item[hidden],
+      #mode-trim[hidden],
       #edit-bundle-item[hidden] {
         display: none !important;
       }
