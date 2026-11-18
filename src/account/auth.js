@@ -27,7 +27,7 @@ import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
 import { loadStripeJs, loadTurnstileJs, START_MODE_KEY } from '../main.js';
 import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
 import { resetIdentityFlowPromises } from './identity.js';
-import { describeCardRefusal, VERIFY_INTRO, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
+import { describeCardRefusal, VERIFY_INTRO, VERIFY_INTRO_PROOF_ONLY, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
 
 export async function requireLogin(view = 'signup', hint) {
   if (currentAuthUser) return currentAuthUser;
@@ -73,7 +73,8 @@ const verifyContinueBtn = document.getElementById('verify-continue-btn');
 const verifyIdInsteadBtn = document.getElementById('verify-id-instead-btn');
 const verifyLogoutBtn = document.getElementById('verify-logout-btn');
 // #3565: the modal's copy lives in cardVerifyCopy.js.
-document.getElementById('verify-modal-intro').textContent = VERIFY_INTRO;
+const verifyIntroEl = document.getElementById('verify-modal-intro');
+verifyIntroEl.textContent = VERIFY_INTRO;
 document.getElementById('verify-card-intro').textContent = CARD_STEP_INTRO;
 verifyIdInsteadBtn.textContent = ID_INSTEAD_LABEL;
 
@@ -144,6 +145,9 @@ function openVerifyModal(user) {
   // Escape. Tab-focus-trapping is unaffected since it only depends on
   // activeModalEl, not activeModalCloseFn.
   openModalA11y(verifyModalEl, null);
+  // The intro matches what is on the screen: both things when the tick is shown, only the proof when
+  // the account already gave it at sign-up (#3734).
+  verifyIntroEl.textContent = user.ageAttested ? VERIFY_INTRO_PROOF_ONLY : VERIFY_INTRO;
   if (!user.ageAttested) {
     verifyAgeStepEl.hidden = false;
     verifyContinueBtn.textContent = 'Continue';
