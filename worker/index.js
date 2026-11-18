@@ -168,6 +168,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleLandlets } from './lib/land.js';
 import { handleFarPlacements } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
+import { DEFAULT_WORDMARK_ID, isWordmarkStyleId, isWordmarkColorId } from '../shared/wordmark-set.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
 // worker/lib/auctions.js -- see that module's own header comment for what
@@ -4340,6 +4341,16 @@ export async function getInstancesById(db, instanceIds) {
 // were already written this way and are left unchanged.
 
 
+// #3781: the picker only offers ids from shared/wordmark-set.js, so anything
+// else is refused in plain words.
+function wordmarkChoice(value, isLegal, field) {
+  const id = value ?? DEFAULT_WORDMARK_ID;
+  if (typeof id !== 'string' || !isLegal(id)) {
+    throw new HttpError(`That ${field === 'wordmarkStyle' ? 'lettering style' : 'colour choice'} is not one of the choices on offer`, 400);
+  }
+  return id;
+}
+
 export function validateLandlet(input, fallbackId) {
   const center = input.center || {};
   const landlet = {
@@ -4356,6 +4367,8 @@ export function validateLandlet(input, fallbackId) {
     landType: landletLandType(input.landType || 'buildable'),
     biome: landletBiome(input.biome ?? null),
     elevationM: landletElevationM(input.elevationM ?? null),
+    wordmarkStyle: wordmarkChoice(input.wordmarkStyle, isWordmarkStyleId, 'wordmarkStyle'),
+    wordmarkColors: wordmarkChoice(input.wordmarkColors, isWordmarkColorId, 'wordmarkColors'),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: optionalIsoDateString(input.generatedAt, 'generatedAt'),
     claimableAt: optionalIsoDateString(input.claimableAt, 'claimableAt'),
@@ -4593,6 +4606,9 @@ export function landletFromRow(row) {
     // add this straight onto a ground vertex's local z, same "read the
     // already-final value" shape as biome just above.
     elevationM: row.elevation_m ?? null,
+    // #3781: the builder's chosen wordmark lettering and colours.
+    wordmarkStyle: row.wordmark_style ?? DEFAULT_WORDMARK_ID,
+    wordmarkColors: row.wordmark_colors ?? DEFAULT_WORDMARK_ID,
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
