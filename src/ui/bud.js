@@ -12,8 +12,14 @@
 //   openLeaf({ id, title, render, onClose }) / closeLeaf()  one soft sheet at a time, close upper-right;
 //                                                  onClose runs as it goes (give back anything lent to it)
 //   setBudMark(key) / clearBudMark(key)            any key set shows the bud's one unread mark
-//   setBudWord(key, text) / clearBudWord(key)      the bud wears a short word beside it (a minimised
-//                                                  conversation's name); "Menu" comes back when none is set
+//   setBudWord(key, text, { open, label }) / clearBudWord(key)
+//                                                  the bud wears a short word beside it (a minimised
+//                                                  conversation's name); "Menu" comes back when none is set.
+//                                                  A word that announces something carries its door:
+//                                                  `open` runs when the note is tapped (the owner of the
+//                                                  key clears the word once the thing is open), `label`
+//                                                  is what a screen reader says. With no `open` the word
+//                                                  is just a word, as before (#3774)
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
@@ -206,12 +212,52 @@ export function clearBudMark(key) {
 function showWord() {
   const wordEl = toggle()?.querySelector('.bud-word');
   const latest = [...words.values()].pop();
-  if (wordEl) wordEl.textContent = latest ?? MENU_WORD;
+  if (wordEl) wordEl.textContent = latest ? latest.text : MENU_WORD;
   document.body.toggleAttribute('data-bud-word', words.size > 0);
+  showNote(latest && latest.open ? latest : null);
 }
 
-export function setBudWord(key, text) {
-  words.set(key, String(text));
+// #3774: the note beside the head is a door when it announces something. It is its own button (a
+// button cannot sit inside the head's button), attached to the head, 44px tall, and grows out of
+// it and folds back like the petals. The plain word inside the head stays for words with no door.
+let noteEl = null;
+let noteTimer = null;
+function ensureNote() {
+  if (noteEl) return noteEl;
+  const host = document.getElementById('account-menu');
+  if (!host) return null;
+  noteEl = document.createElement('button');
+  noteEl.id = 'bud-note';
+  noteEl.type = 'button';
+  noteEl.hidden = true;
+  noteEl.addEventListener('click', () => {
+    const latest = [...words.values()].pop();
+    if (!latest || !latest.open) return;
+    foldBud();
+    latest.open();
+  });
+  host.appendChild(noteEl);
+  return noteEl;
+}
+function showNote(entry) {
+  const el = entry ? ensureNote() : noteEl;
+  if (!el) return;
+  clearTimeout(noteTimer);
+  if (entry) {
+    el.textContent = entry.text;
+    el.setAttribute('aria-label', entry.label || entry.text);
+    el.classList.remove('folding');
+    el.hidden = false;
+    document.body.setAttribute('data-bud-note', 'on');
+  } else if (!el.hidden) {
+    document.body.removeAttribute('data-bud-note');
+    el.classList.add('folding');
+    noteTimer = setTimeout(() => { el.hidden = true; el.classList.remove('folding'); }, 180);
+  }
+}
+
+export function setBudWord(key, text, { open = null, label = '' } = {}) {
+  words.set(key, { text: String(text), open: typeof open === 'function' ? open : null, label: String(label || '') });
   showWord();
 }
 

@@ -552,7 +552,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 4. To tuck it away without ending the chat, tap the minus at the top right of the
    window ("Minimise"). While it is tucked away the little bud in the corner shows
    the assistant's name, with a dot once they have replied. To bring it back, tap
-   the bud, then "Assistant". To end the chat, tap the cross ("End the conversation
+   that name beside the bud (one tap, and the conversation opens at the newest
+   message), or tap the bud, then "Assistant". To end the chat, tap the cross ("End the conversation
    and close").
 
 **You will see:** a window at the bottom of the screen with your message and the

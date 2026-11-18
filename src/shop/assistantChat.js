@@ -244,7 +244,11 @@ function render() {
   const tuckedLabel = pillLabel(title.name, unread);
   menuRowEl.hidden = !tucked;
   menuRowEl.textContent = tuckedLabel;
-  if (tucked) setBudWord('assistant', tuckedLabel); else clearBudWord('assistant');
+  if (tucked) {
+    // #3774: the note is a door: one tap brings the conversation back, at the newest message.
+    const who = title.name || 'the assistant';
+    setBudWord('assistant', tuckedLabel, { open: restorePanel, label: unread ? `${who} replied. Open the conversation.` : `Open the conversation with ${who}.` });
+  } else clearBudWord('assistant');
   if (tucked && unread) setBudMark('assistant'); else clearBudMark('assistant');
   // #3636 part 2: one quiet line while she is on shift and out of sight, with a way to walk there.
   const line = standing ? standingText(standing) : null;
