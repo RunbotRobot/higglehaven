@@ -41,6 +41,7 @@
       </div>
     </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
+    <div id="shop-nearby-status" class="visually-hidden" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
@@ -856,7 +857,7 @@
          world with a dimmed sheet and a second 3D copy of the product. Not a
          modal: nothing behind it is dimmed or locked, and tapping the world
          folds it away. All of its text can be selected. -->
-    <div id="product-card" class="world-card" role="region" aria-label="Product" data-state="closed" hidden>
+    <div id="product-card" class="world-card" role="region" aria-label="Product" tabindex="-1" data-state="closed" hidden>
       <div id="product-card-name"></div>
       <div id="product-card-price"></div>
       <div id="product-card-seller"></div>
