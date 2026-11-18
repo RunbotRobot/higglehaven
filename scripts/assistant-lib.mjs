@@ -193,3 +193,40 @@ export async function runShift({ client, pollSeconds, maxSeconds, sleep, now = D
   }
   return { idle: true, reason: 'time limit' };
 }
+
+// #3800: the handbook an assistant reads is served by the live site (built from
+// docs/assistant-handbook.md in the same deploy as the app), so it is never behind
+// what people see. The shift program refreshes the installed copy from there; the
+// copy pinned and checksummed by the setup script stays as the fallback, and the
+// three programs themselves are never fetched this way. Same host as every other
+// request, so no new network rule.
+export const HANDBOOK_INSTALLED_PATH = '/opt/assistant/assistant-handbook.md';
+export const HANDBOOK_SERVED_PATH = '/assistant-handbook.md';
+export const HANDBOOK_FIRST_LINE = '# Assistant handbook';
+export const HANDBOOK_MAX_BYTES = 300000;
+
+// Fetches the served handbook and replaces the installed copy when it differs.
+// Returns 'updated', 'unchanged' or 'kept' (the existing copy stays: the fetch
+// failed, the answer was not plausibly the handbook, or the file cannot be
+// written). Never throws: an assistant with a slightly older handbook is better
+// than one that cannot start a shift.
+export async function refreshHandbook({ baseUrl, path = HANDBOOK_INSTALLED_PATH, fetchImpl = fetch, fs }) {
+  try {
+    if (!fs.existsSync(path.slice(0, path.lastIndexOf('/')))) return 'kept';
+    const response = await fetchImpl(`${baseUrl.replace(/\/$/, '')}${HANDBOOK_SERVED_PATH}`, { headers: { accept: 'text/markdown, text/plain' } });
+    if (response.status !== 200) return 'kept';
+    const type = response.headers.get('content-type') || '';
+    if (/html/i.test(type)) return 'kept';
+    const text = await response.text();
+    if (!text.startsWith(HANDBOOK_FIRST_LINE) || Buffer.byteLength(text) > HANDBOOK_MAX_BYTES) return 'kept';
+    let current = null;
+    try { current = fs.readFileSync(path, 'utf8'); } catch { /* not installed yet */ }
+    if (current === text) return 'unchanged';
+    const temporary = `${path}.new`;
+    fs.writeFileSync(temporary, text, { mode: 0o444 });
+    fs.renameSync(temporary, path);
+    return 'updated';
+  } catch {
+    return 'kept';
+  }
+}

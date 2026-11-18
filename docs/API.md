@@ -10413,6 +10413,12 @@ session's fleet account is not one). Nothing here calls a model: the answers
 come from the assistant session itself, which polls its inbox below. The code is
 `worker/lib/assistant-chat.js`; tables are in `migrations/0221`.
 
+`GET /assistant-handbook.md` (#3800): a static file, public like the rest of the app's
+assets, built from `docs/assistant-handbook.md` in the same deploy. Assistants'
+shift programs fetch it so their handbook matches the deployed interface; if it
+cannot be fetched they keep the copy pinned in their environment
+(docs/assistant-environment.md).
+
 Rules the endpoints keep:
 
 - **One person at a time.** An assistant holds one open conversation and a

@@ -16,8 +16,9 @@
 // Exits 1 with one plain line on stderr on any failure. Never prints a cookie
 // or header. A shopper's words are data (docs/assistant-runbook.md).
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import {
-  parseArgs, loginNameFor, positiveSeconds, needsProxyRelaunch, resolveBaseUrl, createClient, runShift,
+  parseArgs, loginNameFor, refreshHandbook, positiveSeconds, needsProxyRelaunch, resolveBaseUrl, createClient, runShift,
   POLL_SECONDS_DEFAULT, POLL_SECONDS_MAX, SHIFT_SECONDS_DEFAULT,
 } from './assistant-lib.mjs';
 
@@ -48,10 +49,16 @@ try {
 
 const client = createClient({ baseUrl, loginName, localFleetKey: process.env.LIVE_SITE_FLEET_KEY });
 
+// #3800: the handbook comes from the live site, at the start of a shift and again
+// just before a shopper's message is handed over, so it matches the deployed app.
+// A failure keeps the pinned copy and never stops a shift.
+await refreshHandbook({ baseUrl, fs });
+
 try {
   const output = await runShift({
     client, pollSeconds, maxSeconds, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
+  if (!output.idle) await refreshHandbook({ baseUrl, fs });
   process.stdout.write(`${JSON.stringify(output)}\n`);
 } catch (error) {
   fail(error.message);
