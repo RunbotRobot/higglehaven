@@ -50,7 +50,9 @@ const covered = () => page.evaluate(() => {
   const panel = document.getElementById('assistant-chat-panel').getBoundingClientRect();
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   const hit = [];
-  for (const selector of ['#shop-vertical-controls']) {
+  // #3769: the flying arrows are gone; nothing stands on the world but the bud (checked
+  // by e2e/bud.test.mjs), so there is no list of controls to cover any more.
+  for (const selector of []) {
     const el = document.querySelector(selector);
     if (!el || getComputedStyle(el).display === 'none') continue;
     if (overlaps(panel, el.getBoundingClientRect())) hit.push(selector);

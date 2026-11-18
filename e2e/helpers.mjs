@@ -918,3 +918,19 @@ export async function shopLookStickBox(page) {
   const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
   return { x: width - 20 - 108, y: height - 24 - 108, width: 108, height: 108 };
 }
+
+// #3769: the up and down arrows in flight are gone; the avatar goes where the view
+// points. Tip the view up (R) or down (F) for lookMs, then hold forward (W) for moveMs.
+// The view stays where it was left, so a later call can just walk on at that pitch.
+// An automated browser has a keyboard, so this is the keyboard way of the same gesture.
+export async function flyByView(page, direction, { lookMs = 1200, moveMs = 3000 } = {}) {
+  const lookKey = direction === 'up' ? 'KeyR' : 'KeyF';
+  if (lookMs > 0) {
+    await page.keyboard.down(lookKey);
+    await page.waitForTimeout(lookMs);
+    await page.keyboard.up(lookKey);
+  }
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(moveMs);
+  await page.keyboard.up('KeyW');
+}

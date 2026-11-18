@@ -760,43 +760,6 @@
       :root {
         --assistant-kb-inset: 0px;
         --assistant-visible-height: 100dvh;
-        /* #3553: the up/down arrows and the gap between them; the assistant
-           panel lifts above the stack while it is showing. */
-        --shop-vertical-button-height: 40px;
-        --shop-vertical-gap: 8px;
-        --shop-vertical-stack-height: calc(2 * var(--shop-vertical-button-height) + var(--shop-vertical-gap));
-        /* #3650: where the arrows sit (bottom right) now that the sticks and the
-           fly button are gone. */
-        --shop-vertical-bottom: 24px;
-      }
-      /* Ascend/descend while actually flying (updateShopFlight in
-         src/main.js sets shop-flying on <body> for the duration) — hidden
-         the rest of the time, since holding altitude only means anything
-         once airborne. Bottom right (#3650: they used to stack above the fly
-         button). */
-      #shop-vertical-controls {
-        display: none;
-        bottom: var(--shop-vertical-bottom);
-        right: 20px;
-        flex-direction: column;
-        gap: var(--shop-vertical-gap);
-      }
-      body.shop-flying #shop-vertical-controls.visible {
-        display: flex;
-      }
-      #shop-vertical-controls button {
-        width: 52px;
-        height: var(--shop-vertical-button-height);
-        border-radius: var(--radius-lg);
-        border: none;
-        background: rgb(var(--spring-green-rgb) / 0.85);
-        color: var(--pill-text);
-        font-size: var(--text-lg);
-        touch-action: none;
-      }
-      #shop-vertical-controls button.active {
-        background: var(--brand-green);
-        color: var(--ink);
       }
       /* Undo/redo are always-relevant, not tied to a selection, so they get
          their own persistent spot rather than crowding into the
@@ -1649,15 +1612,6 @@
       #assistant-chat-panel[hidden],
       #assistant-chat-panel.minimized {
         display: none;
-      }
-      /* #3553: in Shop the panel never sits over the movement controls. The
-         joysticks (top at 132px) and the fly button (top at 134px) fill the
-         bottom 134px, so the panel starts above them; while flying, the
-         up/down arrows stack above the fly button and the panel starts above
-         those too. Build and Sell have none of these controls (no visible fly
-         button), so the panel keeps its place at the bottom there. */
-      body.shop-flying.shop-ready #assistant-chat-panel {
-        --assistant-bottom: calc(var(--shop-vertical-bottom) + var(--shop-vertical-stack-height) + 8px);
       }
       /* #3653: a minimised conversation has no pill: the bud wears her name (and a dot when she has
          replied) and the account menu has an Assistant row that brings the window back. */

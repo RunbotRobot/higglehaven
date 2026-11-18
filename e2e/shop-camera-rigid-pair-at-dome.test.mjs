@@ -48,15 +48,18 @@ const state = () => page.evaluate(() => {
 // The avatar spawns flying near the ceiling, where a freshly seeded (14 m) world's dome has
 // narrowed to a few metres and no rigid pair can fit. Descend until it is flying below the
 // wall's rim (the flat part of the world, still well above the ground) so the pair has room.
-const downBox = await page.locator('#shop-down-btn').boundingBox();
-await page.mouse.move(downBox.x + downBox.width / 2, downBox.y + downBox.height / 2);
-await page.mouse.down();
+await page.keyboard.down('KeyF');
+await page.waitForTimeout(1200);
+await page.keyboard.up('KeyF');
+await page.keyboard.down('KeyW');
 for (let i = 0; i < 60; i += 1) {
   await page.waitForTimeout(250);
   const s0 = await state();
   if (s0.avatarZ - s0.domeBaseWorldZ < -3) break;
 }
-await page.mouse.up();
+await page.keyboard.up('KeyW');
+// Level the view again (exactly) so the runs below fly level.
+await page.evaluate(() => window.__testSetShopPitch(0));
 const flying = await state();
 console.log('flying altitude check (avatar z minus dome base z, should be below the rim and above the ground):', (flying.avatarZ - flying.domeBaseWorldZ).toFixed(1));
 

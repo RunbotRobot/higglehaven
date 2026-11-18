@@ -38,7 +38,7 @@ console.log('Sell world view is live (should be true):', worldViewActive);
 
 // #3650: the sticks and the fly button are gone; what is left of "the HUD" is the
 // flying arrows (hidden unless flying) and the body.shop-ready flag.
-const hudSelectors = ['#shop-vertical-controls'];
+const hudSelectors = []; // #3769: the flying arrows are gone too
 const hudIsUp = async () => [await page.evaluate(() => document.body.classList.contains('shop-ready'))];
 const hudVisibleWhileModalOpen = await hudIsUp();
 console.log('Shop movement HUD visible while the modal is open (should be all false):', hudVisibleWhileModalOpen);

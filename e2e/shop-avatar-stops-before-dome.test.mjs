@@ -7,7 +7,7 @@
 // avatar's real world bounding box (window.__shopAvatarBoundsDebug) and checks
 // its farthest corner against the dome's cross-section radius at that corner's
 // height, independent of the clamp's own formula.
-import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox, flyByView } from './helpers.mjs';
 
 const LABEL = 'Avatar Dome Edge Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -50,11 +50,7 @@ const lowStopped = Math.abs(low.second.pivotRadiusM - low.first.pivotRadiusM) < 
 console.log(`low: body margin inside dome (>= 0): ${lowMargin.toFixed(2)}, stopped moving outward: ${lowStopped}, camera-to-anchor distance: ${low.second.anchorToCameraM.toFixed(2)}`);
 
 // Climb (the avatar spawns already near the ceiling, so this holds it there), then fly outward again.
-const upBox = await page.locator('#shop-up-btn').boundingBox();
-await page.mouse.move(upBox.x + upBox.width / 2, upBox.y + upBox.height / 2);
-await page.mouse.down();
-await page.waitForTimeout(6000);
-await page.mouse.up();
+await flyByView(page, 'up', { moveMs: 6000 });
 const high = await flyOutward(9000);
 console.log('high altitude, at the edge:', JSON.stringify(high.second));
 const highMargin = high.second.farthest.marginM;

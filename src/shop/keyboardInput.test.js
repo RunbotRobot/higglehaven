@@ -5,32 +5,38 @@ import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardI
 const down = (...codes) => new Set(codes);
 
 describe('keyboardAxes (#1319)', () => {
+  it('R looks up and F looks down, so a keyboard can steer flight height (#3769)', () => {
+    expect(keyboardAxes(down('KeyR'))).toMatchObject({ lookY: -1 });
+    expect(keyboardAxes(down('KeyF'))).toMatchObject({ lookY: 1 });
+    expect(keyboardAxes(down('KeyR', 'KeyF'))).toMatchObject({ lookY: 0 });
+  });
+
   it('maps WASD and the arrow keys to the same move vector (y negative = forward)', () => {
-    expect(keyboardAxes(down('KeyW'))).toEqual({ moveX: 0, moveY: -1, lookX: 0 });
-    expect(keyboardAxes(down('ArrowUp'))).toEqual({ moveX: 0, moveY: -1, lookX: 0 });
+    expect(keyboardAxes(down('KeyW'))).toEqual({ moveX: 0, moveY: -1, lookX: 0, lookY: 0 });
+    expect(keyboardAxes(down('ArrowUp'))).toEqual({ moveX: 0, moveY: -1, lookX: 0, lookY: 0 });
     expect(keyboardAxes(down('KeyS'))).toMatchObject({ moveY: 1 });
     expect(keyboardAxes(down('KeyA'))).toMatchObject({ moveX: -1 });
     expect(keyboardAxes(down('ArrowRight'))).toMatchObject({ moveX: 1 });
   });
 
   it('maps Q/E to turning left/right without moving', () => {
-    expect(keyboardAxes(down('KeyQ'))).toEqual({ moveX: 0, moveY: 0, lookX: -1 });
-    expect(keyboardAxes(down('KeyE'))).toEqual({ moveX: 0, moveY: 0, lookX: 1 });
+    expect(keyboardAxes(down('KeyQ'))).toEqual({ moveX: 0, moveY: 0, lookX: -1, lookY: 0 });
+    expect(keyboardAxes(down('KeyE'))).toEqual({ moveX: 0, moveY: 0, lookX: 1, lookY: 0 });
   });
 
   it('opposite keys cancel, including across the WASD/arrow sets', () => {
-    expect(keyboardAxes(down('KeyW', 'KeyS'))).toEqual({ moveX: 0, moveY: 0, lookX: 0 });
+    expect(keyboardAxes(down('KeyW', 'KeyS'))).toEqual({ moveX: 0, moveY: 0, lookX: 0, lookY: 0 });
     expect(keyboardAxes(down('KeyA', 'ArrowRight', 'KeyD'))).toMatchObject({ moveX: 0 });
-    expect(keyboardAxes(down('KeyQ', 'KeyE'))).toMatchObject({ lookX: 0 });
+    expect(keyboardAxes(down('KeyQ', 'KeyE'))).toMatchObject({ lookX: 0, lookY: 0 });
   });
 
   it('combines axes for diagonals and is zero with nothing held', () => {
-    expect(keyboardAxes(down('KeyW', 'KeyD'))).toEqual({ moveX: 1, moveY: -1, lookX: 0 });
-    expect(keyboardAxes(down())).toEqual({ moveX: 0, moveY: 0, lookX: 0 });
+    expect(keyboardAxes(down('KeyW', 'KeyD'))).toEqual({ moveX: 1, moveY: -1, lookX: 0, lookY: 0 });
+    expect(keyboardAxes(down())).toEqual({ moveX: 0, moveY: 0, lookX: 0, lookY: 0 });
   });
 
   it('ignores keys it does not own (Space stays with the flight toggle)', () => {
-    expect(keyboardAxes(down('Space', 'KeyZ'))).toEqual({ moveX: 0, moveY: 0, lookX: 0 });
+    expect(keyboardAxes(down('Space', 'KeyZ'))).toEqual({ moveX: 0, moveY: 0, lookX: 0, lookY: 0 });
   });
 });
 

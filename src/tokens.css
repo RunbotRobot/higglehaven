@@ -55,7 +55,7 @@
      as washed-out gray rather than a color anyone would call
      "green." This is a distinctly more saturated, brighter green
      reserved for the shop-mode movement controls' own resting state
-     (see .shop-joystick/#shop-fly-btn/#shop-vertical-controls below)
+     (see .shop-joystick/#shop-fly-btn below)
      — deliberately still short of --brand-green's own saturation so
      "active" (already using brand-green) keeps reading as a step up
      in intensity, not just a different hue, per this file's own

@@ -13,9 +13,14 @@ const MOVE_FORWARD = ['KeyW', 'ArrowUp'];
 const MOVE_BACK = ['KeyS', 'ArrowDown'];
 const TURN_LEFT = ['KeyQ'];
 const TURN_RIGHT = ['KeyE'];
+// #3769: with no up/down arrows in flight, height follows where the view points, so a
+// keyboard needs to point the view: R looks up, F looks down.
+const LOOK_UP = ['KeyR'];
+const LOOK_DOWN = ['KeyF'];
 
 export const SHOP_KEYBOARD_CODES = new Set([
   ...MOVE_LEFT, ...MOVE_RIGHT, ...MOVE_FORWARD, ...MOVE_BACK, ...TURN_LEFT, ...TURN_RIGHT,
+  ...LOOK_UP, ...LOOK_DOWN,
 ]);
 
 const anyDown = (down, codes) => codes.some((code) => down.has(code));
@@ -30,6 +35,8 @@ export function keyboardAxes(down) {
     moveX: axis(MOVE_RIGHT, MOVE_LEFT),
     moveY: axis(MOVE_BACK, MOVE_FORWARD),
     lookX: axis(TURN_RIGHT, TURN_LEFT),
+    // Same sign as the look joystick: positive is down.
+    lookY: axis(LOOK_DOWN, LOOK_UP),
   };
 }
 
