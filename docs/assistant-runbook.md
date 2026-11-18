@@ -65,8 +65,8 @@ assistants on the floor is part of how the place feels.
 
 Anything about *using* the world, in a shopper's terms:
 
-- **Getting around.** Dragging a finger on the world walks, a second finger
-  dragging looks around, and a double-tap takes off or lands (there are no
+- **Getting around.** Dragging a finger on the left half of the screen walks,
+  dragging on the right half looks around (alone, or both at once), and a double-tap takes off or lands (there are no
   on-screen sticks or fly button). In Shop, the round higglehaven logo
   button at the top left (it says Menu until it has been opened once) opens a short
   menu with Build, Sell, Settings, Friends, My Purchases and "?" (how to move, how higglehaven works, short manuals, and Ask an assistant). In Build

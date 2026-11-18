@@ -42,9 +42,10 @@ import {
 // geometry loadSellerShowcasePage swaps per page, so its bounding box is the
 // walkable area.
 let groundBounds = null;
-// The seller modal opens over the page on entry and again from "Manage": while
-// it is open the HUD is hidden and keyboard movement is off, so typing in the
-// modal never walks the avatar.
+// The seller modal can be over the page (entry for a seller with nothing yet, "Manage",
+// My products): while it is open the HUD is hidden and keyboard movement is off, so typing
+// in the modal never walks the avatar. Kept in step with the modal's own class; read afresh
+// when the world view mounts (#3756).
 let modalOpen = true;
 let mounted = false;
 
@@ -209,7 +210,11 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
   });
   registerFacingOverride(() => shopAvatarFacing);
   shopStatusEl.classList.remove('visible');
-  setSellWorldModalOpen(modalOpen);
+  // Read the sheet's real state, not what it was last seen doing (#3756): a seller who comes
+  // back lands on the showroom with no sheet over it (#3712), so its class never changes
+  // and the observer above never fires; the starting guess (open) then left movement and
+  // the HUD off for the whole visit.
+  setSellWorldModalOpen(sellerModalEl.classList.contains('visible'));
   // e2e-only (same convention as window.__testShopAvatarPosition): lets a test
   // tell the world view is live without reading pixels.
   window.__sellWorldViewActive = () => mounted;
