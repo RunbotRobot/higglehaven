@@ -29,12 +29,13 @@ const read = () => page.evaluate(() => {
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 const waiting = await read();
 console.log('while waiting for sign-in:', waiting);
-const tipsText = LOADING_TIPS.map((tip) => tip.text);
+// #3832: this desktop browser has a fine pointer, so the moving tips come in their computer words.
+const tipsText = LOADING_TIPS.flatMap((tip) => (tip.keyText ? [tip.text, tip.keyText] : [tip.text]));
 const waitingOk = waiting.exists && waiting.progress === 0.35 && waiting.stage === 'Signing you in'
   && waiting.hidden === false && waiting.opacity === 1 && waiting.animating && tipsText.includes(waiting.tip);
 // #3763: the very first open on a device shows the tip about moving, and it is
 // held (not swapped every few seconds) so a slow reader can finish it.
-const firstOpenTip = waiting.tip === LOADING_TIPS[0].text;
+const firstOpenTip = waiting.tip === LOADING_TIPS[0].text || waiting.tip === LOADING_TIPS[0].keyText;
 // Held: no change before six seconds have passed since the page opened (the
 // tips start within the first moments, and each is held at least six seconds).
 const heldFor = await page.evaluate(() => new Promise((resolve) => {

@@ -7,16 +7,18 @@
 // no internal words. When the way of moving changes, change the first two lines and
 // their handbook entries together (#3650, #3749: left half walks, right half looks,
 // double-tap flies).
-import { WALK_WORDS, FLY_WORDS } from './gestureWords.js';
+import { WALK_WORDS, FLY_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from './gestureWords.js';
 
 export const LOADING_TIPS = [
   {
     text: `${WALK_WORDS}, and on the right half to look around.`,
+    keyText: `${KEY_WALK_WORDS}. ${KEY_LOOK_WORDS}.`, // #3832: a computer reads the keys
     handbook: 'How do I walk around and look around?',
     words: ['left half', 'right half'],
   },
   {
     text: `${FLY_WORDS}. Look up and walk forward to climb, look down to descend.`,
+    keyText: `${KEY_FLY_WORDS}. Look up and walk forward to climb, look down to descend.`,
     handbook: 'How do I fly, go up and come back down?',
     words: ['double-tap the world', 'look up', 'look down'],
   },
@@ -48,4 +50,12 @@ export const TIP_MIN_MS = 6000;
 export function tipReadingMs(text) {
   const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
   return Math.max(TIP_MIN_MS, Math.ceil((words / TIP_WORDS_PER_SECOND) * 1000));
+}
+
+// #3832: the line to show for the device in front of the person. A computer (a fine pointer and no
+// touch) reads the keys and the mouse; everything else reads the touch words.
+export function tipText(tip, win = typeof window === 'undefined' ? null : window) {
+  const media = win && typeof win.matchMedia === 'function' ? win.matchMedia.bind(win) : null;
+  const computer = Boolean(media && media('(pointer: fine)').matches && !media('(pointer: coarse)').matches);
+  return computer && tip.keyText ? tip.keyText : tip.text;
 }

@@ -567,6 +567,9 @@ window.addEventListener('keydown', (event) => {
   if (shopKeysDown.has(event.code)) return;
   shopKeysDown.add(event.code);
   applyShopStickInput();
+  // #3832: the first-visit hint moves on when the keys are used too (walk keys walk; the turn
+  // and look keys look).
+  announceWorldGesture(/^(Key[WASD]|Arrow)/.test(event.code) ? 'walk' : 'look');
 });
 window.addEventListener('keyup', (event) => {
   if (!shopKeysDown.delete(event.code)) return;
@@ -599,6 +602,7 @@ window.addEventListener('keydown', (event) => {
   if (now - shopLastSpacePressAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
     shopLastSpacePressAt = -Infinity;
     toggleShopFlight();
+    announceWorldGesture('fly');
   } else {
     shopLastSpacePressAt = now;
   }
@@ -612,6 +616,7 @@ window.addEventListener('keydown', (event) => {
   if (!shopActive || !isFlightToggleKeyEvent(event)) return;
   event.preventDefault();
   toggleShopFlight();
+  announceWorldGesture('fly');
 });
 
 // #3824: N opens the card of the next nearest product (Shift+N the previous), for anyone who
