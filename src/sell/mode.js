@@ -2269,7 +2269,7 @@ registerBudPetals('sell', [
   // #3703 (Sell in the bud, 5/6): one petal starts every way of adding a product. The leaf it opens
   // (src/catalog/upload.js) asks which way; the + Upload Model and Sell This Too buttons are gone.
   { id: 'add-product', label: 'Add a product', run: () => { void openAddProductFromPetal(); } },
-  { id: 'help', label: '?', run: openHelpLeaf },
+  { id: 'help', label: '?', name: 'Help', run: openHelpLeaf },
 ]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --

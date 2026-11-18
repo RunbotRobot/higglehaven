@@ -146,7 +146,7 @@
         <!-- #3649: in Shop this is the bud (the logo, with the word Menu until it has been opened once);
              in Build and Sell it is still the gear until those modes get their petals. -->
         <button id="account-menu-toggle" type="button" aria-label="Account menu" aria-expanded="false"><span class="bud-gear" aria-hidden="true">&#9881;&#65039;</span><img class="bud-logo" src="/favicon.svg" alt="" width="36" height="36" /><span class="bud-word">Menu</span></button>
-        <div id="account-menu-panel">
+        <div id="account-menu-panel" role="group" aria-label="Menu">
           <button id="add-item-btn" type="button" hidden>Add item</button>
           <button id="account-auth-btn" type="button">Log In / Sign Up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
@@ -165,7 +165,7 @@
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
           <div id="bud-head-row">
             <div id="account-menu-landlet-info" class="bud-place" hidden><span class="bud-place-name"></span><span class="bud-place-by"></span></div>
-          <div id="compass-panel" title="Facing direction">
+          <div id="compass-panel" title="Facing direction" aria-hidden="true">
             <div id="compass-dial">
               <span class="compass-label compass-n">N</span>
               <span class="compass-label compass-e">E</span>

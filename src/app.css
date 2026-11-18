@@ -1173,10 +1173,10 @@
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
       .bud-leaf-close {
         position: absolute;
-        top: 8px;
-        right: 10px;
-        width: 36px;
-        height: 36px;
+        top: 4px;
+        right: 6px;
+        width: 44px; /* #3818: a tap target of at least 44px */
+        height: 44px;
         border: none;
         border-radius: var(--radius-round);
         background: transparent;
@@ -1903,7 +1903,7 @@
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
-        font: 10px/1 sans-serif;
+        font: 12px/1 sans-serif; /* #3818: nothing under 12px */
         pointer-events: none;
       }
       .compass-label.compass-n {
@@ -4116,7 +4116,10 @@
         box-sizing: border-box;
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: as Settings: near-opaque, blurred behind, so the world does not show through text. */
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         border-radius: 30px 6px 30px 6px;
       }
@@ -4712,7 +4715,12 @@
         max-height: calc(100vh - 68px);
         max-height: calc(100dvh - 68px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
+        /* #3829: text sits on a card the world cannot show through (the corner of the old
+           gradient was 90% white, so the avatar's legs and the wall read through the labels):
+           near-opaque at both ends, and blurred behind it for the rest. */
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.98), rgb(var(--panel-rgb) / 0.99));
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
         box-shadow: var(--shadow-card);
         /* The leaf's own shape (#3652), as the bud's leaves have it. */
         border-radius: 30px 6px 30px 6px;
@@ -6816,27 +6824,33 @@
          bootstrap() has resolved a landlet to build on, whenever this
          builder (see ensureBuilderIdentity in src/main.js) doesn't
          already own one. */
+      /* #3811 (part of #3654, the bud): the claim map is one large leaf, not a modal: a soft
+         sheet from the head's corner with no scrim over the world (the same shape as
+         .bud-leaf, only wider because the map wants the room; the elements and ids stay so
+         what leans on them, runClaimFlow and the claim e2e, still works). It is still the
+         mandatory first step for a builder with no lándlet (src/claim/flow.js), so it has no
+         way to be put away except its close button. */
       #claim-modal {
         position: fixed;
-        inset: 0;
+        top: 76px;
+        left: 12px;
         z-index: 30;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(440px, calc(100vw - 24px));
       }
       #claim-modal.visible {
-        display: flex;
+        display: block;
       }
       #claim-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 440px;
-        max-height: 90vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
