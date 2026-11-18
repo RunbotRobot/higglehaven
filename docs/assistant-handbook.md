@@ -386,7 +386,9 @@ label:has(#verify-age-attest) | at least 18
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"). A short menu opens, with your name
    at the top and "Notices", "Friends", "My Purchases" and "Settings" below it.
 2. Tap "My Purchases".
-3. Each purchase has a "Rate this seller" button. Tap it to rate the seller.
+3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
+   the seller or the product for that purchase. Once given, the rating shows under the purchase
+   with buttons to edit or delete it.
 
 **You will see:** a list of what you bought. Someone who has bought nothing yet sees
 "You haven't bought anything yet."
@@ -406,26 +408,31 @@ label:has(#verify-age-attest) | at least 18
 
 ### How do I leave a review for a product?
 
-1. Open the product's card and tap "Rate this Product".
-2. A sheet titled "Review this product" opens. Tap a rating from 1 to 5 stars. 5 is
-   chosen to begin with.
-3. If you want, write a comment in the box. It is optional.
-4. Tap "Post review".
+A product is rated from a purchase: one rating for each thing someone bought.
 
-**You will see:** the sheet closes and your review is saved on the product.
+1. Open the account menu and tap "My Purchases", then tap "Rate this product" under the purchase.
+2. Choose a rating from 1 to 5 stars (5 is chosen to begin with), add a comment if you want (it is
+   optional), and tap "Save product rating".
+
+The product's card also offers "Rate this Product" (under "More") when that person has a purchase
+of that product they have not rated yet; it opens a sheet titled "Review this product". They tap a
+rating, write a comment if they want, and tap "Post review". If they have no unrated purchase of it,
+the card does not offer it.
+
+**You will see:** the rating shown under the purchase and on the product.
 
 **If something goes wrong:**
-- The sheet says to choose a star rating from 1 to 5: tap one of the star choices.
-- To change a review you left, open "Rate this Product" again: a "Delete review"
-  button shows next to "Post review".
-- To back out, tap "Cancel".
+- No "Rate this product" button on a purchase: it is already rated, was refunded, or the product
+  has since been removed. They can edit or delete a rating they gave under that purchase.
+- A product they never bought cannot be rated.
+- The review sheet on the card says to choose a star rating from 1 to 5: tap one of the star choices;
+  to back out, tap "Cancel".
 
 ```controls any
 #product-card-review-btn | Rate this Product
 #product-review-modal-title | Review this product
 #product-review-save-btn | Post review
 #product-review-cancel-btn | Cancel
-#product-review-delete-btn | Delete review
 ```
 
 ### What are the glowing orbs, and what if I hit the limit?

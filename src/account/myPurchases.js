@@ -1,7 +1,10 @@
 // "My Purchases" (#3197/#3198/#3199): row rendering for the account-menu panel.
 // Kept out of menu.js so the plain-language wording is testable. Copy
 // describes what the buyer sees, never internals.
-import { createSellerFeedback, editSellerFeedback, deleteSellerFeedback } from '../api.js';
+import {
+  createSellerFeedback, editSellerFeedback, deleteSellerFeedback,
+  createProductReview, editProductReview, deleteProductReview,
+} from '../api.js';
 import {
   DISPUTE_PROMPT_TEXT, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
 } from './disputeOutcome.js';
@@ -153,6 +156,105 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     select.focus();
   }
 
+  // #3775: rating the product is one-to-one with this order (owner, 2026-11-18): "Rate this
+  // product" beside "Rate this seller", the rating shown here once given, and changed or
+  // removed here. The server records it against this exact order.
+  const productArea = document.createElement('div');
+  productArea.className = 'my-purchase-feedback my-purchase-product-rating';
+  row.appendChild(productArea);
+  const productStatus = document.createElement('div');
+  productStatus.className = 'my-purchase-feedback-status';
+  productStatus.setAttribute('role', 'status');
+  productStatus.setAttribute('aria-live', 'polite');
+
+  function showProductSummary() {
+    productArea.textContent = '';
+    if (purchase.productReview) {
+      const summary = document.createElement('div');
+      summary.className = 'my-purchase-feedback-summary';
+      summary.textContent = `Your rating of this product: ${stars(purchase.productReview.rating)}${purchase.productReview.text ? ` "${purchase.productReview.text}"` : ''}`;
+      const actions = document.createElement('div');
+      actions.className = 'my-purchase-actions';
+      actions.append(
+        button('Edit product rating', () => showProductForm()),
+        button('Delete product rating', () => removeProductRating()),
+      );
+      productArea.append(summary, actions);
+    } else if (purchase.canReviewProduct) {
+      const actions = document.createElement('div');
+      actions.className = 'my-purchase-actions';
+      actions.append(button('Rate this product', () => showProductForm()));
+      productArea.appendChild(actions);
+    }
+    productArea.appendChild(productStatus);
+  }
+
+  async function removeProductRating() {
+    productStatus.textContent = '';
+    try {
+      await deleteProductReview(purchase.templateId, purchase.productReview.reviewId);
+    } catch (err) {
+      productStatus.textContent = feedbackErrorText(err);
+      return;
+    }
+    document.dispatchEvent(new CustomEvent('higglehaven:orders-changed'));
+    onReload();
+  }
+
+  function showProductForm() {
+    productArea.textContent = '';
+    const form = document.createElement('form');
+    form.className = 'my-purchase-feedback-form';
+    const label = document.createElement('label');
+    label.textContent = 'Product rating ';
+    const select = document.createElement('select');
+    select.name = 'rating';
+    select.setAttribute('aria-label', 'Product rating');
+    for (let n = 5; n >= 1; n -= 1) {
+      const option = document.createElement('option');
+      option.value = String(n);
+      option.textContent = `${n} ${n === 1 ? 'star' : 'stars'}`;
+      select.appendChild(option);
+    }
+    select.value = String(purchase.productReview ? purchase.productReview.rating : 5);
+    label.appendChild(select);
+    const text = document.createElement('textarea');
+    text.name = 'text';
+    text.maxLength = 280;
+    text.rows = 3;
+    text.placeholder = 'Add a comment (optional)';
+    text.setAttribute('aria-label', 'Product comment');
+    text.value = purchase.productReview?.text || '';
+    const actions = document.createElement('div');
+    actions.className = 'my-purchase-actions';
+    const save = document.createElement('button');
+    save.type = 'submit';
+    save.className = 'my-purchase-action';
+    save.textContent = 'Save product rating';
+    actions.append(save, button('Cancel', () => showProductSummary()));
+    form.append(label, text, actions, productStatus);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      productStatus.textContent = '';
+      save.disabled = true;
+      const input = { rating: Number(select.value), text: text.value.trim() };
+      try {
+        const review = purchase.productReview
+          ? await editProductReview(purchase.templateId, purchase.productReview.reviewId, input)
+          : await createProductReview(purchase.templateId, { ...input, text: input.text || undefined, purchaseId: purchase.purchaseId });
+        purchase = { ...purchase, canReviewProduct: false, productReview: { reviewId: review.reviewId, rating: review.rating, text: review.text } };
+        onChanged(purchase);
+        document.dispatchEvent(new CustomEvent('higglehaven:orders-changed'));
+        showProductSummary();
+      } catch (err) {
+        save.disabled = false;
+        productStatus.textContent = feedbackErrorText(err);
+      }
+    });
+    productArea.appendChild(form);
+    select.focus();
+  }
+
   // "Report a problem" (#3199): a two-step inline confirm (a dispute can move
   // real money), a confirm button that disables while the request is in flight
   // so a double click sends one request, and a plain-words outcome afterwards.
@@ -208,6 +310,8 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
       onChanged(purchase);
       renderMeta();
       showSummary();
+      showProductSummary();
+      document.dispatchEvent(new CustomEvent('higglehaven:orders-changed'));
       showDisputeIdle();
       disputeNote.textContent = disputeSuccessText(result);
       disputeNote.hidden = false;
@@ -222,5 +326,6 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
   row.appendChild(disputeArea);
   showDisputeIdle();
   showSummary();
+  showProductSummary();
   return row;
 }

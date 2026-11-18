@@ -161,13 +161,17 @@ export async function handleProductReviews(request, db, route) {
     // isn't the actual guard against double-reviewing (see the INSERT's own
     // WHERE NOT EXISTS below for that); it's just what turns "no eligible
     // purchase at all" into a clean 400 instead of a confusing 409.
+    // #3775: a caller may name the order it is rating (My Purchases does); with no
+    // purchaseId it is the oldest unrated one, as before.
+    const wantedPurchaseId = typeof input.purchaseId === 'string' && input.purchaseId ? input.purchaseId : null;
     const purchase = await db.prepare(`
       SELECT purchase_id FROM purchases
       WHERE template_id = ? AND refunded_at IS NULL
         AND (buyer_user_id = ? OR (buyer_user_id IS NULL AND buyer_builder_id = ?))
         AND NOT EXISTS (SELECT 1 FROM product_reviews WHERE purchase_id = purchases.purchase_id)
+        AND (? IS NULL OR purchase_id = ?)
       ORDER BY created_at ASC LIMIT 1
-    `).bind(templateId, sessionBuilder.user_id, sessionBuilder.builder_id).first();
+    `).bind(templateId, sessionBuilder.user_id, sessionBuilder.builder_id, wantedPurchaseId, wantedPurchaseId).first();
     // #3217: a purchase belongs to the account (purchases.buyer_user_id,
     // #3195), not the resettable builder profile -- buyer_builder_id is
     // ON DELETE SET NULL (migration 0099), so matching only on it stranded
