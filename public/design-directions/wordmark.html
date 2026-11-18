@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Lettering for a lándlet's name</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="wordmark.css" />
+  <script src="wordmark.js" defer></script>
+</head>
+<body data-pair="meadow">
+  <!-- A mock-up for the owner (#3780, part of #3771): the same three lándlet names in each proposed lettering
+       style, at phone size. Not the app, not linked from it. Names and builders are examples. -->
+  <header class="page-head">
+    <img class="logo" src="/wordmark.png" alt="higglehaven" />
+    <h1>Lettering for a lándlet's name</h1>
+    <p class="lede">A builder could choose how their lándlet's name is lettered, and a colour pair, and shoppers would see it wherever the lándlet is named. Seven styles are below, each with the same three example names. Tap a colour pair to try it on all of them.</p>
+  </header>
+  <section aria-label="Colour pairs">
+    <ul class="pairs" id="pairs">
+      <li><button type="button" class="pair-btn" data-pair="meadow" aria-pressed="true" data-ink="#2f6a14" data-accent="#6ca42e"><span class="chip" aria-hidden="true"><i style="background:#2f6a14"></i><i style="background:#6ca42e"></i></span>Meadow</button></li>
+      <li><button type="button" class="pair-btn" data-pair="ink" aria-pressed="false" data-ink="#16240a" data-accent="#6ca42e"><span class="chip" aria-hidden="true"><i style="background:#16240a"></i><i style="background:#6ca42e"></i></span>Ink</button></li>
+      <li><button type="button" class="pair-btn" data-pair="berry" aria-pressed="false" data-ink="#8a2450" data-accent="#e2694f"><span class="chip" aria-hidden="true"><i style="background:#8a2450"></i><i style="background:#e2694f"></i></span>Berry</button></li>
+      <li><button type="button" class="pair-btn" data-pair="sky" aria-pressed="false" data-ink="#17608f" data-accent="#4a9bd1"><span class="chip" aria-hidden="true"><i style="background:#17608f"></i><i style="background:#4a9bd1"></i></span>Sky</button></li>
+      <li><button type="button" class="pair-btn" data-pair="clay" aria-pressed="false" data-ink="#7d4310" data-accent="#e0a030"><span class="chip" aria-hidden="true"><i style="background:#7d4310"></i><i style="background:#e0a030"></i></span>Clay</button></li>
+      <li><button type="button" class="pair-btn" data-pair="bark" aria-pressed="false" data-ink="#4a3520" data-accent="#f6d65c"><span class="chip" aria-hidden="true"><i style="background:#4a3520"></i><i style="background:#f6d65c"></i></span>Bark</button></li>
+    </ul>
+  </section>
+  <section aria-label="Styles on the menu leaf">
+    <h2>On the open menu</h2>
+    <article class="card" id="style-round">
+      <div class="card-head"><h3>Round</h3><span class="size">16 KB</span></div>
+      <p class="blurb">Friendly rounded sans; the nearest to the app's own feel.</p>
+      <div class="leaf wm-round">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-airy">
+      <div class="card-head"><h3>Airy</h3><span class="size">15 KB</span></div>
+      <p class="blurb">Light, even strokes; clean and quiet.</p>
+      <div class="leaf wm-airy">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-serif">
+      <div class="card-head"><h3>Serif</h3><span class="size">18 KB</span></div>
+      <p class="blurb">A soft, slightly wonky serif; warm and bookish.</p>
+      <div class="leaf wm-serif">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-slab">
+      <div class="card-head"><h3>Slab</h3><span class="size">26 KB</span></div>
+      <p class="blurb">Sturdy slab letters; reads like a shop sign.</p>
+      <div class="leaf wm-slab">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-script">
+      <div class="card-head"><h3>Script</h3><span class="size">32 KB</span></div>
+      <p class="blurb">Brush script; the most playful, the least legible when small.</p>
+      <div class="leaf wm-script">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-stencil">
+      <div class="card-head"><h3>Stencil</h3><span class="size">14 KB</span></div>
+      <p class="blurb">Stencilled serif capitals; crates and workshops.</p>
+      <div class="leaf wm-stencil">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+    <article class="card" id="style-hand">
+      <div class="card-head"><h3>Hand-drawn</h3><span class="size">24 KB</span></div>
+      <p class="blurb">Marker-pen lettering; informal and easy to read.</p>
+      <div class="leaf wm-hand">
+        <div class="wm"><span class="wm-name">Pip's Corner</span><span class="wm-by">by Robin</span></div>
+        <div class="wm"><span class="wm-name">The Long Table Orchard Market and Bakery</span><span class="wm-by">by Sam &amp; Co.</span></div>
+        <div class="wm"><span class="wm-name">Maple lándlet</span><span class="wm-by">by Ana</span></div>
+      </div>
+    </article>
+  </section>
+  <section aria-label="Styles over the grass">
+    <h2>Over the grass</h2>
+    <p class="lede">Where a name is drawn straight on the world (a &ldquo;you are now on&rdquo; moment), the colour pair has to hold on the green, not only on the pale leaf.</p>
+    <div class="grass">
+      <div class="grass-row wm-round"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Round</span></div>
+      <div class="grass-row wm-airy"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Airy</span></div>
+      <div class="grass-row wm-serif"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Serif</span></div>
+      <div class="grass-row wm-slab"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Slab</span></div>
+      <div class="grass-row wm-script"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Script</span></div>
+      <div class="grass-row wm-stencil"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Stencil</span></div>
+      <div class="grass-row wm-hand"><div class="wm"><span class="wm-name">Pip's Corner</span></div><span class="tag">Hand-drawn</span></div>
+    </div>
+  </section>
+  <section aria-label="Contrast">
+    <h2>Do the colour pairs read?</h2>
+    <p class="lede">Contrast of the name's colour against the menu's leaf and against the grass. 4.5 is the floor for text; 3 for large lettering. Most pairs hold on the leaf and fail on the grass: only Ink holds on both.</p>
+    <table>
+      <thead><tr><th>Pair</th><th class="num">on leaf</th><th class="num">on grass</th></tr></thead>
+      <tbody>
+        <tr><td>Meadow</td><td class="num ok">5.1</td><td class="num low">2.2</td></tr>
+        <tr><td>Ink</td><td class="num ok">12.5</td><td class="num ok">5.5</td></tr>
+        <tr><td>Berry</td><td class="num ok">6.6</td><td class="num low">2.9</td></tr>
+        <tr><td>Sky</td><td class="num ok">5.2</td><td class="num low">2.3</td></tr>
+        <tr><td>Clay</td><td class="num ok">6.0</td><td class="num low">2.6</td></tr>
+        <tr><td>Bark</td><td class="num ok">8.9</td><td class="num ">3.9</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section aria-label="Cost">
+    <h2>What each costs</h2>
+    <p class="lede">Each face is one small file, fetched only when a lándlet that uses it is in view, and never on the way in. All are self-hosted under the SIL Open Font License; no font service sees a shopper.</p>
+    <table>
+      <thead><tr><th>Style</th><th>Face</th><th class="num">File</th></tr></thead>
+      <tbody>
+        <tr><td>Round</td><td>Fredoka</td><td class="num">16 KB</td></tr>
+        <tr><td>Airy</td><td>Quicksand</td><td class="num">15 KB</td></tr>
+        <tr><td>Serif</td><td>Fraunces</td><td class="num">18 KB</td></tr>
+        <tr><td>Slab</td><td>Zilla Slab</td><td class="num">26 KB</td></tr>
+        <tr><td>Script</td><td>Pacifico</td><td class="num">32 KB</td></tr>
+        <tr><td>Stencil</td><td>Stardos Stencil</td><td class="num">14 KB</td></tr>
+        <tr><td>Hand-drawn</td><td>Patrick Hand</td><td class="num">24 KB</td></tr>
+        <tr><td colspan="2"><strong>All seven</strong> (a shopper loads only those in view)</td><td class="num">146 KB</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section aria-label="What is needed">
+    <h2>What I need from you</h2>
+    <ol class="ask">
+      <li>Which of the seven styles to keep (six to eight were proposed), and any you would swap for another look.</li>
+      <li>Which colour pairs to keep. Ink is the only one that reads over the grass; the others are for the leaf.</li>
+      <li>Whether the name should stay one colour with a small accent bar (as drawn here) or use the second colour more.</li>
+    </ol>
+  </section>
+  <footer>The default look for a lándlet's name is a separate piece of work. No uploaded logos in this version: a choice from a set needs no review beyond the name itself.</footer>
+</body>
+</html>

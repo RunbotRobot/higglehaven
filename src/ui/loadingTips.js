@@ -14,9 +14,9 @@ export const LOADING_TIPS = [
     words: ['left half', 'right half'],
   },
   {
-    text: 'Double-tap the world to come down to the ground, and again to fly back up.',
+    text: 'Double-tap the world to fly. Look up and walk forward to climb, look down to descend.',
     handbook: 'How do I fly, go up and come back down?',
-    words: ['double-tap the world'],
+    words: ['double-tap the world', 'look up', 'look down'],
   },
   {
     text: 'Tap a product to read about it. A small card blooms beside it.',

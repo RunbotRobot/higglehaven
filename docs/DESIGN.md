@@ -308,6 +308,13 @@ by touching the world. The module is `src/ui/bud.js`:
   "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
   Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
   plan blooms it beside the selection; that is a later slice).
+- Bundles (#3692): Bundle, Unbundle, Edit and Save Bundle are buttons of the item card (the card that
+  blooms beside the selection), with the same ids and handlers; Edit's reason line shows under them.
+  While Multi-Select paints, the card keeps the bundle actions (Copy, Delete and More wait for
+  Multi-Select to end) so it covers as little of the world as it can.
+- More (#3693): Community Sign, Community Calendar and Backup Chain are buttons in the item card's
+  More beside Snap, ids and handlers unchanged; they are rare and about one item. The claim map is
+  still one large leaf of its own.
 - `setBudWord(key, text, { open, label })` and `clearBudWord(key)` (#3774): the word the bud
   wears beside it. A word that announces something carries its door: with `open`, the word is
   a real button (`#bud-note`, at least 44px tall, a pressed state, `label` for a screen
@@ -323,13 +330,28 @@ by touching the world. The module is `src/ui/bud.js`:
   dimming scrim, so the world shows around it; it stays inside the screen and scrolls
   inside itself. A panel that moves into the bud takes this look, not a full-screen
   dialog.
-- The three modes are a petal group of their own, a half-ring at the bud's corner (#3723):
-  Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, hidden until the bud
-  is unfolded, the same three in every mode with the current one green and `aria-current`.
-  They sit 100px from the bud's centre at 10, 45 and 80 degrees, so no two touch, and the
-  column of things you open starts 92px lower, under them. The head stays in the upper left,
-  so the arc opens right and down. A mode is never a petal of the column, and the ring is last in
-  reading order.
+- The three modes are a petal group of their own, a half-ring at the bud's corner (#3723,
+  #3752): Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, the same three in
+  every mode with the current one green and `aria-current`. Each is a petal: a button turned to
+  point away from the bud's centre (at 8, 46 and 84 degrees, 38 apart so their 44px
+  bodies never touch), clipped to a point at the bud widening to a soft tip, with its base
+  tucked under the bud (the bud paints above the ring) so it reads as attached, placed from
+  `--bud-size` so a bud of another shape needs only the same centre and size; its label is
+  turned back upright. The column of things you open starts 92px lower, under them, and keeps
+  its own rounded shape: where you are and what you open look different. The arc opens away from
+  the screen edge (`body[data-bud-corner="bottom-right"]` flips it). A mode is never a petal of
+  the column, and the ring is last in reading order.
+- The ring moves like the bud is alive (#3752). Tapping the bud grows the three petals out of
+  its centre (turned out from the base and scaled up, a few tens of milliseconds apart, 0.24s
+  in all); closing reverses it. A tapped mode answers at once: its petal turns green with the
+  ring still out (`body[data-bud-ring="held"]`, no motion) while the mode loads across the
+  reload, and when the mode's first screen is up (`higglehaven:mode-ready`, from the opening
+  screen lifting) the petals fold back in (`"folding"`). If the mode will not load
+  (`higglehaven:mode-failed`) the ring stays out with the mode you are still in marked, and the
+  opening screen shows the reason. Tapping the mode you are already in only folds the bud.
+  `prefers-reduced-motion` gets a plain fade. The word beside the bud and the Sell pager step
+  aside while the petals are out. The record that carries "a switch is in progress" across the
+  reload is `sessionStorage["higglehaven.budSwitch"]`, good for 60 seconds.
 - An open menu is a stem with leaves on both sides (#3761, the flower). The stem is set 88px in
   from the screen edge, because the head is in the upper left and the left-hand leaves need
   room; leaves are 76px wide, the first on the right and then alternating, their pitch about
@@ -342,6 +364,19 @@ by touching the world. The module is `src/ui/bud.js`:
   grows from the top and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- The compass is not on the world (#3772). It sits in the open menu's head row, right of the lándlet's
+  sign (or alone in Sell, which has no sign), in every mode, and is not drawn while the menu is shut.
+  Every leaf (Settings, My products, Friends and the rest) runs to the same margin on the right as on
+  the left, because nothing stands in the upper right to leave room for.
+- The lándlet a person is on is named at the top of the open menu (#3770), before any leaf: a small
+  sign in the same leaf shape in the head's row, to the right of the ring of modes. The name is a
+  wordmark (a flourished serif in the ink green, the family of the higglehaven wordmark) with "by
+  <builder>" small under it. Shop keeps it current as the avatar crosses lándlets, Build names the
+  lándlet being built, and Sell names nothing, because the showroom is not a real place. It is
+  selectable text and a tap does nothing. The name and the builder are separate spans
+  (src/ui/budPlace.js), and the lettering lives on one class, so the wordmark renderer (#3782)
+  swaps the face and colours without touching the layout. The three lines of grey text that used
+  to sit between Settings and How to move are gone.
 - The glow, never a scale, is the bud's breath: a control that moves is hard to
   tap, and cannot be clicked by a test.
 

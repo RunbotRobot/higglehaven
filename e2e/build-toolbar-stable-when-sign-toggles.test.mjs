@@ -25,6 +25,9 @@ const positions = () => page.evaluate((ids) => Object.fromEntries(ids.map((id) =
   return [id, [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]];
 })), IDS);
 
+// #3693: the three buttons sit in the item card's More now; open it so the buttons are measured on both sides.
+await page.click('#item-card-more-btn');
+await page.waitForTimeout(300);
 const before = await positions();
 await page.click('#toggle-community-sign');
 await page.waitForFunction(() => document.getElementById('toggle-community-sign')?.textContent.includes('Manage'), null, { timeout: 10000 });

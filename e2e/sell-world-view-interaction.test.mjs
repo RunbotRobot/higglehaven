@@ -95,7 +95,7 @@ console.log('showcase has at least two pages (should be true):', multiPage, page
 
 // #3650: the sticks and the fly button are gone; what is left of "the HUD" is the
 // flying arrows (hidden unless flying) and the body.shop-ready flag.
-const hudSelectors = ['#shop-vertical-controls'];
+const hudSelectors = []; // #3769: the flying arrows are gone too
 const hudIsUp = async () => [await page.evaluate(() => document.body.classList.contains('shop-ready'))];
 const overlaps = (a, b) => a && b && a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 async function pagerClearOfHud(label) {

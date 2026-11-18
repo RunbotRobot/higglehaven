@@ -161,6 +161,13 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 **You will see:** their character in the world changes to the avatar. The row they chose says it is equipped.
 
+**What it does when it moves:** every avatar walks, stands and flies with a simple
+motion of its own, so none of them glides. The starting avatar swings its legs and
+arms. An avatar that carries no motion of its own gets a small bob and lean. An
+avatar that carries its own motion uses that. An animation they apply under "My
+Animations" replaces the simple motion, so a bought animation is a different
+motion, not the only way to move. Other people see the same.
+
 **If something goes wrong:**
 - "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
 - A message says it could not equip the avatar: read it out; try once more, then offer to pass it to the team.
@@ -241,16 +248,17 @@ everything else.
 ### How do I go between Shop, Build and Sell?
 
 1. Tap the round logo at the top left (the bud).
-2. Three small petals fan out beside it in an arc: "Shop", "Build" and "Sell". The
-   one you are in is shaded green.
+2. Three petals grow out of it in an arc: "Shop", "Build" and "Sell". The one you
+   are in is shaded green.
 3. Tap the one you want.
 
-**You will see:** the menu folds away and you are in that place. The three petals
-are the same in all three places.
+**You will see:** the petal you tapped turns green at once and the petals stay out
+while that place loads; when it is on screen they fold back into the bud. The three
+petals are the same in all three places.
 
 **If something goes wrong:**
 - The petals are not there: the bud is folded. Tap the round logo once.
-- Nothing happens on tapping the place you are already in: that is expected.
+- Tapping the place you are already in only folds the petals back: that is expected.
 
 ```controls any
 .mode-nav-btn[data-mode="shop"] | Shop
@@ -266,7 +274,11 @@ are the same in all three places.
 3. Lift your finger and you stop. There are no buttons to find: the world itself is
    the control.
 
-**You will see:** your bird walks or turns as you drag, and the view follows.
+**You will see:** your bird walks or turns as you drag, and the view follows. Every
+avatar has a simple motion of its own for walking, standing and flying: the
+starting bird swings its legs and arms as it walks, and an avatar you have bought
+that carries no motion of its own gets a small bob and lean instead of sliding. An
+animation you have applied (see the avatar entry below) replaces that motion.
 
 **If something goes wrong:**
 - Nothing moves: a quick tap does not move you, so keep the finger down and drag a
@@ -283,24 +295,25 @@ are the same in all three places.
 
 1. You start each visit in the air. To come down, double-tap the world: two quick
    taps in the same place.
-2. While you are flying, two green arrows sit at the bottom right: tap the up
-   arrow ("Fly up") to climb and the down arrow ("Fly down") to sink.
+2. While you are flying, you go where the view points. To climb, drag on the
+   right half of the screen to look up, and drag on the left half to walk
+   forward. To descend, look down and walk forward. A level view flies level,
+   and when you stop walking you hold your height. On a keyboard, R looks up and
+   F looks down.
 3. Walk and look by dragging, as usual.
-4. To go up again from the ground, double-tap the world again and the arrows come
-   back. The arrows go away once you are on the ground.
+4. To go up again from the ground, double-tap the world again.
 
-**You will see:** the up and down arrows show only while the bird is flying, and a
-double-tap switches between flying and standing.
+**You will see:** the bird tips its nose up or down with your view, and a
+double-tap switches between flying and standing. At the top of the sky, or as low
+as you can fly, a short note says so and you stay there.
 
 **If something goes wrong:**
-- No arrows: you are on the ground. Double-tap the world to fly.
+- You do not climb: you are on the ground. Double-tap the world to fly.
 - A double-tap on a product opens that product instead: double-tap on open ground.
 - You cannot find the ground: double-tap the world and let it come down by itself.
 
 ```controls shop
 #app | (no words)
-#shop-up-btn | Fly up
-#shop-down-btn | Fly down
 ```
 
 ### How do I get back to where I was?
@@ -548,7 +561,8 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
    then "Ask an assistant".
-2. A small window opens. Type in the box that says "Ask a question…" and tap "Send".
+2. A small window opens once your earlier messages are in it (a moment after the tap, while the
+   "Ask an assistant" row or the bud shows it is working). Type in the box that says "Ask a question…" and tap "Send".
 3. An assistant answers there. Keep going in the same window.
 4. To tuck it away without ending the chat, tap the minus at the top right of the
    window ("Minimise"). While it is tucked away the little bud in the corner shows
@@ -562,6 +576,8 @@ assistant's replies, each labelled with who wrote it.
 The message box starts one line tall and grows as you type, up to about five lines. On a phone the keyboard's Enter key starts a new line, and "Send" sends; with a computer keyboard, Enter sends and Shift+Enter starts a new line. A message can be up to 280 characters, and the window says so when you reach it.
 
 **If something goes wrong:**
+- The window opens and says "We couldn't load your conversation. Check your connection and try
+  again." with a "Try again" button: nothing is lost, the messages are just not loaded yet.
 - No assistant is free: the window says so, and the message waits in line. It is
   answered when one is free.
 - The assistant is on shift but somewhere else in the world: a line at the top of the window says which lándlet she is standing on, with a "Take me there" button that walks them to her. The line is not shown when she is close by or off shift.
@@ -583,7 +599,7 @@ The message box starts one line tall and grows as you type, up to about five lin
 
 ### How do I get my own lándlet?
 
-1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+1. Tap the round logo at the top left (the bud). Three petals grow out of it:
    "Shop", "Build" and "Sell". Tap "Build".
 2. The first time, a sheet opens with the title "Claim a lándlet" and a small map.
    Green squares are "Available", grey are "Claimed", blue is "Water".
@@ -783,7 +799,7 @@ single item.
 ### How do I make a bundle, and use it again?
 
 1. Select two or more items (see the entry above).
-2. Tap "Bundle" in the row above them. They become one thing: one box around them,
+2. Tap "Bundle" on the card that opens beside them. They become one thing: one box around them,
    moved and turned together.
 3. To keep it for later, tap "Save Bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
@@ -873,7 +889,7 @@ top of the screen.
 
 ### What does Sell mode show, and where is my showroom?
 
-1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+1. Tap the round logo at the top left (the bud). Three petals grow out of it:
    "Shop", "Build" and "Sell". Tap "Sell".
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"

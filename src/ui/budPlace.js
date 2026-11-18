@@ -1,0 +1,26 @@
+// #3770 (part of #3759, the flower): the lándlet a person is on is named at the top of the open
+// menu, before any leaf, as a small wordmark with "by <builder>" under it. It answers "where am I?".
+// The name and the builder are separate spans and the lettering lives on one class (.bud-place-name),
+// so the wordmark renderer (#3782) swaps that class and its face without touching the layout.
+// The element keeps its old id, account-menu-landlet-info, so what reads it carries over.
+//
+//   showBudPlace({ name, builder })   name the place; builder is the person's label or null
+//   hideBudPlace()                    nothing is named (not on a lándlet, or the Sell showroom,
+//                                     which is not a real place, so nothing is made up for it)
+//
+// The text is real text a person can select; tapping it does nothing.
+const placeEl = () => document.getElementById('account-menu-landlet-info');
+const part = (cls) => placeEl()?.querySelector(`.${cls}`);
+
+export function showBudPlace({ name, builder }) {
+  const el = placeEl();
+  if (!el) return;
+  part('bud-place-name').textContent = name;
+  part('bud-place-by').textContent = builder ? `by ${builder}` : '';
+  el.hidden = !name;
+}
+
+export function hideBudPlace() {
+  const el = placeEl();
+  if (el) el.hidden = true;
+}

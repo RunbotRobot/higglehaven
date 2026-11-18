@@ -408,6 +408,9 @@ export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
 // #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
 // they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
 const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
+// #3693: Community Sign, Community Calendar and Backup Chain sit in the item card's More, so they
+// are only drawn while the card is open with More expanded.
+const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
 export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
@@ -425,10 +428,31 @@ export function budAware(page) {
         await page.waitForSelector('#bud-leaf-tools', { timeout: 5000 });
       }
     }
+    if (CARD_MORE_CONTROLS.has(selector)) await ensureCardMoreOpen();
     return click(selector, options);
+  };
+  async function ensureCardMoreOpen() {
+    if (await page.locator('#item-card-more-btn').isVisible()
+      && (await page.getAttribute('#item-card-more-btn', 'aria-expanded')) !== 'true') {
+      await click('#item-card-more-btn');
+    }
+  }
+  // A test that holds the control as a locator and clicks it gets the same help.
+  const locator = page.locator.bind(page);
+  page.locator = (selector, options) => {
+    const found = locator(selector, options);
+    if (typeof selector === 'string' && CARD_MORE_CONTROLS.has(selector)) {
+      const clickFound = found.click.bind(found);
+      found.click = async (clickOptions) => {
+        await ensureCardMoreOpen();
+        return clickFound(clickOptions);
+      };
+    }
+    return found;
   };
   const wait = page.waitForSelector.bind(page);
   page.waitForSelector = async (selector, options = {}) => {
+    if (CARD_MORE_CONTROLS.has(selector) && !options.state) return wait(selector, { ...options, state: 'attached' });
     if (TOOL_CONTROLS.has(selector) && !options.state) return wait(selector, { ...options, state: 'attached' });
     if (BUD_PETALS.has(selector) && !options.state) return wait(`${selector}:not([hidden])`, { ...options, state: 'attached' });
     const handle = await wait(selector, options);
@@ -701,6 +725,9 @@ async function clickModeButton(page, mode) {
   // Clicking the mode you are already in was always a no-op; in Shop its button is not drawn.
   if (await page.evaluate(() => document.body.dataset.mode) === mode) return false;
   const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
+  // #3752: the petals are still drawn for the short fold after the bud closes (Escape, a leaf opening);
+  // judging them visible then and clicking would land as they vanish. Let the fold finish first.
+  await page.waitForFunction(() => document.body.dataset.budRing !== 'folding', null, { timeout: 5000 }).catch(() => {});
   if (!(await nav.isVisible())) await openAccountMenu(page);
   await nav.click();
   return true;
@@ -931,4 +958,20 @@ export async function shopStickBox(page) {
 export async function shopLookStickBox(page) {
   const { width, height } = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
   return { x: width - 20 - 108, y: height - 24 - 108, width: 108, height: 108 };
+}
+
+// #3769: the up and down arrows in flight are gone; the avatar goes where the view
+// points. Tip the view up (R) or down (F) for lookMs, then hold forward (W) for moveMs.
+// The view stays where it was left, so a later call can just walk on at that pitch.
+// An automated browser has a keyboard, so this is the keyboard way of the same gesture.
+export async function flyByView(page, direction, { lookMs = 1200, moveMs = 3000 } = {}) {
+  const lookKey = direction === 'up' ? 'KeyR' : 'KeyF';
+  if (lookMs > 0) {
+    await page.keyboard.down(lookKey);
+    await page.waitForTimeout(lookMs);
+    await page.keyboard.up(lookKey);
+  }
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(moveMs);
+  await page.keyboard.up('KeyW');
 }

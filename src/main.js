@@ -653,9 +653,11 @@ import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
-import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
+import { beginBudModeSwitch } from './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
+import { startFirstVisitHints } from './ui/firstVisitHints.js'; // #3657: one quiet hint at a time the first time on a touch screen
+startFirstVisitHints();
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/
@@ -1040,18 +1042,14 @@ document.addEventListener('click', (event) => {
 // import, same shape as the other Shop DOM consts below.
 export const shopStatusEl = document.getElementById('shop-status');
 export const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
-export const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
-export const shopUpBtn = document.getElementById('shop-up-btn');
-export const shopDownBtn = document.getElementById('shop-down-btn');
 // #3650: the sticks and the fly button are gone (moving is done by touching the
 // world, src/shop/worldGestures.js); what remains of "the Shop controls are up"
 // is this flag on <body> (the voice button and the assistant panel read it, and
-// so do the e2e tests) and the flying arrows' own gate.
+// so do the e2e tests). #3769: the flying arrows are gone too (height follows the view).
 export function setShopControlsVisible(visible) {
   document.body.classList.toggle('shop-ready', visible);
-  shopVerticalControlsEl.classList.toggle('visible', visible);
 }
-// #2624: wires up the world gestures (#3650)/both vertical buttons/the
+// #2624: wires up the world gestures (#3650)/the
 // last-location click -- deferred into a function call (rather than left
 // as shop/flightMovement.js's own top-level side effects) so it runs after
 // the DOM consts just above are actually initialized; see that module's
@@ -2128,6 +2126,8 @@ for (const btn of modeNavButtons) {
       b.setAttribute('aria-pressed', String(isTarget));
     }
     sessionStorage.setItem(START_MODE_KEY, target);
+    // #3752: the bud's ring stays out, the chosen petal lit, until the new mode is on screen.
+    beginBudModeSwitch(target);
     location.reload();
   });
 }

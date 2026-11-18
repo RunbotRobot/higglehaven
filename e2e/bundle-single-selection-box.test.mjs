@@ -36,7 +36,9 @@ console.log('three trees, screen positions:', JSON.stringify(positions));
 
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(200);
-for (const pos of positions) {
+// #3692: the item card (with the bundle actions) blooms beside the first pick, so pick from the
+// right: each next item is then away from the card.
+for (const pos of [...positions].sort((a, b) => b.x - a.x)) {
   await page.mouse.click(pos.x, pos.y);
   await page.waitForTimeout(200);
 }

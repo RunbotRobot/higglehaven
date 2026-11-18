@@ -20,6 +20,9 @@
 //                                                  key clears the word once the thing is open), `label`
 //                                                  is what a screen reader says. With no `open` the word
 //                                                  is just a word, as before (#3774)
+//   beginBudModeSwitch(target)                     a mode petal was tapped (#3752): the chosen petal is lit at
+//                                                  once and the ring stays open across the reload; the new page
+//                                                  folds it when the mode is on screen
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
@@ -95,10 +98,60 @@ export function budPetalsFor(mode) {
   return registry.get(mode) || [];
 }
 
+// #3752: the three mode petals grow out of the bud and fold back into it. body[data-bud-ring]
+// says what the ring is doing beyond "the bud is unfolded" (src/app.css): "held" while a chosen
+// mode loads (open, still, the chosen petal lit) and "folding" for the short trip back in.
+const SWITCH_KEY = 'higglehaven.budSwitch';
+const SWITCH_FRESH_MS = 60000;
+const FOLD_MS = 300;
+let foldTimer = null;
+// The switch this page was opened by, if any: { target, from }.
+let switching = null;
+
+function setRing(state) {
+  if (state) document.body.setAttribute('data-bud-ring', state);
+  else document.body.removeAttribute('data-bud-ring');
+}
+
+function foldRing() {
+  clearTimeout(foldTimer);
+  setRing('folding');
+  foldTimer = setTimeout(() => {
+    if (document.body.getAttribute('data-bud-ring') === 'folding') setRing(null);
+  }, FOLD_MS);
+}
+
 function foldBud() {
+  const wasOpen = panel()?.classList.contains('expanded');
   panel()?.classList.remove('expanded');
   toggle()?.classList.remove('active');
   toggle()?.setAttribute('aria-expanded', 'false');
+  // The petals fold in instead of vanishing, unless a mode is still loading (they stay out then).
+  if (wasOpen && document.body.getAttribute('data-bud-ring') !== 'held') foldRing();
+}
+
+// Marks one mode's petal as the current one; the others are not.
+function litPetal(mode) {
+  for (const btn of document.querySelectorAll('.mode-nav-btn')) {
+    if (btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
+    else btn.removeAttribute('aria-current');
+  }
+}
+
+export function beginBudModeSwitch(target) {
+  const from = document.body.dataset.mode || null;
+  try { sessionStorage.setItem(SWITCH_KEY, JSON.stringify({ target, from, at: Date.now() })); } catch { /* the ring just folds as usual */ }
+  litPetal(target);
+}
+
+function readSwitch() {
+  let record = null;
+  try {
+    record = JSON.parse(sessionStorage.getItem(SWITCH_KEY) || 'null');
+    sessionStorage.removeItem(SWITCH_KEY);
+  } catch { return null; }
+  if (!record || typeof record.target !== 'string' || Date.now() - Number(record.at) > SWITCH_FRESH_MS) return null;
+  return { target: record.target, from: record.from };
 }
 
 // Petals registered for the current mode are buttons in the panel: created once, shown only
@@ -171,9 +224,14 @@ function syncBud() {
   // (docs/DESIGN.md, "The bud"), the same three in every mode with the current one marked. They
   // are the existing .mode-nav-btn buttons moved here, so their ids and handlers carry over; a
   // mode without a bud keeps them in the old top row.
+  placeModePetals(registry.has(mode), mode);
+}
+
+// The three mode buttons live in the ring while the bud is on and in the old top row while it is
+// not; the current one is marked.
+function placeModePetals(inBud, mode) {
   const ring = modesRing();
   for (const btn of document.querySelectorAll('.mode-nav-btn')) {
-    const inBud = registry.has(mode);
     if (inBud && btn.parentElement !== ring) ring.appendChild(btn);
     if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
@@ -245,30 +303,38 @@ let leafOnClose = null;
 
 // The ring lives after the petal column, so it is last in reading order, and CSS shows it only
 // while the bud is unfolded. It holds the three places and the general menu (#3760): four petals
-// around the head. A place you are not in takes you there and folds the bud; the place you are in
+// around the head. A place you are not in takes you there (the page reloads); the place you are in
 // opens that place's own menu; "Menu" opens the general one. One stem is open at a time.
 function modesRing() {
   let ring = document.getElementById('bud-modes');
-  if (ring) return ring;
-  ring = document.createElement('div');
-  ring.id = 'bud-modes';
-  ring.setAttribute('role', 'group');
-  ring.setAttribute('aria-label', 'Places and menu');
+  if (ring && ring.dataset.wired) return ring;
+  if (!ring) {
+    ring = document.createElement('div');
+    ring.id = 'bud-modes';
+    ring.setAttribute('role', 'group');
+    ring.setAttribute('aria-label', 'Places and menu');
+    panel()?.after(ring);
+  }
+  ring.dataset.wired = '1';
   const menuBtn = document.createElement('button');
   menuBtn.type = 'button';
   menuBtn.id = 'bud-menu-general';
   menuBtn.className = 'bud-menu-btn';
   menuBtn.dataset.menu = 'general';
-  menuBtn.textContent = 'Menu';
+  const menuWord = document.createElement('span');
+  menuWord.className = 'mode-nav-label';
+  menuWord.textContent = 'Menu';
+  menuBtn.appendChild(menuWord);
   ring.appendChild(menuBtn);
+  // Another place: the page reloads and keeps the ring out (beginBudModeSwitch). The place you are
+  // already in: nothing to load, so its petal opens that place's own menu (#3760); "Menu" opens the
+  // general one. Neither folds the bud.
   ring.addEventListener('click', (event) => {
-    const btn = event.target.closest('button');
+    const btn = event.target.closest?.('button');
     if (!btn) return;
     if (btn === menuBtn) { showMenu('general'); return; }
-    if (btn.dataset.mode && btn.dataset.mode === document.body.dataset.mode) { showMenu(btn.dataset.mode); return; }
-    foldBud();
+    if (btn.classList.contains('mode-nav-btn') && btn.dataset.mode === document.body.dataset.mode) showMenu(btn.dataset.mode);
   });
-  panel()?.after(ring);
   return ring;
 }
 
@@ -423,6 +489,34 @@ function markLearned() {
 
 if (typeof document !== 'undefined') {
   document.addEventListener('higglehaven:mode', syncBud);
+  // #3752: this page was opened by tapping a mode petal. The ring is already out with the chosen
+  // petal lit; it folds when the mode is on screen, or stays and says so when the mode will not load
+  // (the opening screen shows the reason in a sentence).
+  switching = readSwitch();
+  if (switching) {
+    // The bud and its ring are there from the first paint, so the opening screen does not show the
+    // old top row for a moment first; syncBud takes over once the mode is known.
+    document.body.dataset.bud = 'on';
+    placeModePetals(true, switching.target);
+    setRing('held');
+  }
+  document.addEventListener('higglehaven:mode-ready', () => {
+    if (!switching) return;
+    switching = null;
+    foldRing();
+  });
+  document.addEventListener('higglehaven:mode-failed', () => {
+    if (switching) litPetal(switching.from);
+  });
+  // Opening the bud again while the petals are still folding cancels the fold.
+  if (panel()) {
+    new MutationObserver(() => {
+      if (panel().classList.contains('expanded') && document.body.getAttribute('data-bud-ring') === 'folding') {
+        clearTimeout(foldTimer);
+        setRing(null);
+      }
+    }).observe(panel(), { attributes: true, attributeFilter: ['class'] });
+  }
   // Every time the bud opens it opens on the general menu: the one thing in it that never changes.
   const host = panel();
   if (host) {

@@ -16,7 +16,7 @@
 // e2e/shop-landlet-instance-leak.test.mjs (#1445) already established for
 // deterministic Shop-mode navigation) rather than waiting for a real
 // multi-month-old production world.
-import { launchPage, chooseIdentity, ensureAdminSession, finish } from './helpers.mjs';
+import { flyByView, launchPage, chooseIdentity, ensureAdminSession, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 // Large enough that curvatureDropM(radius) is tens of meters (clearly
@@ -77,12 +77,8 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 // Avatar spawns already flying (#1175) near the world center, where
 // curvatureDropM(avatar's own distance) is near zero -- the exact
 // condition that maximizes the pre-fix gap between the clamp and the
-// dome's real apex. Hold the up button long enough to hit the ceiling.
-const upBtnBox = await page.locator('#shop-up-btn').boundingBox();
-await page.mouse.move(upBtnBox.x + upBtnBox.width / 2, upBtnBox.y + upBtnBox.height / 2);
-await page.mouse.down();
-await page.waitForTimeout(6000);
-await page.mouse.up();
+// dome's real apex. Look up and fly forward long enough to hit the ceiling (#3769).
+await flyByView(page, 'up', { moveMs: 6000 });
 
 const debug = await page.evaluate(() => window.__shopFlightCeilingDebug);
 console.log('avatar/camera z vs. the dome\'s own real world-space apex z after flying up as far as possible:', debug);
