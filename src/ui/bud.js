@@ -191,7 +191,21 @@ function placeModePetals(inBud, mode) {
     if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
+    if (inBud) decoratePetal(btn);
   }
+}
+
+// #3761 (part of #3759): each of the three mode petals is a picture first with its one small word
+// under it, like every leaf. The icon goes inside the petal's upright label, so it stays upright
+// with the word however the petal is turned. Once per button; the word is the label's own text.
+function decoratePetal(btn) {
+  const label = btn.querySelector('.mode-nav-label');
+  if (!label || label.querySelector('.bud-icon')) return;
+  const icon = document.createElement('span');
+  icon.className = 'bud-icon';
+  icon.dataset.icon = iconKeyFor(btn);
+  icon.appendChild(svgIcon(icon.dataset.icon));
+  label.prepend(icon);
 }
 
 
@@ -289,6 +303,7 @@ export function closeLeaf() {
 }
 
 export function openLeaf({ id, title, render, onClose = null }) {
+  if (id === 'help') document.body.removeAttribute('data-bud-teach-help');
   closeLeaf();
   leafOnClose = onClose;
   foldBud();
@@ -419,6 +434,7 @@ function learned() {
 function markLearned() {
   try { localStorage.setItem(FIRST_OPEN_KEY, '1'); } catch { /* the word just stays */ }
   document.body.removeAttribute('data-bud-new');
+  document.body.removeAttribute('data-bud-teach-help');
 }
 
 if (typeof document !== 'undefined') {
@@ -459,10 +475,14 @@ if (typeof document !== 'undefined') {
   toggle()?.setAttribute('aria-controls', 'account-menu-panel');
   toggle()?.addEventListener('click', (event) => {
     if (panel()?.classList.contains('expanded')) markLearned();
+    // #3762: the first time the bud is opened ever, the "?" leaf pulses so a newcomer sees where the
+    // instructions are (the bud's own "Menu" word has gone while it is open). It stops when "?" is
+    // opened or the bud is closed, and is not shown again once learned. The menu's own click handler
+    // opens the panel after this one runs, hence the deferred check.
+    else if (!learned()) setTimeout(() => { if (panel()?.classList.contains('expanded') && !learned()) document.body.setAttribute('data-bud-teach-help', ''); }, 0);
     // #3818: opened from the keyboard (Enter or Space gives a click with no pointer), focus goes
     // into the menu, to its first leaf, so Tab reads it in order; a tap leaves focus where it was.
-    // Checked a frame later: the menu's own click handler (src/account/menu.js) opens it, and may
-    // run after this one.
+    // Checked a frame later, for the same reason: the menu's own handler opens it after this one.
     if (event.detail === 0) {
       requestAnimationFrame(() => {
         if (!panel()?.classList.contains('expanded')) return;
