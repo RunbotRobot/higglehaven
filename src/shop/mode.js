@@ -370,6 +370,10 @@ export function buildShopGroundMesh(record) {
   return groundMesh;
 }
 
+// #3745: how old the early catalog/world/landlets requests may be when the
+// sign-in gate passes before they are used as they are.
+const SHOP_PREFETCH_MAX_AGE_MS = 2000;
+
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
   // UI has nothing to do with an identity check, and hiding it before that
@@ -388,10 +392,18 @@ export async function enterShopMode() {
   // anything is built; a failure still falls back exactly as it did (the
   // catch below on each), and the no-op catch here only keeps a request that
   // is never awaited (a declined login) from being reported as unhandled.
-  const catalogLoad = fetchCatalog();
-  const worldLoad = Promise.all([fetchWorld(), fetchAllLandlets()]);
-  catalogLoad.catch(() => {});
-  worldLoad.catch(() => {});
+  // A person who sits at the sign-in prompt would otherwise get a world as old
+  // as that wait, so when the gate takes longer than SHOP_PREFETCH_MAX_AGE_MS
+  // the requests are made again after it (the early ones were a head start,
+  // not an answer).
+  const startPublicLoads = () => {
+    const catalog = fetchCatalog();
+    const worldAndLandlets = Promise.all([fetchWorld(), fetchAllLandlets()]);
+    catalog.catch(() => {});
+    worldAndLandlets.catch(() => {});
+    return { catalog, worldAndLandlets, startedAt: performance.now() };
+  };
+  let publicLoads = startPublicLoads();
 
   // N44 (owner, Control Room, 2026-09-12): Shop mode used to need no
   // identity at all — see ensureShopperIdentity's own comment for why that
@@ -421,6 +433,7 @@ export async function enterShopMode() {
     }
   }
   markLoadingStage('signedin'); // #3738
+  if (performance.now() - publicLoads.startedAt > SHOP_PREFETCH_MAX_AGE_MS) publicLoads = startPublicLoads();
 
   // #3745: what needs the signed-in user starts the moment sign-in is known and
   // runs while the world below is still loading. Same conditions as where each
@@ -495,7 +508,7 @@ export async function enterShopMode() {
   setSoldOutMarkers([]);
 
   try {
-    setActiveCatalog(await catalogLoad);
+    setActiveCatalog(await publicLoads.catalog);
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
   }
@@ -544,7 +557,7 @@ export async function enterShopMode() {
   let world;
   let allLandlets;
   try {
-    [world, allLandlets] = await worldLoad;
+    [world, allLandlets] = await publicLoads.worldAndLandlets;
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
     // #3738: the opening screen says so too, and offers Try again.

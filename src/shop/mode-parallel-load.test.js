@@ -14,17 +14,22 @@ describe('enterShopMode starts its requests together (#3745)', () => {
 
   it('starts catalog, world and landlets before awaiting the sign-in checks', () => {
     const authWait = at('await authInitPromise;');
-    expect(at('const catalogLoad = fetchCatalog();')).toBeLessThan(authWait);
-    expect(at('const worldLoad = Promise.all([fetchWorld(), fetchAllLandlets()]);')).toBeLessThan(authWait);
+    expect(at('const catalog = fetchCatalog();')).toBeLessThan(authWait);
+    expect(at('const worldAndLandlets = Promise.all([fetchWorld(), fetchAllLandlets()]);')).toBeLessThan(authWait);
   });
 
   it('starts the signed-in requests right after the gate, before the world is awaited', () => {
     const gate = at("markLoadingStage('signedin');");
-    const worldWait = at('[world, allLandlets] = await worldLoad;');
+    const worldWait = at('[world, allLandlets] = await publicLoads.worldAndLandlets;');
     for (const needle of ['const lastPresenceLoad =', 'const equippedAvatarLoad =', 'const equippedAnimationLoad =']) {
       expect(at(needle)).toBeGreaterThan(gate);
       expect(at(needle)).toBeLessThan(worldWait);
     }
+  });
+
+  it('asks again when the sign-in gate took long enough to make the early answers stale', () => {
+    expect(modeSource).toContain('SHOP_PREFETCH_MAX_AGE_MS');
+    expect(at('SHOP_PREFETCH_MAX_AGE_MS) publicLoads = startPublicLoads();')).toBeGreaterThan(at("markLoadingStage('signedin');"));
   });
 
   it('no longer fetches the catalog or world inline', () => {
