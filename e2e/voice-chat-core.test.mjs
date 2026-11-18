@@ -179,9 +179,9 @@ console.log('landlet created (status should be 201):', landletCreated.status);
 // actually stopped, same as it would any real walk, so there's no need to
 // also fight it with a direct POST /api/presence.
 await pageA.reload({ waitUntil: 'networkidle' });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn'); // stops the orbit (real navigation input) and starts landing
+await pageA.evaluate(() => window.__testToggleShopFlight()); // stops the orbit (real navigation input) and starts landing
 await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded', orbit stopped
 await pageA.evaluate(() => window.__testTeleportShopAvatar(0, 0, 0));
 
@@ -191,9 +191,9 @@ const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
 await installVoiceRelay(pageB, { myBuilderId: builderB.builderId, mailboxes });
 
 await pageB.reload({ waitUntil: 'networkidle' });
-await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await pageB.waitForSelector('body.shop-ready', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn'); // stops the orbit and starts landing, same as A above
+await pageB.evaluate(() => window.__testToggleShopFlight()); // stops the orbit and starts landing, same as A above
 await pageB.waitForTimeout(2500); // past landing
 // Comfortably inside VOICE_RANGE_M (30.48m) of A's (0,0,0) above.
 await pageB.evaluate(() => window.__testTeleportShopAvatar(1, 0, 0));
@@ -313,7 +313,7 @@ console.log('A\'s report POST reached the mocked endpoint with the expected body
 // very next poll, and voiceChat.js's updateVoicePeersForRange should tear
 // that connection down the same way it tears down any other avatar that's
 // no longer nearby.
-await pageB.click('#shop-fly-btn'); // takes off this time -- was grounded since the landing above
+await pageB.evaluate(() => window.__testToggleShopFlight()); // takes off this time -- was grounded since the landing above
 await pageA.waitForTimeout(3000); // past SHOP_PRESENCE_POLL_INTERVAL_MS (1000) x a few cycles
 
 async function waitForTeardown(page, builderId, timeoutMs = 8000) {

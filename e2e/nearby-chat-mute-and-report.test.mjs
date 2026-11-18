@@ -63,7 +63,7 @@ page.on('dialog', async (dialog) => {
 });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 await page.waitForSelector('#shop-nearby-chat-btn.visible', { timeout: 10000 });

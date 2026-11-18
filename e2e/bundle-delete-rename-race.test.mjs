@@ -30,7 +30,7 @@ async function placeAndSaveBundle(name, x, y) {
   // options slot, and the timeout itself is widened to 60000ms for real
   // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
   // wait.
-  await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
+  await page.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('Tree'), null, { timeout: 60000 });
   await page.click('#toggle-multiselect');
   await page.waitForTimeout(300);
   await saveBundleAs(page, name);

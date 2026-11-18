@@ -12,19 +12,19 @@
 // drag to turn the avatar's facing away from the camera's current heading,
 // then confirm the camera (a) stays put with the setting off and (b) eases
 // to match with it on.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Camera Lock Tester' });
 
 await chooseIdentity(page, { mode: 'shop', label: 'Camera Lock Tester', isNew: true });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 
 function shortestAngleDeltaRad(a, b) {
   return Math.atan2(Math.sin(a - b), Math.cos(a - b));
 }
 
 async function dragMoveJoystick(dxPx, dyPx) {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const originX = box.x + box.width / 2;
   const originY = box.y + box.height / 2;
   await page.mouse.move(originX, originY);

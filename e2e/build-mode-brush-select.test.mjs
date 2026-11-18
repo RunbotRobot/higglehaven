@@ -85,7 +85,7 @@ await page.mouse.down();
 await page.mouse.move(posB.x, posB.y, { steps: 10 });
 await page.mouse.up();
 await page.waitForTimeout(300);
-const smallBrushSelection = await page.textContent('#product-info');
+const smallBrushSelection = await page.textContent('#item-card-name');
 console.log(`selection after a ${smallRadius}px-radius brush drag along the real A-B line (should be "2 items selected", short of C's ${cOffsetFromLine.toFixed(0)}px offset):`, smallBrushSelection);
 
 // Back to single-select, clear the selection, then re-enter multi-select
@@ -106,7 +106,7 @@ await page.mouse.down();
 await page.mouse.move(posB.x, posB.y, { steps: 10 });
 await page.mouse.up();
 await page.waitForTimeout(300);
-const largeBrushSelection = await page.textContent('#product-info');
+const largeBrushSelection = await page.textContent('#item-card-name');
 console.log(`selection after a ${largeRadius}px-radius brush drag along the same line (should be "3 items selected", now past C's offset):`, largeBrushSelection);
 
 const pass = brushControlVisibleOnceMultiSelectOn &&

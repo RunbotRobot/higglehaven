@@ -19,7 +19,7 @@
 // without racing real joystick movement. placeholder-tree has no
 // modelUrl (migrations/0001_initial.sql), so this resolves synchronously
 // via the plain-box fallback -- no GLTF fetch to race at all.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL = 'Community Sign Mount Offset Tester';
 
@@ -58,7 +58,7 @@ await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
 });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // #688/#1175: spawn state isn't settled until enterShopMode's post-fetch
 // tail finishes (same wait flight.test.mjs/shop-landlet-instance-leak.test.mjs rely on).
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
@@ -67,7 +67,7 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 // hands-off spawn orbit, freeing shopAvatarPosition for the teleport hook
 // below to actually drive (see that file's own comment for why a pure
 // teleport alone can't out-race the orbit).
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await shopStickBox(page);
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
 await page.mouse.move(moveCenterX, moveCenterY);

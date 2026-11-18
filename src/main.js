@@ -246,7 +246,7 @@ import {
 import {
   getShopCameraLockToFacing, setShopCameraLockToFacing, setShopFlyBtnFlying,
   applyShopCameraOrientation, positionShopCamera, setShopFov, updateShopMovement,
-  beginShopSpawn, initShopFlightInputBindings,
+  beginShopSpawn, initShopFlightInputBindings, goToShopLocation,
 } from './shop/flightMovement.js';
 // #2625 (leaf of #2563/#2504/#2500, depends on #2624 above): Shop mode's
 // sky dome/wall shader material and atmosphere-rise-with-altitude growth
@@ -281,7 +281,7 @@ import {
   shopOtherAvatars, assistantFromHit, assistantGroups,
 } from './shop/presenceAndContent.js';
 // #3447: tapping an assistant in the Shop world opens its chat panel.
-import { openAssistantChat, closeAssistantChat } from './shop/assistantChat.js';
+import { openAssistantChat, closeAssistantChat, setAssistantStandingHooks } from './shop/assistantChat.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
 // rendering now lives in src/shop/worldSprites.js -- see that module's own
@@ -1037,17 +1037,19 @@ document.addEventListener('click', (event) => {
 // Exported for src/shop/mode.js's own enterShopMode (#2629) -- a reverse
 // import, same shape as the other Shop DOM consts below.
 export const shopStatusEl = document.getElementById('shop-status');
-export const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
-export const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
-export const shopLookJoystickEl = document.getElementById('shop-look-joystick');
-export const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
-export const shopFlyBtn = document.getElementById('shop-fly-btn');
-export const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
 export const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 export const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 export const shopUpBtn = document.getElementById('shop-up-btn');
 export const shopDownBtn = document.getElementById('shop-down-btn');
-// #2624: wires up both joysticks/both vertical buttons/the fly toggle/the
+// #3650: the sticks and the fly button are gone (moving is done by touching the
+// world, src/shop/worldGestures.js); what remains of "the Shop controls are up"
+// is this flag on <body> (the voice button and the assistant panel read it, and
+// so do the e2e tests) and the flying arrows' own gate.
+export function setShopControlsVisible(visible) {
+  document.body.classList.toggle('shop-ready', visible);
+  shopVerticalControlsEl.classList.toggle('visible', visible);
+}
+// #2624: wires up the world gestures (#3650)/both vertical buttons/the
 // last-location click -- deferred into a function call (rather than left
 // as shop/flightMovement.js's own top-level side effects) so it runs after
 // the DOM consts just above are actually initialized; see that module's
@@ -1284,6 +1286,12 @@ export function setShopEquippedAvatarSkeletonSignature(value) {
 // dependency notes.
 
 export const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
+// #3636 part 2: the assistant window asks how far she is (only meaningful in the Shop world, so
+// NaN elsewhere: no walk is offered) and has the avatar taken to her.
+setAssistantStandingHooks({
+  distanceTo: (x, y) => (shopActive ? Math.hypot(shopAvatarPosition.x - x, shopAvatarPosition.y - y) : NaN),
+  goTo: (target) => goToShopLocation(target),
+});
 // #1829: read-only counterpart to the teleport hook above -- lets a test
 // confirm shopAvatarPosition actually changed (or didn't) after driving a
 // real move through moveShopAvatarWithCollision below, same "always inert
@@ -1581,8 +1589,8 @@ window.__testShopLeanPose = () => ({
 // unloadShopLandletInstances, which all stay here (unloadShopLandletInstances'
 // own forward-import shape already established by #2626).
 // Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
-// on open canvas (movement/look are joystick-driven, pinch-zoom needs two
-// fingers — see the pointerdown/pointermove pair just above), so this is
+// on open canvas (a finger that moves walks and a second one looks, see
+// src/shop/worldGestures.js; a tap that does not move is a click), so this is
 // free to use for "what is this." Tapping a product shows its info;
 // tapping anything else (ground, sky, empty space) dismisses whatever was
 // showing, the same "tap away to close" a shopper would expect.
@@ -1641,6 +1649,10 @@ window.__testTapAssistantByUserId = (userId) => {
   openAssistantChat({ userId: found[1].userId, builderId: found[0], name: found[1].assistantName });
   return true;
 };
+
+// #3636 part 2: e2e-only, opens the panel for a named assistant without her being drawn in the
+// world (the standing line is about where she stands, not whether she is in view).
+window.__testOpenAssistant = (target) => openAssistantChat(target);
 
 window.__testTapShopProductByInstanceId = (instanceId) => {
   const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
@@ -1895,7 +1907,7 @@ window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geome
 // Exported for src/shop/mode.js's own enterShopMode (#2629) -- a reverse
 // import, same shape as showShopAccessGate's own below.
 export const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'item-card', 'add-item-panel', 'camera-debug-panel',
   'level-controls', 'connectivity-indicator',
 ];
 
@@ -1953,7 +1965,7 @@ export function showShopAccessGate() {
 // here any more: Sell's world view walks the page with Shop's movement and the
 // seller's avatar (#3295), so it has the same facing for the compass to show.
 export const SELL_HIDDEN_BUILDER_UI_IDS = [
-  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'item-card', 'add-item-panel', 'camera-debug-panel', 'level-controls',
 ];
 
 // #2561: the faux-layout preview mode (layoutPreviewMeshes/Instances,

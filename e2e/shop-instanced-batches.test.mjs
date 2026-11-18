@@ -8,7 +8,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,13 +96,13 @@ console.log(`seeded ${COUNT} placements (all 201):`, statuses.every((s) => s ===
 // The page's catalog was fetched before this product existed.
 await page.reload();
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 });
+await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 await page.waitForTimeout(1000);
 
 // A fresh Shop-mode spawn keeps overwriting the avatar's position every frame
 // with its own hands-off orbit until real navigation input first arrives, which
 // would undo every teleport below. Same release gesture other Shop e2es use.
-const joystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const joystickBox = await shopStickBox(page);
 const joystickX = joystickBox.x + joystickBox.width / 2;
 const joystickY = joystickBox.y + joystickBox.height / 2;
 await page.mouse.move(joystickX, joystickY);

@@ -1093,6 +1093,30 @@ most likely to come up again.
   words: all three modes show whichever mode you are in, with the current
   one marked.)
 
+- **A wait a person can see is first made short, and whatever is left
+  shows that things are working.** (2026-11-17, #3735.) Opening the app
+  from the owner's home-screen tile took about ten seconds, then less,
+  then two: "It felt like long enough that I'd assume the app was broken
+  and move on to something else if I was a casual user." They asked three
+  things in order: research why it is ever slow, why it varies, and what
+  changes; and for the wait itself, "something to occupy the user's
+  attention that also gives them the feeling that things are working.
+  Little tips about how to use higglehaven and some kind of quick-to-load
+  animation, paired with a status bar." So a slow step is measured before
+  it is dressed up, and the cause is fixed where it can be. A wait that
+  remains moves from its first second, shows progress that follows real
+  stages and never a timer, gives the person something worth reading, and
+  says plainly when a stage has failed. A still screen reads as a broken
+  app. This sits beside "Moving, looking and drawing never wait on
+  loading" (which covers the world once it is on screen) and applies to
+  every wait a person can see: opening, signing in, an upload, a model
+  being generated. The same day, on a sentence in the assistant window
+  that told people how long a waiting question is kept: "It seems like
+  superfluous information. Can we eliminate that?" (#3733.) That is "The
+  world is the product; every piece of interface has to earn the space it
+  takes from it" applied to a single sentence: text that helps nobody act
+  goes, and a session may remove such a line without asking.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -1728,6 +1752,13 @@ retry re-runs only the files that failed on attempt 1, not the whole
 shard, so one flaky file costs about one file's runtime rather than
 doubling the shard; a shard that fails before reporting which files
 failed (a build error, a crash) still retries in full.
+
+**A red `main` announces itself (#3727).** When the CI run on a push to `main` fails,
+the `main-red-alert` job (`scripts/main-red-alert.mjs`) opens one GitHub issue titled
+"main is red: <files>" naming the failing test files, updates it while `main` stays red, and
+closes it when a run on `main` is green again. If you see one open, fix `main` first, or tell
+the session already on it: a PR whose run fails on exactly those files is not at fault, and
+another two-hour run on it cannot pass.
 
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 

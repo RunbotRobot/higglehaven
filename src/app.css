@@ -597,127 +597,27 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         cursor: pointer;
       }
-      /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
-         right looks (yaw/pitch) — each tracks its own pointer via
-         setPointerCapture so both thumbs work at once. The knob is an
-         absolutely-positioned child re-centered with a translate() offset
-         computed in JS; the base's own .shop-ui position:fixed already
-         gives the knob a containing block, so no extra positioning rule
-         is needed here. */
-      .shop-joystick {
-        width: 108px;
-        height: 108px;
-        bottom: 24px;
-        border-radius: var(--radius-round);
-        /* Owner: "the three controls at the bottom of shop mode" (this,
-           #shop-fly-btn, #shop-vertical-controls below) read as gray
-           rather than on-brand green — an ink-rgb tint reads that way at
-           low alpha since ink-rgb is a near-black green. Every other bit
-           of floating HUD chrome over the 3D scene (#shop-status,
-           #shop-sign-hint, ...) already uses a pale pill-rgb fill with no
-           border for contrast against an arbitrary backdrop instead; this
-           just brings the joystick in line with that, matching what the
-           :root palette comment already claimed it did.
-           Owner (follow-up): pill-rgb's own pale tint still read as gray,
-           not green — see --spring-green-rgb's own comment above for why
-           this now uses that instead, at a higher alpha so it doesn't
-           wash out the same way against a dark 3D backdrop. */
-        background: rgb(var(--spring-green-rgb) / 0.85);
-        touch-action: none;
-      }
-      .shop-joystick-knob {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 44px;
-        height: 44px;
-        margin: -22px 0 0 -22px;
-        border-radius: var(--radius-round);
-        background: rgb(var(--ink-rgb) / 0.4);
-        pointer-events: none;
-      }
-      #shop-move-joystick {
-        left: 20px;
-      }
-      #shop-look-joystick {
-        right: 20px;
-      }
-      /* docs/SPEC.md §2's flight trigger — double-tap to take off/land
-         (see bindShopFlyToggle in src/main.js; double-press space does the
-         same on desktop). Centered above the hint text, its own row so it
-         never collides with the move/look joysticks on either side. */
-      /* #1589: the bird artwork fills the whole pill rather than sitting as a
-         small icon -- padding removed so the image can reach the button's own
-         edge. #3393: the pill is brand green in both states (the owner liked
-         the green one); the icon alone says which state it is in. */
-      /* #3334: the fly button and the up/down stack above it share one
-         bottom anchor, so the stack's position is derived from the button's
-         own bottom + size + gap instead of a second hand-tuned number that
-         could drift into it (it overlapped by 2px at 390x844). */
       :root {
-        /* Set from script by the assistant panel while the phone keyboard is
-           open (src/shop/assistantChat.js); these are the keyboard-closed
-           values, so check-design-tokens sees them declared. Same two lines as
-           #3642/#3637 (main's pretest is red without them); drops out on merge. */
         --assistant-kb-inset: 0px;
         --assistant-visible-height: 100dvh;
-        --shop-fly-bottom: 78px;
-        --shop-fly-size: 56px;
-        --shop-fly-stack-gap: 12px;
         /* #3553: the up/down arrows and the gap between them; the assistant
            panel lifts above the stack while it is showing. */
         --shop-vertical-button-height: 40px;
         --shop-vertical-gap: 8px;
         --shop-vertical-stack-height: calc(2 * var(--shop-vertical-button-height) + var(--shop-vertical-gap));
-        /* The assistant panel's phone-keyboard fit (#3621): assistantChat.js sets
-           both on the panel itself while the keyboard is open; these are the
-           values with it closed, and declare them so the token check (#3541)
-           finds a definition for what the panel's rule reads. */
-        --assistant-kb-inset: 0px;
-        --assistant-visible-height: 100dvh;
-      }
-      #shop-fly-btn {
-        bottom: var(--shop-fly-bottom);
-        left: 50%;
-        transform: translateX(-50%);
-        width: var(--shop-fly-size);
-        height: var(--shop-fly-size);
-        padding: 0;
-        border-radius: var(--radius-round);
-        border: none;
-        background: var(--brand-green);
-        color: var(--pill-text);
-        font-size: var(--text-xl);
-        touch-action: none;
-      }
-      /* #3393: colour no longer tells the two states apart, so a press and
-         keyboard focus each get their own visible cue. */
-      #shop-fly-btn:active {
-        filter: brightness(0.88);
-      }
-      #shop-fly-btn:focus-visible {
-        outline: 3px solid rgb(var(--ink-rgb) / 0.75);
-        outline-offset: 3px;
-      }
-      /* #3369: the icon is the bird alone, already sized to sit inside this
-         circle (scripts/cut-bird-icons.mjs), so it is just contained -- no
-         zoom, no clip. */
-      #shop-fly-btn-icon {
-        display: block;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
+        /* #3650: where the arrows sit (bottom right) now that the sticks and the
+           fly button are gone. */
+        --shop-vertical-bottom: 24px;
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
          the rest of the time, since holding altitude only means anything
-         once airborne. Stacked above #shop-fly-btn rather than sharing its
-         row. */
+         once airborne. Bottom right (#3650: they used to stack above the fly
+         button). */
       #shop-vertical-controls {
         display: none;
-        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap));
-        left: 50%;
-        transform: translateX(-50%);
+        bottom: var(--shop-vertical-bottom);
+        right: 20px;
         flex-direction: column;
         gap: var(--shop-vertical-gap);
       }
@@ -868,6 +768,51 @@
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
+      /* #3723: Shop, Build and Sell are a half-ring of three petals at the bud's corner, apart from
+         the column of things you open, hidden until the bud is unfolded. The arc opens away from
+         the screen edge: --ring-sx/--ring-sy are +1 for a bud in the top-left corner (the ring
+         goes right and down) and -1 for one in the bottom-right; whoever moves the bud sets
+         body[data-bud-corner="bottom-right"]. Centres sit 100px from the bud's centre at 10, 45
+         and 80 degrees, so no two petals touch. The column below starts 92px lower, under the ring. */
+      #bud-modes {
+        --ring-sx: 1;
+        --ring-sy: 1;
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+      }
+      body[data-bud-corner="bottom-right"] #bud-modes { --ring-sx: -1; --ring-sy: -1; }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes { display: block; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn {
+        position: absolute;
+        box-sizing: border-box;
+        width: 52px;
+        height: 44px;
+        padding: 0;
+        left: calc(2px + var(--ring-sx) * var(--ring-x));
+        top: calc(6px + var(--ring-sy) * var(--ring-y));
+        border: none;
+        border-radius: 24px 5px 24px 5px;
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.2);
+        color: var(--pill-text);
+        font: var(--text-md)/1 var(--font-sans);
+        text-align: center;
+        animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+      }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-x: 98.5px; --ring-y: 17.4px; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-x: 70.7px; --ring-y: 70.7px; animation-delay: 0.04s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-x: 17.4px; --ring-y: 98.5px; animation-delay: 0.08s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn.active,
+      body[data-bud="on"] #bud-modes .mode-nav-btn[aria-current="true"] {
+        background: var(--brand-green);
+        color: var(--ink);
+        font-weight: 600;
+      }
+      body[data-bud="on"] #account-menu-panel { margin-top: 92px; }
       /* #3690: Undo and Redo are one petal with two halves (src/build/budPetals.js). */
       .bud-pair { display: flex; gap: var(--space-sm); }
       .bud-pair[hidden] { display: none; }
@@ -878,7 +823,8 @@
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
-        body[data-bud="on"] #account-menu-panel button { animation: none; }
+        body[data-bud="on"] #account-menu-panel button,
+        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: none; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {
@@ -1323,11 +1269,8 @@
          up/down arrows stack above the fly button and the panel starts above
          those too. Build and Sell have none of these controls (no visible fly
          button), so the panel keeps its place at the bottom there. */
-      body:has(#shop-fly-btn.visible) #assistant-chat-panel {
-        --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + 8px);
-      }
-      body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
-        --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
+      body.shop-flying.shop-ready #assistant-chat-panel {
+        --assistant-bottom: calc(var(--shop-vertical-bottom) + var(--shop-vertical-stack-height) + 8px);
       }
       /* #3653: a minimised conversation has no pill: the bud wears her name (and a dot when she has
          replied) and the account menu has an Assistant row that brings the window back. */
@@ -1347,6 +1290,27 @@
         background: rgb(var(--ink-rgb) / 0.14);
         font-size: var(--text-2xs);
         font-weight: var(--weight-regular);
+      }
+      /* #3636 part 2: the quiet "where she stands" line under the header. */
+      #assistant-chat-standing {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-md);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        color: var(--pill-text-soft);
+        user-select: text;
+      }
+      #assistant-chat-standing[hidden] { display: none; }
+      #assistant-chat-go {
+        flex: none;
+        min-height: 36px;
+        padding: var(--space-xs) var(--space-2xl);
+        border: 0;
+        border-radius: var(--radius-pill);
+        background: var(--petal-yellow);
+        color: var(--ink);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #assistant-chat-header-actions {
         display: flex;
@@ -1663,6 +1627,14 @@
       body:has(#catalog-picker.visible) #product-info {
         display: none;
       }
+      /* #3689: the selected item's card is what the name pill used to be, so it
+         steps aside for the picker the same way (the e2e caught it covering the
+         picker's Close button: catalog-search-scope.test.mjs). visibility, not
+         display, so the card keeps its place and comes back unchanged when the
+         picker closes by any of its paths. */
+      body:has(#catalog-picker.visible) #item-card {
+        visibility: hidden;
+      }
       #gizmo-mode-controls {
         position: fixed;
         /* #3573: never above the bottom of the item's name box (set by
@@ -1868,12 +1840,14 @@
         font-weight: var(--weight-semibold);
         opacity: 0.75;
       }
-      #gizmo-mode-controls button.pressed {
+      #gizmo-mode-controls button.pressed,
+      #item-card button.pressed {
         transform: scale(0.92);
         background: var(--brand-green);
         color: var(--ink);
       }
-      #delete-item {
+      /* #3689: Delete lives in the item card now; it keeps its danger colour. */
+      #item-card #delete-item {
         background: var(--danger);
         color: var(--white);
       }
@@ -2767,6 +2741,11 @@
         display: flex;
         justify-content: flex-end;
         gap: var(--space-sm);
+      }
+      /* #3703: hidden while the leaf is still asking which way (an author display rule beats the
+         attribute otherwise, and Add Product showed under the two choices). */
+      #upload-modal-actions[hidden] {
+        display: none;
       }
       #upload-modal-actions button {
         padding: var(--space-sm) var(--space-2xl);
@@ -4393,13 +4372,6 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
-      /* #3530: the fly button's bird at text size inside the Controls line. */
-      .settings-fly-icon {
-        width: 1.5em;
-        height: 1.5em;
-        vertical-align: middle;
-        object-fit: contain;
-      }
       .settings-empty-note.error {
         color: var(--danger-text);
       }
@@ -5851,7 +5823,7 @@
          c.css, .bloom and .buy). All its text is selectable (standing
          decision "Any text a user can read, they can copy"); only the mist
          drawn around it is not, and the mist holds no text. */
-      #product-card {
+      .world-card {
         position: fixed;
         left: 0;
         top: 0;
@@ -5874,16 +5846,16 @@
         flex-direction: column;
         gap: var(--space-xs);
       }
-      #product-card[data-side='left'] {
+      .world-card[data-side='left'] {
         transform-origin: right center;
       }
-      #product-card[data-side='above'] {
+      .world-card[data-side='above'] {
         transform-origin: center bottom;
       }
-      #product-card[data-side='below'] {
+      .world-card[data-side='below'] {
         transform-origin: center top;
       }
-      #product-card[hidden] {
+      .world-card[hidden] {
         display: none;
       }
       #product-card-name {
@@ -5979,7 +5951,7 @@
       /* A small pointer toward the product, on the side facing it, drawn fully
          outside the card. Gone when the product is off screen: there is nothing
          to point at. */
-      #product-card::before {
+      .world-card::before {
         content: '';
         position: absolute;
         top: calc(var(--pointer-y, 24px) - 8px);
@@ -5987,28 +5959,28 @@
         height: 0;
         border: 8px solid transparent;
       }
-      #product-card[data-side='right']::before {
+      .world-card[data-side='right']::before {
         left: -15px;
         border-right-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='left']::before {
+      .world-card[data-side='left']::before {
         right: -15px;
         border-left-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
       /* Above or below the product (a product in the middle of a narrow screen
          has no room beside it): the pointer is on the card's bottom or top edge. */
-      #product-card[data-side='above']::before {
+      .world-card[data-side='above']::before {
         top: auto;
         bottom: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-top-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-side='below']::before {
+      .world-card[data-side='below']::before {
         top: -15px;
         left: calc(var(--pointer-x, 24px) - 8px);
         border-bottom-color: rgb(var(--panel-rgb) / var(--alpha-strong));
       }
-      #product-card[data-edge='true']::before {
+      .world-card[data-edge='true']::before {
         display: none;
       }
       /* Things arrive in the world through fog; nothing pops in (standing
@@ -6017,10 +5989,10 @@
          while the mist around it thins and spreads. The timeline is the
          bloom's own (--motion-bloom), shorter than a landlet's arrival: a tap
          is not a load. */
-      #product-card[data-state='blooming'] {
+      .world-card[data-state='blooming'] {
         animation: product-card-bloom var(--motion-bloom) var(--ease-bloom) both;
       }
-      #product-card[data-state='blooming']::after {
+      .world-card[data-state='blooming']::after {
         content: '';
         position: absolute;
         inset: -28px;
@@ -6038,11 +6010,77 @@
         from { opacity: 1; scale: 0.7; }
         to { opacity: 0; scale: 1.35; }
       }
+      /* #3689: the card of the selected item in Build. Shell, pointer and bloom
+         are the shared .world-card rules above; only its contents are here.
+         Its text (the item's name) is selectable like every text surface. */
+      #item-card-name {
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
+        line-height: var(--leading-tight);
+        padding-right: var(--space-2xl);
+        overflow-wrap: anywhere;
+      }
+      #item-card-actions {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: var(--space-xs);
+      }
+      #item-card-actions button,
+      #item-card-more button {
+        padding: var(--space-xs) var(--space-lg);
+        min-height: 32px;
+        border: none;
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #item-card-actions button:disabled,
+      #item-card-more button:disabled {
+        opacity: 0.5;
+      }
+      #item-card-actions button.active,
+      #item-card-more button.active {
+        background: var(--petal-yellow);
+        color: var(--ink);
+      }
+      #item-card-more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+      }
+      #item-card-more[hidden] {
+        display: none;
+      }
+      /* Multi-select: the next taps add items, so the card shrinks to its title
+         (what is selected) and every tap goes through it to the world. Copy,
+         Delete and More are back when multi-select is turned off, with the
+         selection carried over. */
+      #item-card.pass-through {
+        pointer-events: none;
+      }
+      #item-card.pass-through #item-card-actions,
+      #item-card.pass-through #item-card-more,
+      #item-card.pass-through #item-card-close-btn {
+        display: none;
+      }
+      #item-card.pass-through #item-card-name {
+        padding-right: 0;
+      }
+      #item-card-close-btn {
+        position: absolute;
+        top: var(--space-xs);
+        right: var(--space-xs);
+      }
       @media (prefers-reduced-motion: reduce) {
-        #product-card[data-state='blooming'] {
+        .world-card[data-state='blooming'] {
           animation: product-card-fade 0.25s linear both;
         }
-        #product-card[data-state='blooming']::after {
+        .world-card[data-state='blooming']::after {
           display: none;
         }
         @keyframes product-card-fade {

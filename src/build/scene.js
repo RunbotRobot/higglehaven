@@ -76,6 +76,9 @@ import {
 import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
 import { planSelectionBoxes } from './selectionBoxes.js';
+import {
+  hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
+} from './itemCard.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
@@ -3262,6 +3265,8 @@ function disposeSelectionBox(entry) {
 // the members' live bounds (a gizmo drag moves them every frame). One box
 // per bundle plus one per loose item; a mesh being previewed elsewhere
 // (the trim preview hides the real one) is left out of the union.
+// #3689: the union of every drawn selection box, kept for the item card to anchor to.
+const selectionBounds = new THREE.Box3();
 function updateSelectionBoxes() {
   if (selectionOutlines.size === 0 && selectionBoxes.size === 0) return;
   const visibleMeshes = [];
@@ -3293,6 +3298,8 @@ function updateSelectionBoxes() {
     disposeSelectionBox(entry);
     selectionBoxes.delete(key);
   }
+  selectionBounds.makeEmpty();
+  for (const { helper } of selectionBoxes.values()) selectionBounds.union(helper.box);
 }
 
 // #3324: test-only hook (the window.__test* convention used throughout this
@@ -3481,6 +3488,7 @@ export function updateSelectionUI() {
     // multiSelectMode below, so whatever was selected before Measure was
     // turned on is still selected once it's turned back off.
     modeControlsEl.classList.remove('visible');
+    hideItemCard();
     trimLengthControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
@@ -3491,6 +3499,7 @@ export function updateSelectionUI() {
   if (count === 0) {
     showSelectionActionStatus('');
     setProductInfo('');
+    hideItemCard();
     modeControlsEl.classList.remove('visible');
     trimLengthControlEl.classList.remove('visible');
     translateControls.detach();
@@ -3508,7 +3517,10 @@ export function updateSelectionUI() {
     const template = [...selectedMeshes][0].userData.template;
     singleSelectionInfo = template.isTestModel ? `${template.name} (Testing Model — not a real product)` : template.name;
   }
-  setProductInfo(count === 1 ? singleSelectionInfo : `${count} items selected`);
+  // #3689/#3573: the name is the item card's title now, beside the item; the pill
+  // at the top of the screen is left for Measure and Copy's confirmations.
+  setProductInfo('');
+  showItemCard(count === 1 ? singleSelectionInfo : `${count} items selected`, { passThrough: multiSelectMode });
   modeControlsEl.classList.add('visible');
   // Rotate has a bundle form only (#3325: one rigid turn about the bundle's
   // pivot); an arbitrary multi-item selection still offers only Move.
@@ -3599,6 +3611,11 @@ function isSingleBundleSelection() {
   for (const mesh of selectedMeshes) if (mesh.userData.groupId !== id) return false;
   return true;
 }
+
+setItemCardCloseHandler(() => {
+  clearSelection();
+  updateSelectionUI();
+});
 
 export function clearSelection() {
   for (const mesh of selectedMeshes) removeSelectionOutline(mesh);
@@ -4064,6 +4081,10 @@ export function enterPlacementMode(pending, statusText) {
   // every other tap-driven tool.
   exitMeasureMode();
   modeControlsEl.classList.remove('visible');
+  // #3689: the next tap places the new item, so the old selection's card must not
+  // sit where that tap lands. It comes back with the selection (cancelPlacementMode
+  // and a placement both run updateSelectionUI).
+  hideItemCard();
   translateControls.detach();
   rotateControls.detach();
   pendingPlacement = pending;
@@ -4891,6 +4912,7 @@ export function buildModeFrameUpdate(now) {
   // only on selection change (#3324: one union box per bundle, the fill
   // reading the very same box so the two never drift apart).
   updateSelectionBoxes();
+  updateItemCard(selectionBounds);
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its

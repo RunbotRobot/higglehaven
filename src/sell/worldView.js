@@ -17,7 +17,7 @@ import { currentAuthUser } from '../account/auth.js';
 import { fetchMyEquippedAvatar, fetchMyEquippedAnimation } from '../api.js';
 import {
   shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature, setShopDomeMesh,
-  shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl, shopStatusEl,
+  setShopControlsVisible, shopStatusEl,
 } from '../main.js';
 import {
   shopAvatar, setShopAvatar, createShopAvatar, createCustomShopAvatar,
@@ -146,12 +146,10 @@ function placeAvatarAtPageStart() {
 }
 
 function showHud(visible) {
-  for (const el of [shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
-    el.classList.toggle('visible', visible);
-  }
+  setShopControlsVisible(visible);
 }
 
-// Movement input (joysticks, keyboard, fly button) and the HUD are live only
+// Movement input (touch on the world, keyboard) and the HUD are live only
 // while the page itself is what the seller is looking at. Driven by the modal's
 // own visibility (below), not by each code path that opens it: the modal is
 // opened from several places (entry, the Products button, tapping a product on

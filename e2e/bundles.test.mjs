@@ -53,10 +53,10 @@ async function selectByScanningY(x, yStart, yEnd, yStep, textBefore) {
   for (let y = yStart; y <= yEnd; y += yStep) {
     await page.mouse.click(x, y);
     await page.waitForTimeout(250);
-    const textAfter = await page.textContent('#product-info');
+    const textAfter = await page.textContent('#item-card-name');
     if (textAfter !== textBefore) return textAfter;
   }
-  return page.textContent('#product-info');
+  return page.textContent('#item-card-name');
 }
 
 // Multi-select both trees by tapping each (a plain tap toggles selection in
@@ -64,7 +64,7 @@ async function selectByScanningY(x, yStart, yEnd, yStep, textBefore) {
 // items).
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-let selectionText = await page.textContent('#product-info');
+let selectionText = await page.textContent('#item-card-name');
 selectionText = await selectByScanningY(160, 320, 400, 10, selectionText);
 selectionText = await selectByScanningY(260, 320, 400, 10, selectionText);
 console.log('selection status before saving (should say 2 items selected):', selectionText);
@@ -106,7 +106,7 @@ await page.locator('.bundle-tile-place').first().click();
 await page.waitForTimeout(300);
 await page.mouse.click(210, 550);
 await page.waitForTimeout(1000);
-const infoAfterBundlePlacement = await page.textContent('#product-info');
+const infoAfterBundlePlacement = await page.textContent('#item-card-name');
 console.log('selection after placing the bundle (should say 2 items selected):', infoAfterBundlePlacement);
 
 // #2766: the bundle's newly-placed instances should default to grouped

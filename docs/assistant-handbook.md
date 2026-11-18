@@ -16,8 +16,8 @@ from this one and a test can check them:
 
 - **A title that is the person's question**, ending in a question mark.
 - **Numbered steps.** Each step names the control by the words on it, in quotes
-  ("Add item"), or by what it looks like when it has no words (the bird button, the
-  gear). It says what to tap, not where the code keeps it. Where the app's own
+  ("Add item"), or by what it looks like when it has no words (the gear, the world
+  itself). It says what to tap, not where the code keeps it. Where the app's own
   words are not yet spelled the way the product spells them, quote only the part
   that is, so the step stays true when the spelling is fixed.
 - **`**You will see:**`** one or two sentences on what changes on screen after the
@@ -214,46 +214,66 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ## Getting around and Shop
 
-### How do I walk around and look around?
+### How do I go between Shop, Build and Sell?
 
-1. Put your left thumb on the round pad at the bottom left and push it in the
-   direction you want to go. The further you push, the faster you move.
-2. Put your right thumb on the round pad at the bottom right and push it to turn
-   the view and look around.
-3. Let go of a pad and you stop.
+1. Tap the round logo at the top left (the bud).
+2. Three small petals fan out beside it in an arc: "Shop", "Build" and "Sell". The
+   one you are in is shaded green.
+3. Tap the one you want.
 
-**You will see:** your bird walks or turns as you push, and the view follows.
+**You will see:** the menu folds away and you are in that place. The three petals
+are the same in all three places.
 
 **If something goes wrong:**
-- Nothing moves: tap the screen once so the page has your touch, then try again. If
-  the pads are not on screen at all, ask what they see at the bottom of the
-  screen and offer to pass it to the team.
+- The petals are not there: the bud is folded. Tap the round logo once.
+- Nothing happens on tapping the place you are already in: that is expected.
+
+```controls any
+.mode-nav-btn[data-mode="shop"] | Shop
+```
+
+### How do I walk around and look around?
+
+1. Put one finger on the world anywhere and drag it in the direction you want to
+   go. The further you drag, the faster you move.
+2. To look around, keep that first finger down and put a second finger on the
+   world, then drag the second finger to turn the view.
+3. Lift your finger and you stop. There are no buttons to find: the world itself is
+   the control.
+
+**You will see:** your bird walks or turns as you drag, and the view follows.
+
+**If something goes wrong:**
+- Nothing moves: a quick tap does not move you, so keep the finger down and drag a
+  little further, then try again.
+- Looking needs two fingers at once, so it can be awkward with one thumb: rest the
+  first finger anywhere and turn with the second.
 - You want to go up in the air: see the flying entry below.
 
 ```controls shop
-#shop-move-joystick | (no words)
-#shop-look-joystick | (no words)
+#app | (no words)
 ```
 
 ### How do I fly, go up and come back down?
 
-1. You start each visit in the air. Two green arrows sit just above the round bird
-   button at the bottom centre: tap the up arrow ("Fly up") to climb and the down
-   arrow ("Fly down") to sink.
-2. Walk and look with the two pads as usual.
-3. To come back down, tap the bird button. The arrows go away once you are on the
-   ground.
-4. To go up again, tap the bird button again and the arrows come back.
+1. You start each visit in the air. To come down, double-tap the world: two quick
+   taps in the same place.
+2. While you are flying, two green arrows sit at the bottom right: tap the up
+   arrow ("Fly up") to climb and the down arrow ("Fly down") to sink.
+3. Walk and look by dragging, as usual.
+4. To go up again from the ground, double-tap the world again and the arrows come
+   back. The arrows go away once you are on the ground.
 
-**You will see:** the up and down arrows show only while the bird is flying, and the
-bird button's picture changes when you tap it.
+**You will see:** the up and down arrows show only while the bird is flying, and a
+double-tap switches between flying and standing.
 
 **If something goes wrong:**
-- No arrows: you are on the ground. Tap the bird button to fly.
-- You cannot find the ground: tap the bird button and let it come down by itself.
+- No arrows: you are on the ground. Double-tap the world to fly.
+- A double-tap on a product opens that product instead: double-tap on open ground.
+- You cannot find the ground: double-tap the world and let it come down by itself.
 
 ```controls shop
-#shop-fly-btn | (no words)
+#app | (no words)
 #shop-up-btn | Fly up
 #shop-down-btn | Fly down
 ```
@@ -510,6 +530,7 @@ assistant's replies, each labelled with who wrote it.
 **If something goes wrong:**
 - No assistant is free: the window says so, and the message waits in line. It is
   answered when one is free.
+- The assistant is on shift but somewhere else in the world: a line at the top of the window says which lándlet she is standing on, with a "Take me there" button that walks them to her. The line is not shown when she is close by or off shift.
 - To stop an assistant from contacting them, tap "Block" in the window.
 - Assistants are AI helpers, and the window says so. They cannot do anything to an
   account; for money, an account's standing, or a report about someone, they send it
@@ -529,7 +550,8 @@ assistant's replies, each labelled with who wrote it.
 
 ### How do I get my own lándlet?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Build".
+1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+   "Shop", "Build" and "Sell". Tap "Build".
 2. The first time, a sheet opens with the title "Claim a" and a small map.
    Green squares are "Available", grey are "Claimed", blue is "Water".
 3. Tap an available green square on the map. The line under the map names it and
@@ -603,8 +625,9 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 - It will not go any further: it has reached a limit and the app stops it there,
   saying so at the top of the screen. If the message is about how high or how deep
   the lándlet goes, see the levels entry below.
-- You want to line it up with something nearby: tap "Snap" so it is green. A
-  dragged item then lines its edges and middle up with items close to it.
+- You want to line it up with something nearby: tap "More" on the card beside the
+  item, then "Snap" so it is yellow. A dragged item then lines its edges and
+  middle up with items close to it.
 - Wrong spot: the round logo button at the top left, then "Undo".
 
 ```controls build
@@ -635,7 +658,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 ### How do I copy an item?
 
-1. Tap the item, then tap "Copy" in the row above it. The top of the screen says
+1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
 2. Tap the bud, then "Tools", then "Paste" (it is only listed once something is
    copied). With the item still selected, the copy appears
@@ -660,7 +683,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 ### How do I remove an item, or get it back?
 
 1. Tap the item.
-2. Tap "Delete" in the row above it.
+2. Tap "Delete" on the card beside it.
 
 **You will see:** the item disappears at once. There is no "are you sure" for a
 single item.
@@ -817,7 +840,8 @@ top of the screen.
 
 ### What does Sell mode show, and where is my showroom?
 
-1. Tap the gear at the top left (in Shop and Build it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Sell".
+1. Tap the round logo at the top left (the bud). Three small petals fan out beside it:
+   "Shop", "Build" and "Sell". Tap "Sell".
 2. Your showroom opens: a small, empty piece of the world with your products
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.

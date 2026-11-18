@@ -584,6 +584,45 @@ describe('Assistant shifts', () => {
     expect(body.avatars.find((a) => a.userId === userId)).toBeUndefined();
   });
 
+  it('GET /assistant/standing lists who is on shift and where, for any signed-in person (#3636)', async () => {
+    const admin = await signupAdmin('standing-admin');
+    await createGreenbeltLandletAs(admin.session, 'standing-landlet', { x: 1300, y: 1300 });
+    const login = await fleetLogin('assistant-fig');
+    const userId = login.body.user.userId;
+    const standing = (who) => api('/assistant/standing', who.session());
+    const shopper = await signupBuilder('standing-shopper');
+
+    // Signed out: refused.
+    expect((await api('/assistant/standing')).response.status).toBe(401);
+
+    // Off shift: not listed.
+    await env.DB.prepare('DELETE FROM assistant_shifts WHERE user_id = ?').bind(userId).run();
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(userId).run();
+    let { response, body } = await standing(shopper);
+    expect(response.status).toBe(200);
+    expect(body.assistants.find((a) => a.userId === userId)).toBeUndefined();
+
+    // A fresh inbox poll puts her on shift, at her server-chosen spot, free.
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = ? WHERE user_id = ?').bind(new Date().toISOString(), userId).run();
+    const spot = assistantSpot('Fig', await greenbelt());
+    ({ body } = await standing(shopper));
+    const found = body.assistants.find((a) => a.userId === userId);
+    expect(found).toMatchObject({ name: 'Fig', busy: false, landletId: spot.landletId });
+    expect(found.x).toBeCloseTo(spot.x);
+    expect(found.y).toBeCloseTo(spot.y);
+
+    // A coding session's fleet account is never listed, even when it polls.
+    const coding = await fleetLogin('higglehaven7');
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = ? WHERE user_id = ?').bind(new Date().toISOString(), coding.body.user.userId).run();
+    ({ body } = await standing(shopper));
+    expect(body.assistants.find((a) => a.userId === coding.body.user.userId)).toBeUndefined();
+
+    // A lapsed poll removes her.
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = ? WHERE user_id = ?').bind(new Date(Date.now() - 3600_000).toISOString(), userId).run();
+    ({ body } = await standing(shopper));
+    expect(body.assistants.find((a) => a.userId === userId)).toBeUndefined();
+  });
+
   it('only an assistant account may send a heartbeat; a coding session or a shopper is refused and never appears', async () => {
     const coding = await fleetLogin('higglehaven7');
     expect((await beat(coding.token)).status).toBe(403);

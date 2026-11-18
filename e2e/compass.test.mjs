@@ -14,7 +14,7 @@
 // Build, a move-joystick drag in Shop — the latter also doubles as the
 // navigation input that stops Shop's spawn orbit), not just its own static
 // initial value.
-import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, goToMode } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
 
@@ -84,7 +84,7 @@ console.log('Build-mode needle rotation after dragging the camera (should differ
 
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
 const initialShopRotation = await needleRotationDeg();
@@ -102,7 +102,7 @@ console.log('initial Shop-mode needle rotation (random — #1175\'s spawn orbit 
 // coincidentally land within any fixed tolerance of it by chance, while
 // two independent, clearly-different manual headings can't.
 async function dragMoveJoystick(dxPx, dyPx) {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const originX = box.x + box.width / 2;
   const originY = box.y + box.height / 2;
   await page.mouse.move(originX, originY);

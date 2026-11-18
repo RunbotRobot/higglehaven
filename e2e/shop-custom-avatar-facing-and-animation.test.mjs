@@ -17,7 +17,7 @@
 // clips, not crate.glb's "everything comes back null" shortcut.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, goToMode, openAddProductLeaf } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, shopStickBox, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AVATAR_MODEL_PATH = path.join(REPO_ROOT, 'e2e', 'fixtures', 'test-rigged-avatar.glb');
@@ -83,7 +83,7 @@ console.log('avatar purchase status (should be 201):', purchaseResult.status);
 // --- Enter Shop mode, then equip the rigged avatar live from Settings ---
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
+await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 
 await openAccountMenu(page);
 await page.click('#settings-btn');
@@ -113,11 +113,11 @@ console.log('animation source after equipping the rigged fixture (should be "own
 // margin e2e/shop-landing-spot-avatar-collision.test.mjs's own comment
 // documents, before ground movement/walk-vs-fly animation state means
 // anything.
-await page.click('#shop-fly-btn');
+await page.evaluate(() => window.__testToggleShopFlight());
 await page.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now grounded
 
 async function dragMoveJoystick(dxPx, dyPx) {
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await shopStickBox(page);
   const originX = box.x + box.width / 2;
   const originY = box.y + box.height / 2;
   await page.mouse.move(originX, originY);
