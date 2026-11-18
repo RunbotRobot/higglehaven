@@ -4,7 +4,7 @@
 // ordinary shopper in the Shop world; B is made an assistant account directly in the local D1
 // (fleet-login needs a deployment secret) and kept on shift by an inbox poll's timestamp.
 import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, finish, shopStickBox } from './helpers.mjs';
 
 const LABEL_A = 'Standing Shopper';
 const LABEL_B = 'Standing Stand-in';
@@ -31,7 +31,7 @@ const quote = (value) => value.replace(/'/g, "''");
 await createGreenbeltLandletAsAdmin('standing-greenbelt');
 
 await chooseIdentity(pageA, { mode: 'shop', label: LABEL_A, isNew: true });
-await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
+await pageA.waitForSelector('body.shop-ready', { timeout: 20000 });
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 
 const userB = (await fetchJson(pageB, '/api/auth/me')).body.user;
@@ -67,8 +67,16 @@ check(Boolean(spot) && spot.name === 'Juniper', `the server lists her on shift (
 // Far away: the line and the walk. (The avatar drops in at spawn first; a teleport during the
 // drop is overwritten, so wait for it to land.)
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn');
-await pageA.waitForTimeout(2500);
+// A short drag on the movement area ends the spawn orbit (same sequence as credit-orb-collect).
+const stick = await shopStickBox(pageA);
+const sx = stick.x + stick.width / 2;
+const sy = stick.y + stick.height / 2;
+await pageA.mouse.move(sx, sy);
+await pageA.mouse.down();
+await pageA.mouse.move(sx + 25, sy, { steps: 5 });
+await pageA.waitForTimeout(100);
+await pageA.mouse.up();
+await pageA.waitForTimeout(500);
 await pageA.evaluate(([x, y]) => window.__testTeleportShopAvatar(x + 60, y, 0), [spot.x, spot.y]);
 await pageA.waitForTimeout(500);
 await pageA.evaluate((t) => window.__testOpenAssistant(t), target);
