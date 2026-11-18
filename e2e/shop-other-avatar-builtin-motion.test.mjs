@@ -67,7 +67,9 @@ await page.route('**/models/rigged-avatar.glb', (route) => route.fulfill({ statu
 let poll = 0;
 await page.route('**/api/presence*', async (route) => {
   if (route.request().method() !== 'GET') return route.continue();
-  const res = await route.fetch();
+  // A poll can be in flight when the test ends and the page closes; that is not a failure.
+  const res = await route.fetch().catch(() => null);
+  if (!res) return;
   const body = await res.json();
   poll += 1;
   const swing = poll % 2 === 0 ? 3 : 6;
@@ -80,7 +82,7 @@ await page.route('**/api/presence*', async (route) => {
     { builderId: 'fake-clipped-walker', x: swing, y: 10, z: 0, heading: 0, equippedAvatar: CLIPPED, equippedAnimation: null },
     { builderId: 'fake-far-walker', x: swing + 100, y: 4, z: 0, heading: 0, equippedAvatar: null, equippedAnimation: null },
   ];
-  await route.fulfill({ response: res, body: JSON.stringify(body), contentType: 'application/json' });
+  await route.fulfill({ response: res, body: JSON.stringify(body), contentType: 'application/json' }).catch(() => {});
 });
 
 const waitFor = (fn, arg) => page.waitForFunction(fn, arg, { timeout: 25000 }).then(() => true).catch(() => false);
@@ -143,6 +145,8 @@ console.log('a clip-less custom body leans, bobs and sways while walking (should
 console.log('a clip-less custom body standing only breathes (should be true):', cliplessStillBreathes);
 console.log('a custom body with its own clips gets no built-in motion (should be true):', clippedGetsNothing);
 console.log('an avatar beyond the cutoff is left alone (should be true):', farKeepsItsPose);
+
+await page.unrouteAll({ behavior: 'ignoreErrors' });
 
 const pass = landletCreated.status === 201 && ready
   && defaultWalkerSwings && defaultStillIsStill && cliplessWalks && cliplessStillBreathes && clippedGetsNothing && farKeepsItsPose
