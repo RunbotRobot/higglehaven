@@ -1166,6 +1166,20 @@
         font-size: 24px;
         line-height: 1;
       }
+      /* #3819: with a mouse, everything the head offers shows it can be clicked (the pointer, and a
+         slight dimming under it). Touch is unchanged: the hover rule only applies to a pointer that can hover. */
+      body[data-bud="on"] #account-menu-toggle,
+      body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-modes .mode-nav-btn,
+      body[data-bud="on"] #bud-note,
+      .bud-leaf button,
+      .help-row { cursor: pointer; }
+      @media (hover: hover) {
+        body[data-bud="on"] #account-menu-panel button:hover,
+        body[data-bud="on"] #bud-modes .mode-nav-btn:hover,
+        body[data-bud="on"] #bud-note:hover,
+        .help-row:hover { filter: brightness(0.96); }
+      }
       /* The "?" leaf (#3762): a short list of pages, each page a few questions that open to their steps. */
       .help-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
       .help-row {
