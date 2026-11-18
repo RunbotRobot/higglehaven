@@ -6,6 +6,8 @@
 // Escape. Only one modal is ever open at a time in this app, so a single
 // tracked "active" modal (rather than a stack) matches how
 // openModalA11y/closeModalA11y are called below.
+import { shouldCloseForNewPanel } from './budPanels.js';
+
 let activeModalEl = null;
 let activeModalCloseFn = null;
 let modalReturnFocusEl = null;
@@ -17,6 +19,7 @@ export function getModalFocusable(modalEl) {
 }
 
 export function openModalA11y(modalEl, closeFn) {
+  if (shouldCloseForNewPanel(activeModalEl, modalEl) && activeModalCloseFn) activeModalCloseFn();
   activeModalEl = modalEl;
   activeModalCloseFn = closeFn || null;
   modalReturnFocusEl = document.activeElement;
