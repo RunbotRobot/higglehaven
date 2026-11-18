@@ -188,6 +188,11 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!(Number(args[0]) >= 0)) throw new Error(`step "${token}": milliseconds must be a number`);
       return { command, args: [Number(args[0])] };
+    case 'key':
+      // key:KeyN, key:Escape, key:Shift+KeyN: one Playwright key name.
+      need(1);
+      if (!/^[A-Za-z0-9+]+$/.test(args[0])) throw new Error(`step "${token}": key needs a key name such as KeyN, Escape or Shift+KeyN`);
+      return { command, args: [args[0]] };
     case 'shot':
       return { command, args: [args[0] || ''] };
     case 'burst': {
@@ -212,7 +217,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'pos':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, key, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos)`);
   }
 }
 
