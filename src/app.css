@@ -59,7 +59,14 @@
         justify-content: center;
         background: var(--world-fallback);
         opacity: 1;
-        transition: opacity var(--motion-fade) var(--ease-soft);
+        /* #3738: it hands over through fog, not a cut: the fog thins slowly
+           (this fade) while the bud and words let go sooner (see
+           #loading-content). */
+        transition: opacity calc(var(--motion-fade) * 2.5) var(--ease-soft);
+        /* The bar's share, set by src/ui/loadingStages.js when a real stage is
+           reached; the page's own first paint is the first stage. */
+        --loading-progress: 0.12;
+        overflow: hidden;
       }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
@@ -68,9 +75,120 @@
            beneath it. */
         pointer-events: none;
       }
-      #loading-screen img {
+      #loading-content {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-lg);
+        padding: var(--space-2xl);
+        max-width: min(360px, 90vw);
+        text-align: center;
+        color: var(--ink);
+        font-family: var(--font-sans);
+        transition: opacity var(--motion-fade) var(--ease-soft);
+      }
+      #loading-screen.loading-screen-hidden #loading-content { opacity: 0; }
+      /* Someone signing in is not waiting on the bar; keep the form clean. */
+      body:has(#auth-modal.visible) #loading-content { opacity: 0; }
+      #loading-content img {
         width: min(240px, 60vw);
         height: auto;
+      }
+      /* #3738: the bud unfolds again and again (a quiet breath), the one thing on
+         the screen that moves on its own; the bar moves only on real progress. */
+      .loading-petal {
+        fill: var(--brand-green);
+        fill-opacity: 0.85;
+        transform-origin: 60px 60px;
+        animation: loading-petal-open var(--motion-breath) var(--ease-soft) infinite;
+      }
+      #loading-bud g:nth-child(2) .loading-petal { animation-delay: 0.15s; }
+      #loading-bud g:nth-child(3) .loading-petal { animation-delay: 0.3s; }
+      #loading-bud g:nth-child(4) .loading-petal { animation-delay: 0.45s; }
+      #loading-bud g:nth-child(5) .loading-petal { animation-delay: 0.6s; }
+      #loading-bud-core { fill: var(--sun); }
+      @keyframes loading-petal-open {
+        0%, 100% { transform: scale(0.45); }
+        50% { transform: scale(1); }
+      }
+      #loading-bar {
+        width: min(200px, 60vw);
+        height: var(--space-xs);
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / 0.12);
+        overflow: hidden;
+      }
+      #loading-bar-fill {
+        height: 100%;
+        width: calc(var(--loading-progress) * 100%);
+        border-radius: var(--radius-pill);
+        background: var(--brand-green);
+        transition: width var(--motion-bloom) var(--ease-soft);
+      }
+      #loading-stage {
+        font-size: var(--text-md);
+        font-weight: var(--weight-semibold);
+        color: var(--pill-text-soft);
+      }
+      #loading-tip {
+        min-height: calc(var(--text-md) * var(--leading-loose) * 2);
+        font-size: var(--text-md);
+        line-height: var(--leading-loose);
+        color: var(--pill-text-soft);
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      #loading-tip.loading-tip-show { animation: loading-tip-in var(--motion-bloom) var(--ease-soft); }
+      @keyframes loading-tip-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      /* Fog: three soft pale puffs that drift slowly behind the bud. */
+      #loading-fog span {
+        position: absolute;
+        width: 70vmax;
+        height: 70vmax;
+        border-radius: var(--radius-round);
+        background: radial-gradient(closest-side, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0));
+        animation: loading-fog-drift calc(var(--motion-breath) * 4) ease-in-out infinite alternate;
+      }
+      #loading-fog span:nth-child(1) { left: -30vmax; top: -20vmax; }
+      #loading-fog span:nth-child(2) { right: -35vmax; top: 20vh; animation-delay: -4s; }
+      #loading-fog span:nth-child(3) { left: -10vmax; bottom: -35vmax; animation-delay: -8s; }
+      @keyframes loading-fog-drift {
+        from { transform: translate(0, 0); }
+        to { transform: translate(8vmax, 3vmax); }
+      }
+      /* A stage that fails says so, in text a person can select, and offers to
+         try again; the splash stays up instead of looking busy. */
+      #loading-screen.loading-screen-failed #loading-bar,
+      #loading-screen.loading-screen-failed #loading-stage,
+      #loading-screen.loading-screen-failed #loading-tip { display: none; }
+      #loading-problem[hidden] { display: none; }
+      #loading-problem { display: flex; flex-direction: column; align-items: center; gap: var(--space-lg); }
+      #loading-problem-text {
+        margin: 0;
+        font-size: var(--text-lg);
+        line-height: var(--leading-loose);
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      #loading-retry {
+        padding: var(--space-sm) var(--space-2xl);
+        border: 0;
+        border-radius: var(--radius-pill);
+        background: var(--brand-green);
+        color: var(--white);
+        font-size: var(--text-md);
+        font-weight: var(--weight-semibold);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .loading-petal { animation: none; transform: scale(0.85); }
+        #loading-fog span { animation: none; }
+        #loading-tip.loading-tip-show { animation: none; }
+        #loading-bar-fill { transition: none; }
+        #loading-screen { transition-duration: var(--motion-fade); }
       }
       /* Wordmark and the account-menu toggle share one fixed top-left row
          (owner request: a cog icon "just to the right of the higglehaven
@@ -284,8 +402,8 @@
         display: none;
         position: fixed;
         z-index: 9;
-        border: 1px solid rgb(255 255 255 / 0.9);
-        background: rgb(255 255 255 / 0.15);
+        border: 1px solid rgb(var(--white-rgb) / 0.9);
+        background: rgb(var(--white-rgb) / 0.15);
         pointer-events: none;
       }
       #layout-preview-marquee.visible {
@@ -722,12 +840,12 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgb(255 255 255 / 0.5);
+        background: rgb(var(--white-rgb) / 0.5);
         box-shadow: var(--shadow-card);
         animation: bud-breathe var(--motion-breath) ease-in-out infinite;
       }
       body[data-bud="on"] #account-menu-toggle.active {
-        background: rgb(255 255 255 / 0.8);
+        background: rgb(var(--white-rgb) / 0.8);
         animation: none;
       }
       body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
@@ -739,7 +857,7 @@
         top: 17px;
         padding: 6px var(--space-md);
         border-radius: var(--radius-word);
-        background: rgb(255 255 255 / 0.7);
+        background: rgb(var(--white-rgb) / 0.7);
         color: var(--ink);
         font: var(--text-xs)/1 var(--font-sans);
         white-space: nowrap;
@@ -818,7 +936,7 @@
       .bud-pair[hidden] { display: none; }
       .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
-      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(255 255 255 / 0.35); } }
+      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(var(--white-rgb) / 0.35); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       @media (prefers-reduced-motion: reduce) {
@@ -837,7 +955,7 @@
         overflow-y: auto;
         padding: var(--space-lg) var(--space-lg) var(--space-lg);
         border-radius: var(--radius-leaf);
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
         box-shadow: var(--shadow-card);
         color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
@@ -970,7 +1088,7 @@
         margin-left: var(--space-xs);
         border-radius: var(--radius-round);
         background: var(--petal-yellow);
-        box-shadow: 0 0 0 2px rgb(255 255 255 / 0.9);
+        box-shadow: 0 0 0 2px rgb(var(--white-rgb) / 0.9);
         font-size: 0;
         line-height: 0;
         overflow: hidden;
@@ -2521,7 +2639,7 @@
         max-height: calc(100vh - 92px);
         max-height: calc(100dvh - 92px);
         max-width: 316px;
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
         box-shadow: var(--shadow-card);
         border-radius: 30px 6px 30px 6px;
       }
@@ -4278,7 +4396,7 @@
         max-height: calc(100vh - 68px);
         max-height: calc(100dvh - 68px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.97));
         box-shadow: var(--shadow-card);
         /* The leaf's own shape (#3652), as the bud's leaves have it. */
         border-radius: 30px 6px 30px 6px;
@@ -4920,7 +5038,7 @@
         max-height: calc(100vh - 100px);
         max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
         border-radius: var(--radius-leaf);
         box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
@@ -5176,7 +5294,7 @@
         max-height: calc(100vh - 100px);
         max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.94));
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
         border-radius: var(--radius-leaf);
         box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
@@ -5832,7 +5950,7 @@
         box-sizing: border-box;
         padding: var(--space-lg) var(--space-2xl) var(--space-2xl);
         border-radius: var(--radius-bloom);
-        background: linear-gradient(160deg, rgb(255 255 255 / 0.82), rgb(var(--panel-rgb) / 0.86));
+        background: linear-gradient(160deg, rgb(var(--white-rgb) / 0.82), rgb(var(--panel-rgb) / 0.86));
         box-shadow: var(--shadow-leaf);
         -webkit-backdrop-filter: blur(8px);
         backdrop-filter: blur(8px);

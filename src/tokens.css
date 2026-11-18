@@ -39,6 +39,7 @@
    even for a warning. */
 :root {
   --ink-rgb: 22 36 10;
+  --white-rgb: 255 255 255;
   --pill-rgb: 214 232 190;
   --panel-rgb: 250 240 199;
   --pill-text: rgb(var(--ink-rgb));

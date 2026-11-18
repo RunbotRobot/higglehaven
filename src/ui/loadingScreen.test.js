@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { hideLoadingScreen } from './loadingScreen.js';
+import { failLoadingStage, resetLoadingStagesForTest } from './loadingStages.js';
 
 function fakeDocument() {
   const classes = new Set();
   const listeners = {};
   const el = {
-    style: {},
-    classList: { add: (name) => classes.add(name), contains: (name) => classes.has(name) },
+    style: { setProperty: () => {} },
+    classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+    removeAttribute: () => {},
     addEventListener: (type, fn) => { listeners[type] = fn; },
+    removeEventListener: (type) => { delete listeners[type]; },
   };
   return { doc: { getElementById: (id) => (id === 'loading-screen' ? el : null) }, el, classes, listeners };
 }
@@ -30,5 +33,24 @@ describe('hideLoadingScreen', () => {
     expect(listeners.transitionend).toBe(first);
     expect(() => hideLoadingScreen({ getElementById: () => null })).not.toThrow();
     expect(() => hideLoadingScreen(null)).not.toThrow();
+  });
+
+  it('keeps the splash while a transition of something inside it ends', () => {
+    resetLoadingStagesForTest();
+    const { doc, el, listeners } = fakeDocument();
+    hideLoadingScreen(doc);
+    listeners.transitionend({ target: {} });
+    expect(el.style.display).toBeUndefined();
+    listeners.transitionend({ target: el });
+    expect(el.style.display).toBe('none');
+  });
+
+  it('leaves a splash that is showing a failed stage where it is', () => {
+    resetLoadingStagesForTest();
+    const { doc, classes } = fakeDocument();
+    failLoadingStage('The world did not load.', doc);
+    hideLoadingScreen(doc);
+    expect(classes.has('loading-screen-hidden')).toBe(false);
+    resetLoadingStagesForTest();
   });
 });
