@@ -624,6 +624,9 @@
         opacity: 0;
         transition: opacity var(--motion-fade);
       }
+      /* The assistant window sits above the hint (z 32) and is translucent, so the hint read
+         through it; the hint waits while the window is open. */
+      body:has(#assistant-chat-panel:not([hidden])) #world-hint { visibility: hidden; }
       #world-hint.visible {
         opacity: 1;
         pointer-events: auto;
