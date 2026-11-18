@@ -494,10 +494,14 @@ function bindWorldGestures(canvas) {
   // to drive a drag with, so there it counts, and nobody else is affected.
   const touching = (event) => event.pointerType === 'touch' || event.pointerType === 'pen'
     || (event.pointerType === 'mouse' && navigator.webdriver === true);
+  // When the finger touched, not when this handler got to run: a long task (a model loading, a
+  // slow frame) between the two taps of a double-tap must not make them look slower than they
+  // were (seen live: a double-tap dropped while a 400 ms task sat between its taps).
+  const eventTime = (event) => (event.timeStamp > 0 ? event.timeStamp : performance.now());
   canvas.addEventListener('pointerdown', (event) => {
     if (!shopActive || !touching(event)) return;
     try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
-    worldGestures.down(event.pointerId, event.clientX, event.clientY, performance.now());
+    worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event));
   });
   canvas.addEventListener('pointermove', (event) => {
     if (!shopActive || !touching(event)) return;
@@ -505,7 +509,7 @@ function bindWorldGestures(canvas) {
   });
   canvas.addEventListener('pointerup', (event) => {
     if (!touching(event)) return;
-    worldGestures.up(event.pointerId, performance.now(), event.clientX, event.clientY);
+    worldGestures.up(event.pointerId, eventTime(event), event.clientX, event.clientY);
   });
   canvas.addEventListener('pointercancel', (event) => {
     if (!touching(event)) return;
