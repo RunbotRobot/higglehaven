@@ -5813,10 +5813,10 @@ with the new message.
 
 `src/shop/nearbyChat.js` — a fully self-contained Shop-mode leaf (no
 `main.js`/`presenceAndContent.js` legacy to respect, same shape
-`src/feedback/submitFeedbackUI.js` already established). A small
-collapsed `#shop-nearby-chat-btn` toggle pill (visibility driven live off
-`currentAuthUser.trustTier`, not a one-time reveal) expands
-`#shop-nearby-chat-panel`'s log + input only once tapped, per docs/SPEC.md
+`src/feedback/submitFeedbackUI.js` already established). The
+Chat petal of the flower (`#bud-petal-shop-chat`, #3556) opens a leaf that borrows
+`#shop-nearby-chat-panel`'s log + input while it is open (a person who is not
+ID-verified is told so there instead), so nothing stands on the world, per docs/SPEC.md
 §1's "leave plenty of screen space open." Polled every 2 seconds
 (`NEARBY_CHAT_POLL_INTERVAL_MS`) from `pollNearbyChatIfNeeded`, called
 every Shop-mode render tick from `src/shop/flightMovement.js`'s movement

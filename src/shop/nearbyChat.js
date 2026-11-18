@@ -20,10 +20,10 @@ import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { showFadingNote } from '../ui/fadingNote.js';
+import { addBudPetals, openLeaf } from '../ui/bud.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
-const chatBtnEl = document.getElementById('shop-nearby-chat-btn');
 const chatPanelEl = document.getElementById('shop-nearby-chat-panel');
 const chatLogEl = document.getElementById('shop-nearby-chat-log');
 const chatStatusEl = document.getElementById('shop-nearby-chat-status');
@@ -245,11 +245,40 @@ if (chatLogEl) {
   });
 }
 
-if (chatBtnEl) {
-  chatBtnEl.addEventListener('click', () => {
-    chatOpen = !chatOpen;
-    chatPanelEl.classList.toggle('open', chatOpen);
+// #3556 (part of #3539): the way in is the Chat petal of the flower, not a pill on the world. The
+// panel waits, hidden, in the page; the leaf borrows it while it is open and hands it back as it
+// closes (the same lending the Build leaves use), so every element and handler here is unchanged.
+// A person who is not ID-verified is told so in the leaf instead of being shown a form that can
+// only refuse them.
+const chatPanelHome = chatPanelEl ? { parent: chatPanelEl.parentNode, next: chatPanelEl.nextSibling } : null;
+
+function openChatLeaf() {
+  openLeaf({
+    id: 'chat',
+    title: 'Chat',
+    render: (body) => {
+      if (!hasIdVerifiedSession()) {
+        const note = document.createElement('p');
+        note.className = 'bud-chat-note';
+        note.textContent = 'Chatting with people nearby opens once your ID is verified.';
+        body.append(note);
+        return;
+      }
+      chatOpen = true;
+      chatLastPollAt = 0; // the first poll is not made to wait for the interval
+      chatPanelEl.classList.add('open');
+      body.append(chatPanelEl);
+    },
+    onClose: () => {
+      chatOpen = false;
+      chatPanelEl.classList.remove('open');
+      chatPanelHome.parent.insertBefore(chatPanelEl, chatPanelHome.next); // back to its place in the page
+    },
   });
+}
+
+if (chatPanelEl) {
+  addBudPetals('shop', [{ id: 'chat', label: 'Chat', run: openChatLeaf }]);
   chatFormEl.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = chatInputEl.value.trim();
@@ -277,21 +306,12 @@ if (chatBtnEl) {
 // Called every Shop-mode render tick (see updateShopMovement in
 // src/shop/flightMovement.js), same unawaited "never stall the render loop
 // on a slow/failed request" shape pollNearbyPresenceIfNeeded already uses.
-// Drives the toggle button's own visibility live off currentAuthUser's
-// trust tier (rather than a one-time reveal from src/shop/mode.js like the
-// fly button/feedback button), so it starts working the instant a shopper
-// finishes ID verification mid-session, with no extra wiring.
+// Polls only while the Chat leaf is open and the account is ID-verified, read live off
+// currentAuthUser's trust tier, so it starts working the instant a shopper finishes
+// verification mid-session, with no extra wiring.
 export function pollNearbyChatIfNeeded(now) {
-  if (!chatBtnEl) return;
-  const available = hasIdVerifiedSession();
-  chatBtnEl.classList.toggle('visible', available);
-  if (!available) {
-    if (chatOpen) {
-      chatOpen = false;
-      chatPanelEl.classList.remove('open');
-    }
-    return;
-  }
+  if (!chatPanelEl) return;
+  if (!hasIdVerifiedSession()) return;
   if (!chatOpen) return;
   if (now - chatLastPollAt < NEARBY_CHAT_POLL_INTERVAL_MS) return;
   chatLastPollAt = now;

@@ -19,6 +19,7 @@ const PATHS = {
   bell: 'M6 16.5v-5a6 6 0 0 1 12 0v5l2 2H4z M10 21.5h4',
   friends: 'M9 11.5a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5z M2.5 20c0-3.5 2.9-5.5 6.5-5.5s6.5 2 6.5 5.5 M17 11a2.75 2.75 0 1 0 0-5.5 M17.5 14.3c2.7.3 4 2.1 4 5',
   assistant: 'M4 5h16v11.5h-8.5L6.5 20.5v-4H4z M9 10.5h.01 M15 10.5h.01 M9.5 13.2c1.4 1 3.6 1 5 0',
+  chat: 'M4 4.5h16v11H11l-5 4v-4H4z M8 9h8 M8 12h5',
   bag: 'M5 8.5h14l-1 12.5H6z M9 8.5V7a3 3 0 0 1 6 0v1.5',
   plot: 'M3 17.5l9-4 9 4-9 4z M12 13.5V3.5l5.5 2.2L12 8',
   gear: 'M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5z M12 2.5l1.6 2.7 3-.7.9 3 2.9 1.2-1.1 2.8 1.1 2.8-2.9 1.2-.9 3-3-.7L12 21.5l-1.6-2.7-3 .7-.9-3-2.9-1.2L4.7 12 3.6 9.2l2.9-1.2.9-3 3 .7z',
@@ -57,6 +58,7 @@ const BY_ID = {
   'bud-petal-sell-my-products': 'crate',
   'bud-petal-sell-add-product': 'tagPlus',
   'bud-petal-shop-help': 'help',
+  'bud-petal-shop-chat': 'chat',
   'bud-petal-build-help': 'help',
   'bud-petal-sell-help': 'help',
 };

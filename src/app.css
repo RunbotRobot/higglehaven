@@ -1457,41 +1457,20 @@
         border-radius: var(--radius-round);
         background: rgb(var(--pill-rgb) / 0.65);
       }
-      /* #2779: a small collapsed toggle, same shape/position column as
-         #compass-panel (top: 86px) above -- next free slot in that right-edge
-         stack. #3302: the Submit Feedback pill that used to sit between the
-         two moved into Settings, so this and everything below it moved up one
-         40px slot. */
-      #shop-nearby-chat-btn {
-        top: 142px;
-        right: 8px;
-        padding: var(--space-xs) var(--space-lg);
-        border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
-        cursor: pointer;
-      }
-      /* Deliberately its own open/closed state (not .shop-ui's own
-         .visible) -- #shop-nearby-chat-btn's visibility already tracks
-         trust-tier eligibility; this tracks "did the shopper tap it open,"
-         a fully independent axis. See src/shop/nearbyChat.js. */
+      /* #3556: the panel is shown only inside the Chat leaf (src/shop/nearbyChat.js lends it to
+         the leaf, which gives the box, the colour and the width); .open is that lending. */
       #shop-nearby-chat-panel {
         display: none;
-        position: fixed;
-        z-index: 16;
-        top: 222px;
-        right: 8px;
-        width: 220px;
-        background: rgb(var(--pill-rgb) / 0.85);
-        border-radius: var(--radius-md);
-        padding: var(--space-sm);
         flex-direction: column;
         gap: var(--space-xs);
       }
       #shop-nearby-chat-panel.open {
         display: flex;
+      }
+      .bud-leaf #shop-nearby-chat-log {
+        min-height: 96px;
+        max-height: 40vh;
+        font-size: var(--text-md);
       }
       #shop-nearby-chat-log {
         max-height: 160px;
