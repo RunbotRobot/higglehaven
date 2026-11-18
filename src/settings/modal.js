@@ -41,7 +41,6 @@ import { sellerModalEl, renderActiveSellerView } from '../sell/mode.js';
 import { trimUnitLabelEls } from '../main.js';
 import { renderShopSettingsSection } from '../shop/mode.js';
 import { renderBuildSettingsSection } from '../build/scene.js';
-import { renderSellSettingsSection } from '../sell/mode.js';
 
 // Settings: local, per-device display preferences — nothing here is ever
 // sent to the server (see settings.js). Four sections exist as fixed tabs
@@ -110,10 +109,6 @@ export function renderSettingsSection() {
   }
   if (activeSettingsTab === 'build') {
     renderBuildSettingsSection();
-    return;
-  }
-  if (activeSettingsTab === 'sell') {
-    renderSellSettingsSection();
     return;
   }
 
@@ -530,7 +525,11 @@ const IDENTITY_FIELD_COPY = {
   },
 };
 
-export async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted, onRenamed }) {
+// #3704: `container`/`rerender` let a leaf of the bud host the field (Sell's Storefront leaf) instead of
+// Settings; with neither given it behaves exactly as before.
+export async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted, onRenamed, container = null, rerender = null }) {
+  const host = container || settingsSectionEl;
+  const redraw = rerender || renderSettingsSection;
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
@@ -541,7 +540,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  settingsSectionEl.appendChild(field);
+  host.appendChild(field);
 
   let profile;
   try {
@@ -636,8 +635,8 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
         message: warningText,
         confirmLabel: 'Reset Profile',
         returnFocusEl: deleteBtn,
-        restoreModalEl: settingsModalEl,
-        restoreCloseFn: closeSettingsModal,
+        restoreModalEl: container ? null : settingsModalEl,
+        restoreCloseFn: container ? null : closeSettingsModal,
         onConfirm: async () => {
           try {
             await deleteProfile(profile[idKey]);
@@ -666,7 +665,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
         // sibling field against the fresh, auto-provisioned identity, not
         // just this one.
         justDeletedIdentityKind = kind;
-        renderSettingsSection();
+        redraw();
         return;
       } catch (err) {
         status.textContent = err.message || 'Could not delete.';
@@ -686,8 +685,12 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
 // wrong tab first. currentMode's own values ('shop'/'build'/'sell')
 // match the settings-tab-btn dataset values exactly.
 export function openSettingsModal() {
-  if (currentMode === 'shop' || currentMode === 'build' || currentMode === 'sell') {
+  // #3704: Sell has no tab (payouts and the storefront are leaves of the bud), so Settings opens on
+  // General there.
+  if (currentMode === 'shop' || currentMode === 'build') {
     activeSettingsTab = currentMode;
+  } else if (currentMode === 'sell' && activeSettingsTab === 'sell') {
+    activeSettingsTab = 'general';
   }
   renderSettingsSection();
   settingsModalEl.classList.add('visible');
