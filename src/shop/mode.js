@@ -381,6 +381,18 @@ export async function enterShopMode() {
   }
   controls.enabled = false;
 
+  // #3745 (part of #3735, the slow open): the catalog, world and landlets are
+  // public and need nothing from the sign-in checks, so they start now and are
+  // awaited where they are used below, instead of after the checks finish one
+  // by one. The gate still runs first and a declined login still stops before
+  // anything is built; a failure still falls back exactly as it did (the
+  // catch below on each), and the no-op catch here only keeps a request that
+  // is never awaited (a declined login) from being reported as unhandled.
+  const catalogLoad = fetchCatalog();
+  const worldLoad = Promise.all([fetchWorld(), fetchAllLandlets()]);
+  catalogLoad.catch(() => {});
+  worldLoad.catch(() => {});
+
   // N44 (owner, Control Room, 2026-09-12): Shop mode used to need no
   // identity at all — see ensureShopperIdentity's own comment for why that
   // changed. Gated before any of this function's own scene work below,
@@ -409,6 +421,18 @@ export async function enterShopMode() {
     }
   }
   markLoadingStage('signedin'); // #3738
+
+  // #3745: what needs the signed-in user starts the moment sign-in is known and
+  // runs while the world below is still loading. Same conditions as where each
+  // was fetched before (the last position skips the account-recovery path; the
+  // avatar and animation are read by mountShopAvatar, which only uses them when
+  // logged in), and a failure surfaces to the same catch as before.
+  const lastPresenceLoad = currentAuthUser && !accountRecoveryFlowActive ? fetchOwnLastPresence() : null;
+  lastPresenceLoad?.catch(() => {});
+  const equippedAvatarLoad = currentAuthUser ? fetchMyEquippedAvatar() : null;
+  const equippedAnimationLoad = currentAuthUser ? fetchMyEquippedAnimation() : null;
+  equippedAvatarLoad?.catch(() => {});
+  equippedAnimationLoad?.catch(() => {});
 
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
@@ -471,7 +495,7 @@ export async function enterShopMode() {
   setSoldOutMarkers([]);
 
   try {
-    setActiveCatalog(await fetchCatalog());
+    setActiveCatalog(await catalogLoad);
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
   }
@@ -509,9 +533,9 @@ export async function enterShopMode() {
   // 403 instead, found via that file's own errors.length === 0 check during
   // its reset-password flow). null (no button shown) either way.
   setShopLastLocation(null);
-  if (currentAuthUser && !accountRecoveryFlowActive) {
+  if (lastPresenceLoad) {
     try {
-      setShopLastLocation(await fetchOwnLastPresence());
+      setShopLastLocation(await lastPresenceLoad);
     } catch (err) {
       console.warn('Could not fetch last known location:', err);
     }
@@ -520,7 +544,7 @@ export async function enterShopMode() {
   let world;
   let allLandlets;
   try {
-    [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
+    [world, allLandlets] = await worldLoad;
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
     // #3738: the opening screen says so too, and offers Try again.
@@ -605,7 +629,9 @@ export async function enterShopMode() {
   // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
   // #1358 dispose of a previous round trip's avatar and the fallbacks).
   await mountShopAvatar({ scene, isLoggedIn: () => Boolean(currentAuthUser) && !isAccountSessionEnding() }, {
-    fetchMyEquippedAvatar, fetchMyEquippedAnimation,
+    // #3745: already started above once sign-in was known.
+    fetchMyEquippedAvatar: () => equippedAvatarLoad ?? fetchMyEquippedAvatar(),
+    fetchMyEquippedAnimation: () => equippedAnimationLoad ?? fetchMyEquippedAnimation(),
     setEquippedAvatarSkeletonSignature: setShopEquippedAvatarSkeletonSignature,
     getShopAvatar: () => shopAvatar, setShopAvatar, disposeObject3D,
     createCustomShopAvatar, createShopAvatar,
