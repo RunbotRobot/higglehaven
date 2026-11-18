@@ -14,7 +14,7 @@
 // Build, a move-joystick drag in Shop — the latter also doubles as the
 // navigation input that stops Shop's spawn orbit), not just its own static
 // initial value.
-import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, goToMode } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, goToMode, openAccountMenu } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
 
@@ -22,6 +22,20 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
+
+// #3772: the compass is not standing on the world; it is in the head's row of the open menu, in
+// every mode. Closed: not drawn. Open: drawn, inside the screen. Then the menu is closed again.
+async function compassOnlyInOpenMenu() {
+  const closed = !(await page.locator('#compass-panel').isVisible());
+  await openAccountMenu(page);
+  await page.waitForTimeout(500);
+  const box = await page.locator('#compass-panel').boundingBox();
+  const open = !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844;
+  await page.click('#account-menu-toggle');
+  await page.waitForSelector('#account-menu-panel.expanded', { state: 'detached', timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  return closed && open;
+}
 
 async function needleRotationDeg() {
   return page.evaluate(() => {
@@ -31,7 +45,7 @@ async function needleRotationDeg() {
   });
 }
 
-const compassVisibleInBuild = await page.locator('#compass-panel').isVisible();
+const compassVisibleInBuild = await compassOnlyInOpenMenu();
 console.log('compass visible in Build mode (should be true):', compassVisibleInBuild);
 
 // The default Build camera starts at (0.6S, 0.6S, 0.5S) looking at the
@@ -85,7 +99,7 @@ console.log('Build-mode needle rotation after dragging the camera (should differ
 await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
-const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
+const compassVisibleInShop = await compassOnlyInOpenMenu();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
 const initialShopRotation = await needleRotationDeg();
 console.log('initial Shop-mode needle rotation (random — #1175\'s spawn orbit picks a random facing, not asserted to a specific value):', initialShopRotation);
@@ -123,7 +137,7 @@ await goToMode(page, 'sell');
 await page.waitForTimeout(500);
 // #3295: Sell's world view walks the page with Shop's movement and the seller's
 // avatar, so the compass is shown there too (it reads that avatar's facing).
-const compassVisibleInSell = await page.locator('#compass-panel').isVisible();
+const compassVisibleInSell = await compassOnlyInOpenMenu();
 console.log('compass visible in Sell mode (should be true):', compassVisibleInSell);
 
 const near = (actual, expected, tolerance) => typeof actual === 'number' && Math.abs(actual - expected) < tolerance;

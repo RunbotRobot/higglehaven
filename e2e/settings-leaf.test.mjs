@@ -29,6 +29,7 @@ for (const height of [844, 660]) {
       tabs: rect(document.getElementById('settings-tabs')),
       scrimAlpha: alpha(bg),
       vh: window.innerHeight,
+      vw: window.innerWidth,
       share: (() => {
         const r = document.getElementById('settings-modal-content').getBoundingClientRect();
         return (r.width * r.height) / (window.innerWidth * window.innerHeight);
@@ -42,7 +43,8 @@ for (const height of [844, 660]) {
   check(m.content.left < 30, `${where}: the leaf grows from the bud's corner (left ${Math.round(m.content.left)})`);
   check(m.content.bottom <= m.vh && m.content.top >= 0, `${where}: the leaf is inside the screen`);
   check(m.close.left + m.close.width / 2 > m.content.left + m.content.width * 0.75 && m.close.top < m.content.top + 60, `${where}: the close control is upper right of the leaf`);
-  check(m.content.right <= m.compass.left, `${where}: the leaf leaves the compass uncovered (leaf right ${Math.round(m.content.right)}, compass left ${Math.round(m.compass.left)})`);
+  check(Math.abs((m.vw - m.content.right) - m.content.left) <= 2, `${where}: the leaf has the same margin on the right as on the left (left ${Math.round(m.content.left)}, right ${Math.round(m.vw - m.content.right)})`);
+  check(m.compass.width === 0, `${where}: the compass does not stand on the world (#3772)`);
   check(m.tabs.height < 50, `${where}: the four tabs stay on one row (${Math.round(m.tabs.height)}px tall)`);
   check(await page.evaluate(() => {
     const el = document.getElementById('settings-modal-content');
