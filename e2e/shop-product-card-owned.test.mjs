@@ -90,18 +90,15 @@ console.log('bought one avatar placement (should be 201):', bought.status);
 // The page's catalog was fetched before these products existed.
 await page.reload();
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
-await page.waitForSelector('body.shop-ready', { timeout: 30000 }); // #3669: the fly button is gone; body.shop-ready is the world-is-up signal
+await page.waitForSelector('body.shop-ready', { timeout: 30000 }); // #3669: the fly button is gone
 await page.waitForTimeout(1000);
 
 // A fresh Shop-mode spawn keeps overwriting the avatar's position until real
 // navigation input first arrives; the same release gesture other Shop e2es use.
-// #3669: the sticks are gone; a short drag on the world is the navigation input now.
-const cdp = await page.context().newCDPSession(page);
-const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
-await touch('touchStart', [{ id: 1, x: 195, y: 560 }]);
-await touch('touchMove', [{ id: 1, x: 195, y: 540 }]);
-await page.waitForTimeout(100);
-await touch('touchEnd', []);
+// #3669: the on-screen stick is gone; a short key press is the same first navigation input.
+await page.keyboard.down('KeyD');
+await page.waitForTimeout(150);
+await page.keyboard.up('KeyD');
 await page.waitForTimeout(100);
 
 // E2E_SHOT_DIR=<dir> saves a screenshot at each stage (for a PR description).

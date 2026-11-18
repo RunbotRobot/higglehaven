@@ -189,6 +189,7 @@ import {
   findRootSellerShowcaseMesh,
 } from './sell/showcase.js';
 import { enterSellWorldView } from './sell/worldView.js';
+import { openSellerProductCard, closeSellerProductCard, updateSellerProductCard } from './sell/productCard.js'; // #3702
 // #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
 // scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
 // — see that module's own comment for its dependency notes, including why
@@ -895,16 +896,14 @@ renderer.domElement.addEventListener('click', (event) => {
   // no measure/placement/gizmo modes ever run here (those are Build-only
   // flows never triggered while currentMode is 'sell'), so this branches
   // off before any of that rather than needing each of those checks below
-  // to separately account for it. A hit jumps straight to Manage with that
-  // product's row focused (see focusSellerManageRow); a miss does nothing.
+  // to separately account for it. A hit blooms that product's card (#3702); a miss puts the card away.
   if (currentMode === 'sell') {
     const hits = raycaster.intersectObjects(sellerShowcaseMeshes, true);
     const hitRoot = hits.length > 0 ? findRootSellerShowcaseMesh(hits[0].object) : null;
-    if (hitRoot) {
-      sellerModalEl.classList.add('visible');
-      openModalA11y(sellerModalEl, closeSellerModal);
-      focusSellerManageRow(hitRoot.userData.template.templateId);
-    }
+    // #3702: a tap on a product blooms its card beside it (Rename, Price, Delete, More); a tap on
+    // empty ground puts the card away. My products is the bud's petal, and the card's More.
+    if (hitRoot) openSellerProductCard(hitRoot);
+    else closeSellerProductCard();
     return;
   }
 
@@ -2053,7 +2052,12 @@ async function enterSellMode() {
   // #3295 (leaf 4/6 of #3291): the seller walks the page with Shop's own
   // movement and their equipped avatar. Entered before the first page loads
   // so that load puts the avatar at the page's start.
-  await enterSellWorldView({ onFrame: recordSellFeedbackSample });
+  await enterSellWorldView({
+    onFrame: (now) => {
+      recordSellFeedbackSample(now);
+      updateSellerProductCard();
+    },
+  });
 
   // #3700 (Sell in the bud, 2/6; part of #3655 and #3648): Sell opens on the showroom it just
   // landed on, unobstructed. My products used to open over it here (the owner's audit finding
