@@ -8,11 +8,13 @@
 // browser page to load, which would pull the whole world into this one's unit test).
 const WORLD_GESTURE_EVENT = 'higglehaven:world-gesture';
 
+import { WALK_WORDS, LOOK_WORDS, FLY_WORDS } from './gestureWords.js';
+
 export const FIRST_HINTS_KEY = 'higglehaven.firstHints.done';
 export const FIRST_HINT_STEPS = [
-  { kind: 'walk', text: 'Drag on the left of the screen to walk' },
-  { kind: 'look', text: 'Drag on the right of the screen to look around' },
-  { kind: 'fly', text: 'Double-tap to fly' },
+  { kind: 'walk', text: WALK_WORDS },
+  { kind: 'look', text: LOOK_WORDS },
+  { kind: 'fly', text: FLY_WORDS },
 ];
 
 export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRST_HINT_STEPS }) {
