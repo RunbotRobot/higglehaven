@@ -60,7 +60,7 @@ const open = {
 };
 console.log('unfolded:', JSON.stringify(open));
 
-// #3723, #3752: the ring. Three petals of their own, the current one marked, each a turned shape
+// #3723, #3752: the ring. Four petals (three places and Menu) of their own, the current one marked, each a turned shape
 // whose base is joined to the bud (a point just outside the bud, along its angle, lands on the
 // petal), 44px wide at the widest, apart from each other, inside the screen, and the column of
 // things you open starts below them. The word beside the bud steps aside while they are out.
@@ -72,7 +72,7 @@ const ring = await page.evaluate(() => {
   const centres = boxes.map((b) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }));
   const bud = r(document.getElementById('account-menu-toggle'));
   const hub = { x: bud.left + bud.width / 2, y: bud.top + bud.height / 2 };
-  const angles = [8, 46, 84];
+  const angles = [6, 36, 66]; // #3760: four petals now (the fourth, Menu, is at 96)
   const column = [...document.querySelectorAll('#account-menu-panel button')].filter((b) => b.offsetParent !== null).map((b) => r(b));
   const word = document.querySelector('#account-menu-toggle .bud-word');
   return {

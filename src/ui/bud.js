@@ -312,9 +312,10 @@ function modesRing() {
     ring = document.createElement('div');
     ring.id = 'bud-modes';
     ring.setAttribute('role', 'group');
-    ring.setAttribute('aria-label', 'Places and menu');
     panel()?.after(ring);
   }
+  // The ring may already exist (public/bud-switch.js draws it from the first paint), so its label is set here.
+  ring.setAttribute('aria-label', 'Places and menu');
   ring.dataset.wired = '1';
   const menuBtn = document.createElement('button');
   menuBtn.type = 'button';

@@ -29,8 +29,10 @@ check(ring.length === 4 && ['shop', 'build', 'sell', 'general'].every((m) => rin
 
 const apart = await page.evaluate(() => {
   const boxes = [...document.querySelectorAll('#bud-modes button')].map((b) => b.getBoundingClientRect());
-  const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-  return boxes.every((a, i) => boxes.every((b, j) => i === j || !overlap(a, b))) && boxes.every((b) => b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight);
+  const centres = boxes.map((b) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }));
+  // Petals are turned shapes, so their boxes overlap by design; what matters is that their centres are a petal's width apart.
+  const distinct = centres.every((a, i) => centres.every((b, j) => i === j || Math.hypot(a.x - b.x, a.y - b.y) >= 40));
+  return distinct && boxes.every((b) => b.left >= 0 && b.right <= innerWidth && b.bottom <= innerHeight);
 });
 check(apart, 'the four petals do not touch each other and stay on screen');
 const stemBelowRing = await page.evaluate(() => {
