@@ -1115,7 +1115,11 @@ describe('Product reviews', () => {
     expect(listB.body.reviews).toEqual([]);
   });
 
-  it('cascades review deletion when the catalog template itself is deleted', async () => {
+  // #3776: a review needs a purchase, and a product with a purchase is delisted
+  // by a seller's delete, never hard-deleted, so its reviews (and the order that
+  // names it) survive. (The reviews' ON DELETE CASCADE still covers a template
+  // row removed some other way, but no API path does that to a bought product.)
+  it('keeps a bought product\'s reviews when its seller deletes it, because it is delisted not deleted (#3776)', async () => {
     const templateId = await createTemplate('reviewable-product-to-delete');
     const shopper = await signupBuilder('reviewable-product-to-delete-shopper');
     await createPurchase(templateId, shopper);
@@ -1123,10 +1127,12 @@ describe('Product reviews', () => {
       method: 'POST',
       body: JSON.stringify({ rating: 4 }),
     }));
-    await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    expect(deleted.body).toEqual({ deleted: true, delisted: true });
 
     const afterDelete = await api(`/catalog/${templateId}/reviews`);
-    expect(afterDelete.response.status).toBe(404);
+    expect(afterDelete.response.status).toBe(200);
+    expect(afterDelete.body.reviews.length).toBe(1);
   });
 
   // #1975 (owner decision): a review now records who actually wrote it
