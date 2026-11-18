@@ -422,7 +422,7 @@ function markLearned() {
 }
 
 if (typeof document !== 'undefined') {
-  document.addEventListener('higglehaven:mode', () => { showMenu('general'); syncBud(); });
+  document.addEventListener('higglehaven:mode', syncBud);
   // Every time the bud opens it opens on the general menu: the one thing in it that never changes.
   const host = panel();
   if (host) {
