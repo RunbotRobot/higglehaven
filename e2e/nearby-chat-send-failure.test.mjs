@@ -16,7 +16,7 @@
 // the send endpoint itself to reject lets this test exercise the frontend
 // failure-handling in isolation, without needing to actually exhaust
 // NEARBY_CHAT_SEND_RATE_LIMIT_MAX for real.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, budClick } from './helpers.mjs';
 
 const LABEL = 'Nearby Chat Send Failure Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -58,8 +58,7 @@ await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
 await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-await page.waitForSelector('#shop-nearby-chat-btn.visible', { timeout: 10000 });
-await page.click('#shop-nearby-chat-btn');
+await budClick(page, '#bud-petal-shop-chat'); // #3556: the Chat petal of the flower
 await page.waitForSelector('#shop-nearby-chat-panel.open', { timeout: 5000 });
 
 const MESSAGE_TEXT = 'hello from a failed send';

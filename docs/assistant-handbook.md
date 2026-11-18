@@ -486,7 +486,7 @@ its corner when you reach the limit.
 
 ### How do I chat with people nearby?
 
-1. Tap the "Chat" button. A small chat box opens.
+1. Tap the round logo at the top left (the bud), then tap "Chat". A small chat box opens.
 2. Type in the box that says "Say something nearby…" and tap "Send".
 3. People close to you see it. Their messages show in the same box.
 4. If you have muted someone, "Muted" with a number shows above the box. Tap it to
@@ -496,15 +496,15 @@ its corner when you reach the limit.
 appear in the same box.
 
 **If something goes wrong:**
-- There is no "Chat" button: nearby chat, like direct messages and voice, is only
-  for people whose age and identity the app has checked. If they cannot see it, that
-  is the likely reason. Do not explain the rules: if they want to know how to get
-  verified, use the runbook's hand-off.
+- The box says chatting opens once their ID is verified: nearby chat, like direct
+  messages and voice, is only for people whose age and identity the app has checked.
+  Do not explain the rules: if they want to know how to get verified, use the
+  runbook's hand-off.
 - Someone is bothering them: they can mute that person from the box. For harassment,
   use the runbook's hand-off.
 
 ```controls any
-#shop-nearby-chat-btn | Chat
+#bud-petal-shop-chat | Chat
 #shop-nearby-chat-input | Say something nearby
 #shop-nearby-chat-panel button[type="submit"] | Send
 #shop-nearby-chat-muted-toggle | Muted
