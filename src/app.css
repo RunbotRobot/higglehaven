@@ -68,6 +68,13 @@
         --loading-progress: 0.12;
         overflow: hidden;
       }
+      /* #3738: the first opening shows the loading screen and nothing else.
+         #topbar-left and #mode-nav sit above it (z 21) on purpose for the
+         mode-switch splash, so on the first open they showed through for
+         seconds before any script ran. index.html's <html> starts with
+         first-open; hideLoadingScreen() removes it as the splash lifts. */
+      html.first-open #topbar-left,
+      html.first-open #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
