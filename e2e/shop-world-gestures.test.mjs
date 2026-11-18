@@ -1,8 +1,9 @@
-// #3650 (part of #3648, the bud): moving through the world by touching it. At
+// #3650, #3749 (part of #3648, the bud): moving through the world by touching it. At
 // phone size with real touch input (Chrome DevTools Protocol touch events, so
-// pointerType is "touch"): a drag on the world walks, a second finger dragging
-// looks, a double-tap takes off and lands, a tap that does not move walks nowhere,
-// and there are no on-screen sticks or fly button any more.
+// pointerType is "touch"): a drag that starts on the left half walks, a drag that
+// starts on the right half looks (alone, with nothing else down, and together with a
+// walking thumb), a double-tap takes off and lands, a tap that does not move walks
+// nowhere, and there are no on-screen sticks or fly button any more.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const LABEL = 'World Gestures Tester';
@@ -42,11 +43,11 @@ if (await flying()) {
 }
 check(!(await flying()), 'grounded before walking');
 
-// A drag walks: put a finger down on open ground, drag it up the screen, hold.
+// A drag on the left half walks: put a finger down on open ground, drag it up the screen, hold.
 const start = await pos();
-await touch('touchStart', [{ id: 1, x: 195, y: 560 }]);
-await touch('touchMove', [{ id: 1, x: 195, y: 520 }]);
-await touch('touchMove', [{ id: 1, x: 195, y: 490 }]);
+await touch('touchStart', [{ id: 1, x: 100, y: 560 }]);
+await touch('touchMove', [{ id: 1, x: 100, y: 520 }]);
+await touch('touchMove', [{ id: 1, x: 100, y: 490 }]);
 await wait(1200);
 await touch('touchEnd', []);
 await wait(300);
@@ -68,17 +69,33 @@ await wait(500);
 const afterTap = await pos();
 check(Math.hypot(afterTap.x - beforeTap.x, afterTap.y - beforeTap.y) < 0.05, 'a tap that does not move does not walk');
 
-// A second finger looks: the first stays down and still, the second drags.
+// A drag on the right half looks, ALONE: nothing else is down, the avatar does not walk.
+const beforeLook = await pos();
 const viewBefore = JSON.stringify(await view());
-await touch('touchStart', [{ id: 1, x: 90, y: 600 }]);
-await touch('touchStart', [{ id: 1, x: 90, y: 600 }, { id: 2, x: 250, y: 600 }]);
-await touch('touchMove', [{ id: 1, x: 90, y: 600 }, { id: 2, x: 290, y: 600 }]);
-await touch('touchMove', [{ id: 1, x: 90, y: 600 }, { id: 2, x: 320, y: 600 }]);
+await touch('touchStart', [{ id: 1, x: 300, y: 600 }]);
+await touch('touchMove', [{ id: 1, x: 330, y: 600 }]);
+await touch('touchMove', [{ id: 1, x: 360, y: 600 }]);
 await wait(900);
 await touch('touchEnd', []);
 await wait(300);
 const viewAfter = JSON.stringify(await view());
-check(viewBefore !== viewAfter, 'a second finger dragging looks (the camera turned)');
+const afterLook = await pos();
+check(viewBefore !== viewAfter, 'one finger dragging on the right half looks (the camera turned)');
+check(Math.hypot(afterLook.x - beforeLook.x, afterLook.y - beforeLook.y) < 0.3, 'looking alone does not walk the avatar');
+
+// Both thumbs at once: left walks, right looks, whichever went down first.
+const beforeBoth = await pos();
+const viewBeforeBoth = JSON.stringify(await view());
+await touch('touchStart', [{ id: 2, x: 300, y: 600 }]);
+await touch('touchStart', [{ id: 2, x: 300, y: 600 }, { id: 1, x: 100, y: 600 }]);
+await touch('touchMove', [{ id: 2, x: 340, y: 600 }, { id: 1, x: 100, y: 560 }]);
+await touch('touchMove', [{ id: 2, x: 360, y: 600 }, { id: 1, x: 100, y: 520 }]);
+await wait(900);
+await touch('touchEnd', []);
+await wait(300);
+const afterBoth = await pos();
+check(JSON.stringify(await view()) !== viewBeforeBoth, 'both thumbs: the right one looks');
+check(Math.hypot(afterBoth.x - beforeBoth.x, afterBoth.y - beforeBoth.y) > 0.5, 'both thumbs: the left one walks');
 
 console.log('fingers still tracked after the look gesture (should be 0):', await page.evaluate(() => window.__testWorldGestureFingers()));
 check((await page.evaluate(() => window.__testWorldGestureFingers())) === 0, 'every finger is released after the gestures');
@@ -92,4 +109,4 @@ await doubleTap();
 await wait(400);
 check(!(await flying()), 'another double-tap lands');
 
-await finish(browser, { pass: pass && errors.length === 0, label: '#3650: drag walks, a second finger looks, a double-tap flies, no sticks or fly button', errors });
+await finish(browser, { pass: pass && errors.length === 0, label: '#3650, #3749: left half walks, right half looks (alone and together), a double-tap flies, no sticks or fly button', errors });
