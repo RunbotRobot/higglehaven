@@ -347,6 +347,9 @@ ground.
    "Buy" button. "More" opens "Rate this Product" and "Return Policy".
 4. Tap anywhere else in the world, or the cross at the top right of the card, when
    you are done.
+5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
+   of the nearest product, and N again for the next nearest; Shift and N go back. The
+   product's name is read out, and Tab reaches the card's buttons. Escape closes it.
 
 **You will see:** a small card next to the product, with the world still moving
 behind it.
