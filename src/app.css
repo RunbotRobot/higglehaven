@@ -6796,27 +6796,33 @@
          bootstrap() has resolved a landlet to build on, whenever this
          builder (see ensureBuilderIdentity in src/main.js) doesn't
          already own one. */
+      /* #3811 (part of #3654, the bud): the claim map is one large leaf, not a modal: a soft
+         sheet from the head's corner with no scrim over the world (the same shape as
+         .bud-leaf, only wider because the map wants the room; the elements and ids stay so
+         what leans on them, runClaimFlow and the claim e2e, still works). It is still the
+         mandatory first step for a builder with no lándlet (src/claim/flow.js), so it has no
+         way to be put away except its close button. */
       #claim-modal {
         position: fixed;
-        inset: 0;
+        top: 76px;
+        left: 12px;
         z-index: 30;
         display: none;
-        align-items: center;
-        justify-content: center;
-        background: var(--scrim-soft);
-        padding: var(--space-2xl);
+        width: min(440px, calc(100vw - 24px));
       }
       #claim-modal.visible {
-        display: flex;
+        display: block;
       }
       #claim-modal-content {
         position: relative;
+        box-sizing: border-box;
         width: 100%;
-        max-width: 440px;
-        max-height: 90vh;
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: var(--radius-lg);
+        background: linear-gradient(165deg, rgb(var(--white-rgb) / 0.9), rgb(var(--panel-rgb) / 0.94));
+        border-radius: var(--radius-leaf);
+        box-shadow: var(--shadow-leaf);
         padding: var(--space-2xl);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
