@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS,
-  keyboardInset, threadRows,
+  keyboardInset, threadRows, standingText, shouldOfferWalk, standingFor, STANDING_NEAR_M,
 } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
@@ -74,11 +74,12 @@ describe('left questions (#3448)', () => {
     expect(canLeaveQuestion(null)).toBe(false);
   });
 
-  it('states the place in line, that closing keeps it, and how long it is kept, from the server numbers', () => {
+  it('states the place in line and that closing keeps it, from the server numbers, and not how long questions are kept (#3733)', () => {
     const text = questionNotice({ status: 'waiting', position: 3 }, { keptDays: 7, assistantsOnShift: 2 });
     expect(text).toContain("You're number 3 in line.");
     expect(text).toContain('your place is kept');
-    expect(text).toContain('7 days');
+    expect(text).not.toMatch(/\bdays?\b/);
+    expect(text).not.toContain('kept for');
     expect(text).not.toContain('No assistant is on the floor');
   });
 
@@ -201,5 +202,28 @@ describe('threadRows (#3624)', () => {
   });
   it('is empty with no history', () => {
     expect(threadRows(undefined, null, 'x')).toEqual([]);
+  });
+});
+
+// #3636 part 2: where she stands, and when to offer the walk.
+describe('standing', () => {
+  const entry = { userId: 'u1', name: 'Juniper', landletId: 'central-mosaic-006' };
+  it('says where she stands in person-facing words, or nothing', () => {
+    expect(standingText(entry)).toBe('Juniper is standing on lándlet central-mosaic-006.');
+    expect(standingText(null)).toBeNull();
+    expect(standingText({ name: 'Juniper' })).toBeNull();
+  });
+  it('offers the walk only when she is out of sight and the distance is known', () => {
+    expect(shouldOfferWalk({ entry, distanceM: STANDING_NEAR_M + 1 })).toBe(true);
+    expect(shouldOfferWalk({ entry, distanceM: STANDING_NEAR_M })).toBe(false);
+    expect(shouldOfferWalk({ entry, distanceM: 2 })).toBe(false);
+    expect(shouldOfferWalk({ entry, distanceM: NaN })).toBe(false); // not in the Shop world
+    expect(shouldOfferWalk({ entry: null, distanceM: 500 })).toBe(false); // off shift
+  });
+  it('finds the entry for the assistant the window is about, not for a question with none', () => {
+    expect(standingFor([entry], { userId: 'u1' })).toBe(entry);
+    expect(standingFor([entry], { userId: 'u2' })).toBeNull();
+    expect(standingFor([entry], null)).toBeNull();
+    expect(standingFor(undefined, { userId: 'u1' })).toBeNull();
   });
 });
