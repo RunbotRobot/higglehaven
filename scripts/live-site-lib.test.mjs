@@ -49,6 +49,13 @@ describe('live-site steps (#3430)', () => {
     expect(() => parseStep('mode:moon')).toThrow(/mode must be one of/);
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
   });
+
+  it('parses a key press and refuses a bad key name', () => {
+    expect(parseStep('key:KeyN')).toMatchObject({ command: 'key', args: ['KeyN'] });
+    expect(parseStep('key:Shift+KeyN')).toMatchObject({ command: 'key', args: ['Shift+KeyN'] });
+    expect(() => parseStep('key')).toThrow(/needs 1 argument/);
+    expect(() => parseStep('key:a b')).toThrow(/key name/);
+  });
 });
 
 describe('live-site arguments (#3430)', () => {
