@@ -6403,11 +6403,6 @@
       #item-card.pass-through #item-card-actions button:disabled {
         display: none;
       }
-      /* While painting, Save Bundle shows once there is something to save (two or more items, or a
-         bundle), so a lone first pick is not covered by it. */
-      #item-card.pass-through:not(:has(#group-item:not(:disabled), #ungroup-item:not([hidden]))) #save-bundle-item {
-        display: none;
-      }
       #item-card.pass-through #group-item,
       #item-card.pass-through #ungroup-item,
       #item-card.pass-through #edit-bundle-item,
