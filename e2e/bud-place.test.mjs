@@ -43,6 +43,47 @@ check(build.selectable, 'it is selectable text');
 check(parseFloat(build.nameFont) > parseFloat(build.byFont), 'the name is the main thing and the builder is small');
 check(build.aboveColumn, 'it comes before the first leaf');
 if (process.env.STILLS_DIR) await page.screenshot({ path: `${process.env.STILLS_DIR}/place-build.png` });
+// #3844: long names. A long one wraps at spaces (a word that fits is never cut), stays between the
+// ring and the compass, never runs down over the first leaf, and scrolls inside itself with a fade.
+const longName = 'Where the AI sessions that build higglehaven try things out and then some more words about it all';
+const shortName = 'The AI sessions playground';
+const readSign = (name) => page.evaluate(async (n) => {
+  window.__testShowBudPlace({ name: n, builder: 'higglehaven0' });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const el = document.getElementById('account-menu-landlet-info');
+  const nameEl = el.querySelector('.bud-place-name');
+  const box = el.getBoundingClientRect();
+  const compass = document.getElementById('compass-panel').getBoundingClientRect();
+  const firstLeaf = document.querySelector('#account-menu-panel button:not([hidden])').getBoundingClientRect();
+  // Which words are broken across lines? Wrap the text in a range per word and count rows each word spans.
+  const text = nameEl.firstChild;
+  const words = n.split(' ');
+  let at = 0;
+  const brokenWords = [];
+  for (const w of words) {
+    const range = document.createRange();
+    range.setStart(text, at);
+    range.setEnd(text, at + w.length);
+    if (new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size > 1) brokenWords.push(w);
+    at += w.length + 1;
+  }
+  return {
+    w: Math.round(box.width), h: Math.round(box.height), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom),
+    compassLeft: Math.round(compass.left), firstLeafTop: Math.round(firstLeaf.top),
+    clipped: el.hasAttribute('data-clipped'), brokenWords,
+  };
+}, name);
+const shortSign = await readSign(shortName);
+const longSign = await readSign(longName);
+console.log('short sign:', JSON.stringify(shortSign));
+console.log('long sign:', JSON.stringify(longSign));
+check(shortSign.brokenWords.length === 0, `no word of a short name is cut (${shortSign.brokenWords})`);
+check(shortSign.w > 110, `the sign has room (${shortSign.w}px wide, it was 91)`);
+check(longSign.brokenWords.length === 0, `no word of a long name is cut (${longSign.brokenWords})`);
+check(longSign.right <= longSign.compassLeft + 1, 'the sign stays left of the compass');
+check(longSign.bottom <= longSign.firstLeafTop, `the sign stops above the first leaf (${longSign.bottom} vs ${longSign.firstLeafTop})`);
+check(longSign.clipped, 'a name too long for the cap says so with its fade');
+check(!shortSign.clipped, 'a short name is not faded');
 // A tap on it does nothing surprising: the menu stays as it is.
 await page.click('#account-menu-landlet-info', { timeout: 3000 }).catch(() => {});
 check(await page.evaluate(() => document.getElementById('account-menu-panel').classList.contains('expanded')), 'a tap on the name leaves the menu open');
