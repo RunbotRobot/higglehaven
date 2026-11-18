@@ -9,8 +9,9 @@
 // panel/modals.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { createPurchaseRow } from './myPurchases.js';
-import { builderId, currentMode } from '../world/state.js';
+import { builderId, currentMode, currentLandletId } from '../world/state.js';
 import { currentAuthUser } from './auth.js';
+import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
 import { formatArea } from '../settings.js';
 // formatHiggles/START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY stay owned by
 // main.js (formatHiggles is a shared money formatter used throughout that
@@ -306,6 +307,29 @@ notificationsClearReadBtn.addEventListener('click', async () => {
 // just below, except the source of truth to refresh against is this panel
 // itself (see the accountMenuToggle click handler further down) rather
 // than a separate modal.
+// #3770: the lándlet a person is on is named at the top of the open menu. Shop keeps it current as the
+// avatar crosses lándlets (updateShopLandletInfo); Sell's showroom is not a real place, so it names
+// nothing; Build names the lándlet being built, read when the menu opens like the cap below it.
+async function refreshAccountMenuPlace() {
+  if (currentMode === 'sell') {
+    hideBudPlace();
+    return;
+  }
+  if (currentMode !== 'build' || !builderId) return;
+  try {
+    const [landlets, me] = await Promise.all([fetchAllLandlets(), fetchMyBuilder()]);
+    const mine = landlets.find((landlet) => landlet.landletId === currentLandletId);
+    if (!mine) {
+      hideBudPlace();
+      return;
+    }
+    showBudPlace({ name: mine.name || mine.landletId, builder: me.label });
+  } catch (err) {
+    console.warn('Could not refresh the lándlet name in the menu:', err);
+    hideBudPlace();
+  }
+}
+
 const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
 async function refreshAccountMenuLandCap() {
   // #3700 (follow-up, from #3655): the cap is Build information, and in Shop and Sell it showed as
@@ -1108,6 +1132,7 @@ accountMenuToggle.addEventListener('click', () => {
     // the petals never unfold over it.
     document.dispatchEvent(new CustomEvent('bud-opening'));
     refreshAccountMenuLandCap();
+    refreshAccountMenuPlace();
     refreshAccountMenuTaxNotice();
     // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
     // the Build tab, not Shop or Sell — it shipped visible in every mode

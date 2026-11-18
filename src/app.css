@@ -1237,11 +1237,39 @@
          live-updating (updateShopLandletInfo in src/main.js) even while the
          menu panel itself is collapsed, so it's current the moment the menu
          opens rather than stale until the next landlet crossing. */
-      #account-menu-landlet-info {
-        padding: var(--space-sm) var(--space-lg);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+      /* #3770 (part of #3759): the lándlet you are on is named at the top of the open menu, before any
+         leaf: a small sign in the same leaf shape, the name as a wordmark (a flourished serif in the
+         ink green, the family of the higglehaven wordmark; #3782's renderer swaps the face and colours
+         on .bud-place-name only) and "by <builder>" small under it. It sits in the head's row, to the
+         right of the ring of modes; text a person can select, nothing happens on a tap. The old
+         three lines of grey text between Settings and How to move are gone. */
+      body[data-bud="on"] #account-menu-landlet-info {
+        position: absolute;
+        top: calc(-1 * (var(--bud-size) + 8px + 92px));
+        left: calc(var(--bud-size) + 104px);
+        box-sizing: border-box;
+        width: max-content;
+        max-width: calc(100vw - var(--bud-size) - 104px - 13px - 66px);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3xs);
+        padding: var(--space-xs) var(--space-lg);
+        border-radius: 6px 24px 6px 24px;
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: var(--shadow-petal);
+        user-select: text;
+      }
+      body[data-bud="on"] #account-menu-landlet-info[hidden] { display: none; }
+      .bud-place-name {
+        font: 700 var(--text-xl)/1.1 Georgia, 'Times New Roman', serif;
+        letter-spacing: 0.01em;
+        color: var(--ink);
+        overflow-wrap: anywhere;
+      }
+      .bud-place-by {
+        font: var(--text-xs)/var(--leading-tight) var(--font-sans);
         color: var(--pill-text);
-        opacity: 0.75;
+        opacity: 0.8;
       }
       /* #3653: a dot on the petal that holds something waiting, never a number (the count is inside). */
       #notifications-badge,

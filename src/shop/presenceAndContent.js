@@ -53,6 +53,7 @@
 // back to main.js for the same reason -- addBuildModeNeighborOutlines there
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
+import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
@@ -645,12 +646,12 @@ export function updateShopLandletInfo() {
   if (found === shopCurrentLandletEntry) return;
   shopCurrentLandletEntry = found;
   if (!found) {
-    accountMenuLandletInfoEl.hidden = true;
+    hideBudPlace();
     return;
   }
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
-  accountMenuLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
-  accountMenuLandletInfoEl.hidden = false;
+  // #3770: named at the top of the open menu, in the brand's lettering, with the builder under it.
+  showBudPlace({ name: found.record.name, builder: ownerLabel });
 }
 
 // #2853 (leaf of #2373, Option C real terrain): the real per-landlet
