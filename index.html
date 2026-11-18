@@ -167,13 +167,18 @@
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
           <div id="account-menu-landlet-info" hidden></div>
         </div>
+        <div id="bud-modes" role="group" aria-label="Places">
+          <button class="mode-nav-btn" data-mode="shop" type="button"><span class="mode-nav-label">Shop</span></button>
+          <button class="mode-nav-btn" data-mode="build" type="button"><span class="mode-nav-label">Build</span></button>
+          <button class="mode-nav-btn" data-mode="sell" type="button"><span class="mode-nav-label">Sell</span></button>
+        </div>
       </div>
     </div>
-    <div id="mode-nav">
-      <button class="mode-nav-btn" data-mode="shop" type="button"><span class="mode-nav-label">Shop</span></button>
-      <button class="mode-nav-btn" data-mode="build" type="button"><span class="mode-nav-label">Build</span></button>
-      <button class="mode-nav-btn" data-mode="sell" type="button"><span class="mode-nav-label">Sell</span></button>
-    </div>
+    <!-- #3752: the three mode buttons start in the bud's ring (src/ui/bud.js moves them back into this
+         top row for a mode that has no bud), so a page opened by tapping one of them can show the ring,
+         the chosen petal lit, from the first paint (public/bud-switch.js), before any script has run. -->
+    <div id="mode-nav"></div>
+    <script src="/bud-switch.js"></script>
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled hidden>Redo</button>

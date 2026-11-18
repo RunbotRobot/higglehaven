@@ -168,9 +168,14 @@ function syncBud() {
   // (docs/DESIGN.md, "The bud"), the same three in every mode with the current one marked. They
   // are the existing .mode-nav-btn buttons moved here, so their ids and handlers carry over; a
   // mode without a bud keeps them in the old top row.
+  placeModePetals(registry.has(mode), mode);
+}
+
+// The three mode buttons live in the ring while the bud is on and in the old top row while it is
+// not; the current one is marked.
+function placeModePetals(inBud, mode) {
   const ring = modesRing();
   for (const btn of document.querySelectorAll('.mode-nav-btn')) {
-    const inBud = registry.has(mode);
     if (inBud && btn.parentElement !== ring) ring.appendChild(btn);
     if (!inBud && btn.parentElement === ring) document.getElementById('mode-nav')?.appendChild(btn);
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
@@ -184,18 +189,21 @@ let leafOnClose = null;
 // while the bud is unfolded. Choosing a mode folds the bud.
 function modesRing() {
   let ring = document.getElementById('bud-modes');
-  if (ring) return ring;
-  ring = document.createElement('div');
-  ring.id = 'bud-modes';
-  ring.setAttribute('role', 'group');
-  ring.setAttribute('aria-label', 'Places');
+  if (ring && ring.dataset.wired) return ring;
+  if (!ring) {
+    ring = document.createElement('div');
+    ring.id = 'bud-modes';
+    ring.setAttribute('role', 'group');
+    ring.setAttribute('aria-label', 'Places');
+    panel()?.after(ring);
+  }
+  ring.dataset.wired = '1';
   // Another mode: the page reloads and keeps the ring out (beginBudModeSwitch). The mode you are
   // already in: nothing to load, so the bud just folds.
   ring.addEventListener('click', (event) => {
     const btn = event.target.closest?.('.mode-nav-btn');
     if (btn && btn.dataset.mode === document.body.dataset.mode) foldBud();
   });
-  panel()?.after(ring);
   return ring;
 }
 
@@ -293,7 +301,13 @@ if (typeof document !== 'undefined') {
   // petal lit; it folds when the mode is on screen, or stays and says so when the mode will not load
   // (the opening screen shows the reason in a sentence).
   switching = readSwitch();
-  if (switching) setRing('held');
+  if (switching) {
+    // The bud and its ring are there from the first paint, so the opening screen does not show the
+    // old top row for a moment first; syncBud takes over once the mode is known.
+    document.body.dataset.bud = 'on';
+    placeModePetals(true, switching.target);
+    setRing('held');
+  }
   document.addEventListener('higglehaven:mode-ready', () => {
     if (!switching) return;
     switching = null;
