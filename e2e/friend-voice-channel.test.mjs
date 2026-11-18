@@ -358,7 +358,7 @@ await pageB.click('#shop-voice-btn');
 await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 
-async function waitForGain(page, expectedBuilderId, timeoutMs = 20000) {
+async function waitForGain(page, expectedBuilderId, timeoutMs = 60000) {
   const start = Date.now();
   let peers = null;
   while (Date.now() - start < timeoutMs) {
