@@ -22,7 +22,6 @@ await page.waitForTimeout(1600);
 const z = () => page.evaluate(() => window.__testShopAvatarPosition().z);
 const walk = async (ms) => { await page.keyboard.down('KeyW'); await page.waitForTimeout(ms); await page.keyboard.up('KeyW'); };
 const pitch = (rad) => page.evaluate((r) => window.__testSetShopPitch(r), rad);
-const note = () => page.evaluate(() => document.getElementById('shop-status').textContent);
 
 // Level view (and a nearly level one, inside the dead zone): height is held while walking.
 await pitch(0);
@@ -50,21 +49,27 @@ check(tiltUpSettled > tiltDown + 0.2, `the body tips nose-up looking up and nose
 
 // The top of the sky: it levels off, stays, and says so once.
 await pitch(0.6);
-await walk(25000);
+await page.keyboard.down('KeyW');
+const sawTop = await page.waitForFunction(() => document.getElementById('shop-status').textContent.includes('top of the sky'), null, { timeout: 40000 }).then(() => true, () => false);
+await page.keyboard.up('KeyW');
+check(sawTop, 'the top of the sky is said in plain words');
+await page.waitForTimeout(500);
 const top1 = await z();
 await walk(2000);
 const top2 = await z();
 check(Math.abs(top2 - top1) < 0.05, `it rests at the top of the sky and does not bounce (${top1.toFixed(2)}, ${top2.toFixed(2)})`);
-check((await note()).includes('top of the sky'), `the top of the sky is said in plain words (got "${await note()}")`);
 
 // The bottom: descends to the lowest hover, says so, does not land.
 await pitch(-0.6);
-await walk(30000);
+await page.keyboard.down('KeyW');
+const sawLow = await page.waitForFunction(() => document.getElementById('shop-status').textContent.includes('as low as you can fly'), null, { timeout: 60000 }).then(() => true, () => false);
+await page.keyboard.up('KeyW');
+check(sawLow, 'the lowest hover is said in plain words');
+await page.waitForTimeout(500);
 const low1 = await z();
 await walk(1500);
 const low2 = await z();
 check(Math.abs(low2 - low1) < 0.05, 'it rests at the lowest hover and does not bounce');
-check((await note()).includes('as low as you can fly'), `the lowest hover is said in plain words (got "${await note()}")`);
 check(await page.evaluate(() => document.body.classList.contains('shop-flying')), 'flying into the ground does not land by itself');
 check((await page.locator('#shop-up-btn, #shop-down-btn, #shop-vertical-controls').count()) === 0, 'the up and down arrows are gone');
 
