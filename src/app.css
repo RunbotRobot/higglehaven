@@ -745,6 +745,9 @@
         white-space: nowrap;
         pointer-events: none;
       }
+      /* #3723: the first-visit word steps aside while the bud is open, where the mode petals now
+         fan out over its right edge. */
+      body[data-bud="on"] #account-menu-toggle.active .bud-word { display: none; }
       body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
         animation: bud-pulse 1.6s ease-in-out infinite;
       }
