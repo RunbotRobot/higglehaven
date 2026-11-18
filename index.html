@@ -232,9 +232,6 @@
           <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
         </label>
       </div>
-      <button id="toggle-community-sign" type="button" data-width-sizer="Community Sign">Community Sign</button>
-      <button id="toggle-community-calendar" type="button" data-width-sizer="Community Calendar">Community Calendar</button>
-      <button id="toggle-backup-chain" type="button">Backup Chain</button>
       <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
         <span id="selection-action-status-text" class="shop-notice-text"></span>
         <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
@@ -898,6 +895,10 @@
       <span id="edit-bundle-reason" hidden></span>
       <div id="item-card-more" hidden>
         <button id="toggle-snap" type="button">Snap</button>
+        <!-- #3693 (Build in the bud 6/6): rare, and about one item, so they live in the card's More; ids and handlers unchanged. -->
+        <button id="toggle-community-sign" type="button" data-width-sizer="Community Sign">Community Sign</button>
+        <button id="toggle-community-calendar" type="button" data-width-sizer="Community Calendar">Community Calendar</button>
+        <button id="toggle-backup-chain" type="button">Backup Chain</button>
       </div>
       <button id="item-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>

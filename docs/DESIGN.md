@@ -312,6 +312,9 @@ by touching the world. The module is `src/ui/bud.js`:
   blooms beside the selection), with the same ids and handlers; Edit's reason line shows under them.
   While Multi-Select paints, the card keeps the bundle actions (Copy, Delete and More wait for
   Multi-Select to end) so it covers as little of the world as it can.
+- More (#3693): Community Sign, Community Calendar and Backup Chain are buttons in the item card's
+  More beside Snap, ids and handlers unchanged; they are rare and about one item. The claim map is
+  still one large leaf of its own.
 - `setBudWord(key, text, { open, label })` and `clearBudWord(key)` (#3774): the word the bud
   wears beside it. A word that announces something carries its door: with `open`, the word is
   a real button (`#bud-note`, at least 44px tall, a pressed state, `label` for a screen
