@@ -1104,6 +1104,9 @@ accountMenuToggle.addEventListener('click', () => {
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
   accountMenuToggle.setAttribute('aria-expanded', String(expanding));
   if (expanding) {
+    // #3701: a leaf-shaped sheet that is open (Sell's My products) folds when the bud opens, so
+    // the petals never unfold over it.
+    document.dispatchEvent(new CustomEvent('bud-opening'));
     refreshAccountMenuLandCap();
     refreshAccountMenuTaxNotice();
     // #1167 (owner direction, 2026-10-01): My Lands only makes sense from

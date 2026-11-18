@@ -25,6 +25,14 @@ describe('hideLoadingScreen', () => {
     expect(el.style.display).toBe('none');
   });
 
+  it('lets the old top controls show only once the splash lifts (first-open class)', () => {
+    const { doc } = fakeDocument();
+    const rootClasses = new Set(['first-open']);
+    doc.documentElement = { classList: { remove: (name) => rootClasses.delete(name) } };
+    hideLoadingScreen(doc);
+    expect(rootClasses.has('first-open')).toBe(false);
+  });
+
   it('does nothing a second time, or when there is no splash', () => {
     const { doc, listeners } = fakeDocument();
     hideLoadingScreen(doc);

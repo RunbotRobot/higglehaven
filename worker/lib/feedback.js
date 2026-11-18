@@ -44,7 +44,7 @@ const CONTROL_ROOM_BUG_REPORT_POSTED_BY = 'bug-report';
 // blow up this row the same way MAX_METADATA_JSON_BYTES above already
 // guards the request itself).
 const CONTROL_ROOM_NOTE_MAX_LENGTH = 20000;
-function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages = [] }) {
+function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages = [], startupTimings = {} }) {
   const lines = [];
   // #3302: the report now comes from Shop, Build or Sell; say which on the card.
   if (mode) lines.push(`Mode: ${mode}`);
@@ -59,6 +59,9 @@ function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platf
     lines.push('Last messages shown to the person (oldest first):');
     for (const entry of recentUserVisibleMessages) lines.push(`- ${entry.shownAt ? `[${entry.shownAt}] ` : ''}${entry.text}`);
   }
+  // #3736: ms since navigation for each stage of opening the app.
+  const stages = Object.entries(startupTimings);
+  if (stages.length) lines.push(`Startup timings (ms): ${stages.map(([name, ms]) => `${name} ${ms}`).join(', ')}`);
   lines.push(`Render-state buffer (${renderStateBuffer.length} sample${renderStateBuffer.length === 1 ? '' : 's'}, ~1Hz, camera/avatar state + shader uniforms):`);
   lines.push(JSON.stringify(renderStateBuffer, null, 2));
   let note = lines.join('\n');
@@ -180,6 +183,15 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
       shownAt: typeof entry.shownAt === 'string' ? entry.shownAt.slice(0, 64) : '',
     }));
 
+  // #3736: display-only like the fields above; keep at most 20 numeric entries
+  // with bounded names so a malformed payload cannot grow the card.
+  const startupTimings = Object.fromEntries(
+    Object.entries(metadata.startupTimings && typeof metadata.startupTimings === 'object' && !Array.isArray(metadata.startupTimings) ? metadata.startupTimings : {})
+      .filter(([name, ms]) => typeof ms === 'number' && Number.isFinite(ms))
+      .slice(0, 20)
+      .map(([name, ms]) => [name.slice(0, 40), Math.round(ms)]),
+  );
+
   const reportId = `report-${crypto.randomUUID()}`;
 
   // screenshot is optional -- src/feedback/submitFeedbackUI.js's own
@@ -210,7 +222,7 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
   const controlRoomTaskId = `bug-report-${reportId.slice('report-'.length)}`;
   const now = new Date().toISOString();
   const controlRoomTitle = description || 'Bug report (no description)';
-  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages });
+  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages, startupTimings });
 
   await db.batch([
     db.prepare(`

@@ -75,7 +75,7 @@ permanent controls. Four things are built with:
 | thing | what it is for | size and shape | how it arrives and leaves | never |
 |---|---|---|---|---|
 | **the bud** | the only standing piece of interface; carries the higglehaven logo; the door to every petal | `--bud-size` (56px), round, `--shadow-bud`; sits in the bottom-right corner clear of the thumb's resting place; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes | carry a count, a second control, or text that stays after it has been learned |
-| **a petal** | one way in: Settings, Friends, Chat, Purchases, Build and Sell, How to move | at least 44px tall and 104px wide, 15px label, `--radius-petal`, pale green fading to pale yellow, `--shadow-petal` | unfolds upward from the bud, 40ms apart, over `--motion-petal` with `--ease-bloom`; folds back when another thing opens | be more than one word, or sit anywhere but over the bud's own column |
+| **a petal** | one way in: Settings, Friends, Chat, Purchases, Build and Sell, "?" | at least 44px tall and 104px wide, 15px label, `--radius-petal`, pale green fading to pale yellow, `--shadow-petal` | unfolds upward from the bud, 40ms apart, over `--motion-petal` with `--ease-bloom`; folds back when another thing opens | be more than one word, or sit anywhere but over the bud's own column |
 | **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
 | **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
 
@@ -302,6 +302,12 @@ by touching the world. The module is `src/ui/bud.js`:
   existing elements (Levels borrows the level label and the Up/Down/Build/Dig
   panel, parked in `#level-controls`) and hands them back there, so the
   handlers on them never have to be rewritten.
+- Tools (#3691) is the same pattern for Multi-Select (with its Brush slider), Measure and
+  Paste, parked in `#tool-controls`. Choosing Multi-Select, Measure or Paste puts the
+  leaf away so the world is clear; while Multi-Select or Measure is on the bud wears
+  "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
+  Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
+  plan blooms it beside the selection; that is a later slice).
 - `setBudMark(key)` and `clearBudMark(key)`: any key set shows the bud's one
   unread mark; it clears when none are left.
 - The bud is the existing account toggle and its petals are the buttons of the

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
+import { markStartup } from './ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from './ui/loadingStages.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
@@ -653,6 +654,7 @@ import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
+import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
@@ -2234,6 +2236,7 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
 // Runs after animate() has already started so the (empty, for now) scene
 // renders immediately rather than waiting on the network.
 async function bootstrap() {
+  markStartup('bootstrap-start');
   // Set by #mode-nav just before its reload; consumed
   // once here. Nothing set — a plain fresh tab — lands on Shop, the
   // product's chosen default landing view (see START_MODE_KEY above).

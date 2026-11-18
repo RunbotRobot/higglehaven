@@ -1,3 +1,5 @@
+import { markStartup } from './startupMarks.js';
+
 // #1590: fades out the cold-start/mode-switch splash (#loading-screen, visible
 // by default in index.html's own markup). main.js calls it once bootstrap() has
 // settled, whichever mode it resolved into, including the declined-login dead
@@ -17,7 +19,10 @@ import { completeLoadingBar, loadingFailed, stopLoadingTips } from './loadingSta
 export function hideLoadingScreen(doc = typeof document === 'undefined' ? null : document) {
   const el = doc && doc.getElementById('loading-screen');
   if (!el || el.classList.contains('loading-screen-hidden') || loadingFailed()) return;
+  markStartup('loading-screen-hidden');
   completeLoadingBar(doc);
+  // #3738: the first-open class (index.html) hides the old top controls until now.
+  doc.documentElement?.classList?.remove('first-open');
   stopLoadingTips();
   el.classList.add('loading-screen-hidden');
   // The fog's own fade ends last; a child's transition ending first must not

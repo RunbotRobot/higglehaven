@@ -33,5 +33,6 @@ export function purchaseAfterDispute(purchase, result) {
     refundedAmountCents: serverPurchase.refundedAmountCents ?? purchase.totalCents,
     canDispute: false,
     canLeaveFeedback: false,
+    canReviewProduct: false,
   };
 }

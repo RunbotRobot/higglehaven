@@ -68,6 +68,13 @@
         --loading-progress: 0.12;
         overflow: hidden;
       }
+      /* #3738: the first opening shows the loading screen and nothing else.
+         #topbar-left and #mode-nav sit above it (z 21) on purpose for the
+         mode-switch splash, so on the first open they showed through for
+         seconds before any script ran. index.html's <html> starts with
+         first-open; hideLoadingScreen() removes it as the splash lifts. */
+      html.first-open #topbar-left,
+      html.first-open #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
@@ -138,7 +145,10 @@
         color: var(--pill-text-soft);
         user-select: text;
         -webkit-user-select: text;
+        /* #3763: a tap shows the next tip. */
+        cursor: pointer;
       }
+      #loading-tip[hidden] { display: none; }
       #loading-tip.loading-tip-show { animation: loading-tip-in var(--motion-bloom) var(--ease-soft); }
       @keyframes loading-tip-in {
         from { opacity: 0; }
@@ -980,6 +990,36 @@
         font-size: 24px;
         line-height: 1;
       }
+      /* The "?" leaf (#3762): a short list of pages, each page a few questions that open to their steps. */
+      .help-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
+      .help-row {
+        display: block;
+        width: 100%;
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-lg);
+        border: none;
+        border-radius: var(--radius-md);
+        background: rgb(var(--white-rgb) / 0.7);
+        color: var(--ink);
+        font: inherit;
+        text-align: left;
+      }
+      .help-back {
+        min-height: 36px;
+        margin: 0 0 var(--space-sm);
+        padding: 0 var(--space-sm);
+        border: none;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+      }
+      .bud-leaf .help-page-title { margin: 0 0 var(--space-sm); font-size: var(--text-lg); font-weight: 600; }
+      .help-entry { margin: 0 0 var(--space-sm); user-select: text; }
+      .help-entry summary { min-height: 36px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
+      .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; }
+      .help-steps li { margin: 0 0 var(--space-xs); }
+      .bud-leaf .help-see { color: rgb(var(--ink-rgb) / 0.75); }
+      .bud-leaf .help-note { margin: 0; }
       body[data-bud-mark] #account-menu-toggle::after {
         content: '';
         position: absolute;
@@ -1508,6 +1548,7 @@
       }
       #assistant-chat-form {
         display: flex;
+        align-items: flex-end; /* #3750: Send stays level with the bottom of the box as it grows */
         gap: var(--space-xs);
       }
       #assistant-chat-input {
@@ -1517,6 +1558,14 @@
         border-radius: var(--radius-md);
         border: none;
         font: var(--text-lg)/var(--leading-tight) var(--font-sans);
+        resize: none; /* #3750: it grows by itself, up to five lines (assistantChat.js) */
+        overflow-y: hidden;
+        box-sizing: border-box;
+      }
+      #assistant-chat-limit {
+        margin: 0;
+        font: var(--text-sm)/var(--leading-tight) var(--font-sans);
+        color: var(--pill-text);
       }
       #assistant-chat-send {
         padding: var(--space-sm) var(--space-lg);
@@ -2030,6 +2079,22 @@
       }
       #level-label {
         font-weight: 600;
+      }
+      /* #3691 (Build in the bud, 4/6): Multi-Select, its Brush slider, Measure and Paste are lent to
+         the Tools leaf (src/build/budPetals.js) and wait, hidden, in #tool-controls. In the leaf
+         they are a short column, one tool to a row, the same pills as before. */
+      .bud-tools {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-xs);
+      }
+      .bud-tools > button {
+        padding: var(--space-sm) var(--space-lg);
+        text-align: left;
+      }
+      .bud-tools .gizmo-numeric-control.visible {
+        display: flex;
       }
       #level-nav {
         display: flex;
@@ -3799,6 +3864,36 @@
         margin: 0;
         font-size: var(--text-lg);
       }
+      /* #3701 (Sell in the bud, 3/6 of #3655; part of #3648): My products is a leaf, the
+         bud's own shape and place, as Settings is (#3652): a soft sheet growing from just
+         under the bud at the top-left corner, no dimming scrim (the showroom shows around
+         it), the leaf's corners, close control upper-right. The overlay still takes taps,
+         so nothing behind it is touched by accident. */
+      body[data-bud="on"] #seller-modal {
+        align-items: flex-start;
+        justify-content: flex-start;
+        background: transparent;
+        padding: 76px var(--space-2xl) var(--space-2xl);
+      }
+      body[data-bud="on"] #seller-modal-content {
+        /* Narrow enough to leave the compass (top right, about 46px) uncovered at 390px. */
+        max-width: 316px;
+        box-sizing: border-box;
+        max-height: calc(100vh - 92px);
+        max-height: calc(100dvh - 92px);
+        background: linear-gradient(165deg, rgb(255 255 255 / 0.9), rgb(var(--panel-rgb) / 0.97));
+        box-shadow: var(--shadow-card);
+        border-radius: 30px 6px 30px 6px;
+      }
+      /* The Manage / List view switch sits in the leaf's header, beside the title and clear of the
+         close control in the upper-right corner. */
+      .modal-heading-row #seller-view-toggle {
+        margin-left: auto;
+        margin-right: calc(var(--space-2xl) + var(--space-lg));
+      }
+      .modal-heading-row .seller-view-btn {
+        padding: var(--space-3xs) var(--space-md);
+      }
       /* #1602: layout-only (no font-size/color of its own, unlike
          .upload-step-heading) so wrapping the h2 in this doesn't disturb
          its existing size/color -- just places the new "?" tooltip button
@@ -4438,9 +4533,8 @@
         border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
         padding-top: var(--space-md);
       }
-      /* #3567: both utilities share one pill style (the assistant button used
-         to fall back to the browser's square default). */
-      #settings-assistant-btn,
+      /* #3567: the utilities share one pill style (the assistant button used
+         to fall back to the browser's square default; it has since moved under "?", #3762). */
       #settings-feedback-btn {
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
