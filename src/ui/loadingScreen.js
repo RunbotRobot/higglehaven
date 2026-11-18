@@ -10,10 +10,25 @@ import { markStartup } from './startupMarks.js';
 // solid behind the sheet, hiding the world the sheet tells them to fly around.
 // The claim flow calls this as it opens the sheet: nothing is left to load that
 // the sheet is waiting on. Idempotent.
+//
+// #3738: a splash that is showing a failed stage stays up (the person has a
+// sentence to read and Try again to tap), and the bar is filled and the tips
+// stopped as the splash thins into the world.
+import { completeLoadingBar, loadingFailed, stopLoadingTips } from './loadingStages.js';
+
 export function hideLoadingScreen(doc = typeof document === 'undefined' ? null : document) {
   const el = doc && doc.getElementById('loading-screen');
-  if (!el || el.classList.contains('loading-screen-hidden')) return;
+  if (!el || el.classList.contains('loading-screen-hidden') || loadingFailed()) return;
   markStartup('loading-screen-hidden');
+  completeLoadingBar(doc);
+  stopLoadingTips();
   el.classList.add('loading-screen-hidden');
-  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+  // The fog's own fade ends last; a child's transition ending first must not
+  // take the splash out early.
+  const onEnd = (event) => {
+    if (event && event.target !== el) return;
+    el.removeEventListener('transitionend', onEnd);
+    el.style.display = 'none';
+  };
+  el.addEventListener('transitionend', onEnd);
 }
