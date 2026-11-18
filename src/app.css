@@ -1184,6 +1184,55 @@
         font-size: 24px;
         line-height: 1;
       }
+      /* The Payouts leaf (#3704): labels above inputs at one width, the date of birth as one row, two short
+         steps, and the buttons in one row at the foot of the leaf, in view whichever step shows (#3590).
+         [hidden] needs its own rule: these author display rules would otherwise beat the attribute. */
+      .payout-account, .payout-balance { display: flex; flex-direction: column; gap: var(--space-sm); margin: 0 0 var(--space-lg); }
+      .payout-balance[hidden], .payout-form[hidden], .payout-step[hidden], .payout-btn[hidden] { display: none; }
+      .bud-leaf .payout-note { margin: 0; font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.8); }
+      .bud-leaf .payout-note.error { color: var(--danger-text); }
+      .payout-form { display: flex; flex-direction: column; gap: var(--space-sm); }
+      .payout-step { display: flex; flex-direction: column; gap: var(--space-sm); }
+      .bud-leaf .payout-step-title { margin: 0; font-size: var(--text-md); font-weight: 600; }
+      .bud-leaf .payout-why { margin: 0; font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.7); }
+      .payout-field { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
+      .payout-label { font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.75); }
+      .payout-field input {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-md);
+        border: none;
+        border-radius: var(--radius-md);
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      .payout-dob { display: flex; flex-direction: column; gap: var(--space-3xs); }
+      .payout-dob-row, .payout-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
+      .payout-dob-row { grid-template-columns: 1fr 1fr 1.4fr; }
+      .payout-dob-row .payout-label { display: none; }
+      .payout-dob-row .payout-field input { text-align: center; }
+      .payout-actions {
+        position: sticky;
+        bottom: calc(-1 * var(--space-lg));
+        display: flex;
+        gap: var(--space-sm);
+        margin: 0 calc(-1 * var(--space-lg)) calc(-1 * var(--space-lg));
+        padding: var(--space-sm) var(--space-lg) var(--space-lg);
+        background: linear-gradient(to top, rgb(var(--panel-rgb) / 0.98) 70%, rgb(var(--panel-rgb) / 0));
+      }
+      .payout-btn {
+        min-height: 44px;
+        padding: 0 var(--space-2xl);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border-radius: var(--radius-pill);
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      .payout-btn.payout-primary { flex: 1 1 auto; background: rgb(var(--ink-rgb) / 0.88); border-color: transparent; color: rgb(var(--white-rgb)); }
+      .payout-btn:disabled { opacity: 0.5; }
       /* The "?" leaf (#3762): a short list of pages, each page a few questions that open to their steps. */
       .help-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
       .help-row {
