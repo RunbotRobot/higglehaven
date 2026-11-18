@@ -149,13 +149,15 @@ console.log('after the reply:', JSON.stringify(answered));
 await pageA.click('#assistant-chat-minimize');
 const minimised = await pageA.evaluate(() => {
   const rect = (el) => el.getBoundingClientRect();
-  const pill = document.querySelector('#account-menu-toggle .bud-word');
+  // #3774: the note beside the head is a door (its own button), not the plain word inside the head.
+  const pill = document.getElementById('bud-note');
   const pillBox = rect(pill);
   const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   const controls = ['#account-menu-toggle']; // #3650: the sticks and the fly button were the world's other controls; the world itself is the control now
   return {
     panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
-    pillShown: window.__assistantChat.pill !== null && pillBox.width > 0 && getComputedStyle(pill).display !== 'none',
+    pillShown: window.__assistantChat.pill !== null && !pill.hidden && pillBox.width > 0 && getComputedStyle(pill).display !== 'none',
+    noteIsButton: pill.tagName === 'BUTTON' && pillBox.height >= 44 && pill.getAttribute('aria-label').length > 0,
     pillText: pill.textContent,
     pillBox: pillBox.toJSON(),
     state: { open: window.__assistantChat.open, status: window.__assistantChat.conversationStatus, minimized: window.__assistantChat.minimized },
@@ -173,16 +175,18 @@ await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/repl
 await pageA.waitForFunction(() => window.__assistantChat.pill?.unread === true, null, { timeout: 10000 });
 const litPill = await pageA.evaluate(() => document.querySelector('#account-menu-toggle .bud-word').textContent);
 const dotShown = await pageA.evaluate(() => document.body.hasAttribute('data-bud-mark'));
-await pageA.click('#account-menu-toggle');
-await pageA.click('#assistant-menu-btn');
+const litLabel = await pageA.evaluate(() => document.getElementById('bud-note').getAttribute('aria-label'));
+// #3774: one tap on the note brings the conversation back; no menu, no row.
+await pageA.click('#bud-note');
 await pageA.waitForSelector('#assistant-chat-panel:not(.minimized)', { timeout: 5000 });
+const noteGone = await pageA.evaluate(() => new Promise((resolve) => setTimeout(() => resolve(document.getElementById('bud-note').hidden && !document.body.hasAttribute('data-bud-note')), 400)));
 const restored = await pageA.evaluate(() => ({
   pillHidden: document.getElementById('assistant-menu-btn').hidden && !document.body.hasAttribute('data-bud-mark'),
   wordBack: document.querySelector('#account-menu-toggle .bud-word').textContent, // #3653: "Menu" again once the panel is back
   status: window.__assistantChat.conversationStatus,
   log: document.getElementById('assistant-chat-log').textContent,
 }));
-console.log('after restoring:', JSON.stringify({ litPill, dotShown, restored }));
+console.log('after restoring:', JSON.stringify({ litPill, dotShown, litLabel, noteGone, restored }));
 
 // The assistant ends it: the panel says so, in words.
 await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/end`);
@@ -341,6 +345,7 @@ const pass = tapped === true
   && minimised.state.open === true && minimised.state.status === 'open' && minimised.state.minimized === true
   && minimised.clear.every((c) => !c.overlapsPill && c.tappable)
   && litPill === `${ASSISTANT_NAME} replied` && dotShown
+  && minimised.noteIsButton && litLabel === `${ASSISTANT_NAME} replied. Open the conversation.` && noteGone
   && restored.pillHidden && restored.wordBack === 'Menu' && restored.status === 'open' && restored.log.includes('Head north past the fountain!') && restored.log.includes('Did that work for you?')
   && readAnswer.title === ASSISTANT_NAME && readAnswer.badgeShown
   && ended === `${ASSISTANT_NAME} ended the conversation.`
