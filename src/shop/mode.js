@@ -371,6 +371,10 @@ export function buildShopGroundMesh(record) {
   return groundMesh;
 }
 
+// #3745: how old the early catalog/world/landlets requests may be when the
+// sign-in gate passes before they are used as they are.
+const SHOP_PREFETCH_MAX_AGE_MS = 2000;
+
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
   // UI has nothing to do with an identity check, and hiding it before that
@@ -381,6 +385,26 @@ export async function enterShopMode() {
     if (el) el.style.display = 'none';
   }
   controls.enabled = false;
+
+  // #3745 (part of #3735, the slow open): the catalog, world and landlets are
+  // public and need nothing from the sign-in checks, so they start now and are
+  // awaited where they are used below, instead of after the checks finish one
+  // by one. The gate still runs first and a declined login still stops before
+  // anything is built; a failure still falls back exactly as it did (the
+  // catch below on each), and the no-op catch here only keeps a request that
+  // is never awaited (a declined login) from being reported as unhandled.
+  // A person who sits at the sign-in prompt would otherwise get a world as old
+  // as that wait, so when the gate takes longer than SHOP_PREFETCH_MAX_AGE_MS
+  // the requests are made again after it (the early ones were a head start,
+  // not an answer).
+  const startPublicLoads = () => {
+    const catalog = fetchCatalog();
+    const worldAndLandlets = Promise.all([fetchWorld(), fetchAllLandlets()]);
+    catalog.catch(() => {});
+    worldAndLandlets.catch(() => {});
+    return { catalog, worldAndLandlets, startedAt: performance.now() };
+  };
+  let publicLoads = startPublicLoads();
 
   // N44 (owner, Control Room, 2026-09-12): Shop mode used to need no
   // identity at all — see ensureShopperIdentity's own comment for why that
@@ -412,6 +436,19 @@ export async function enterShopMode() {
     }
   }
   markLoadingStage('signedin'); // #3738
+  if (performance.now() - publicLoads.startedAt > SHOP_PREFETCH_MAX_AGE_MS) publicLoads = startPublicLoads();
+
+  // #3745: what needs the signed-in user starts the moment sign-in is known and
+  // runs while the world below is still loading. Same conditions as where each
+  // was fetched before (the last position skips the account-recovery path; the
+  // avatar and animation are read by mountShopAvatar, which only uses them when
+  // logged in), and a failure surfaces to the same catch as before.
+  const lastPresenceLoad = currentAuthUser && !accountRecoveryFlowActive ? fetchOwnLastPresence() : null;
+  lastPresenceLoad?.catch(() => {});
+  const equippedAvatarLoad = currentAuthUser ? fetchMyEquippedAvatar() : null;
+  const equippedAnimationLoad = currentAuthUser ? fetchMyEquippedAnimation() : null;
+  equippedAvatarLoad?.catch(() => {});
+  equippedAnimationLoad?.catch(() => {});
 
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
@@ -474,7 +511,7 @@ export async function enterShopMode() {
   setSoldOutMarkers([]);
 
   try {
-    setActiveCatalog(await fetchCatalog());
+    setActiveCatalog(await publicLoads.catalog);
     markStartup('catalog-loaded');
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
@@ -513,9 +550,9 @@ export async function enterShopMode() {
   // 403 instead, found via that file's own errors.length === 0 check during
   // its reset-password flow). null (no button shown) either way.
   setShopLastLocation(null);
-  if (currentAuthUser && !accountRecoveryFlowActive) {
+  if (lastPresenceLoad) {
     try {
-      setShopLastLocation(await fetchOwnLastPresence());
+      setShopLastLocation(await lastPresenceLoad);
       markStartup('last-location-loaded');
     } catch (err) {
       console.warn('Could not fetch last known location:', err);
@@ -525,7 +562,7 @@ export async function enterShopMode() {
   let world;
   let allLandlets;
   try {
-    [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
+    [world, allLandlets] = await publicLoads.worldAndLandlets;
     markStartup('world-loaded');
   } catch (err) {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
@@ -611,7 +648,9 @@ export async function enterShopMode() {
   // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
   // #1358 dispose of a previous round trip's avatar and the fallbacks).
   await mountShopAvatar({ scene, isLoggedIn: () => Boolean(currentAuthUser) && !isAccountSessionEnding() }, {
-    fetchMyEquippedAvatar, fetchMyEquippedAnimation,
+    // #3745: already started above once sign-in was known.
+    fetchMyEquippedAvatar: () => equippedAvatarLoad ?? fetchMyEquippedAvatar(),
+    fetchMyEquippedAnimation: () => equippedAnimationLoad ?? fetchMyEquippedAnimation(),
     setEquippedAvatarSkeletonSignature: setShopEquippedAvatarSkeletonSignature,
     getShopAvatar: () => shopAvatar, setShopAvatar, disposeObject3D,
     createCustomShopAvatar, createShopAvatar,
