@@ -2031,6 +2031,22 @@
       #level-label {
         font-weight: 600;
       }
+      /* #3691 (Build in the bud, 4/6): Multi-Select, its Brush slider, Measure and Paste are lent to
+         the Tools leaf (src/build/budPetals.js) and wait, hidden, in #tool-controls. In the leaf
+         they are a short column, one tool to a row, the same pills as before. */
+      .bud-tools {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-xs);
+      }
+      .bud-tools > button {
+        padding: var(--space-sm) var(--space-lg);
+        text-align: left;
+      }
+      .bud-tools .gizmo-numeric-control.visible {
+        display: flex;
+      }
       #level-nav {
         display: flex;
         align-items: center;
