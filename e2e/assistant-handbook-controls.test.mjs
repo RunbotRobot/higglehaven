@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, goToMode, openAddProductLeaf } from './helpers.mjs';
-import { parseHandbook, validateHandbook, controlMatches } from '../scripts/assistant-handbook-lib.mjs';
+import { parseHandbook, validateHandbook, controlMatches, isHeadingSelector } from '../scripts/assistant-handbook-lib.mjs';
 
 const entries = parseHandbook(readFileSync(new URL('../docs/assistant-handbook.md', import.meta.url), 'utf8'));
 const formatProblems = validateHandbook(entries);
@@ -70,7 +70,7 @@ async function checkMode(mode) {
   for (const control of here) {
     const reading = await read(control.selector);
     checked += 1;
-    if (!controlMatches(reading, control.words)) {
+    if (!controlMatches(reading, control.words, { whole: isHeadingSelector(control.selector) })) {
       failures.push(`${control.entry}: "${control.selector}" ${reading.exists ? `no longer says "${control.words}" (it says "${(reading.text || reading.ariaLabel || reading.placeholder).trim().replace(/\s+/g, ' ').slice(0, 60)}")` : 'is not on the page'}`);
     }
   }
