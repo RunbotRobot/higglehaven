@@ -8,7 +8,7 @@
 // its handbook entry together.
 export const LOADING_TIPS = [
   {
-    text: 'Drag one finger on the world to walk, and add a second finger to look around.',
+    text: 'Drag a finger on the world to walk. Add a second finger to look around.',
     handbook: 'How do I walk around and look around?',
     words: ['one finger', 'second finger'],
   },
