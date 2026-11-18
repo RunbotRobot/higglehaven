@@ -1018,6 +1018,8 @@
       .help-entry summary { min-height: 36px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
       .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; }
       .help-steps li { margin: 0 0 var(--space-xs); }
+      .help-tips { margin: 0; padding-left: 20px; user-select: text; }
+      .help-tips li { margin: 0 0 var(--space-sm); }
       .bud-leaf .help-see { color: rgb(var(--ink-rgb) / 0.75); }
       .bud-leaf .help-note { margin: 0; }
       body[data-bud-mark] #account-menu-toggle::after {
