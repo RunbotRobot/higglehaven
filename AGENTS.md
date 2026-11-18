@@ -98,8 +98,11 @@ Rules of conduct on the live site:
   your own account is for looking around). See "The fleet has a lándlet of
   its own in the live world" under "Standing owner decisions" for what it
   is for and what it must never become. (Claimed 2026-11-16 on the
-  owner's typed instruction, #3431. It starts empty. Until #3597's guards
-  are in, place nothing there that a shopper could buy.)
+  owner's typed instruction, #3431. It starts empty. #3597's guards are in
+  (a fleet account cannot redeem, bid or transfer higgles: #3604; no
+  featured, spawn or ranking treatment: #3638, #3661), so real catalog
+  products a shopper can buy may stand there; its sign (#3597 piece 4) is
+  the one piece still open.)
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.

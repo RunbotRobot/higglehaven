@@ -273,8 +273,9 @@ petals are the same in all three places.
    on each side.
 3. Lift your finger and you stop. There are no buttons to find: the world itself is
    the control.
-4. On a computer keyboard, W, A, S and D (or the arrow keys) walk, Q and E turn,
-   and R and F look up and down.
+4. On a computer, use the keyboard: W, A, S and D (or the arrow keys) walk, Q and E
+   turn, R looks up and F looks down, and double-pressing the space bar takes off or
+   comes back down (the flying entry says more). The mouse wheel zooms in and out.
 
 **You will see:** your bird walks or turns as you drag, and the view follows. Every
 avatar has a simple motion of its own for walking, standing and flying: the
@@ -347,6 +348,9 @@ ground.
    "Buy" button. "More" opens "Rate this Product" and "Return Policy".
 4. Tap anywhere else in the world, or the cross at the top right of the card, when
    you are done.
+5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
+   of the nearest product, and N again for the next nearest; Shift and N go back. The
+   product's name is read out, and Tab reaches the card's buttons. Escape closes it.
 
 **You will see:** a small card next to the product, with the world still moving
 behind it.
