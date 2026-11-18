@@ -212,7 +212,7 @@ async function loadLandletMap(resolve) {
   const myLoadToken = ++claimMapLoadToken;
   claimStatusEl.textContent = 'Loading the world…';
   claimStatusEl.classList.remove('error');
-  claimSelectionNameEl.textContent = 'No plot selected';
+  claimSelectionNameEl.textContent = 'No lándlet selected'; // the word is "lándlet", never "plot" (#3613)
   claimConfirmBtn.disabled = true;
   claimConfirmBtn.onclick = null;
   disposeClaimFlyover();
