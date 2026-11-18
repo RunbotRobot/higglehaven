@@ -1,0 +1,61 @@
+/* Lettering styles for a lándlet's name (#3780, part of #3771). A mock-up page, not the app.
+   Brand tokens are the app's own (src/app.css :root). The faces are self-hosted Latin subsets under the SIL OFL
+   (wordmark-fonts/LICENSES.txt); the site allows fonts from itself only. */
+@font-face { font-family: "WM Round"; src: url("wordmark-fonts/fredoka-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "WM Airy"; src: url("wordmark-fonts/quicksand-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "WM Serif"; src: url("wordmark-fonts/fraunces-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "WM Slab"; src: url("wordmark-fonts/zilla-slab-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "WM Script"; src: url("wordmark-fonts/pacifico-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "WM Stencil"; src: url("wordmark-fonts/stardos-stencil-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "WM Hand-drawn"; src: url("wordmark-fonts/patrick-hand-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+:root {
+  --ink-rgb: 22 36 10; --pill-rgb: 214 232 190; --panel-rgb: 250 240 199;
+  --brand-green: #6ca42e; --yellow: #f6d65c; --grass: #6ea53a;
+  --ink: rgb(var(--ink-rgb)); --ink-soft: rgb(var(--ink-rgb) / 0.65);
+  --wm-ink: #2f6a14; --wm-accent: #6ca42e;
+}
+* { box-sizing: border-box; }
+html { background: rgb(var(--panel-rgb)); }
+body { margin: 0 auto; max-width: 430px; padding: 16px 0 48px; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: rgb(var(--panel-rgb)); }
+.page-head, section, footer { padding: 0 16px; }
+.logo { height: 40px; width: auto; display: block; }
+h1 { font-size: 22px; line-height: 1.2; margin: 10px 0 6px; font-weight: 600; }
+h2 { font-size: 17px; margin: 26px 0 8px; font-weight: 600; }
+.lede { margin: 0 0 12px; color: var(--ink-soft); }
+.pairs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pair-btn { font: inherit; font-size: 14px; color: var(--ink); display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 8px; border-radius: 999px; border: 2px solid transparent; background: rgb(var(--pill-rgb)); cursor: pointer; }
+.pair-btn[aria-pressed="true"] { border-color: var(--brand-green); background: #fff; }
+.chip { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; flex: none; box-shadow: 0 0 0 1px rgb(var(--ink-rgb) / 0.18); }
+.chip i { flex: 1; display: block; }
+.card { margin: 0 0 14px; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.size { font-size: 13px; color: var(--ink-soft); white-space: nowrap; }
+.blurb { margin: 2px 0 6px; font-size: 13px; color: var(--ink-soft); }
+.leaf { background: rgb(var(--pill-rgb)); border-radius: 18px 18px 18px 6px; padding: 14px 16px; display: grid; gap: 14px; }
+.wm { min-width: 0; }
+.wm-name { display: block; font-size: 28px; line-height: 1.12; color: var(--wm-ink); overflow-wrap: anywhere; }
+.wm-name::after { content: ""; display: block; width: 44px; height: 4px; border-radius: 3px; margin-top: 6px; background: var(--wm-accent); }
+.wm-by { display: block; margin-top: 4px; font-size: 12px; color: var(--ink-soft); }
+.wm-round .wm-name { font-family: "WM Round", sans-serif; font-weight: 600; }
+.wm-airy .wm-name { font-family: "WM Airy", sans-serif; font-weight: 700; }
+.wm-serif .wm-name { font-family: "WM Serif", serif; font-weight: 700; }
+.wm-slab .wm-name { font-family: "WM Slab", serif; font-weight: 600; }
+.wm-script .wm-name { font-family: "WM Script", cursive; font-weight: 400; font-size: 29px; line-height: 1.3; }
+.wm-stencil .wm-name { font-family: "WM Stencil", serif; font-weight: 700; font-size: 25px; }
+.wm-hand .wm-name { font-family: "WM Hand-drawn", cursive; font-weight: 400; font-size: 31px; line-height: 1.1; }
+.grass { background: var(--grass); border-radius: 18px; padding: 14px 16px; display: grid; gap: 10px; }
+.grass .wm-name { font-size: 24px; }
+.grass .wm-by { color: rgb(var(--ink-rgb) / 0.8); }
+.grass-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.grass-row .tag { font-size: 12px; color: rgb(var(--ink-rgb) / 0.8); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 5px 4px; border-bottom: 1px solid rgb(var(--ink-rgb) / 0.12); vertical-align: top; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.ok { color: #3f7a1f; font-weight: 600; }
+.low { color: #a83a27; font-weight: 600; }
+.ask { background: rgb(var(--pill-rgb)); border-radius: 14px; padding: 4px 16px 4px 28px; }
+.ask li { margin: 8px 0; }
+footer { margin-top: 24px; font-size: 12px; color: var(--ink-soft); }
+
