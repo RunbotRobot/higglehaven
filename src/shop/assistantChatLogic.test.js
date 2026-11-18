@@ -74,11 +74,12 @@ describe('left questions (#3448)', () => {
     expect(canLeaveQuestion(null)).toBe(false);
   });
 
-  it('states the place in line, that closing keeps it, and how long it is kept, from the server numbers', () => {
+  it('states the place in line and that closing keeps it, from the server numbers, and not how long questions are kept (#3733)', () => {
     const text = questionNotice({ status: 'waiting', position: 3 }, { keptDays: 7, assistantsOnShift: 2 });
     expect(text).toContain("You're number 3 in line.");
     expect(text).toContain('your place is kept');
-    expect(text).toContain('7 days');
+    expect(text).not.toMatch(/\bdays?\b/);
+    expect(text).not.toContain('kept for');
     expect(text).not.toContain('No assistant is on the floor');
   });
 

@@ -114,6 +114,9 @@ export const questionInLine = isInLine;
 // What the panel says about a left question, in a shopper's words. Every number
 // (the place in line, how many days it is kept, how many assistants are on the
 // floor) arrives in the server's reply; nothing is a second copy of a limit.
+// #3733: the waiting notice no longer says how long questions are kept (the
+// owner: superfluous); the run-out notice still says it, since that explains
+// what happened to the person's question.
 export function questionNotice(question, { keptDays, assistantsOnShift }) {
   if (question.status === 'expired') {
     return `Nobody answered your question within ${keptDays} days. You can ask again.`;
@@ -123,7 +126,7 @@ export function questionNotice(question, { keptDays, assistantsOnShift }) {
     ? 'An assistant is reading your question.'
     : `You're number ${question.position} in line.`;
   const floor = assistantsOnShift === 0 ? ' No assistant is on the floor right now, so this may take a while.' : '';
-  return `${place}${floor} You can close this and your place is kept: you'll get a notification when it's answered. Questions are kept for ${keptDays} days.`;
+  return `${place}${floor} You can close this and your place is kept: you'll get a notification when it's answered.`;
 }
 
 // #3529: the minimised panel's pill. `unread` is whether a reply has come in
