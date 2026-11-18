@@ -449,10 +449,10 @@ export function applyShopCameraOrientation() {
   camera.quaternion.copy(yawQuat).multiply(pitchQuat).multiply(SHOP_BASE_QUAT);
 }
 
-// #3650 (part of #3648, the bud): moving through the world by touching it, in
-// place of the two on-screen sticks and the fly button. A drag anywhere on the
-// world walks (a stick placed wherever the finger lands), a second finger
-// dragging looks, and a double-tap takes off or lands; the recogniser is
+// #3650, #3749 (part of #3648, the bud): moving through the world by touching it, in
+// place of the two on-screen sticks and the fly button. A drag that starts on the left
+// half of the screen walks (a stick placed wherever the thumb lands), one that starts on
+// the right half looks, and a double-tap takes off or lands; the recogniser is
 // src/shop/worldGestures.js and it feeds the same two raw stick states the
 // keyboard feeds, so everything downstream is unchanged. Touch and pen only:
 // a mouse keeps the keyboard and wheel. Each finger is captured on the canvas so
@@ -488,6 +488,8 @@ function bindWorldGestures(canvas) {
       toggleShopFlight();
       announceWorldGesture('fly');
     },
+    // Left half of the screen walks, right half looks (#3749).
+    splitX: () => window.innerWidth / 2,
   });
   // A mouse is not a gesture on a real device (it keeps the keyboard and wheel);
   // an automated browser (the e2e suite, scripts/live-site.mjs) has only a mouse

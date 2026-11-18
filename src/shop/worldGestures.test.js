@@ -7,6 +7,7 @@ function rig() {
     onMove: (x, y) => events.push(['move', x, y]),
     onLook: (x, y) => events.push(['look', x, y]),
     onDoubleTap: () => events.push(['double']),
+    splitX: () => 200, // a 400 px wide screen: x < 200 is the left half
   });
   return { events, gestures };
 }
@@ -24,20 +25,23 @@ describe('deflection', () => {
   });
 });
 
-describe('walking', () => {
+const LEFT = 100;
+const RIGHT = 300;
+
+describe('walking (the left half)', () => {
   it('a finger that stays within the tap slop is not a drag', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 100, 100, 0);
-    gestures.move(1, 100 + TAP_SLOP_PX, 100);
+    gestures.down(1, LEFT, 100, 0);
+    gestures.move(1, LEFT + TAP_SLOP_PX, 100);
     expect(events).toEqual([]);
   });
 
   it('a drag walks, from where the finger landed, and stops on lift', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 200, 300, 0);
-    gestures.move(1, 200, 300 - FULL_DEFLECTION_PX);
+    gestures.down(1, LEFT, 300, 0);
+    gestures.move(1, LEFT, 300 - FULL_DEFLECTION_PX);
     expect(events.at(-1)).toEqual(['move', 0, -1]);
-    gestures.move(1, 200, 300 - FULL_DEFLECTION_PX / 2);
+    gestures.move(1, LEFT, 300 - FULL_DEFLECTION_PX / 2);
     expect(events.at(-1)[2]).toBeCloseTo(-0.5);
     gestures.up(1, 600);
     expect(events.at(-1)).toEqual(['move', 0, 0]);
@@ -55,39 +59,76 @@ describe('walking', () => {
   });
 });
 
-describe('looking', () => {
-  it('a second finger looks while the first stays a walker', () => {
+describe('looking (the right half)', () => {
+  it('one finger alone looks, with nothing else down: a person can stand still and look around', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 100, 400, 0);
-    gestures.down(2, 300, 400, 20);
-    gestures.move(2, 300 + FULL_DEFLECTION_PX, 400);
-    expect(events.at(-1)).toEqual(['look', 1, 0]);
-    // the walker has not moved, so it asks for nothing
-    expect(events.some((e) => e[0] === 'move' && (e[1] !== 0 || e[2] !== 0))).toBe(false);
-    gestures.move(1, 100, 400 - FULL_DEFLECTION_PX);
-    expect(events.at(-1)).toEqual(['move', 0, -1]);
-    gestures.up(2, 500);
+    gestures.down(1, RIGHT, 400, 0);
+    gestures.move(1, RIGHT + FULL_DEFLECTION_PX / 2, 400);
+    expect(events.at(-1)[0]).toBe('look');
+    expect(events.at(-1)[1]).toBeCloseTo(0.5);
+    expect(events.some((e) => e[0] === 'move')).toBe(false);
+    gestures.up(1, 500);
     expect(events.at(-1)).toEqual(['look', 0, 0]);
-    gestures.up(1, 520);
-    expect(events.at(-1)).toEqual(['move', 0, 0]);
   });
 
-  it('a third finger does nothing', () => {
+  it('both halves work at once, whichever finger went down first', () => {
+    const first = rig();
+    first.gestures.down(1, RIGHT, 400, 0);
+    first.gestures.down(2, LEFT, 400, 20);
+    first.gestures.move(2, LEFT, 400 - FULL_DEFLECTION_PX);
+    first.gestures.move(1, RIGHT + FULL_DEFLECTION_PX, 400);
+    expect(first.events).toContainEqual(['move', 0, -1]);
+    expect(first.events).toContainEqual(['look', 1, 0]);
+    first.gestures.up(2, 500);
+    expect(first.events.at(-1)).toEqual(['move', 0, 0]);
+    first.gestures.up(1, 520);
+    expect(first.events.at(-1)).toEqual(['look', 0, 0]);
+
+    const second = rig();
+    second.gestures.down(1, LEFT, 400, 0);
+    second.gestures.down(2, RIGHT, 400, 20);
+    second.gestures.move(1, LEFT, 400 - FULL_DEFLECTION_PX);
+    second.gestures.move(2, RIGHT + FULL_DEFLECTION_PX, 400);
+    expect(second.events).toContainEqual(['move', 0, -1]);
+    expect(second.events).toContainEqual(['look', 1, 0]);
+  });
+
+  it('a still finger on one half asks for nothing while the other half drags', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 0, 0, 0);
-    gestures.down(2, 100, 0, 5);
-    gestures.down(3, 200, 0, 10);
-    gestures.move(3, 200 + 60, 0);
+    gestures.down(1, LEFT, 400, 0);
+    gestures.down(2, RIGHT, 400, 20);
+    gestures.move(2, RIGHT + FULL_DEFLECTION_PX, 400);
+    expect(events.some((e) => e[0] === 'move')).toBe(false);
+  });
+
+  it('a second finger on a half that already has one does nothing', () => {
+    const { events, gestures } = rig();
+    gestures.down(1, LEFT, 0, 0);
+    gestures.down(2, LEFT + 50, 0, 5);
+    gestures.move(2, LEFT + 50, 60);
     expect(events).toEqual([]);
+    gestures.move(1, LEFT, 60);
+    expect(events.at(-1)[0]).toBe('move');
+  });
+
+  it('the dividing line is the middle: left of it walks, at it and right of it looks', () => {
+    const left = rig();
+    left.gestures.down(1, 199, 0, 0);
+    left.gestures.move(1, 199, FULL_DEFLECTION_PX);
+    expect(left.events.at(-1)[0]).toBe('move');
+    const right = rig();
+    right.gestures.down(1, 200, 0, 0);
+    right.gestures.move(1, 200, FULL_DEFLECTION_PX);
+    expect(right.events.at(-1)[0]).toBe('look');
   });
 
   it('two fingers are never a tap, whatever they do', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 0, 0, 0);
-    gestures.down(2, 100, 0, 5);
+    gestures.down(1, LEFT, 0, 0);
+    gestures.down(2, RIGHT, 0, 5);
     gestures.up(2, 50);
     gestures.up(1, 60);
-    gestures.down(3, 0, 0, 100);
+    gestures.down(3, LEFT, 0, 100);
     gestures.up(3, 150);
     expect(events.some((e) => e[0] === 'double')).toBe(false);
   });
@@ -126,6 +167,15 @@ describe('double-tap', () => {
     expect(hold.events).toEqual([]);
   });
 
+  it('works on either half of the screen', () => {
+    for (const x of [LEFT, RIGHT]) {
+      const { events, gestures } = rig();
+      gestures.down(1, x, 50, 0); gestures.up(1, 30);
+      gestures.down(2, x, 50, 100); gestures.up(2, 130);
+      expect(events).toEqual([['double']]);
+    }
+  });
+
   it('three quick taps are one double-tap and then a fresh first tap', () => {
     const { events, gestures } = rig();
     gestures.down(1, 0, 0, 0); gestures.up(1, 30);
@@ -138,10 +188,10 @@ describe('double-tap', () => {
 describe('cancel', () => {
   it('lets go of everything held', () => {
     const { events, gestures } = rig();
-    gestures.down(1, 0, 0, 0);
-    gestures.down(2, 100, 0, 5);
-    gestures.move(1, 0, -50);
-    gestures.move(2, 150, 0);
+    gestures.down(1, LEFT, 0, 0);
+    gestures.down(2, RIGHT, 0, 5);
+    gestures.move(1, LEFT, -50);
+    gestures.move(2, RIGHT + 50, 0);
     events.length = 0;
     gestures.cancel();
     expect(events).toEqual([['move', 0, 0], ['look', 0, 0]]);

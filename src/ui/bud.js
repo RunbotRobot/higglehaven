@@ -249,8 +249,8 @@ export function openHowToMoveLeaf() {
     title: 'How to move',
     render: (body) => {
       const lines = [
-        'Walk: drag anywhere on the world, or W A S D / the arrow keys.',
-        'Look: drag a second finger, or Q and E to turn.',
+        'Walk: drag on the left half of the screen, or W A S D / the arrow keys.',
+        'Look: drag on the right half, or Q and E to turn. Both at once, one thumb each.',
         'Fly: double-tap the world, or press Space twice.',
         'Tap a product to look at it.',
       ];

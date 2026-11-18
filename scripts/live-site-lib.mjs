@@ -19,7 +19,7 @@ export const WALK_VECTORS = {
   right: [1, 0],
 };
 
-// #3479/#3650: the camera is steered by a second finger (held, it turns the view at a
+// #3479/#3650/#3749: the camera is steered by a finger dragged from the right half (held, it turns the view at a
 // steady rate; up and down are the pitch), not by dragging the page, so `aim`
 // holds that finger. Directions are as the finger moves, on the screen.
 export const AIM_VECTORS = {

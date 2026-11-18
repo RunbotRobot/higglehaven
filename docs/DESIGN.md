@@ -79,8 +79,8 @@ permanent controls. Four things are built with:
 | **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
 | **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
 
-Everything else is a gesture on the world itself: drag to walk, a second finger
-to look, double-tap to fly, tap a product to open its card. A gesture cannot be
+Everything else is a gesture on the world itself: drag on the left half to walk, drag on
+the right half to look, double-tap to fly, tap a product to open its card. A gesture cannot be
 seen until it is taught once, so the bud teaches (it pulses and says Menu until
 first opened) and the instructions live in it, one tap away. Under
 `prefers-reduced-motion` nothing animates.
