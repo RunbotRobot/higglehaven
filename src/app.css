@@ -879,14 +879,38 @@
       body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
         animation: bud-pulse 1.6s ease-in-out infinite;
       }
+      /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
+         stem is set in from the screen edge (the head is in the upper left, so there is little
+         room on the left): 88px in, with 76px leaves either side of it, the first on the right and
+         then alternating (src/ui/bud.js sets data-side and --leaf-i on the visible leaves). The
+         leaves' pitch is about half a leaf's height, so a left leaf sits between two right ones
+         and the whole stem is short. Each leaf is the icon (src/ui/budIcons.js) with its one small
+         word under it; the picture is the main thing. */
+      .bud-icon { display: none; }
       body[data-bud="on"] #account-menu-panel {
+        --stem-x: 88px;
+        --leaf-w: 76px;
         background: transparent;
         box-shadow: none;
         padding: 0;
-        gap: var(--space-sm);
+        gap: 0;
         top: calc(100% + 8px);
+        width: calc(var(--stem-x) + var(--leaf-w) + var(--space-lg));
         min-width: 0;
         align-items: flex-start;
+      }
+      body[data-bud="on"] #account-menu-panel::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        height: var(--stem-h, 0px);
+        left: var(--stem-x);
+        width: 4px;
+        margin-left: -2px;
+        border-radius: var(--radius-sm);
+        background: rgb(var(--ink-rgb) / 0.55);
+        transform-origin: top;
+        animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
       }
       body[data-bud="on"] #account-menu-panel button {
         min-height: 44px;
@@ -898,7 +922,72 @@
         white-space: nowrap;
         animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
       }
+      /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
+      body[data-bud="on"] #account-menu-panel > button,
+      body[data-bud="on"] #account-menu-panel > .bud-pair {
+        position: relative;
+        box-sizing: border-box;
+        width: var(--leaf-w);
+        margin-bottom: -22px;
+        animation-delay: calc(var(--leaf-i, 0) * 0.018s);
+      }
+      body[data-bud="on"] #account-menu-panel > .bud-pair { width: 88px; gap: 0; }
+      body[data-bud="on"] #account-menu-panel [data-side="right"] { margin-left: calc(var(--stem-x) + 4px); transform-origin: left center; }
+      body[data-bud="on"] #account-menu-panel [data-side="left"] { margin-left: calc(var(--stem-x) - var(--leaf-w) - 4px); transform-origin: right center; }
+      body[data-bud="on"] #account-menu-panel > .bud-pair[data-side="left"] { margin-left: calc(var(--stem-x) - 92px); }
+      body[data-bud="on"] #account-menu-panel [data-side="left"],
+      body[data-bud="on"] #account-menu-panel [data-side="left"] button { border-radius: 6px 30px 6px 30px; }
+      body[data-bud="on"] #account-menu-panel [data-side="right"],
+      body[data-bud="on"] #account-menu-panel [data-side="right"] button { border-radius: var(--radius-leaf); }
+      body[data-bud="on"] #account-menu-panel [data-side]::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        width: 6px;
+        height: 4px;
+        margin-top: -2px;
+        background: rgb(var(--ink-rgb) / 0.55);
+      }
+      body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
+      body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
+      body[data-bud="on"] #account-menu-panel > button,
+      body[data-bud="on"] #account-menu-panel .bud-pair button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-3xs);
+        min-height: 56px;
+        padding: var(--space-xs) var(--space-3xs);
+        font: var(--text-xs)/1.1 var(--font-sans);
+        white-space: normal;
+        text-align: center;
+        overflow-wrap: anywhere;
+      }
+      body[data-bud="on"] #account-menu-panel .bud-pair button { flex: 1; min-width: 44px; padding: var(--space-xs); }
+      body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #account-menu-panel .bud-icon svg { display: block; }
+      /* A mark (unread notices, a friend request) sits on the leaf's corner. */
+      body[data-bud="on"] #account-menu-panel button #notifications-badge,
+      body[data-bud="on"] #account-menu-panel button #friends-badge,
+      body[data-bud="on"] #account-menu-panel button #dm-badge {
+        position: absolute;
+        top: var(--space-xs);
+        right: var(--space-xs);
+        margin: 0;
+      }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
+      /* The lines that are not leaves (the lándlet cap, the tax notice, where you are standing) go
+         below the last leaf, not between two of them across the stem. */
+      body[data-bud="on"] #account-menu-landcap,
+      body[data-bud="on"] #account-menu-tax-notice,
+      body[data-bud="on"] #account-menu-landlet-info {
+        order: 100;
+        width: calc(var(--stem-x) + var(--leaf-w));
+        box-sizing: border-box;
+        margin-top: var(--space-2xl);
+        border-top: none;
+      }
       /* #3723: Shop, Build and Sell are a half-ring of three petals at the bud's corner, apart from
          the column of things you open, hidden until the bud is unfolded. The arc opens away from
          the screen edge: --ring-sx/--ring-sy are +1 for a bud in the top-left corner (the ring
@@ -952,9 +1041,11 @@
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(var(--white-rgb) / 0.35); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+      @keyframes bud-stem-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
         body[data-bud="on"] #account-menu-panel button,
+        body[data-bud="on"] #account-menu-panel::before,
         body[data-bud="on"] #bud-modes .mode-nav-btn { animation: none; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */

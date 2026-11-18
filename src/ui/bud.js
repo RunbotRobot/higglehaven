@@ -19,6 +19,8 @@
 // #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
 // without being rebuilt, and the id the e2e suite drives is unchanged.
 
+import { iconKeyFor, svgIcon } from './budIcons.js';
+
 const FIRST_OPEN_KEY = 'hh_bud_opened';
 const registry = new Map();
 const marks = new Set();
@@ -108,6 +110,7 @@ function syncBud() {
       btn.hidden = petalMode !== mode;
     }
   }
+  scheduleStem();
   if (!mode) return;
   // A mode with a definition has the bud; without one its old controls are still its way in.
   document.body.dataset.bud = registry.has(mode) ? 'on' : 'off';
@@ -123,6 +126,66 @@ function syncBud() {
     if (inBud && btn.dataset.mode === mode) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
   }
+}
+
+
+// #3761 (part of #3759): an open menu is a stem with leaves on both sides, and every leaf is an
+// icon with its word under it. This only decorates and places what is already in the panel: which
+// leaf is in which menu is decided elsewhere (registerBudPetals and friends), so it walks the
+// *visible* children, never :nth-child, and runs again whenever one is added, shown, hidden or has
+// its text replaced (Add item's "Cancel placing" does that).
+function decorateLeaf(el) {
+  // The sign-in leaf says "Log In / Sign Up" before an account and the person's name after it: an
+  // arrow into a door, then a person.
+  const key = el.id === 'account-auth-btn' && !/log in|sign up/i.test(el.textContent) ? 'person' : iconKeyFor(el);
+  const have = el.querySelector(':scope > .bud-icon');
+  if (have && have.dataset.icon === key) return;
+  have?.remove();
+  const icon = document.createElement('span');
+  icon.className = 'bud-icon';
+  icon.dataset.icon = key;
+  icon.setAttribute('aria-hidden', 'true');
+  icon.appendChild(svgIcon(key));
+  el.prepend(icon);
+}
+
+function layoutStem() {
+  const host = panel();
+  if (!host) return;
+  let index = 0;
+  let last = null;
+  for (const el of host.children) {
+    if (!el.matches('button, .bud-pair')) continue;
+    if (el.matches('.bud-pair')) el.querySelectorAll('button').forEach(decorateLeaf);
+    else decorateLeaf(el);
+    if (el.hidden || el.style.display === 'none') {
+      el.removeAttribute('data-side');
+      continue;
+    }
+    // Alternate: the first leaf on the right (the head is upper left, so the right has the room),
+    // then left, and so on; --leaf-i staggers the unfold from the stem's root outward.
+    el.setAttribute('data-side', index % 2 === 0 ? 'right' : 'left');
+    el.style.setProperty('--leaf-i', String(index));
+    last = el;
+    index += 1;
+  }
+  // The stem ends at the middle of the last leaf, so the notes under the leaves (the lándlet cap)
+  // are not struck through by it. Measured only while the panel is drawn.
+  const hostBox = host.getBoundingClientRect();
+  if (last && hostBox.height > 0) {
+    const box = last.getBoundingClientRect();
+    host.style.setProperty('--stem-h', `${Math.round(box.top + box.height / 2 - hostBox.top)}px`);
+  }
+}
+
+let stemPending = false;
+function scheduleStem() {
+  if (stemPending) return;
+  stemPending = true;
+  queueMicrotask(() => {
+    stemPending = false;
+    layoutStem();
+  });
 }
 
 let leafOnClose = null;
@@ -231,6 +294,10 @@ function markLearned() {
 
 if (typeof document !== 'undefined') {
   document.addEventListener('higglehaven:mode', syncBud);
+  if (panel()) {
+    new MutationObserver(scheduleStem).observe(panel(), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    scheduleStem();
+  }
   if (!learned()) document.body.setAttribute('data-bud-new', '');
   toggle()?.addEventListener('click', () => {
     if (panel()?.classList.contains('expanded')) markLearned();
