@@ -62,17 +62,10 @@
       <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
     </div>
     </div>
-    <!-- #2779 (sub-issue of #2777, docs/SPEC.md §2's "Text chat available
-         as an alternative [to voice]"): visibility is driven entirely by
-         src/shop/nearbyChat.js's own per-tick trustTier check (same
-         id_verified-specific gate direct messages already require, §6),
-         not a one-time reveal from src/shop/mode.js like the fly button/
-         feedback button above -- this toggles live if a shopper verifies
-         mid-session. The panel itself is a separate open/closed state
-         (its own .open class, not .shop-ui's .visible) so the button stays
-         a small collapsed pill until actually tapped, per §1's "leave
-         plenty of screen space open". -->
-    <button id="shop-nearby-chat-btn" class="shop-ui" type="button">Chat</button>
+    <!-- #2779, #3556: the nearby text chat. It waits here, hidden, and the Chat petal of the
+         flower (src/shop/nearbyChat.js) borrows it as a leaf while it is open and gives it back
+         as it closes, so there is no pill on the world. Sending is gated on id_verified
+         (docs/SPEC.md section 6); the leaf says so to anyone who is not. -->
     <div id="shop-nearby-chat-panel">
       <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
       <div id="shop-nearby-chat-status" role="status" aria-live="polite"></div>
@@ -274,11 +267,13 @@
           <button class="catalog-mode-tab-btn" type="button" data-catalog-mode="prompt">Prompt</button>
         </div>
         <div id="catalog-manual-mode">
-          <input id="catalog-search-input" type="text" placeholder="Search…" aria-label="Search products" />
-          <div id="catalog-search-scope-tabs">
-            <button class="search-scope-btn active" type="button" data-search-scope="both">All</button>
-            <button class="search-scope-btn" type="button" data-search-scope="products">Products</button>
-            <button class="search-scope-btn" type="button" data-search-scope="bundles">Bundles</button>
+          <div id="catalog-search-row">
+            <input id="catalog-search-input" type="text" placeholder="Search…" aria-label="Search products" />
+            <div id="catalog-search-scope-tabs">
+              <button class="search-scope-btn active" type="button" data-search-scope="both">All</button>
+              <button class="search-scope-btn" type="button" data-search-scope="products">Products</button>
+              <button class="search-scope-btn" type="button" data-search-scope="bundles">Bundles</button>
+            </div>
           </div>
           <div id="catalog-picker-grid"></div>
           <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>

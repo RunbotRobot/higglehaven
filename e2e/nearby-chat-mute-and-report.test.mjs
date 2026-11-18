@@ -11,7 +11,7 @@
 // already documents and uses (this deployment never configures
 // DIDIT_API_KEY, so there's no real way to drive an account to
 // trust_tier === 'id_verified' otherwise).
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, budClick } from './helpers.mjs';
 
 const REPORT_REASON = 'inappropriate conduct';
 const LABEL = 'Nearby Chat Mute Report Tester';
@@ -66,8 +66,7 @@ await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
 await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-await page.waitForSelector('#shop-nearby-chat-btn.visible', { timeout: 10000 });
-await page.click('#shop-nearby-chat-btn');
+await budClick(page, '#bud-petal-shop-chat'); // #3556: the Chat petal of the flower
 await page.waitForSelector('#shop-nearby-chat-panel.open', { timeout: 5000 });
 
 await page.waitForSelector(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"]`, { timeout: 10000 });

@@ -486,7 +486,7 @@ its corner when you reach the limit.
 
 ### How do I chat with people nearby?
 
-1. Tap the "Chat" button. A small chat box opens.
+1. Tap the round logo at the top left (the bud), then tap "Chat". A small chat box opens.
 2. Type in the box that says "Say something nearby…" and tap "Send".
 3. People close to you see it. Their messages show in the same box.
 4. If you have muted someone, "Muted" with a number shows above the box. Tap it to
@@ -496,15 +496,15 @@ its corner when you reach the limit.
 appear in the same box.
 
 **If something goes wrong:**
-- There is no "Chat" button: nearby chat, like direct messages and voice, is only
-  for people whose age and identity the app has checked. If they cannot see it, that
-  is the likely reason. Do not explain the rules: if they want to know how to get
-  verified, use the runbook's hand-off.
+- The box says chatting opens once their ID is verified: nearby chat, like direct
+  messages and voice, is only for people whose age and identity the app has checked.
+  Do not explain the rules: if they want to know how to get verified, use the
+  runbook's hand-off.
 - Someone is bothering them: they can mute that person from the box. For harassment,
   use the runbook's hand-off.
 
 ```controls any
-#shop-nearby-chat-btn | Chat
+#bud-petal-shop-chat | Chat
 #shop-nearby-chat-input | Say something nearby
 #shop-nearby-chat-panel button[type="submit"] | Send
 #shop-nearby-chat-muted-toggle | Muted
@@ -641,8 +641,10 @@ are inside it.
    then tap "Add item". A short strip opens at the bottom: a "Search" box and a
    row of items to swipe, the ones used most recently first.
 2. Swipe along the row, or type in the "Search" box. For the whole list, tap
-   "All items": "All", "Products" and "Bundles" narrow it to everything, single
-   items or saved bundles.
+   "All items": a wider panel opens with the "Search" box and, on the same row,
+   "All", "Products" and "Bundles", which narrow it to everything, single items
+   or saved bundles. The items scroll underneath; "Manual" and "Prompt" are at
+   the top, beside the close button.
 3. Tap an item's name. The list closes and the top of the screen says "Tap a spot
    to place" and the item's name.
 4. Tap the ground where you want it.
