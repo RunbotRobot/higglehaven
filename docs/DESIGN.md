@@ -342,6 +342,15 @@ by touching the world. The module is `src/ui/bud.js`:
   grows from the top and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- The lándlet a person is on is named at the top of the open menu (#3770), before any leaf: a small
+  sign in the same leaf shape in the head's row, to the right of the ring of modes. The name is a
+  wordmark (a flourished serif in the ink green, the family of the higglehaven wordmark) with "by
+  <builder>" small under it. Shop keeps it current as the avatar crosses lándlets, Build names the
+  lándlet being built, and Sell names nothing, because the showroom is not a real place. It is
+  selectable text and a tap does nothing. The name and the builder are separate spans
+  (src/ui/budPlace.js), and the lettering lives on one class, so the wordmark renderer (#3782)
+  swaps the face and colours without touching the layout. The three lines of grey text that used
+  to sit between Settings and How to move are gone.
 - The glow, never a scale, is the bud's breath: a control that moves is hard to
   tap, and cannot be clicked by a test.
 
