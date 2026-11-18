@@ -1127,6 +1127,9 @@ for (const row of accountMenuPanel.querySelectorAll('button')) {
 document.addEventListener('click', (event) => {
   if (!accountMenuPanel.classList.contains('expanded')) return;
   if (accountMenuToggle.contains(event.target) || accountMenuPanel.contains(event.target)) return; // #3649: the toggle now has children (the bud logo)
+  // #3760: the ring's petals (the three places and Menu) decide for themselves: one for a place you are not in
+  // folds the bud (src/ui/bud.js), the others change which menu is open and leave it open.
+  if (event.target.closest?.('#bud-modes')) return;
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
   accountMenuToggle.setAttribute('aria-expanded', 'false');
