@@ -5,14 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script src="/viewport-refresh.js"></script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- #3738: the phone's own splash before our page (an installed tile) takes its
+         colour from here, so the change to our opening screen is not a flash. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#eef4e0" />
     <title>higglehaven (dev)</title>
     <link rel="stylesheet" href="/src/tokens.css" />
     <link rel="stylesheet" href="/src/app.css" />
   </head>
   <body>
     <canvas id="app"></canvas>
+    <!-- #3738: the opening screen moves from the first paint. The bud and the fog
+         are plain markup animated by the stylesheet (no script, no image
+         request); the bar, the words under it and the tips are filled in by
+         src/ui/loadingStages.js as real stages are reached. -->
     <div id="loading-screen" aria-hidden="true">
-      <img src="/wordmark.png" alt="higglehaven" />
+      <div id="loading-fog"><span></span><span></span><span></span></div>
+      <div id="loading-content">
+        <svg id="loading-bud" viewBox="0 0 120 120" width="96" height="96" focusable="false">
+          <g transform="rotate(0 60 60)"><ellipse class="loading-petal" cx="60" cy="34" rx="13" ry="24" /></g>
+          <g transform="rotate(72 60 60)"><ellipse class="loading-petal" cx="60" cy="34" rx="13" ry="24" /></g>
+          <g transform="rotate(144 60 60)"><ellipse class="loading-petal" cx="60" cy="34" rx="13" ry="24" /></g>
+          <g transform="rotate(216 60 60)"><ellipse class="loading-petal" cx="60" cy="34" rx="13" ry="24" /></g>
+          <g transform="rotate(288 60 60)"><ellipse class="loading-petal" cx="60" cy="34" rx="13" ry="24" /></g>
+          <circle id="loading-bud-core" cx="60" cy="60" r="10" />
+        </svg>
+        <img src="/wordmark.png" alt="higglehaven" />
+        <div id="loading-bar"><div id="loading-bar-fill"></div></div>
+        <div id="loading-stage">Opening</div>
+        <div id="loading-tip"></div>
+        <div id="loading-problem" hidden>
+          <p id="loading-problem-text"></p>
+          <button id="loading-retry" type="button">Try again</button>
+        </div>
+      </div>
     </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
@@ -1085,6 +1111,7 @@
         </div>
       </div>
     </div>
+    <script type="module" src="/src/ui/loadingBoot.js"></script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

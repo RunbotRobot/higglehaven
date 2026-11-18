@@ -115,6 +115,7 @@ active state and one coral for danger.
 | token | value | use |
 |---|---|---|
 | `--ink-rgb` | `22 36 10` | the one dark-green ink, as channels so a use can pick its own opacity: `rgb(var(--ink-rgb) / 0.25)` |
+| `--white-rgb` | `255 255 255` | white as channels, for the bud and its leaves' sheen and rings: `rgb(var(--white-rgb) / 0.9)` |
 | `--ink` | the ink as a colour | text and lines on either pale surface |
 | `--pill-rgb` | `214 232 190` | the small floating HUD chrome: pale green |
 | `--panel-rgb` | `250 240 199` | large, text-heavy dialogs: pale yellow |
