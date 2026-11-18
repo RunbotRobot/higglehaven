@@ -35,6 +35,7 @@
 //                                         the walk's legs; tap:... shows a leaf unfolding)
 //   idle                                  wait until the network and frames settle
 //   wait:<ms>                             wait
+//   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
 //   pos                                   where the avatar stands now, and which mode and flags the page is in
@@ -458,6 +459,12 @@ async function runStepAction(step, index) {
       return null;
     case 'wait':
       await page.waitForTimeout(a);
+      return null;
+    case 'key':
+      // A real key press (a Playwright key name: KeyN, Escape, Shift+KeyN), for the keyboard ways
+      // in (#3824). The page's own handlers see an ordinary keydown.
+      await page.keyboard.press(String(a));
+      await page.waitForTimeout(400);
       return null;
     case 'shot': {
       const file = path.join(outDir, safeShotName(a, index));

@@ -1398,10 +1398,18 @@
         width: 48px;
         height: 48px;
       }
+      /* #3844: the sign had 91px on a phone (a 79px reserve on the right that nothing uses), so a name
+         broke inside a word and ran down over the stem. It now takes the room between the ring and the
+         compass (never wider than a leaf), breaks at spaces and only inside a word that alone is wider
+         than the sign, and stops above the stem: past that height it scrolls inside itself (a person
+         can still select all of it) with a quiet fade at the bottom while text is clipped. */
       body[data-bud="on"] #account-menu-landlet-info {
         box-sizing: border-box;
         width: max-content;
-        max-width: calc(100vw - var(--bud-size) - 104px - 13px - 66px - 48px - var(--space-lg));
+        max-width: min(320px, calc(100vw - var(--bud-size) - 104px - 13px - 48px - var(--space-lg)));
+        max-height: calc(var(--bud-size) + 8px + 92px - var(--space-sm));
+        overflow-y: auto;
+        scrollbar-width: none;
         display: flex;
         flex-direction: column;
         gap: var(--space-3xs);
@@ -1412,11 +1420,17 @@
         user-select: text;
       }
       body[data-bud="on"] #account-menu-landlet-info[hidden] { display: none; }
+      body[data-bud="on"] #account-menu-landlet-info::-webkit-scrollbar { display: none; }
+      body[data-bud="on"] #account-menu-landlet-info[data-clipped] {
+        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+      }
       .bud-place-name {
         font: 700 var(--text-xl)/1.1 Georgia, 'Times New Roman', serif;
         letter-spacing: 0.01em;
         color: var(--ink);
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word; /* spaces first; inside a word only when it alone is wider than the sign */
+        hyphens: manual;
       }
       .bud-place-by {
         font: var(--text-xs)/var(--leading-tight) var(--font-sans);
