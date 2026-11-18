@@ -40,6 +40,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { registerBudPetals } from '../ui/bud.js';
+import { openPayoutsLeaf } from './payoutsLeaf.js';
 import { openHelpLeaf } from '../ui/helpLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
@@ -62,21 +63,19 @@ import {
   fetchProductReviews, fetchPurchases, fetchSellerFeedback,
   markPurchaseShipped, refundPurchase, updateCatalogTemplate, uploadModelFile,
   fetchMySeller, renameSeller, deleteSeller,
-  fetchSellerStripeAccount, submitSellerStripeAccount, fetchSellerPayouts, requestSellerPayout,
 } from '../api.js';
-import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import { buildCatalogPickerButtons } from '../catalog/picker.js';
 import { dimensionsChanged } from '../catalog/upload.js';
 import { rescaleAndUploadModelTiers } from '../catalog/modelTierUpload.js';
 import { updateSelectionUI } from '../build/scene.js';
 import {
   bootstrapPromise, catalogThumbnailCache, catalogThumbnailEmbeddingCache,
-  formatDollarsForPriceInput, formatPriceCents, parsePriceInputDollars, daysInMonth,
+  formatDollarsForPriceInput, formatPriceCents, parsePriceInputDollars,
   persistCatalogThumbnail, renderCatalogThumbnail, solidColorDataUrl,
   updateModeNavUI, DIGITAL_GOOD_DISCLAIMER_TEXT, MAX_MONEY_CENTS,
 } from '../main.js';
 import {
-  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
+  renderSettingsSection, renderIdentityField,
 } from '../settings/modal.js';
 import {
   loadSellerShowcasePage, refreshSellerShowcase, sellerShowcasePageIndex, sellerShowcaseFeedbackState,
@@ -2259,6 +2258,13 @@ async function openAddProductFromPetal() {
   document.dispatchEvent(new Event('higglehaven:add-product'));
 }
 
+async function openPayoutsFromPetal() {
+  await bootstrapPromise;
+  const id = await ensureSellerIdentity();
+  if (!id) return;
+  openPayoutsLeaf();
+}
+
 // #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
 // the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
 // two: My products reopens the product list (the bottom-right Products button it replaces is
@@ -2269,6 +2275,9 @@ registerBudPetals('sell', [
   // #3703 (Sell in the bud, 5/6): one petal starts every way of adding a product. The leaf it opens
   // (src/catalog/upload.js) asks which way; the + Upload Model and Sell This Too buttons are gone.
   { id: 'add-product', label: 'Add a product', run: () => { void openAddProductFromPetal(); } },
+  // #3704 (6/6, slice 1): the payout account, balance and Cash out are a leaf now (src/sell/payoutsLeaf.js),
+  // not the bottom of Settings > Sell. A seller identity first, as My products has always needed.
+  { id: 'payouts', label: 'Payouts', run: () => { void openPayoutsFromPetal(); } },
   { id: 'help', label: '?', name: 'Help', run: openHelpLeaf },
 ]);
 
@@ -2519,221 +2528,9 @@ function renderSellerIdentityField() {
   });
 }
 
-// Seller-facing Stripe Connect Custom account onboarding (#452, first leaf
-// under #347/#324's real-money payment processing — owner-confirmed
-// account type: Custom, meaning Stripe stays entirely invisible to the
-// seller and higglehaven builds this form itself, rather than redirecting
-// to a Stripe-hosted page). Lives under the Sell settings tab since it's a
-// seller-identity concern, not tied to any one landlet the way Build's
-// Publish/Auction sections are.
+// The payout account, balance and Cash out used to be the rest of this tab (#452, #454). They are
+// the bud's Payouts leaf now (#3704, src/sell/payoutsLeaf.js); what is left here is the storefront
+// name, which moves to its own leaf in slice 2.
 export async function renderSellSettingsSection() {
-  const myToken = settingsRenderToken;
   renderSellerIdentityField();
-
-  const statusField = document.createElement('div');
-  statusField.className = 'settings-field';
-  const statusLabel = document.createElement('span');
-  statusLabel.textContent = 'Payout Account';
-  statusField.appendChild(statusLabel);
-  const statusNote = document.createElement('div');
-  statusNote.className = 'settings-empty-note';
-  statusNote.setAttribute('role', 'status');
-  statusNote.setAttribute('aria-live', 'polite');
-  statusNote.textContent = 'Loading…';
-  statusField.appendChild(statusNote);
-  settingsSectionEl.appendChild(statusField);
-
-  const formField = document.createElement('div');
-  formField.className = 'settings-field';
-  settingsSectionEl.appendChild(formField);
-
-  let account;
-  try {
-    // #2928: back from Stripe's own onboarding step, re-read Stripe's view.
-    account = await fetchSellerStripeAccount({ refresh: consumeStripeReturnMarker() });
-  } catch (err) {
-    statusNote.textContent = err.message || 'Could not load your payout account status.';
-    statusNote.classList.add('error');
-    return;
-  }
-  // #1732: a tab switch (or modal reopen) during that await already tore
-  // down and rebuilt settingsSectionEl for a different tab — the real-money
-  // Payouts field below would land there instead of silently vanishing with
-  // it, same #905 guard every sibling Settings-tab renderer already has.
-  if (myToken !== settingsRenderToken) return;
-
-  function describeStatus() {
-    if (!account.configured) {
-      return "Stripe payouts aren't set up on this server yet — check back later.";
-    }
-    if (account.status === 'complete') return 'Your payout account is fully set up.';
-    if (account.status === 'requirements_due') {
-      const own = ownRequirementsDue(account);
-      // Anything only Stripe collects is covered by the "Continue with
-      // Stripe" step below, not listed here.
-      return own.length > 0
-        ? `Stripe needs more information: ${own.join(', ')}`
-        : 'Your account needs one more step with Stripe.';
-    }
-    if (account.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
-    if (account.connected) return 'Your account was created — verification is pending.';
-    return 'Not set up yet. Real-money sales are held until this is complete.';
-  }
-
-  statusNote.textContent = describeStatus();
-  statusNote.classList.remove('error');
-  syncStripeStepPrompt(statusField, 'seller', account);
-
-  const fields = [
-    ['firstName', 'First name', 'text'],
-    ['lastName', 'Last name', 'text'],
-    ['dobDay', 'Birth day', 'number'],
-    ['dobMonth', 'Birth month', 'number'],
-    ['dobYear', 'Birth year', 'number'],
-    ['ssnLast4', 'SSN (last 4 digits)', 'text'],
-    // #2927: Stripe started requiring this once account creation moved to
-    // Accounts v2 (#2924) -- it never asked for it under v1.
-    ['phone', 'Phone number', 'tel'],
-    ['addressLine1', 'Street address', 'text'],
-    ['addressCity', 'City', 'text'],
-    ['addressState', 'State', 'text'],
-    ['addressPostalCode', 'ZIP code', 'text'],
-    ['addressCountry', 'Country (2-letter code)', 'text'],
-    ['routingNumber', 'Bank routing number', 'text'],
-    ['accountNumber', 'Bank account number', 'text'],
-  ];
-  const inputs = {};
-  const form = document.createElement('div');
-  form.className = 'stripe-onboarding-form';
-  for (const [key, fieldLabel, type] of fields) {
-    const label = document.createElement('label');
-    label.textContent = fieldLabel;
-    const input = document.createElement('input');
-    input.type = type;
-    if (key === 'addressCountry') input.value = 'US';
-    if (key === 'dobMonth') { input.min = '1'; input.max = '12'; }
-    if (key === 'dobDay') { input.min = '1'; input.max = '31'; }
-    label.appendChild(input);
-    form.appendChild(label);
-    inputs[key] = input;
-  }
-  // #1940: same dobDay/dobMonth sync as the sibling seller-payout form.
-  function refreshDobDayMax() {
-    const month = parseInt(inputs.dobMonth.value, 10);
-    const year = parseInt(inputs.dobYear.value, 10);
-    if (!Number.isFinite(month) || month < 1 || month > 12) return;
-    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
-  }
-  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
-  inputs.dobYear.addEventListener('input', refreshDobDayMax);
-  const submitBtn = document.createElement('button');
-  submitBtn.type = 'button';
-  submitBtn.className = 'version-action-btn';
-  submitBtn.textContent = account.connected ? 'Update payout account' : 'Set up payout account';
-  form.appendChild(submitBtn);
-  const formStatus = document.createElement('div');
-  formStatus.className = 'settings-empty-note';
-  form.appendChild(formStatus);
-
-  submitBtn.addEventListener('click', async () => {
-    formStatus.textContent = '';
-    formStatus.classList.remove('error');
-    submitBtn.disabled = true;
-    try {
-      account = await submitSellerStripeAccount({
-        individual: {
-          firstName: inputs.firstName.value,
-          lastName: inputs.lastName.value,
-          dobDay: Number(inputs.dobDay.value),
-          dobMonth: Number(inputs.dobMonth.value),
-          dobYear: Number(inputs.dobYear.value),
-          ssnLast4: inputs.ssnLast4.value,
-          phone: inputs.phone.value,
-          addressLine1: inputs.addressLine1.value,
-          addressCity: inputs.addressCity.value,
-          addressState: inputs.addressState.value,
-          addressPostalCode: inputs.addressPostalCode.value,
-          addressCountry: inputs.addressCountry.value,
-        },
-        externalAccount: {
-          routingNumber: inputs.routingNumber.value,
-          accountNumber: inputs.accountNumber.value,
-          currency: 'usd',
-        },
-      });
-      // #1373: the Payouts field (balance + Cash out button) below only
-      // ever gets built once, gated on account.connected as it stood at
-      // this function's own initial render -- a first-time submit flips
-      // account.connected from false to true right here, but nothing
-      // re-evaluates that gate afterward, so the field (and the
-      // "Update payout account" relabel) never appeared until the tab was
-      // closed and reopened. Same renderSettingsSection() full-redraw
-      // idiom #1124/#1346 already use for this exact "a mutation here
-      // should refresh what a sibling/gated block shows" shape.
-      renderSettingsSection();
-      return;
-    } catch (err) {
-      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
-      formStatus.classList.add('error');
-    } finally {
-      submitBtn.disabled = false;
-    }
-  });
-
-  formField.appendChild(form);
-
-  // #454: only meaningful once an account actually exists to hold a
-  // balance against — Stripe stays entirely invisible to the seller
-  // otherwise (#452's own mandate), same reasoning as the status field
-  // above gating on account.connected implicitly via describeStatus().
-  if (account.connected) {
-    const payoutsField = document.createElement('div');
-    payoutsField.className = 'settings-field';
-    const payoutsLabel = document.createElement('span');
-    payoutsLabel.textContent = 'Payouts';
-    payoutsField.appendChild(payoutsLabel);
-    const payoutsNote = document.createElement('div');
-    payoutsNote.className = 'settings-empty-note';
-    payoutsNote.textContent = 'Loading…';
-    payoutsField.appendChild(payoutsNote);
-    const cashOutBtn = document.createElement('button');
-    cashOutBtn.type = 'button';
-    cashOutBtn.className = 'version-action-btn';
-    cashOutBtn.textContent = 'Cash out';
-    cashOutBtn.hidden = true;
-    payoutsField.appendChild(cashOutBtn);
-    settingsSectionEl.appendChild(payoutsField);
-
-    async function refreshPayouts() {
-      try {
-        const payouts = await fetchSellerPayouts();
-        const parts = [`Available to cash out: ${formatPriceCents(payouts.availableCents)}`];
-        if (payouts.heldCents > 0) parts.push(`Held: ${formatPriceCents(payouts.heldCents)}`);
-        if (payouts.nextEligibleAt) parts.push(`Next eligible: ${new Date(payouts.nextEligibleAt).toLocaleDateString()}`);
-        payoutsNote.textContent = parts.join(' · ');
-        payoutsNote.classList.remove('error');
-        cashOutBtn.hidden = payouts.availableCents <= 0;
-      } catch (err) {
-        payoutsNote.textContent = err.message || 'Could not load your payout balance.';
-        payoutsNote.classList.add('error');
-      }
-    }
-
-    cashOutBtn.addEventListener('click', async () => {
-      cashOutBtn.disabled = true;
-      showInlineActionStatus(payoutsField, '');
-      try {
-        await requestSellerPayout();
-        await refreshPayouts();
-        // #3249: shown beside the balance, not alert() (a suppressed dialog is silent).
-        showInlineActionStatus(payoutsField, 'Payout requested.', { error: false });
-      } catch (err) {
-        showInlineActionStatus(payoutsField, err.message || 'Could not request a payout.');
-      } finally {
-        cashOutBtn.disabled = false;
-      }
-    });
-
-    await refreshPayouts();
-  }
 }

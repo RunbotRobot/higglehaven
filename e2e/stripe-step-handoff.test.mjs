@@ -6,7 +6,7 @@
 // account GET and the link POST are mocked with route.fulfill (same idiom as
 // e2e/seller-stripe-onboarding-refreshes-payouts.test.mjs); the DOM behaviour
 // under test is the real, unmodified app code.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openPayoutsLeaf, finish } from './helpers.mjs';
 
 const LABEL = 'Stripe Step Handoff Tester';
 const STRIPE_URL = 'https://connect.stripe.test/setup/e/handoff';
@@ -43,13 +43,11 @@ await page.route(`${STRIPE_URL}*`, async (route) => {
   await route.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>stripe</body></html>' });
 });
 
-await openAccountMenu(page);
-await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('.settings-tab-btn[data-section="sell"]');
-await page.waitForSelector('.stripe-step-prompt', { timeout: 30000 });
+// #3704: the payout account is the bud's Payouts leaf now (it was Settings > Sell).
+await openPayoutsLeaf(page);
+await page.waitForSelector('#bud-leaf-payouts .stripe-step-prompt', { timeout: 30000 });
 
-const field = page.locator('.settings-field', { hasText: 'Payout Account' });
+const field = page.locator('#bud-leaf-payouts .payout-account');
 const fieldText = await field.first().textContent();
 const showsRawRequirement = fieldText.includes('id_number');
 const listsOwnRequirement = fieldText.includes('individual.phone');

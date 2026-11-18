@@ -34,8 +34,8 @@ async function checkSettings(mode, label) {
     await page.click('#account-menu-toggle');
     await page.click('#settings-btn');
     await page.waitForSelector('#settings-modal.visible', { timeout: 10000 });
-    // The tallest tab, so the panel is as tall as it gets.
-    await page.click('.settings-tab-btn[data-section="sell"]');
+    // #3704: Sell's tab is gone (payouts moved to the bud); the General tab is the tall one now.
+    await page.click('.settings-tab-btn[data-section="general"]');
     await page.waitForTimeout(500);
     const box = await settingsBoxes();
     const where = `${label}, ${height} px tall`;
