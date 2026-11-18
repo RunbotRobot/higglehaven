@@ -20,6 +20,26 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('idle')).toEqual({ command: 'idle', args: [] });
   });
 
+  it('parses the flower steps, land and a burst (#3817)', () => {
+    expect(parseStep('menu')).toEqual({ command: 'menu', args: [] });
+    expect(parseStep('land')).toEqual({ command: 'land', args: [] });
+    expect(parseStep('petal:build')).toEqual({ command: 'petal', args: ['build'] });
+    expect(parseStep('leaf:help')).toEqual({ command: 'leaf', args: ['help'] });
+    expect(parseStep('burst:legs:4:250')).toEqual({ command: 'burst', args: ['legs', 4, 250] });
+    expect(parseStep('walk:forward:2000:burst:walk:4:500')).toEqual({ command: 'walk', args: ['forward', 2000], burst: { name: 'walk', count: 4, ms: 500 } });
+    expect(parseStep('leaf:friends:burst:unfold:3:200')).toEqual({ command: 'leaf', args: ['friends'], burst: { name: 'unfold', count: 3, ms: 200 } });
+    expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
+  });
+
+  it('refuses a bad flower step or burst with one plain line (#3817)', () => {
+    expect(() => parseStep('petal:moon')).toThrow(/petal must be one of/);
+    expect(() => parseStep('leaf:wardrobe')).toThrow(/leaf must be one of notices, friends, purchases, settings, help/);
+    expect(() => parseStep('leaf')).toThrow(/needs 1 argument/);
+    expect(() => parseStep('burst:legs:4')).toThrow(/burst needs a name, a count and milliseconds apart/);
+    expect(() => parseStep('walk:forward:1000:burst:w:99:500')).toThrow(/count must be a whole number from 1 to 12/);
+    expect(() => parseStep('walk:forward:1000:burst:w:3:5')).toThrow(/milliseconds apart must be from 50 to 5000/);
+  });
+
   it('refuses a bad step with one plain line naming it', () => {
     expect(() => parseStep('walk:sideways')).toThrow(/direction must be one of/);
     expect(() => parseStep('walk')).toThrow(/needs 1 argument/);
