@@ -86,5 +86,19 @@ check(badStep.code === 1 && /unknown step "dance"/.test(badStep.stderr), `an unk
 const liveBadName = await exec('node', ['scripts/live-site.mjs', '--url', BASE_URL, '--name', 'someone', 'idle']).then(() => ({ code: 0, stderr: '' }), (e) => ({ code: e.code, stderr: e.stderr }));
 check(liveBadName.code === 1 && /not a fleet name/.test(liveBadName.stderr), `a non-fleet name is refused for the live login (${liveBadName.stderr.trim().slice(0, 120)})`);
 
+// ---- 4. The flower's steps and motion stills (#3817) ----
+const flower = await run(['--name', 'higglehaven9', 'idle', 'land', 'walk:forward:800:burst:walk:3:300', 'menu', 'leaf:settings', 'shot:settings']);
+check(flower.code === 0, `land, a walk with a burst, menu and a leaf all run (code ${flower.code}, stderr ${flower.stderr.slice(0, 200)})`);
+try {
+  const f = JSON.parse(flower.stdout);
+  const stills = f.screenshots.filter((file) => /-walk-\d\.png$/.test(file));
+  check(stills.length === 3 && stills.every((file) => fs.existsSync(file) && fs.statSync(file).size > 5000), `the burst gives three numbered stills (${stills.join(', ')})`);
+} catch {
+  check(false, 'the flower run prints a report');
+}
+// A control a step cannot find is one plain line naming the step, within 40 seconds.
+const missing = await run(['--name', 'higglehaven9', 'idle', 'tap:#no-such-control']);
+check(missing.code === 2 && /step "tap:#no-such-control" failed: "#no-such-control" is not on screen/.test(missing.stderr), `a control that is not there fails with one line naming the step (${missing.stderr.trim().slice(0, 160)})`);
+
 fs.rmSync(outDir, { recursive: true, force: true });
 await finish({ close: async () => {} }, { pass, label: '#3430: scripts/live-site.mjs signs in, walks, screenshots at phone size, and reports timings and frame figures without printing a credential' });
