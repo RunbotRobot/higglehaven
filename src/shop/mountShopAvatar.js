@@ -77,6 +77,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   win.__shopAvatarModelUrl = avatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   win.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // (#1091)
   win.__shopAvatarAnimationSource = avatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
+  win.__shopAvatarBuiltinMotion = !!avatar.builtinMotion; // #3777: an avatar with no clips wears the built-in motion
   resetShopAvatarIdleState(); // src/shop/avatar.js (#2623): zeroes every idle/sway/sit/lean field it owns
   return avatar;
 }
