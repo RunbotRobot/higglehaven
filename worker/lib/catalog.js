@@ -876,7 +876,8 @@ async function notifyBundleOwnersOfTemplateDeletion(db, templates) {
 
 // #3279 (owner decision, 2026-11-08; supersedes #1291's "tell the owners and
 // unequip them"): a seller "deleting" a product that any shopper owns as an
-// avatar or animation delists it instead. Owners keep it exactly as it was --
+// avatar or animation (#3776: or anything that has a purchase) delists it
+// instead. Owners keep it exactly as it was --
 // owned list, equipped state and model file all untouched -- and are told
 // nothing, because nothing changed for them. Only a product nobody owns is
 // hard-deleted. Returns which ids were deleted and which were delisted;
@@ -889,7 +890,13 @@ async function removeCatalogTemplates(db, templateIds) {
     SELECT template_id FROM owned_avatars WHERE template_id IN (${placeholders})
     UNION
     SELECT template_id FROM owned_animations WHERE template_id IN (${placeholders})
-  `).bind(...templateIds, ...templateIds).all();
+    UNION
+    -- #3776: a product anyone has bought, of any kind, is delisted, never
+    -- deleted: avatars/animations are covered by the owned lists above, but a
+    -- physical good (or a digital one with no owned-list row) is bought all
+    -- the same, and its order must keep naming it.
+    SELECT template_id FROM purchases WHERE template_id IN (${placeholders})
+  `).bind(...templateIds, ...templateIds, ...templateIds).all();
   const owned = new Set(results.map((row) => row.template_id));
   const delistedIds = templateIds.filter((id) => owned.has(id));
   const deletedIds = templateIds.filter((id) => !owned.has(id));

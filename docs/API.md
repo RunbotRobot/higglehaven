@@ -8729,8 +8729,17 @@ enforce:
 } ], "nextCursor": null }
 ```
 
-`productName` is `"(removed product)"` and `sellerName` is `"(former seller)"`
-when the product or seller no longer exists. `canLeaveFeedback` is true when
+**#3776:** an order is its own record. `productName`, `productKind` and
+`sellerName` come from a copy written onto the purchase when it was made
+(migration 0229), so a seller deleting or renaming the product, or leaving,
+changes nothing about an old order. An order made before the record existed
+was backfilled from the live product, or from the sold-out markers and
+suspended-seller snapshots where the product was already gone. Only an order
+nothing survives for reads `"A product the seller has since deleted"` /
+`"A seller who has since left"` (it still has its own date and price). A
+product that has any purchase is delisted, never hard-deleted, when its seller
+deletes it (`DELETE /api/catalog/:id` answers `delisted: true`), whatever its
+kind. `canLeaveFeedback` is true when
 the purchase has a seller on record, is not refunded, and has no feedback yet
 (`feedback` then carries the caller's own `rating`/`text` for an edit control
 to prefill); `canDispute` is true while the purchase is neither refunded nor

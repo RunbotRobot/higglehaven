@@ -99,6 +99,12 @@ describe('Simulated purchases', () => {
     const purchased = await api('/instances/avatar-category-instance/purchase', seller.session({ method: 'POST' }));
     expect(purchased.response.status).toBe(201);
     expect(purchased.body.purchase).toMatchObject({ unitPriceCents: 500, totalCents: 500 });
+
+    // #3776: the order carries its own record of what was bought, written when
+    // it was made, so a later delete or rename of the product cannot change it.
+    const record = await env.DB.prepare('SELECT product_name, product_kind, unit_price_cents FROM purchases WHERE purchase_id = ?')
+      .bind(purchased.body.purchase.purchaseId).first();
+    expect(record).toEqual({ product_name: 'Sellable Avatar', product_kind: 'avatar', unit_price_cents: 500 });
   });
 
   it('404s purchasing an instance that does not exist', async () => {
