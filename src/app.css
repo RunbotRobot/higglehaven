@@ -900,10 +900,10 @@
         white-space: nowrap;
         cursor: pointer;
         transform-origin: left center;
-        animation: bud-note-grow 0.2s ease-out both;
+        animation: bud-note-grow var(--motion-grow) var(--ease-soft) both;
       }
       body[data-bud="on"] #bud-note:active { background: rgb(var(--spring-green-rgb) / 0.55); transform: scale(0.97); }
-      body[data-bud="on"] #bud-note.folding { animation: bud-note-fold 0.18s ease-in both; pointer-events: none; }
+      body[data-bud="on"] #bud-note.folding { animation: bud-note-fold var(--motion-fold) var(--ease-fold) both; pointer-events: none; }
       body[data-bud="on"] #account-menu-toggle.active ~ #bud-note { display: none; }
       @keyframes bud-note-grow { from { opacity: 0; transform: scaleX(0.2); } to { opacity: 1; transform: scaleX(1); } }
       @keyframes bud-note-fold { from { opacity: 1; transform: scaleX(1); } to { opacity: 0; transform: scaleX(0.2); } }
@@ -965,7 +965,7 @@
         box-shadow: var(--shadow-petal);
         font-size: var(--text-md);
         white-space: nowrap;
-        animation: bud-unfold 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+        animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
       }
       /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
       body[data-bud="on"] #account-menu-panel > button,
@@ -1096,7 +1096,7 @@
         text-align: center;
         transform-origin: 0 22px;
         transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2));
-        animation: bud-grow 0.24s var(--ease-soft) both;
+        animation: bud-grow var(--motion-grow) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
       body[data-bud="on"] #bud-modes .mode-nav-label,
@@ -1134,7 +1134,7 @@
       /* Folding back in: the reverse, a little faster, the last petal first. */
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
       body[data-bud-ring="folding"] #bud-modes .bud-menu-btn {
-        animation: bud-fold 0.2s var(--ease-soft) both;
+        animation: bud-fold var(--motion-fold) var(--ease-fold) both;
       }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.04s; }
@@ -1165,11 +1165,11 @@
         body[data-bud="on"] #account-menu-panel button,
         body[data-bud="on"] #account-menu-panel::before { animation: none; }
         body[data-bud="on"] #bud-modes .mode-nav-btn,
-        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade 0.12s linear both; }
+        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear both; }
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
         body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
         body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade 0.12s linear reverse both; }
+        body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {
@@ -1186,7 +1186,7 @@
         box-shadow: var(--shadow-card);
         color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
-        animation: bud-unfold 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+        animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
         transform-origin: 0 0;
       }
       .bud-leaf h2 { margin: 0 40px var(--space-sm) 0; font-size: 18px; font-weight: 600; }
@@ -6831,7 +6831,7 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .world-card[data-state='blooming'] {
-          animation: product-card-fade 0.25s linear both;
+          animation: product-card-fade var(--motion-reduced) linear both;
         }
         .world-card[data-state='blooming']::after {
           display: none;
