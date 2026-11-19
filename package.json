@@ -18,6 +18,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply higglehaven-db --remote && node scripts/check-migration-drift.mjs",
     "deploy:ci": "npm run generate:migrations-manifest && npm run generate:schema-snapshot && npm run db:migrate:remote && wrangler deploy",
     "seed:mockup": "node scripts/seed-mockup-data.mjs",
+    "seed:local-world": "node scripts/seed-local-world.mjs",
     "ingest:geo-data": "node scripts/ingest-geo-data.mjs"
   },
   "dependencies": {
