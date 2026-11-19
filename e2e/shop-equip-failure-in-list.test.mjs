@@ -17,11 +17,16 @@ async function patch(route) {
 await page.route('**/api/auth/me', patch);
 await page.route('**/api/auth/signup', patch);
 
-await page.route('**/api/builders/me/avatars*', (route) => json(route, 200, { avatars: [{ templateId: 'mock-avatar', name: 'Mock Avatar', purchasedAt: null }], nextCursor: 'more-avatars' }));
+// A request carrying a cursor is the "Load more" click: it fails; the first page succeeds.
+await page.route('**/api/builders/me/avatars*', (route) => (route.request().url().includes('cursor=')
+  ? json(route, 500, { error: 'The avatar list is down.' })
+  : json(route, 200, { avatars: [{ templateId: 'mock-avatar', name: 'Mock Avatar', purchasedAt: null }], nextCursor: 'more-avatars' })));
 await page.route('**/api/builders/me/avatar', (route) => (route.request().method() === 'PUT'
   ? json(route, 500, { error: 'The equip service is down.' })
   : json(route, 200, { avatar: { equippedTemplateId: null, modelUrl: null } })));
-await page.route('**/api/builders/me/animations*', (route) => json(route, 200, { animations: [{ templateId: 'mock-anim', name: 'Mock Dance', purchasedAt: null, skeletonSignature: null }], nextCursor: 'more-animations' }));
+await page.route('**/api/builders/me/animations*', (route) => (route.request().url().includes('cursor=')
+  ? json(route, 500, { error: 'The animation list is down.' })
+  : json(route, 200, { animations: [{ templateId: 'mock-anim', name: 'Mock Dance', purchasedAt: null, skeletonSignature: null }], nextCursor: 'more-animations' })));
 await page.route('**/api/builders/me/animation', (route) => (route.request().method() === 'PUT'
   ? json(route, 500, { error: 'The animation service is down.' })
   : json(route, 200, { animation: { equippedTemplateId: null } })));
@@ -54,6 +59,8 @@ await avatars.locator('button', { hasText: 'Load more' }).click();
 await avatars.locator('.inline-action-status', { hasText: "Couldn't load more avatars" }).waitFor({ timeout: 10000 });
 await animations.locator('button', { hasText: 'Load more' }).click();
 await animations.locator('.inline-action-status', { hasText: "Couldn't load more animations" }).waitFor({ timeout: 10000 });
+results.loadMoreAvatars = await avatars.locator('.inline-action-status', { hasText: "Couldn't load more avatars" }).textContent();
+results.loadMoreAnimations = await animations.locator('.inline-action-status', { hasText: "Couldn't load more animations" }).textContent();
 
 results.modals = await modalCount();
 results.retryEnabled = await avatars.locator('.version-row', { hasText: 'Mock Avatar' }).locator('button', { hasText: 'Equip' }).isEnabled();
@@ -67,6 +74,8 @@ console.log('equip failure said in the list:', results);
 
 const pass = /Couldn't equip this avatar\. The equip service is down\./.test(results.equipAvatar || '')
   && /Couldn't apply this animation\. The animation service is down\./.test(results.applyAnimation || '')
+  && /Couldn't load more avatars\. The avatar list is down\./.test(results.loadMoreAvatars || '')
+  && /Couldn't load more animations\. The animation list is down\./.test(results.loadMoreAnimations || '')
   && results.modals === 0 && results.retryEnabled && results.selectable;
 // The mocked 500s are the only console errors this test provokes on purpose.
 const unexpected = errors.filter((e) => !/status of 500|500 \(|Failed to load resource/.test(String(e)));
