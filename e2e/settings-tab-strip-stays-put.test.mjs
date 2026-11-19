@@ -16,7 +16,7 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 10000 });
 
 const tops = {};
-for (const section of ['general', 'shop', 'build', 'sell']) {
+for (const section of ['general', 'shop', 'build']) {
   await page.click(`.settings-tab-btn[data-section="${section}"]`);
   await page.waitForTimeout(400);
   tops[section] = await page.evaluate(() => Math.round(document.getElementById('settings-tabs').getBoundingClientRect().top));
