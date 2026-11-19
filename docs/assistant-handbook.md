@@ -506,7 +506,9 @@ the limit, the word "Orb limit" that stays until you have opened it and closed i
 
 ### How do I chat with people nearby?
 
-1. Tap the round logo at the top left (the bud), then tap "Chat". A small chat box opens.
+1. Tap the round logo at the top left (the bud), then tap the "Shop" petal (it opens Shop's own
+   menu; "Chat" is in it, not in the general menu), then tap "Chat". A small chat box opens
+   with a cross at its top right to close it.
 2. Type in the box that says "Say something nearby…" and tap "Send".
 3. People close to you see it. Their messages show in the same box.
 4. If you have muted someone, "Muted" with a number shows above the box. Tap it to
@@ -532,8 +534,8 @@ appear in the same box. With nobody having spoken yet the box says: Nobody has s
 
 ### How do I talk to people nearby by voice?
 
-1. Tap the round logo at the top left (the bud), tap "Chat", and tap the microphone
-   button in the box that opens. Its label reads "Unmute microphone" while you are
+1. Tap the round logo at the top left (the bud), tap the "Shop" petal, tap "Chat", and tap the
+   microphone button in the box that opens. Its label reads "Unmute microphone" while you are
    muted.
 2. Your phone asks for permission to use the microphone. Allow it.
 3. The button shows what your microphone is doing right now. Tap it again to mute
