@@ -2501,6 +2501,22 @@ either of those as an explicit open question, not yet resolved.
 }
 ```
 
+### `GET /api/instances/:id/purchase-quote` (#3946)
+
+What Buy would do for this signed-in, verified account, without doing it.
+Runs the same checks as `POST /api/instances/:id/purchase` (not for sale, sold
+out, suspended seller or lándlet owner, a seller without real payments for a
+non-admin, a fleet account while payments are live) through one shared
+function, so it refuses with the same status and code, and answers:
+
+```json
+{ "paysWithCard": true, "unitPriceCents": 5000, "stockQuantity": null }
+```
+
+`paysWithCard` is true exactly when the purchase would create a PaymentIntent.
+It creates nothing, charges nothing and never calls Stripe. Rate-limited
+separately from the purchase itself.
+
 ### Mark purchase shipped
 
 `POST /api/purchases/:purchaseId/mark-shipped`

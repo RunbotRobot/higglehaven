@@ -35,7 +35,7 @@ import {
 // #2614: handleInstancePurchase itself moved out of worker/index.js into
 // worker/lib/purchase-creation.js -- import it from there directly instead
 // of via the '../index.js' circular-import path above.
-import { handleInstancePurchase } from './purchase-creation.js';
+import { handleInstancePurchase, handleInstancePurchaseQuote } from './purchase-creation.js';
 import { verifyOwnedGroupLinks, honoredGroupLink } from './bundle-links.js';
 
 // #827: unlike almost every other authenticated write in this file
@@ -842,6 +842,10 @@ export async function handleInstances(request, env, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase') {
     return handleInstancePurchase(request, env, route[1]);
+  }
+
+  if (request.method === 'GET' && route.length === 3 && route[2] === 'purchase-quote') {
+    return handleInstancePurchaseQuote(request, env, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
