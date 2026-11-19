@@ -481,28 +481,27 @@ the card does not offer it.
 ### What are the glowing orbs, and what if I hit the limit?
 
 1. Glowing orbs float around the world. Walk or fly into one to collect it.
-2. The screen says "You collected a free model-generation credit!". Credits are free
-   and are used when you make a model from a picture or a description in Build.
-3. There is a limit on how many you can collect in a short time. When you reach it,
-   a notice says how many you can collect and in how long you can collect more, for
-   example "You can collect up to 20 orbs every 15 minutes. Try again in about 7
-   minutes." The numbers can change, so go by what your own screen says.
+2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a moment
+   and goes by itself. Credits are free and are used when you make a model from a picture or a
+   description in Build.
+3. There is a limit on how many you can collect in a short time. When you reach it, the word
+   "Orb limit" shows beside the logo. Tap it to read how many you can collect and in how long you
+   can collect more, for example "You can collect up to 20 orbs every 15 minutes. Try again in
+   about 7 minutes." The numbers can change, so go by what your own screen says.
 
-**You will see:** a short note when you collect an orb, and a notice with a cross at
-its corner when you reach the limit.
+**You will see:** a short word beside the round logo when you collect an orb, and, when you reach
+the limit, the word "Orb limit" that stays until you have opened it and closed it again.
 
 **If something goes wrong:**
-- "Someone else collected that orb just before you." Another person got there first.
-  Try the next orb.
-- "Can't collect orbs right now — you appear to be offline." Their connection has
-  dropped. Ask them to check it and try again.
-- Tap the small cross on a notice to dismiss it.
+- "Orb missed" beside the logo: tap it to read why. Usually "Someone else collected that orb just
+  before you." Another person got there first. Try the next orb.
+- "Offline" beside the logo: tap it. "Can't collect orbs right now. You appear to be offline."
+  Their connection has dropped. Ask them to check it and try again.
+- To dismiss one of these, tap its word to open it, then tap the small cross at the top right of
+  what opened.
 
 ```controls any
-#shop-credit-orb-toast | You collected a free model-generation credit!
-#shop-credit-orb-offline-notice .shop-notice-text | Can't collect orbs right now
-#shop-credit-orb-rate-limit-notice .shop-notice-text | limit
-#shop-credit-orb-problem-notice .shop-notice-text | Someone else collected that orb
+#account-menu-toggle | Account menu
 ```
 
 ### How do I chat with people nearby?

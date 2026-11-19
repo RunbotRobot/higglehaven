@@ -1,4 +1,5 @@
-// #3335 / #3377: every dismissible notice shares one layout (.shop-notice):
+// #3335 / #3377: the dismissible notice (.shop-notice; the orb notices that shared it moved to the
+// flower's head in #3889, so the Build selection-action status is the one left):
 // the text takes the width and the dismiss x sits in the upper-right corner,
 // on the first line, as a close control normally does. It used to sit in a
 // row beneath the text (#3335 put Copy and x there; #3348 removed Copy and
@@ -10,9 +11,7 @@ async function measureNotice(page, selector, longText) {
     const notice = document.querySelector(sel);
     // The Build status lives in a toolbar that is not shown in this mode, so
     // measure it where it can be laid out.
-    // The orb notices live in #shop-notice-stack (#3441), which lays them out
-    // itself; moving one out of it would measure it without its layout rules.
-    if (!notice.closest('#shop-notice-stack') && !notice.offsetParent && getComputedStyle(notice).position !== 'fixed') document.body.appendChild(notice);
+    if (!notice.offsetParent && getComputedStyle(notice).position !== 'fixed') document.body.appendChild(notice);
     notice.hidden = false;
     notice.classList.add('visible');
     const padX = (el) => parseFloat(getComputedStyle(el).paddingLeft) + parseFloat(getComputedStyle(el).paddingRight);
@@ -58,12 +57,9 @@ function check(label, m) {
 let pass = true;
 for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
   const { browser, page, errors } = await launchPage({ viewport });
-  const orb = await measureNotice(page, '#shop-credit-orb-rate-limit-notice',
-    'You can collect up to 20 orbs every 15 minutes. Try again in about 15 minutes.');
   const build = await measureNotice(page, '#selection-action-status',
     'Those items cannot be bundled because one of them is outside this lándlet.');
-  const ok = check(`orb notice @${viewport.width}:`, orb) && check(`build status @${viewport.width}:`, build)
-    && orb.selectable && errors.length === 0;
+  const ok = check(`build status @${viewport.width}:`, build) && build.selectable && errors.length === 0;
   pass = pass && ok;
   await browser.close();
 }

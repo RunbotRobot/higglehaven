@@ -6,7 +6,7 @@
 // e2e/credit-orb-collect.test.mjs; this exercises the new altitude
 // exclusion (CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M, checked against
 // shopFlightAltitudeM) that test's own ground-level case doesn't cover.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budWordText } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Flight Altitude Tester';
 const LANDLET_ID = `credit-orb-altitude-e2e-${Date.now()}`;
@@ -77,7 +77,7 @@ await page.waitForTimeout(500);
 
 const listedWhileFlyingOver = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
 console.log('orb still active while flying directly over it at altitude (should be true):', listedWhileFlyingOver.orbs.some((o) => o.orbId === orbId));
-const toastVisibleWhileFlying = await page.evaluate(() => document.getElementById('shop-credit-orb-toast')?.classList.contains('visible') ?? false);
+const toastVisibleWhileFlying = await page.evaluate(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1');
 console.log('no collect toast while flying over it (should be false):', toastVisibleWhileFlying);
 
 // Now land back on the ground at the exact same x/y -- confirms this is a
@@ -87,8 +87,8 @@ await page.evaluate(([x, y, z]) => {
   window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
 }, [orbWorldX, orbWorldY, GROUND_Z]);
-await page.waitForSelector('#shop-credit-orb-toast.visible', { timeout: 5000 });
-const toastText = await page.textContent('#shop-credit-orb-toast');
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
+const toastText = await budWordText(page); // #3889: a short word beside the head, gone by itself
 console.log('collect confirmation toast text after landing on it (should mention credit):', toastText);
 
 const listedAfterLandingOnIt = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
@@ -97,7 +97,7 @@ console.log('orb no longer active after landing on it and auto-collecting (shoul
 const pass = !!myLandlet &&
   listedWhileFlyingOver.orbs.some((o) => o.orbId === orbId) &&
   !toastVisibleWhileFlying &&
-  toastText.includes('credit') &&
+  /credit/i.test(toastText) &&
   !listedAfterLandingOnIt.orbs.some((o) => o.orbId === orbId) &&
   errors.length === 0;
 await finish(browser, {

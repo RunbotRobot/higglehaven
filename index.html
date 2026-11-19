@@ -49,23 +49,6 @@
     <button id="shop-last-location-btn" type="button">Go to last location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an event</button>
-    <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
-    <!-- #3441: the three orb notices share one stack so two shown at once are
-         both readable (each used to sit in its own fixed slot and a taller one
-         covered the slot above); the one raised last sits nearest the controls. -->
-    <div id="shop-notice-stack">
-    <div id="shop-credit-orb-offline-notice" class="shop-notice" role="status" aria-live="polite">
-      <span class="shop-notice-text">Can't collect orbs right now — you appear to be offline.</span>
-    </div>
-    <div id="shop-credit-orb-rate-limit-notice" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite">
-      <span class="shop-notice-text">You've reached the orb limit for now — try again in a bit.</span>
-      <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-    </div>
-    <div id="shop-credit-orb-problem-notice" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite">
-      <span class="shop-notice-text">Someone else collected that orb just before you.</span>
-      <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-    </div>
-    </div>
     <!-- #2779, #3556: the nearby text chat. It waits here, hidden, and the Chat petal of the
          flower (src/shop/nearbyChat.js) borrows it as a leaf while it is open and gives it back
          as it closes, so there is no pill on the world. Sending is gated on id_verified

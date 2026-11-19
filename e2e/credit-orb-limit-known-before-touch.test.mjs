@@ -2,7 +2,7 @@
 // reached, touching an orb leaves it in place (no pop, no toast, no collect
 // request) and shows the limit with the time it lifts; and two notices shown
 // at once are both readable, neither covering the other.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budNoteText, budWordText, readSaying, closeSaying } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Standing Tester';
 const LANDLET_ID = `credit-orb-standing-e2e-${Date.now()}`;
@@ -70,36 +70,25 @@ await page.evaluate(([x, y]) => {
   window.__testTeleportShopAvatar(x, y);
   window.__testForceShopProximityCheck();
 }, [myLandlet.center.x + ORB_X, myLandlet.center.y + ORB_Y]);
-await page.waitForSelector('#shop-credit-orb-rate-limit-notice.visible', { timeout: 5000 });
+await page.waitForFunction(() => { const n = document.getElementById('bud-note'); return n && !n.hidden && n.textContent.trim() === 'Orb limit'; }, null, { timeout: 5000 });
 await page.waitForTimeout(800);
-const noticeText = await page.textContent('#shop-credit-orb-rate-limit-notice .shop-notice-text');
+// #3889: the limit is a word beside the head; its sentence is read in the leaf it opens.
+const noticeText = await readSaying(page, 'orb-limit');
 const orbStayed = (await page.evaluate(() => window.__testActiveCreditOrbIds())).includes(orbId);
 const popEffects = await page.evaluate(() => window.__testActiveCreditOrbPopEffectCount());
-const toastVisible = await page.isVisible('#shop-credit-orb-toast.visible');
+const toastVisible = (await budWordText(page)) === 'Credit +1';
 console.log('notice:', JSON.stringify(noticeText), '| orb stayed:', orbStayed, '| pop effects:', popEffects, '| toast:', toastVisible, '| collect requests:', collectRequests);
 await page.unroute('**/api/credit-orbs/*/collect');
 
-// Two notices at once: both visible, not covering each other, both dismissible.
-await page.evaluate(() => {
-  document.getElementById('shop-credit-orb-problem-notice').classList.add('visible');
-  document.getElementById('shop-credit-orb-problem-notice').style.order = '99';
-});
-await page.waitForTimeout(200);
-const boxes = await page.evaluate(() => {
-  const r = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return { t: b.top, b: b.bottom, l: b.left, r: b.right }; };
-  return { limit: r('shop-credit-orb-rate-limit-notice'), problem: r('shop-credit-orb-problem-notice'), vh: window.innerHeight };
-});
-const apart = boxes.limit.b <= boxes.problem.t + 0.5 || boxes.problem.b <= boxes.limit.t + 0.5;
-const onScreen = boxes.limit.t >= 0 && boxes.problem.t >= 0 && boxes.limit.b <= boxes.vh && boxes.problem.b <= boxes.vh;
-console.log('two notices do not overlap (should be true):', apart, '| both on screen:', onScreen, JSON.stringify(boxes));
-await page.click('#shop-credit-orb-problem-notice .shop-notice-dismiss-btn');
-const limitStillThere = await page.isVisible('#shop-credit-orb-rate-limit-notice.visible');
-console.log('dismissing one leaves the other shown (should be true):', limitStillThere);
+// Reading the sentence is what clears the word: it goes when the leaf is closed, not on a timer.
+await closeSaying(page, 'orb-limit');
+const wordGoneAfterRead = (await budNoteText(page)) === '';
+console.log('closing the leaf after reading clears the word (should be true):', wordGoneAfterRead);
 
 const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 const pass = standing.remaining === 0
   && orbStayed && popEffects === 0 && !toastVisible && collectRequests === 0
   && /Try again/.test(noticeText) && !/back where it was/.test(noticeText)
-  && apart && onScreen && limitStillThere
+  && wordGoneAfterRead
   && unexpectedErrors.length === 0;
-await finish(browser, { pass, label: '#3441: an orb touched at the limit stays put and says why; stacked notices stay readable', errors });
+await finish(browser, { pass, label: '#3441: an orb touched at the limit stays put and says why; the word clears once its sentence has been read', errors });

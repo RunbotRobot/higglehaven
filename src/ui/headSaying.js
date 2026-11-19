@@ -11,11 +11,14 @@ const leafIdFor = (key) => `saying-${key}`;
 // key: one per condition ('graphics', 'connection').
 // word: the few letters beside the head. title/message: the opened leaf. label: what a screen
 // reader says for the door. action: { label, run } for a button in the leaf (optional).
-export function sayAtHead(key, { word, title, message, label = '', action = null }) {
+// readOnce: the word goes when its leaf is closed, because the sentence has then been read
+// (a refusal still stays until then, never on a timer).
+export function sayAtHead(key, { word, title, message, label = '', action = null, readOnce = false }) {
   const open = () => {
     openLeaf({
       id: leafIdFor(key),
       title,
+      onClose: readOnce ? () => clearBudWord(key) : null,
       render: (body) => {
         const p = document.createElement('p');
         p.textContent = message;
