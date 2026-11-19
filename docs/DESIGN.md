@@ -332,7 +332,7 @@ by touching the world. The module is `src/ui/bud.js`:
   **the same in every mode**: the person, Notices, Friends, My Purchases, Settings and "?".
   A place's own tools live under that place's petal: Build's (Add item, My Lándlets,
   Levels, Undo and Redo, Tools, and the lándlet cap line), Sell's (My products, Add a
-  product, Payouts, Storefront) and Shop's (Chat). A place with nothing in its menu would have a petal that
+  product, Payouts, Storefront, Orders) and Shop's (Chat). A place with nothing in its menu would have a petal that
   opens no stem. A tap on a place you
   are not in takes you there (the page reloads and the ring stays out); a tap on the place
   you are in opens that place's menu in place of the general one; a tap on Menu brings the

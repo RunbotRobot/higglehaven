@@ -178,6 +178,26 @@ export async function handlePurchases(request, env, route, url) {
     const builderId = url.searchParams.get('builderId');
     const templateId = url.searchParams.get('templateId');
     const danglingSeller = url.searchParams.get('danglingSeller');
+    // #3704 (Sell in the bud, slice 3): every sale of the signed-in seller's own products, newest
+    // first, for the Orders leaf. Read-only and scoped to the session's seller, so it needs no id
+    // from the client; Mark shipped and Refund still go through their own routes unchanged.
+    if (url.searchParams.get('mine') === 'seller') {
+      const sessionSeller = await requireSessionSeller(request, db);
+      const { results } = await db.prepare(`
+        SELECT p.*, t.name AS live_name
+        FROM purchases p
+        LEFT JOIN catalog_templates t ON t.template_id = p.template_id
+        WHERE p.seller_id = ?
+        ORDER BY p.created_at DESC, p.purchase_id DESC LIMIT 100
+      `).bind(sessionSeller.seller_id).all();
+      const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      return json({
+        // #3776: the order's own recorded name first, then the live product, so a delisted product
+        // is still named on the seller's side too.
+        purchases: results.map((row) => ({ ...purchaseFromRow(row), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        totalCount: total.count,
+      });
+    }
     // #1824: the admin dashboard's purchases-fallback panel needs a way to
     // find the purchases its own refund/mark-shipped admin-override
     // branches exist for (a seller_id that's non-null but no longer in
@@ -242,7 +262,7 @@ export async function handlePurchases(request, env, route, url) {
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
       return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
-    throw new HttpError('builderId, templateId, or danglingSeller is required', 400);
+    throw new HttpError('builderId, templateId, mine=seller, or danglingSeller is required', 400);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
