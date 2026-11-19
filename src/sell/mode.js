@@ -1854,6 +1854,12 @@ function renderSellerList() {
     // Where the first setting stood: after the product's own facts, before reviews and sales.
     details.insertBefore(moreToggle, settingsEls[0]);
     details.insertBefore(moreBox, settingsEls[0]);
+    // #3702 slice C: Preview, Duplicate and Flooring are secondary to Rename/Delete, so they
+    // fold into the same box, on a row of their own at its top.
+    const moreActions = document.createElement('div');
+    moreActions.className = 'seller-row-actions';
+    moreActions.append(previewBtn, duplicateBtn, flooringToggleBtn);
+    moreBox.appendChild(moreActions);
     for (const el of settingsEls) moreBox.appendChild(el);
     moreToggle.addEventListener('click', () => {
       moreBox.hidden = !moreBox.hidden;
