@@ -45,7 +45,7 @@
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
 import * as THREE from 'three';
-import { WALK_WORDS, LOOK_WORDS, FLY_WORDS } from '../ui/gestureWords.js';
+import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS } from '../ui/gestureWords.js';
 import { markStartup } from '../ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from '../ui/loadingStages.js';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
@@ -764,7 +764,7 @@ export function renderShopSettingsSection() {
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
   // #3650: moving is done by touching the world (no sticks, no fly button).
-  note.textContent = `${WALK_WORDS} (drag further to run). ${LOOK_WORDS}. Both work at once, one thumb each. ${FLY_WORDS}, and again to land. While flying you go where the view points: look up and walk forward to climb, look down to descend (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down, or hold the left mouse button on the world and drag to look around, T or a double-press of space to fly, and N to open the nearest product's card).`;
+  note.textContent = `${WALK_WORDS} (drag further to run). ${LOOK_WORDS}. Both work at once, one thumb each. ${FLY_WORDS}, and again to land. ${FRIEND_WORDS} (on a computer, click them). While flying you go where the view points: look up and walk forward to climb, look down to descend (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down, or hold the left mouse button on the world and drag to look around, T or a double-press of space to fly, and N to open the nearest product's card).`;
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
