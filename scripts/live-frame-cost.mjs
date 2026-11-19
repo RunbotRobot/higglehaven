@@ -114,11 +114,14 @@ if (mode === 'shop') {
   const settleSeconds = Number(flag('--settle', 300));
   const settleStart = Date.now();
   let lod = null;
+  let previousLod = '';
   for (let waited = 0; waited < settleSeconds; waited += 10) {
     await page.waitForTimeout(10000);
     lod = await answer(page.evaluate(() => window.__testBuildLodCounts?.() ?? null));
     console.log(`  after ${Math.round((Date.now() - settleStart) / 1000)} s: items by version ${JSON.stringify(lod)}`);
-    if (lod && lod.withoutVersions <= (lod.full + lod.mid + lod.far + lod.withoutVersions) * 0.05) break;
+    // Settled: the same counts twice running (the items beside the orbit target never need versions).
+    if (JSON.stringify(lod) === previousLod) break;
+    previousLod = JSON.stringify(lod);
   }
   await phase('standing still, settled', () => page.waitForTimeout(Math.min(seconds, 8) * 1000));
   await phase('selecting everything', async () => { await page.evaluate(() => window.__testSelectAllProducts?.()); await page.waitForTimeout(3000); });
