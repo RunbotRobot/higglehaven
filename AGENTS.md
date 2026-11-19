@@ -1565,6 +1565,10 @@ merge straight to the next), so until 2026-11-23 21:00Z:
   new. Its check-ins end at once: no queries, no notes.
 - Even-numbered sessions carry on as usual, one task at a time, and they are the
   ones who take owner feedback and bug-report cards.
+  A card with status `queued` and an empty session is free, whoever wrote its
+  note last: "Released by higglehavenN" means exactly that, and so does a note
+  that lists what is left. (On 2026-11-19 several sessions stood down with "the
+  free cards belong to other sessions" while a dozen such cards had work in them.)
 - The two queries above apply only to the sessions that are working.
 
 higglehaven1 removes this paragraph when the week resets or if the owner asks for
