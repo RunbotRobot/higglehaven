@@ -29,7 +29,7 @@
 // coordinates directly, since this test needs them genuinely within voice
 // range of each other.
 import { chromium } from 'playwright';
-import { chooseIdentity, finish } from './helpers.mjs';
+import { chooseIdentity, finish, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -115,6 +115,10 @@ async function launchVoicePage(label) {
   });
   // ICE: host candidates alone are enough for two pages on the same
   // machine -- no real STUN/TURN network dependency needed in this suite.
+  // #3556: the microphone is in the Chat leaf, and an open leaf polls nearby chat. This page's
+  // trust tier is patched client-side only, so the real endpoint refuses (403) and the run would
+  // log page errors; nothing in this test is about chat.
+  await page.route('**/api/nearby-chat?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], nextCursor: null, landletId: null }) }));
   await page.route('**/api/voice/ice-config', (route) => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify({ iceServers: [] }),
   }));
@@ -205,8 +209,8 @@ await pageB.waitForTimeout(2200);
 
 // Both sides' voice button should be visible (id_verified, mocked) and
 // default to muted -- #2778's resolution: no auto-activate-on-proximity.
-await pageA.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
-await pageB.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
+await pageA.waitForSelector('#shop-voice-btn.visible', { state: 'attached', timeout: 10000 });
+await pageB.waitForSelector('#shop-voice-btn.visible', { state: 'attached', timeout: 10000 });
 const aMutedByDefault = await pageA.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 const bMutedByDefault = await pageB.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 
@@ -241,6 +245,8 @@ await waitForConnected(pageB, builderA.builderId);
 
 // Unmute both -- exercises the real getUserMedia prompt (fake device,
 // auto-granted) and the recvonly-to-sendrecv transceiver upgrade.
+await budClick(pageA, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
+await budClick(pageB, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
 await pageA.click('#shop-voice-btn');
 await pageB.click('#shop-voice-btn');
 await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });

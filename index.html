@@ -113,8 +113,7 @@
          joysticks, the fly button and the mode buttons; the conversation stays
          open and the pill says when a reply has come in. -->
     <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
-         voice chat's mic toggle. Same live trustTier-driven visibility as
-         #shop-nearby-chat-btn above (src/shop/voiceChat.js's own
+         voice chat's mic toggle, live trustTier-driven (src/shop/voiceChat.js's own
          updateShopVoiceChatIfNeeded), not a one-time reveal. Current-state
          convention (#2778's resolution), not #1589's action-convention --
          the icon/class always shows what the mic is doing right now
@@ -128,7 +127,8 @@
          is just a stable per-connection sequence number
          (src/shop/voiceChat.js's own displaySeq). Auto-shown/hidden by
          JS (the 'open' class) based on whether there's anyone connected to
-         act on at all -- no separate toggle button of its own needed. -->
+         act on at all -- no separate toggle button of its own needed. #3556: the mic and this
+         list are lent to the Chat leaf of the flower while it is open (src/shop/nearbyChat.js). -->
     <div id="shop-voice-peers-panel">
       <div id="shop-voice-peers-list"></div>
     </div>

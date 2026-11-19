@@ -20,7 +20,7 @@ import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { showFadingNote } from '../ui/fadingNote.js';
-import { addBudPetals, openLeaf } from '../ui/bud.js';
+import { addBudPetals, openLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
@@ -248,9 +248,15 @@ if (chatLogEl) {
 // #3556 (part of #3539): the way in is the Chat petal of the flower, not a pill on the world. The
 // panel waits, hidden, in the page; the leaf borrows it while it is open and hands it back as it
 // closes (the same lending the Build leaves use), so every element and handler here is unchanged.
-// A person who is not ID-verified is told so in the leaf instead of being shown a form that can
-// only refuse them.
-const chatPanelHome = chatPanelEl ? { parent: chatPanelEl.parentNode, next: chatPanelEl.nextSibling } : null;
+// The microphone and the list of voices nearby (src/shop/voiceChat.js owns them) are lent the same
+// way, so the leaf is the one place for talking to people nearby, in text or by voice. While the
+// microphone is on the head says so and is a door back to the leaf, one tap from muting. A person
+// who is not ID-verified is told so in the leaf instead of being shown controls that can only
+// refuse them.
+const homeOf = (el) => (el ? { el, parent: el.parentNode, next: el.nextSibling } : null);
+const voiceBtnEl = document.getElementById('shop-voice-btn');
+const voicePanelEl = document.getElementById('shop-voice-peers-panel');
+const lentHomes = [homeOf(chatPanelEl), homeOf(voiceBtnEl), homeOf(voicePanelEl)].filter(Boolean);
 
 function openChatLeaf() {
   openLeaf({
@@ -260,7 +266,7 @@ function openChatLeaf() {
       if (!hasIdVerifiedSession()) {
         const note = document.createElement('p');
         note.className = 'bud-chat-note';
-        note.textContent = 'Chatting with people nearby opens once your ID is verified.';
+        note.textContent = 'Chatting with people nearby, by text or by voice, opens once your ID is verified.';
         body.append(note);
         return;
       }
@@ -268,13 +274,34 @@ function openChatLeaf() {
       chatLastPollAt = 0; // the first poll is not made to wait for the interval
       chatPanelEl.classList.add('open');
       body.append(chatPanelEl);
+      if (voiceBtnEl) {
+        const row = document.createElement('div');
+        row.className = 'bud-voice-row';
+        const words = document.createElement('span');
+        words.className = 'bud-voice-words';
+        const sync = () => { words.textContent = voiceBtnEl.getAttribute('aria-label') || 'Microphone'; };
+        sync();
+        new MutationObserver(sync).observe(voiceBtnEl, { attributes: true, attributeFilter: ['aria-label'] });
+        row.append(voiceBtnEl, words);
+        body.append(row);
+      }
+      if (voicePanelEl) body.append(voicePanelEl);
     },
     onClose: () => {
       chatOpen = false;
       chatPanelEl.classList.remove('open');
-      chatPanelHome.parent.insertBefore(chatPanelEl, chatPanelHome.next); // back to its place in the page
+      for (const home of lentHomes) home.parent.insertBefore(home.el, home.next); // back where the page keeps them
     },
   });
+}
+
+// While the microphone is on the head says so, and tapping it opens the leaf to mute.
+if (voiceBtnEl) {
+  new MutationObserver(() => {
+    const on = voiceBtnEl.classList.contains('unmuted') || voiceBtnEl.classList.contains('speaking');
+    if (on) setBudWord('voice', 'Mic on', { open: openChatLeaf, label: 'Microphone is on. Open chat to mute it.' });
+    else clearBudWord('voice');
+  }).observe(voiceBtnEl, { attributes: true, attributeFilter: ['class'] });
 }
 
 if (chatPanelEl) {
