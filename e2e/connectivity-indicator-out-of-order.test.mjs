@@ -25,9 +25,16 @@ async function placeTreeAt(x, y) {
   await page.mouse.click(x, y);
 }
 
+// #3889: the lost-connection message is a word beside the head (#bud-note), not a button on the world.
+const offlineWordHidden = () => page.evaluate(() => {
+  const note = document.getElementById('bud-note');
+  // data-bud-note goes the instant the word is cleared; the button itself is hidden 200ms later.
+  return !note || !document.body.hasAttribute('data-bud-note') || note.textContent.trim() !== 'Offline';
+});
+
 const isPostInstances = (req) => req.url().includes('/api/instances') && req.method() === 'POST';
 
-const indicatorHiddenInitially = await page.locator('#connectivity-indicator').isHidden();
+const indicatorHiddenInitially = await offlineWordHidden();
 console.log('indicator hidden before any sync (should be true):', indicatorHiddenInitially);
 
 // First POST /api/instances is held open, then aborted (a genuine network-
@@ -85,7 +92,7 @@ await Promise.all([firstRequestFailed, secondRequestSucceeded]);
 // operation itself takes, unlike the timeouts this replaces.
 await page.waitForTimeout(200);
 
-const indicatorHiddenAfterStaleFailureArrives = await page.locator('#connectivity-indicator').isHidden();
+const indicatorHiddenAfterStaleFailureArrives = await offlineWordHidden();
 console.log(
   'indicator hidden once a newer success has landed, even after an older, slower failure arrives later (should be true):',
   indicatorHiddenAfterStaleFailureArrives,

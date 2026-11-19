@@ -33,6 +33,9 @@
 //                                         `:burst:<name>:<count>:<ms>` to the end of any step to take
 //                                         them while it runs (walk:forward:2000:burst:walk:4:500 shows
 //                                         the walk's legs; tap:... shows a leaf unfolding)
+//   slow:<rate>                           run the page's CSS animations at that fraction of their
+//                                         speed (slow:0.1 = ten times slower) so a burst catches an
+//                                         unfold or a bloom; slow:1 puts them back
 //   idle                                  wait until the network and frames settle
 //   wait:<ms>                             wait
 //   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
@@ -266,6 +269,7 @@ const settle = async () => {
 // from the left half of the screen; a look is one finger dragged from the right half
 // (#3749: the half it lands on decides, so each works alone); a fly is two quick taps.
 let touchSession = null;
+let animationSession = null;
 async function sendTouch(type, points) {
   touchSession ||= await page.context().newCDPSession(page);
   await touchSession.send('Input.dispatchTouchEvent', { type, touchPoints: points });
@@ -470,6 +474,14 @@ async function runStepAction(step, index) {
     case 'wait':
       await page.waitForTimeout(a);
       return null;
+    case 'slow': {
+      // Chrome's own animation clock, so CSS animations and transitions run slower and a still
+      // every few hundred ms can show a leaf unfolding (#3876). slow:1 restores it.
+      animationSession ||= await page.context().newCDPSession(page);
+      await animationSession.send('Animation.enable');
+      await animationSession.send('Animation.setPlaybackRate', { playbackRate: a });
+      return null;
+    }
     case 'key':
       // A real key press (a Playwright key name: KeyN, Escape, Shift+KeyN), for the keyboard ways
       // in (#3824). The page's own handlers see an ordinary keydown.

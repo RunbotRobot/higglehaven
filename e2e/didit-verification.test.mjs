@@ -51,12 +51,12 @@ await diditStatusRequest;
 const trustTierBeforeVerify = await page.textContent('#auth-account-trust-tier');
 console.log('trust-tier text for an account that has only cleared the credit-card floor (should say credit-card verified, not yet ID-verified):', trustTierBeforeVerify);
 const verifyBtnVisible = await page.locator('#auth-verify-id-btn').isVisible();
-console.log('"Verify with Government ID" button visible while still below the id_verified tier (should be true):', verifyBtnVisible);
+console.log('"Verify with government ID" button visible while still below the id_verified tier (should be true):', verifyBtnVisible);
 
 await page.click('#auth-verify-id-btn');
 // #1954: the 503 "not configured" text is internal; the player sees src/errorCopy.js's service_unavailable copy instead.
 const statusAfterClick = await waitForText(page, '#auth-status', 'available right now');
-console.log('status after clicking Verify with Government ID (should show the calm "not available right now" copy, not the internal "not configured" text — Didit is unconfigured in this deployment):', statusAfterClick);
+console.log('status after clicking Verify with government ID (should show the calm "not available right now" copy, not the internal "not configured" text — Didit is unconfigured in this deployment):', statusAfterClick);
 
 // The 503 above is a real, deliberate HTTP error response — Chromium logs
 // it to the console as "Failed to load resource" independent of anything

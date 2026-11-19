@@ -11,6 +11,8 @@ export const EMPTY_COPY = {
   lands: "You don't own a lándlet yet. Claim one in Build mode to start building.",
   products: 'No products yet. Tap "Add a product" in the menu to put your first one up for sale.',
   orders: 'No orders yet. When someone buys one of your products, it will show up here.',
+  chat: 'Nobody has said anything nearby yet. What you type here is seen by people close to you.',
+  search: 'Try fewer letters, or clear the search to see everything.',
 };
 
 // A paragraph for a leaf built in code (Orders). Leaves drawn from index.html carry the same class.

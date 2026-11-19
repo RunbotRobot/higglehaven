@@ -1,6 +1,6 @@
 // #3775: which products the shopper has an order of that they have not rated yet. A product
 // is rated once per order and only from an order (owner, 2026-11-18), so the product card
-// offers "Rate this Product" only for these, never a control that can only refuse.
+// offers "Rate this product" only for these, never a control that can only refuse.
 //
 // Same shape as ownedProducts.js: the orders are read once (every page, bounded) the first
 // time a card asks, kept for the page's life, and read again after a purchase or a rating.
@@ -41,7 +41,7 @@ export function hasUnratedOrder(templateId) {
   return !!templateId && templateIds.has(templateId);
 }
 
-// My Purchases changed an order (a product rated, a rating removed, a refund): the set is read
+// My purchases changed an order (a product rated, a rating removed, a refund): the set is read
 // again the next time a card asks, not on every change.
 if (typeof document !== 'undefined') {
   document.addEventListener('higglehaven:orders-changed', () => { loaded = false; });

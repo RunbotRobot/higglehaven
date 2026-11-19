@@ -106,12 +106,14 @@ await page.click(`.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_
 await page.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
 await page.fill('#report-reason-input', REPORT_REASON);
 await page.click('#report-reason-submit-btn');
-await page.waitForSelector('#fading-note.visible', { timeout: 5000 });
-const noticeTitle = await page.textContent('#fading-note');
+const reportedLine = `.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_ID}"] .inline-action-status`;
+await page.waitForSelector(reportedLine, { state: 'visible', timeout: 5000 });
+const noticeTitle = await page.textContent(reportedLine);
 const blockingModalOpen = await page.evaluate(() => document.getElementById('notice-modal')?.classList.contains('visible') ?? false);
-console.log('confirming self-fading note shown (should be "Report sent. Thank you."):', noticeTitle, '| blocking modal open (should be false):', blockingModalOpen);
-await page.waitForFunction(() => !document.getElementById('fading-note')?.classList.contains('visible'), null, { timeout: 8000 });
-console.log('note faded by itself (should be true): true');
+console.log('confirmation said on the reported message (should be "Report sent. Thank you."):', noticeTitle, '| blocking modal open (should be false):', blockingModalOpen);
+const stillThere = await page.locator(reportedLine).isVisible();
+const noFloatingNote = (await page.locator('#fading-note').count()) === 0;
+console.log('the confirmation stays on the message, nothing floats over the world (should be true, true):', stillThere, noFloatingNote);
 console.log('no native dialog was raised (should be 0):', dialogMessages.length);
 console.log('report request sent with the reported builder id and typed reason (should be true):',
   reportRequestBody?.reportedBuilderId === REPORTED_BUILDER_ID && reportRequestBody?.reason === REPORT_REASON);

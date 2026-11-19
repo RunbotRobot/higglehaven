@@ -19,13 +19,18 @@ import { createPersistentMuteSet } from './mutePersistence.js';
 import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
-import { showFadingNote } from '../ui/fadingNote.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { addBudPetals, openLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
 const chatPanelEl = document.getElementById('shop-nearby-chat-panel');
 const chatLogEl = document.getElementById('shop-nearby-chat-log');
+const chatEmptyEl = document.getElementById('shop-nearby-chat-empty');
+// #3875: with nobody having spoken, the panel says what it is for instead of showing an empty box.
+function syncChatEmpty() {
+  if (chatEmptyEl) chatEmptyEl.hidden = chatLogEl.querySelector('.shop-nearby-chat-message') !== null;
+}
 const chatStatusEl = document.getElementById('shop-nearby-chat-status');
 const chatFormEl = document.getElementById('shop-nearby-chat-form');
 const chatInputEl = document.getElementById('shop-nearby-chat-input');
@@ -109,6 +114,7 @@ function appendMessage(message) {
   }
   chatLogEl.appendChild(line);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  syncChatEmpty();
 }
 
 // #3551: one line shows its actions at a time. Tapping the line again, or
@@ -137,10 +143,11 @@ function toggleLineActions(line) {
 function removeMessagesFromBuilder(builderId) {
   chatLogEl.querySelectorAll(`.shop-nearby-chat-message[data-builder-id="${builderId}"]`)
     .forEach((el) => el.remove());
+  syncChatEmpty();
 }
 
 // Same report flow voiceChat.js's reportVoicePeer uses for this action.
-async function reportNearbyChatSender(builderId) {
+async function reportNearbyChatSender(builderId, lineEl) {
   // #3359: in-app modal and notices, not window.prompt()/alert() -- a browser
   // that suppresses native dialogs made reporting impossible and dropped the
   // outcome. A cancelled modal (null) submits nothing.
@@ -148,8 +155,9 @@ async function reportNearbyChatSender(builderId) {
   if (answer === null) return;
   try {
     await sendNearbyChatReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
-    // #3552: a success is a note that fades by itself, not a second modal.
-    showFadingNote('Report sent. Thank you.');
+    // #3889: said on the message that was reported, in the chat leaf, not a
+    // pill over the world.
+    if (lineEl?.isConnected) showInlineActionStatus(lineEl, 'Report sent. Thank you.', { error: false });
   } catch (err) {
     await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
   }
@@ -193,6 +201,7 @@ function resetChatLog() {
   chatCursor = null;
   seenMessageIds.clear();
   chatLogEl.replaceChildren();
+  syncChatEmpty();
 }
 
 if (mutedToggleEl) {
@@ -234,7 +243,7 @@ if (chatLogEl) {
       renderMutedList();
     } else if (button.dataset.action === 'report') {
       setLineActionsOpen(row, false);
-      reportNearbyChatSender(builderId);
+      reportNearbyChatSender(builderId, row);
     } else if (button.dataset.action === 'block') {
       // #3140: what makes a block take effect everywhere is #3143; here the
       // blocker simply stops seeing what is already on screen from them.
@@ -359,6 +368,7 @@ export function pollNearbyChatIfNeeded(now) {
       chatCursor = null;
       seenMessageIds.clear();
       chatLogEl.replaceChildren();
+      syncChatEmpty();
     }
     if (result.nextCursor) chatCursor = result.nextCursor;
     result.messages.forEach(appendMessage);

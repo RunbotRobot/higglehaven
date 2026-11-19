@@ -1,5 +1,5 @@
-// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit Feedback' bug
-// reports with automatic rendering-state capture"): the Submit Feedback
+// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit feedback' bug
+// reports with automatic rendering-state capture"): the Submit feedback
 // modal.
 //
 // #3302: the entry point is now "Send feedback" in the Settings modal (every

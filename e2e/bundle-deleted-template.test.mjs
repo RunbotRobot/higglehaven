@@ -71,7 +71,7 @@ async function placeCrateAt(x, y) {
   await page.waitForTimeout(800);
 }
 await placeCrateAt(100, 500);
-await placeCrateAt(320, 500);
+await placeCrateAt(320, 700);
 
 // Placing the second crate auto-selected it (handlePlacementClick's own
 // selectOnly for a 'template' placement, same as bundles.test.mjs's own
@@ -80,7 +80,7 @@ await placeCrateAt(320, 500);
 // selection (it would otherwise count as "already selected," and the
 // very first of the two taps below would toggle it back OFF instead of
 // adding the other crate, netting exactly one selected item throughout).
-await page.mouse.click(210, 650);
+await page.mouse.click(210, 600);
 await page.waitForTimeout(300);
 
 // Unlike a tall tree (whose canopy renders well above its placement
@@ -91,7 +91,7 @@ await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 await page.mouse.click(100, 500);
 await page.waitForTimeout(300);
-await page.mouse.click(320, 500);
+await page.mouse.click(320, 700);
 await page.waitForTimeout(300);
 const selectionText = await page.textContent('#item-card-name');
 console.log('selection status before saving (should say 2 items selected):', selectionText);
@@ -103,7 +103,7 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 
-// Both crates are still selected (Save Bundle doesn't clear selection) —
+// Both crates are still selected (Save bundle doesn't clear selection) —
 // delete the placed instances so the template's ON DELETE RESTRICT FK no
 // longer has anything blocking it. #3689: while Multi-Select is on the item card
 // is only a title (its taps go through to the world), so turn Multi-Select off

@@ -199,6 +199,14 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!(Number(args[0]) >= 0)) throw new Error(`step "${token}": milliseconds must be a number`);
       return { command, args: [Number(args[0])] };
+    case 'slow': {
+      // slow:<rate>: the page's CSS animations and transitions run at that fraction of their speed
+      // (slow:0.1 is ten times slower), so a burst can catch a 300 ms unfold even where each still
+      // takes longer than that; slow:1 puts them back (#3876).
+      need(1);
+      if (!(Number(args[0]) >= 0.02 && Number(args[0]) <= 1)) throw new Error(`step "${token}": slow needs a rate from 0.02 to 1 (slow:0.1 is ten times slower, slow:1 is normal)`);
+      return { command, args: [Number(args[0])] };
+    }
     case 'key':
       // key:KeyN, key:Escape, key:Shift+KeyN: one Playwright key name.
       need(1);
@@ -229,7 +237,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, key, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
   }
 }
 

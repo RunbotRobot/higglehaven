@@ -122,7 +122,7 @@ export function clampAnchorRadius(radiusPx) {
 // `canBuy`; every other case says why in a sentence (the issue: nothing that is
 // not for sale shows a Buy petal).
 //   inRange: the shopper is close enough to the product to act on it (the same
-//   gate the old panel used for Buy/Rate/Return Policy, SIGN_INTERACT_RADIUS_M).
+//   gate the old panel used for Buy/Rate/Return policy, SIGN_INTERACT_RADIUS_M).
 //   canReview: a product is rated from an order (#3775), so only when the shopper is within
 //   reach AND has an order of it that is not rated yet (`hasUnratedOrder`); otherwise the
 //   control is not drawn at all, rather than drawn to refuse.

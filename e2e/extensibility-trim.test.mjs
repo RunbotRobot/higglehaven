@@ -74,13 +74,10 @@ const yActive = await page.locator('.trim-axis-field[data-trim-axis="y"]').evalu
 console.log('X trim field active (should be true):', xActive);
 console.log('Y trim field active (should be false, not declared extensible):', yActive);
 
-// #1760: aria-pressed should mirror .active on the Move/Rotate/Trim toggle
-// group, same as #1503 already made true for the Shop/Build/Sell nav and
-// the Seller browse/manage toggle.
+// #1760: aria-pressed should mirror .active on the Trim toggle, same as #1503 already made true for
+// the Shop/Build/Sell nav and the Seller browse/manage toggle (#3689: Move and Rotate are gone).
 const trimAriaPressed = await page.locator('#mode-trim').getAttribute('aria-pressed');
-const moveAriaPressed = await page.locator('#mode-move').getAttribute('aria-pressed');
 console.log('Trim button aria-pressed after selecting it (should be "true"):', trimAriaPressed);
-console.log('Move button aria-pressed while Trim is active (should be "false"):', moveAriaPressed);
 
 // Crop it down to 0.5m via the text field (not the drag handle — simpler
 // and just as real a write path, see docs/API.md's "Dragging the Trim
@@ -109,7 +106,7 @@ console.log('persisted X length after reload (should be 0.50):', xAfterReload);
 
 const pass = saveStatus.includes('Saved') && productInfo.includes(PRODUCT_NAME) &&
   xActive === true && yActive === false &&
-  trimAriaPressed === 'true' && moveAriaPressed === 'false' &&
+  trimAriaPressed === 'true' &&
   reselected && Math.abs(Number(xAfterReload) - 0.5) < 0.01 &&
   errors.length === 0;
 await finish(browser, { pass, label: 'extensibility + Trim crop persists across reload', errors });

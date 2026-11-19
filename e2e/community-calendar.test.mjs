@@ -15,7 +15,7 @@
 // claimLandlet below), the only identity actually allowed to.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
-const LABEL = 'Community Calendar Suite Tester';
+const LABEL = 'Community calendar Suite Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
@@ -39,12 +39,12 @@ await page.waitForTimeout(800);
 
 const communityCalendarBtn = () => page.locator('#toggle-community-calendar');
 const labelBefore = await communityCalendarBtn().textContent();
-console.log('Community Calendar button label before toggling (should be plain "Community Calendar"):', labelBefore);
+console.log('Community calendar button label before toggling (should be plain "Community calendar"):', labelBefore);
 
 await communityCalendarBtn().click();
 await page.waitForTimeout(500);
 const labelAfterOn = await communityCalendarBtn().textContent();
-console.log('Community Calendar button label after toggling on (should mention Manage):', labelAfterOn);
+console.log('Community calendar button label after toggling on (should mention Manage):', labelAfterOn);
 
 // Read back the persisted flag directly from the API.
 const { landlets } = (await fetchJson('/api/landlets?limit=100')).body;
@@ -53,7 +53,7 @@ const { instances } = (await fetchJson(`/api/instances?landletId=${myLandlet.lan
 const calendarInstance = instances.find((i) => i.templateId === 'placeholder-tree');
 console.log('isCommunityCalendar persisted after toggling on (should be true):', calendarInstance.isCommunityCalendar);
 
-// Leave a couple of events via the same API the in-world "Add an Event"
+// Leave a couple of events via the same API the in-world "Add an event"
 // button calls (createCalendarEvent in src/api.js), then list them back.
 // No authorLabel in the request bodies — docs/SPEC.md §6 calls calendar
 // events "builder-authored," so the server now derives it from this
@@ -130,7 +130,7 @@ console.log('events persisted server-side after the panel edit (text should now 
 
 // Scheduled events + the one-shot creative-tool trigger (docs/SPEC.md
 // §6's own "scheduled confetti-cannon" example) — posted directly via the
-// API (the in-world "Add an Event" flow's own third, optional prompt for
+// API (the in-world "Add an event" flow's own third, optional prompt for
 // this isn't reachable here for the same reason the rest of Shop mode's
 // prompt-driven flow isn't — see this file's own header comment), but the
 // Manage Events panel's *display* of a scheduled event, and the trigger
@@ -158,7 +158,7 @@ console.log('scheduled (not yet due) event row (should show "Scheduled for"):', 
 const notDueTrigger = await fetchJson(`/api/instances/${calendarInstance.instanceId}/events/${scheduledEventId}/trigger`, { method: 'POST' });
 console.log('trigger attempt before it is due (should be triggered: false):', notDueTrigger.body.triggered);
 
-// "Remove Community Calendar," inside the panel, un-flags and closes it.
+// "Remove community calendar," inside the panel, un-flags and closes it.
 await page.click('#calendar-events-unflag-btn');
 await page.waitForTimeout(500);
 const modalHiddenAfterUnflag = await page.locator('#calendar-events-modal').evaluate((el) => !el.classList.contains('visible'));
@@ -166,7 +166,7 @@ const labelAfterOff = await communityCalendarBtn().textContent();
 const { instances: instancesAfterOff } = (await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`)).body;
 const calendarInstanceAfterOff = instancesAfterOff.find((i) => i.instanceId === calendarInstance.instanceId);
 console.log('calendar-events-modal closed after unflagging (should be true):', modalHiddenAfterUnflag);
-console.log('Community Calendar button label after unflagging (should be plain again):', labelAfterOff);
+console.log('Community calendar button label after unflagging (should be plain again):', labelAfterOff);
 console.log('isCommunityCalendar persisted after unflagging (should be false):', calendarInstanceAfterOff.isCommunityCalendar);
 
 // (The 400 rejection for posting to a non-calendar instance, and
@@ -174,7 +174,7 @@ console.log('isCommunityCalendar persisted after unflagging (should be false):',
 // worker/land.test.js's own "Community calendar" describe block instead
 // of here — same reasoning as community-signs.test.mjs's own note.)
 
-const pass = labelBefore.trim() === 'Community Calendar' &&
+const pass = labelBefore.trim() === 'Community calendar' &&
   labelAfterOn.includes('✓') &&
   calendarInstance.isCommunityCalendar === true &&
   events.length === 2 &&
@@ -190,7 +190,7 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   scheduledRowText.includes('Scheduled for') &&
   notDueTrigger.body.triggered === false &&
   modalHiddenAfterUnflag &&
-  labelAfterOff.trim() === 'Community Calendar' &&
+  labelAfterOff.trim() === 'Community calendar' &&
   calendarInstanceAfterOff.isCommunityCalendar === false &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Community Calendar toggle + Manage Events panel + calendar-events API + scheduled events', errors });
+await finish(browser, { pass, label: 'Community calendar toggle + Manage Events panel + calendar-events API + scheduled events', errors });

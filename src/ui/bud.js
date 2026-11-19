@@ -25,7 +25,7 @@
 //                                                  folds it when the mode is on screen
 //
 // The bud is the existing #account-menu-toggle and its petals are the buttons of
-// #account-menu-panel, so the account rows (Settings, Friends, My Purchases, ...) are petals
+// #account-menu-panel, so the account rows (Settings, Friends, My purchases, ...) are petals
 // without being rebuilt, and the id the e2e suite drives is unchanged.
 
 import { iconKeyFor, svgIcon } from './budIcons.js';
@@ -263,7 +263,7 @@ function decoratePetal(btn) {
 // *visible* children, never :nth-child, and runs again whenever one is added, shown, hidden or has
 // its text replaced (Add item's "Cancel placing" does that).
 function decorateLeaf(el) {
-  // The sign-in leaf says "Log In / Sign Up" before an account and the person's name after it: an
+  // The sign-in leaf says "Log in / Sign up" before an account and the person's name after it: an
   // arrow into a door, then a person.
   const key = el.id === 'account-auth-btn' && !/log in|sign up/i.test(el.textContent) ? 'person' : iconKeyFor(el);
   const have = el.querySelector(':scope > .bud-icon');
@@ -607,7 +607,7 @@ if (typeof document !== 'undefined') {
   });
 }
 
-// Shop's petals. Settings, Friends and My Purchases are rows of the same panel already;
+// Shop's petals. Settings, Friends and My purchases are rows of the same panel already;
 // the modes are the half-ring (#3723); "?" is a leaf that adds itself to Shop and Build from
 // src/ui/helpLeaf.js (#3762: it holds how to move and the manuals; this file cannot import it, since it
 // imports this one). (Chat arrives with the
@@ -621,7 +621,7 @@ registerBudPetals('shop', []);
 // the slices that move them (#3690, #3691), so they are never in two places.
 registerBudPetals('build', [
   { id: 'add-item', label: 'Add item', domId: 'add-item-btn', run: () => {} },
-  // #3760: My Lándlets is a Build tool, so it lives in Build's menu, not the general one. The row keeps
+  // #3760: My lándlets is a Build tool, so it lives in Build's menu, not the general one. The row keeps
   // its id and its handler (src/account/menu.js, which also shows it only in Build).
-  { id: 'my-lands', label: 'My Lándlets', domId: 'my-lands-btn', run: () => {} },
+  { id: 'my-lands', label: 'My lándlets', domId: 'my-lands-btn', run: () => {} },
 ]);

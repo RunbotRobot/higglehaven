@@ -2,7 +2,7 @@
 // replacing the chain of native prompt()/alert() calls Shop's review handler
 // used (a "type edit or delete" prompt, a rating prompt, a comment prompt and
 // alert()s for every outcome). A browser that suppresses native dialogs
-// answered each of those with "cancel" at once, so Rate this Product did
+// answered each of those with "cancel" at once, so Rate this product did
 // nothing and said nothing. Here the rating is a radio group, the comment has
 // a live count against the 280 limit (#2005 -- prompt() could not show one),
 // and an error from the server is shown inside the modal, where the person

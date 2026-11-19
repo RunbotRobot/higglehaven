@@ -78,7 +78,7 @@ const leaf = await page.evaluate(() => {
   };
 });
 check(leaf.line === 'You are on Ground', `the leaf says where you are (${leaf.line})`);
-check(leaf.labelInside && leaf.panelInside && leaf.build && leaf.dig && leaf.onScreen, `the leaf holds the level label, Build Level Above and Dig Level Below, on screen (${JSON.stringify(leaf)})`);
+check(leaf.labelInside && leaf.panelInside && leaf.build && leaf.dig && leaf.onScreen, `the leaf holds the level label, Build level above and Dig level below, on screen (${JSON.stringify(leaf)})`);
 await page.click('.bud-leaf-close');
 const parked = await page.evaluate(() => {
   const home = document.getElementById('level-controls');

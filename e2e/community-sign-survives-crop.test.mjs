@@ -1,4 +1,4 @@
-// Regression test for #1309: cropping an already-flagged Community Sign
+// Regression test for #1309: cropping an already-flagged Community sign
 // via Trim used to silently send isCommunitySign: false to the server
 // (replaceMeshWithCrop's instanceLike never carried the flag forward, so
 // the freshly-rebuilt mesh defaulted it to false), which the PATCH handler
@@ -71,12 +71,12 @@ await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(1000);
 
-// Flag it as a Community Sign.
+// Flag it as a Community sign.
 const communitySignBtn = () => page.locator('#toggle-community-sign');
 await communitySignBtn().click();
 await page.waitForTimeout(500);
 const labelAfterFlag = await communitySignBtn().textContent();
-console.log('Community Sign button label after flagging (should mention Manage):', labelAfterFlag);
+console.log('Community sign button label after flagging (should mention Manage):', labelAfterFlag);
 
 const { landlets } = (await fetchJson('/api/landlets?limit=100')).body;
 const myLandlet = landlets.find((l) => l.ownerBuilderId);
@@ -102,7 +102,7 @@ await page.locator('.trim-axis-field[data-trim-axis="x"] .trim-length-input').di
 await page.waitForTimeout(800);
 
 const labelAfterCrop = await communitySignBtn().textContent();
-console.log('Community Sign button label after cropping (should still mention Manage, not reset to plain):', labelAfterCrop);
+console.log('Community sign button label after cropping (should still mention Manage, not reset to plain):', labelAfterCrop);
 
 const { instances: instancesAfterCrop } = (await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`)).body;
 const signInstanceAfterCrop = instancesAfterCrop.find((i) => i.instanceId === signInstance.instanceId);
@@ -118,4 +118,4 @@ const pass = signInstance.isCommunitySign === true &&
   signInstanceAfterCrop?.isCommunitySign === true &&
   postsAfterCrop.length === 1 &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Community Sign flag + posts survive a Trim crop', errors });
+await finish(browser, { pass, label: 'Community sign flag + posts survive a Trim crop', errors });

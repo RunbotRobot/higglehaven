@@ -15,8 +15,8 @@
 // the time it's delivered -- the exact reordering the issue describes.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
-const ALICE = 'Friends Map Race Alice';
-const BOB = 'Friends Map Race Bob';
+const ALICE = 'Friends map Race Alice';
+const BOB = 'Friends map Race Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });

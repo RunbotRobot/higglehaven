@@ -7,7 +7,7 @@
 // main.js.
 //
 // hideBackupReferenceMesh stays exported: src/catalog/picker.js (#2558)
-// needs it for its own closeCatalogPicker cleanup when a Backup Chain pick
+// needs it for its own closeCatalogPicker cleanup when a Backup chain pick
 // session ends (the low-opacity placement reference this module shows
 // must disappear the moment the picker closes, pick or cancel alike).
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
@@ -29,13 +29,13 @@ const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
 const backupChainBtn = document.getElementById('toggle-backup-chain');
 
-// Community Sign (docs/SPEC.md §6, docs/API.md's "Community signs") — an
+// Community sign (docs/SPEC.md §6, docs/API.md's "Community signs") — an
 // immediate-PATCH flag on the single selected instance the first time (the
 // same pattern the Seller modal's own Flooring button uses for a
 // per-instance/per-template boolean rather than a form with its own Save
 // step). Once already flagged, this same button instead opens the Manage
 // Posts panel (#sign-posts-modal, below) rather than un-flagging directly
-// — un-flagging lives inside that panel's own "Remove Community Sign"
+// — un-flagging lives inside that panel's own "Remove community sign"
 // button instead. A dedicated always-present "Manage Posts" toolbar button
 // was tried first and reverted: on a phone-width viewport it pushed
 // #gizmo-mode-controls' wrapped button row tall enough to physically
@@ -188,8 +188,8 @@ signPostsUnflagBtn.addEventListener('click', async () => {
   await syncUpdate(mesh);
 });
 
-// Community Calendar (docs/SPEC.md §6, docs/API.md's "Community
-// calendar") — structurally identical to Community Sign just above (same
+// Community calendar (docs/SPEC.md §6, docs/API.md's "Community
+// calendar") — structurally identical to Community sign just above (same
 // toggle-then-manage button design, same reasoning), deliberately kept as
 // its own independent flag/table rather than merged with signs — see
 // migrations/0042's own comment.
@@ -385,10 +385,10 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
   await syncUpdate(mesh);
 });
 
-// Backup Chain (#2050/#2051, docs/API.md's "Placed instance backup
+// Backup chain (#2050/#2051, docs/API.md's "Placed instance backup
 // chains") — an ordered, per-instance list of replacement products,
 // auto-activated server-side the moment the active one sells out. Unlike
-// Community Sign/Calendar above, every placed instance can have one (it's
+// Community sign/Calendar above, every placed instance can have one (it's
 // not gated behind some other flag), so this button always opens the same
 // manage panel directly rather than toggling a flag first — see
 // backupChainBtn's own disabled-only (no active state) line in
@@ -450,7 +450,7 @@ async function showBackupReferenceMesh(mesh) {
 }
 
 // Exported for src/catalog/picker.js (#2558) -- its own closeCatalogPicker
-// needs this same cleanup when a Backup Chain pick session ends.
+// needs this same cleanup when a Backup chain pick session ends.
 export function hideBackupReferenceMesh() {
   if (!backupReferenceMesh) return;
   landletElevationGroup.remove(backupReferenceMesh);

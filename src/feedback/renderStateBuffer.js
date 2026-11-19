@@ -1,10 +1,10 @@
-// #2717 (leaf of #2715's "[Tracking] In-app 'Submit Feedback' bug reports
+// #2717 (leaf of #2715's "[Tracking] In-app 'Submit feedback' bug reports
 // with automatic rendering-state capture"): a client-side, in-memory
 // rolling buffer of render state -- position/orientation plus relevant
 // shader uniforms, sampled at ~1Hz over a ~60s window, discarded unless a
 // report is ever actually submitted.
 //
-// Exists so a future "Submit Feedback" click (#2718, the UI sub-issue; the
+// Exists so a future "Submit feedback" click (#2718, the UI sub-issue; the
 // payload then ships to the Worker endpoint added by #2719) can hand over
 // what the scene looked like for the *preceding* ~60 seconds, not just the
 // instant of the click -- the exact gap #2715's own body describes hitting
@@ -63,7 +63,7 @@ export function recordRenderStateSample(nowMs, snapshot) {
 }
 
 // The "simple 'give me the current buffer contents' accessor" #2715's own
-// body asks for -- #2715's other sub-issues (the "Submit Feedback" UI,
+// body asks for -- #2715's other sub-issues (the "Submit feedback" UI,
 // #2718) read from this rather than reaching into this module's private
 // `samples` array directly. Returns a fresh copy, oldest sample first, so a
 // caller mutating what it got back can never corrupt this module's own

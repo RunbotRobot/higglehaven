@@ -1,4 +1,4 @@
-// #1176 (sub-issue of #1174, spawn flow): the "Go to Last Location" button
+// #1176 (sub-issue of #1174, spawn flow): the "Go to last location" button
 // shown during #1175's spawn orbit, offering to fly the shopper straight to
 // their own last-reported avatar_presence position instead of waiting out
 // the hands-off rotation. Three behaviors, each needing a real browser
@@ -175,7 +175,7 @@ const finalPresence = await page.evaluate(async () => {
   const res = await fetch('/api/presence/me');
   return (await res.json()).presence;
 });
-console.log(`presence after the Go to Last Location sequence (should be near x:${targetX} y:${targetY}):`, finalPresence);
+console.log(`presence after the Go to last location sequence (should be near x:${targetX} y:${targetY}):`, finalPresence);
 
 console.log('no button on a genuinely fresh account (should be true):', noButtonOnFreshAccount);
 console.log('seed presence A status (should be 200):', seedStatusA);
@@ -209,4 +209,4 @@ const pass =
   !!finalPresence && near(finalPresence.x, targetX) && near(finalPresence.y, targetY) &&
   errors.length === 0;
 
-await finish(browser, { pass, label: 'Go to Last Location (#1176)', errors });
+await finish(browser, { pass, label: 'Go to last location (#1176)', errors });

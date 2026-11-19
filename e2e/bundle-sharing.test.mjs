@@ -61,7 +61,7 @@ await sharerPage.waitForFunction(() => document.getElementById('product-info').t
 const savedStatus = await sharerPage.textContent('#product-info');
 console.log('save status (should mention Saved):', savedStatus);
 
-// The sharer's own bundle shows in both their My Bundles and Community tabs.
+// The sharer's own bundle shows in both their My bundles and Community tabs.
 await sharerPage.click('#add-item-btn');
 await sharerPage.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await sharerPage.click('.bundle-tab-btn[data-bundle-tab="community"]');
@@ -78,10 +78,10 @@ await claimLandlet(viewerPage);
 
 await viewerPage.click('#add-item-btn');
 await viewerPage.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
-// Nothing of the viewer's own yet — My Bundles (the default tab) is empty,
+// Nothing of the viewer's own yet — My bundles (the default tab) is empty,
 // but the section itself is visible because the Sharer's bundle exists.
 const myBundlesEmptyForViewer = await viewerPage.locator('#bundle-picker-empty').isVisible();
-console.log('viewer\'s own My Bundles tab is empty (should be true):', myBundlesEmptyForViewer);
+console.log('viewer\'s own My bundles tab is empty (should be true):', myBundlesEmptyForViewer);
 
 await viewerPage.click('.bundle-tab-btn[data-bundle-tab="community"]');
 await viewerPage.waitForTimeout(300);

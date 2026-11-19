@@ -114,6 +114,7 @@ import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
+import { sayAtHead, clearSaying } from '../ui/headSaying.js'; // #3889: said beside the flower's head
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
   settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField, closeSettingsModal,
@@ -195,8 +196,8 @@ function announceLevelLimit() {
   if (!hit) return;
   levelLimitAnnounced = true;
   showSelectionActionStatus(hit === 'top'
-    ? "That's as high as this lándlet goes. Use Build Level Above to build higher."
-    : "That's as deep as this lándlet goes. Use Dig Level Below to go deeper.");
+    ? "That's as high as this lándlet goes. Use Build level above to build higher."
+    : "That's as deep as this lándlet goes. Use Dig level below to go deeper.");
 }
 
 function levelLabel(levelIndex) {
@@ -529,6 +530,11 @@ function wireDraggingBehavior(transformControls) {
 // spin the product in place.
 export const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
+// #3689 (slice b): the ring on the item turns it about its upright axis only, which is what nearly every
+// rotation is. The other two axes are typed in the card's Angles block (the gizmo still turns about
+// any of the three when a test drives it, and the readout still names all three).
+rotateControls.showX = false;
+rotateControls.showY = false;
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
@@ -849,11 +855,16 @@ translateControls.addEventListener('objectChange', () => {
 // to groupMovePivot (i.e. 2+ items are selected in Move mode, the normal
 // precondition for a real group drag) -- inert otherwise.
 window.__testDragGroupMoveZ = (offsetZ) => {
-  if (translateControls.object !== groupMovePivot) return false;
+  if (selectedMeshes.size < 2 || sceneMutationBusy) return false;
+  // #3689: the move gizmo is no longer attached while a group is just selected (a drag from the item
+  // moves it), so the hook attaches the pivot the way that drag does, and lets go after.
+  const wasAttached = translateControls.object === groupMovePivot;
+  if (!wasAttached) attachGroupMovePivot();
   translateControls.dispatchEvent({ type: 'dragging-changed', value: true });
   groupMovePivot.position.z += offsetZ;
   translateControls.dispatchEvent({ type: 'objectChange' });
   translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  if (!wasAttached) translateControls.detach();
   return true;
 };
 
@@ -960,7 +971,7 @@ function refreshRotationReadout() {
   let orientation = null;
   if (object === groupRotatePivot) orientation = referenceOrientation([...selectedMeshes].map((mesh) => mesh.quaternion));
   else if (object) orientation = object.quaternion;
-  if (!orientation || currentGizmoMode !== 'rotate') {
+  if (!orientation || !object) {
     if (!rotationReadoutEl.hidden) rotationReadoutEl.hidden = true;
     return;
   }
@@ -1515,13 +1526,22 @@ function instanceForSave(mesh) {
 // (this device's own localStorage save) already runs before any of these are
 // even called, so nothing here is ever a data-loss risk — purely a "the
 // server copy might be stale" signal.
-const connectivityIndicatorEl = document.getElementById('connectivity-indicator');
 let serverReachable = true;
 
 function setServerReachable(reachable) {
   if (reachable === serverReachable) return;
   serverReachable = reachable;
-  connectivityIndicatorEl.hidden = reachable;
+  // #3889: said as a word beside the flower's head that opens to the sentence (it used to be a
+  // standing red button on the world). It stays while the server is unreachable.
+  if (reachable) clearSaying('connection');
+  else {
+    sayAtHead('connection', {
+      word: 'Offline',
+      title: 'No connection',
+      message: "Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.",
+      label: "Can't reach the server. Open for details.",
+    });
+  }
 }
 
 // Backlog audit: the six sync* functions below all fire fire-and-forget
@@ -1598,10 +1618,6 @@ function tellBuilder(title, message) {
   return showNotice({ title, message });
 }
 
-connectivityIndicatorEl.addEventListener('click', () => {
-  tellBuilder("No connection", "Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
-});
-
 // A fetch() call rejects with a TypeError specifically when it never
 // reached a server at all (offline, DNS failure, connection refused, CORS) —
 // per the Fetch spec, that's the one case this indicator should react to.
@@ -1669,7 +1685,7 @@ async function handleRejectedSingleSync(err, action) {
   const reverted = isServerRejection(err) && await revertSceneToServer();
   if (!reverted) noteSyncFailure(err);
   if (isSuspendedSellerSyncError(err)) {
-    tellBuilder("Taken off your lándlet", "That item was taken off your lándlet because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
+    tellBuilder("Taken off your lándlet", "That item was taken off your lándlet because its seller is suspended. It's saved under Removed items and will return if the suspension is lifted.");
     return;
   }
   const what = action === 'delete' ? "Couldn't delete that item" : action === 'create' ? "Couldn't save that new item" : "Couldn't save that change";
@@ -1773,7 +1789,7 @@ function isSuspendedSellerSyncError(err) {
 }
 
 // Drops, from the given meshes, every one the server no longer has (the
-// suspended seller's products), refreshes the Removed Items button, and
+// suspended seller's products), refreshes the Removed items button, and
 // returns { removed, remaining }. Triggered on failure rather than polled, to
 // stay cheap on the free tier. If the server can't be reached to compare,
 // nothing is removed locally (never drop a builder's unsaved work on a guess).
@@ -1800,7 +1816,7 @@ async function reconcileAfterSellerSuspension(meshes) {
 // seller's items left their land (failed save, batch update, tab focus, and
 // the general refocus reconcile).
 function suspendedSellerRemovalNotice(count) {
-  return `${count} item(s) were taken off your lándlet because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`;
+  return `${count} item(s) were taken off your lándlet because their seller is suspended. They're saved under Removed items and will return if the suspension is lifted.`;
 }
 
 // #3095 (second half): the tab-focus counterpart to the failed-save
@@ -2078,7 +2094,7 @@ function deleteInstance(mesh, { sync = true, persist = true } = {}) {
 // No longer defaults to an idle "Tap a product to inspect it" hint — that
 // was permanent on-screen real estate spent stating the obvious. The pill
 // itself is still exactly as useful for everything it was already showing
-// (a selected item's name, Measure's readouts, Copy/Save Bundle
+// (a selected item's name, Measure's readouts, Copy/Save bundle
 // confirmations, ...) — it just now hides completely (native `hidden`,
 // which `#product-info`'s own CSS never overrides) rather than falling
 // back to a permanent placeholder when there's nothing to say.
@@ -2116,8 +2132,6 @@ selectionActionStatusDismissBtn.addEventListener('click', () => showSelectionAct
 
 
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
-const modeMoveBtn = document.getElementById('mode-move');
-const modeRotateBtn = document.getElementById('mode-rotate');
 const modeTrimBtn = document.getElementById('mode-trim');
 const trimLengthControlEl = document.getElementById('trim-length-control');
 const trimAxisFieldEls = [...document.querySelectorAll('.trim-axis-field')];
@@ -2129,7 +2143,7 @@ function trimInputEl(axis) {
 }
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
-// Community Sign/Calendar/Backup Chain buttons belong to #2560's own
+// Community sign/Calendar/Backup chain buttons belong to #2560's own
 // src/build/metadataModals.js -- updateSelectionUI below needs to reflect
 // their enabled/active state
 // off the current selection the same way it does for this module's own
@@ -2183,7 +2197,7 @@ function setLevelStatus(message, { isError = false } = {}) {
 // discarding wherever the builder was actually looking.
 let lastAppliedLevelFloorZ = 0;
 
-// Shared across addLevel (Build Level Above / Dig Level Below) and the
+// Shared across addLevel (Build level above / Dig level below) and the
 // Remove handler below — all three mutate currentLevelIndex/
 // currentLandletLevels from an async server round-trip, and each handler
 // used to disable only its own button while in flight, leaving the other
@@ -2215,8 +2229,8 @@ export function renderLevelControls() {
   levelUpBtn.disabled = currentLevelIndex >= top;
   const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
-  levelBuildBtn.textContent = `Build Level Above (${formatArea(upCostM2)})`;
-  levelDigBtn.textContent = `Dig Level Below (${formatArea(downCostM2)})`;
+  levelBuildBtn.textContent = `Build level above (${formatArea(upCostM2)})`;
+  levelDigBtn.textContent = `Dig level below (${formatArea(downCostM2)})`;
   // Only the outermost existing level (in whichever direction it's on) can
   // actually be removed (worker/index.js's own 409 otherwise) — ground
   // (index 0) is never a real row and can never be removed at all.
@@ -2486,7 +2500,7 @@ async function applySnapshotLocally(snapshot) {
       // crop, so it carries the mesh's own (pre-restore) flag values
       // forward rather than the snapshot's — a reused mesh needs these
       // explicitly re-applied too, or an undo/redo jump across a
-      // Community Sign/Calendar flag change leaves the flag untouched.
+      // Community sign/Calendar flag change leaves the flag untouched.
       mesh.userData.isCommunitySign = inst.isCommunitySign ?? false;
       mesh.userData.isCommunityCalendar = inst.isCommunityCalendar ?? false;
       mesh.userData.safePosition = mesh.position.clone();
@@ -2715,20 +2729,21 @@ export function updateTrimLengthInput() {
   }
 }
 
-let currentGizmoMode = 'translate';
+// #3689 (slice b): the Move and Rotate buttons are gone. A selected item (or bundle) always shows the
+// yaw ring (rotateControls, turned to its upright axis only), and a drag that starts on the item moves it
+// along the ground (see "Drag from the item" below). 'trim' is the one other state, toggled by the Trim
+// button and keeping its own axis handles while it is on. The other two rotation axes are typed in the
+// card's Angles block; vertical placement and sliding along a turned wall are the card's Nudge pad.
+let currentGizmoMode = 'select';
 // #3376: attaching, detaching and undo change what is selected without a drag; a
 // light poll keeps the rotation readout true to the selection (it does nothing
-// unless Rotate is on). Started here, after currentGizmoMode exists.
+// unless the ring is attached). Started here, after currentGizmoMode exists.
 setInterval(refreshRotationReadout, 250);
 function setGizmoMode(mode) {
   currentGizmoMode = mode;
   // #1503: aria-pressed mirrors .active so the current tool is announced to
   // a screen reader, not just styled -- same idiom as updateSellerViewToggleUI
   // and updateModeNavUI's own toggle groups.
-  modeMoveBtn.classList.toggle('active', mode === 'translate');
-  modeMoveBtn.setAttribute('aria-pressed', String(mode === 'translate'));
-  modeRotateBtn.classList.toggle('active', mode === 'rotate');
-  modeRotateBtn.setAttribute('aria-pressed', String(mode === 'rotate'));
   modeTrimBtn.classList.toggle('active', mode === 'trim');
   modeTrimBtn.setAttribute('aria-pressed', String(mode === 'trim'));
   translateControls.detach();
@@ -2738,32 +2753,20 @@ function setGizmoMode(mode) {
   if (selectedMeshes.size === 1) {
     const [mesh] = selectedMeshes;
     if (mode === 'trim') {
-      // Not every selection can be trimmed — fall back to Move rather than
+      // Not every selection can be trimmed — fall back to the plain ring rather than
       // leaving every gizmo detached and nothing visibly attached at all.
-      if (!extensibleAxes(mesh.userData.template)) return setGizmoMode('translate');
+      if (!extensibleAxes(mesh.userData.template)) return setGizmoMode('select');
       attachTrimControls(mesh);
       trimLengthControlEl.classList.add('visible');
       return;
     }
-    // 'local' is what makes moving a single item along its own rotated
-    // orientation feel natural (see translateControls' own setup comment);
-    // a group has no single orientation to align to, so the pivot below
-    // uses 'world' instead — this restores 'local' when coming back to a
-    // single selection.
-    translateControls.space = 'local';
-    (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
+    rotateControls.attach(mesh);
     return;
   }
-  if (selectedMeshes.size > 1 && mode === 'rotate' && isSingleBundleSelection()) {
+  if (selectedMeshes.size > 1 && isSingleBundleSelection()) {
     groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
     groupRotatePivot.quaternion.identity();
     rotateControls.attach(groupRotatePivot);
-    return;
-  }
-  if (selectedMeshes.size > 1 && mode === 'translate') {
-    groupMovePivot.position.copy(getSelectionBoundsCentre());
-    translateControls.space = 'world';
-    translateControls.attach(groupMovePivot);
   }
 }
 
@@ -2851,6 +2854,94 @@ for (const input of angleInputEls) {
   input.addEventListener('change', applyTypedAngles);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') input.blur(); });
 }
+
+// Attaches the move controls to the invisible pivot of a group of items, which is what a group's move
+// (and a drag from one of its items) runs through.
+function attachGroupMovePivot() {
+  groupMovePivot.position.copy(getSelectionBoundsCentre());
+  translateControls.space = 'world';
+  translateControls.attach(groupMovePivot);
+}
+
+// Drag from the item (#3689, slice b; the plan's "one finger drag that starts on the selected item moves
+// it along the ground"). A press on a selected item, then a drag past the tap threshold, moves it (or the
+// whole selection) along the ground under the finger. It is not a second set of rules: every frame sets the
+// position the finger asks for and runs the same objectChange the gizmo's arrows used to, so the lándlet's
+// edge, collision, snapping, the level limits and their messages, the undo snapshot and saving are
+// exactly what a gizmo drag got. A second finger is looking, never moving: it ends the drag and the camera
+// gets its two-finger pan. The camera's one-finger rotate is off from the press until the release, so a
+// drag that starts on the item cannot also orbit.
+const bodyDragPlane = new THREE.Plane();
+const bodyDragHit = new THREE.Vector3();
+const UP_Z = new THREE.Vector3(0, 0, 1);
+let bodyDrag = null; // { pointerId, startX, startY, startHit, started, target, startPos }
+
+function selectedItemHitAt(event) {
+  if (selectedMeshes.size === 0) return null;
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  return raycaster.intersectObjects([...selectedMeshes], true)[0] ?? null;
+}
+
+function beginBodyDrag() {
+  if (selectedMeshes.size === 0 || sceneMutationBusy) return false;
+  let target;
+  if (selectedMeshes.size === 1) {
+    [target] = selectedMeshes;
+    translateControls.attach(target);
+  } else {
+    target = groupMovePivot;
+    attachGroupMovePivot();
+  }
+  translateControls.getHelper().visible = false; // the arrows are not drawn; only the drag moves it
+  translateControls.dispatchEvent({ type: 'dragging-changed', value: true });
+  bodyDrag.target = target;
+  bodyDrag.startPos = target.position.clone();
+  bodyDrag.started = true;
+  return true;
+}
+
+function endBodyDrag() {
+  const drag = bodyDrag;
+  bodyDrag = null;
+  if (!drag) return;
+  controls.enableRotate = !multiSelectMode;
+  if (!drag.started) return;
+  translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  translateControls.detach();
+}
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (bodyDrag) { endBodyDrag(); return; } // a second finger: it is looking, not moving
+  if (!event.isPrimary || event.button > 0) return;
+  if (multiSelectMode || measureMode || pendingPlacement || sceneMutationBusy || currentGizmoMode === 'trim') return;
+  // TransformControls' own pointerdown (registered earlier) has already set .dragging when the ring or a
+  // trim handle was grabbed, so a press on those never starts this.
+  if (translateControls.dragging || rotateControls.dragging || trimControls.dragging) return;
+  const hit = selectedItemHitAt(event);
+  if (!hit) return;
+  bodyDragPlane.setFromNormalAndCoplanarPoint(UP_Z, hit.point);
+  bodyDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startHit: hit.point.clone(), started: false, target: null, startPos: null };
+  controls.enableRotate = false;
+});
+window.addEventListener('pointermove', (event) => {
+  if (!bodyDrag || event.pointerId !== bodyDrag.pointerId) return;
+  if (!bodyDrag.started) {
+    if (Math.hypot(event.clientX - bodyDrag.startX, event.clientY - bodyDrag.startY) <= CLICK_DRAG_THRESHOLD_PX) return;
+    if (!beginBodyDrag()) { endBodyDrag(); return; }
+  }
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  if (!raycaster.ray.intersectPlane(bodyDragPlane, bodyDragHit)) return;
+  const { target, startPos, startHit } = bodyDrag;
+  target.position.set(startPos.x + (bodyDragHit.x - startHit.x), startPos.y + (bodyDragHit.y - startHit.y), startPos.z);
+  translateControls.dispatchEvent({ type: 'objectChange' });
+});
+const finishBodyDrag = (event) => { if (bodyDrag && event.pointerId === bodyDrag.pointerId) endBodyDrag(); };
+window.addEventListener('pointerup', finishBodyDrag);
+window.addEventListener('pointercancel', finishBodyDrag);
+// Test hooks (the window.__test* convention): whether a drag from the item is in progress.
+window.__testBodyDragActive = () => !!bodyDrag?.started;
+// ...and where every placed item is.
+window.__testProductPositions = () => productMeshes.map((mesh) => ({ instanceId: mesh.userData.instanceId, x: mesh.position.x, y: mesh.position.y, z: mesh.position.z }));
 
 // Measure: a lightweight ruler for questions none of the placement tools
 // answer on their own — "are these two courses of Wall - White stacked
@@ -3122,20 +3213,11 @@ function exitMeasureMode() {
   }
   updateSelectionUI();
 }
-modeMoveBtn.addEventListener('click', () => {
-  exitMultiSelectMode();
-  exitMeasureMode();
-  setGizmoMode('translate');
-});
-modeRotateBtn.addEventListener('click', () => {
-  exitMultiSelectMode();
-  exitMeasureMode();
-  setGizmoMode('rotate');
-});
 modeTrimBtn.addEventListener('click', () => {
   exitMultiSelectMode();
   exitMeasureMode();
-  setGizmoMode('trim');
+  // #3689: Trim is the one tool left on the card's row, so it toggles: on, and back to the plain ring.
+  setGizmoMode(currentGizmoMode === 'trim' ? 'select' : 'trim');
 });
 // Exact-value alternative to the drag handles above — typing a length
 // commits the same way releasing a handle does: an undo snapshot, a
@@ -3598,21 +3680,12 @@ export function updateSelectionUI() {
   setProductInfo('');
   showItemCard(count === 1 ? singleSelectionInfo : `${count} items selected`, { passThrough: multiSelectMode });
   modeControlsEl.classList.add('visible');
-  // Rotate has a bundle form only (#3325: one rigid turn about the bundle's
-  // pivot); an arbitrary multi-item selection still offers only Move.
-  // Disabling Rotate (rather than hiding it) keeps every other button —
-  // Move, Snap, Copy, Delete — in the same position regardless of selection
-  // count; removing it from the layout entirely let the rest reflow into
-  // different left/right groupings depending on whether Rotate happened to
-  // be there. Trim follows the same reasoning, disabled (not hidden) for
-  // both a multi-item selection and a single non-extensible one.
-  modeRotateBtn.disabled = count !== 1 && !isSingleBundleSelection();
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   refreshCardNumbers(singleMesh);
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   // #3574 -- a mode this item cannot use is left out, not greyed (the "gone when not needed" rule).
   modeTrimBtn.hidden = modeTrimBtn.disabled;
-  // Community Sign (docs/API.md's "Community signs") only makes sense for
+  // Community sign (docs/API.md's "Community signs") only makes sense for
   // one specific placed object at a time, same reasoning as Trim above —
   // disabled (not hidden) for a multi-item selection so the button row
   // doesn't reflow.
@@ -3626,18 +3699,18 @@ export function updateSelectionUI() {
   // identical toggle. #3576: the on-label is deliberately no wider than
   // the off-label (index.html's data-width-sizer reserves the off-label's
   // width), so flipping the toggle never re-wraps the selection toolbar.
-  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community Sign';
-  // Community Calendar (docs/API.md's "Community calendar") — same
-  // reasoning and same toggle-then-manage button design as Community Sign
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community sign';
+  // Community calendar (docs/API.md's "Community calendar") — same
+  // reasoning and same toggle-then-manage button design as Community sign
   // just above, independent of it.
   communityCalendarBtn.disabled = !singleMesh;
   const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
-  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community Calendar';
-  // Backup Chain (#2050/#2051): every placed instance can have one, not
+  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community calendar';
+  // Backup chain (#2050/#2051): every placed instance can have one, not
   // just flagged ones, so this is a plain "open the manage panel" button —
-  // same single-selection-only gating as Trim/Community Sign/Calendar
+  // same single-selection-only gating as Trim/Community sign/Calendar
   // above, but no toggle/active state of its own to reflect.
   backupChainBtn.disabled = !singleMesh;
   // #2764: Group needs 2+ items to form anything; Ungroup needs the
@@ -3652,18 +3725,10 @@ export function updateSelectionUI() {
   ungroupBtn.hidden = ungroupBtn.disabled;
   syncBundleEditUI();
   if (multiSelectMode) {
-    // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
-    // — the gizmo stays hidden the whole time multi-select is on, so it
-    // can't clutter (or steal a drag from) the exact view a builder needs
-    // clear while tapping/swiping across items. The Move/Rotate buttons
-    // stay visible and clickable so the builder can jump straight from a
-    // freshly built selection into moving/rotating it — clicking either
-    // turns multi-select off itself (see their handlers below) and
-    // reattaches the gizmo to whatever's already selected here.
-    modeMoveBtn.classList.remove('active');
-    modeMoveBtn.setAttribute('aria-pressed', 'false');
-    modeRotateBtn.classList.remove('active');
-    modeRotateBtn.setAttribute('aria-pressed', 'false');
+    // Multi-Select and the ring and the drag from an item are sibling tools, not simultaneous
+    // ones — the gizmo stays hidden the whole time multi-select is on, so it can't clutter (or steal a
+    // drag from) the exact view a builder needs clear while tapping/swiping across items. Tapping
+    // Trim (or turning multi-select off) brings the selection's own tools back.
     modeTrimBtn.classList.remove('active');
     modeTrimBtn.setAttribute('aria-pressed', 'false');
     trimLengthControlEl.classList.remove('visible');
@@ -3672,14 +3737,9 @@ export function updateSelectionUI() {
     trimControls.detach();
     return;
   }
-  if (count === 1) {
-    setGizmoMode(currentGizmoMode);
-  } else if (currentGizmoMode === 'rotate' && isSingleBundleSelection()) {
-    setGizmoMode('rotate');
-  } else {
-    currentGizmoMode = 'translate';
-    setGizmoMode('translate');
-  }
+  // One item keeps whichever of the ring and Trim it was on; anything else is the plain ring (a bundle) or
+  // nothing (an arbitrary several), and a drag from the item moves either.
+  setGizmoMode(count === 1 ? currentGizmoMode : 'select');
 }
 
 // #3325: true when the selection is exactly one bundle (2+ items that all
@@ -3803,10 +3863,10 @@ multiSelectBtn.addEventListener('click', () => {
   // rather than being cleared — toggling multi-select on with an item
   // already selected (from a single tap) lets the builder immediately
   // start adding more to it instead of losing that first item and having
-  // to reselect it. Symmetric with Move/Rotate's own hand-off, which acts
+  // to reselect it. Symmetric with the ring's and the drag's own hand-off, which act
   // on whatever was already selected when leaving multi-select (see
-  // modeMoveBtn/modeRotateBtn and updateSelectionUI's multiSelectMode
-  // branch, which is what actually hides the gizmo while this is true).
+  // updateSelectionUI's multiSelectMode branch, which is what actually
+  // hides the gizmo while this is true).
   updateSelectionUI();
 });
 
@@ -3853,7 +3913,7 @@ deleteBtn.addEventListener('click', () => {
 // follow-up for whoever revisits this, same as #2763's other explicitly
 // open owner-judgment items.
 // Feedback is the same brief press-flash copyBtn's own handler uses (see
-// its comment), not a delayed setProductInfo message like Save Bundle's —
+// its comment), not a delayed setProductInfo message like Save bundle's —
 // unlike Copy, forming/dissolving a group is a real persisted state change
 // that Ungroup/Group's own enabled state needs to reflect the instant it
 // lands, so updateSelectionUI() runs synchronously right after, not behind
@@ -4089,7 +4149,7 @@ ungroupBtn.addEventListener('click', async () => {
 // bottom surface in Z (its "base") — rather than absolute coordinates, so
 // the result can be re-anchored wherever a builder taps next (see
 // handlePlacementClick/placeClipboardItems). Shared by Copy (kept in the
-// in-memory clipboard for this session only) and Save Bundle (persisted to
+// in-memory clipboard for this session only) and Save bundle (persisted to
 // the backend so it survives a reload and works on any landlet) — both
 // just want "this exact arrangement, portable."
 export function relativeItemsForMeshes(meshes) {
@@ -4837,7 +4897,7 @@ function updateCameraDebug(now) {
   if (now - lastDebugUpdate < 200) return;
   lastDebugUpdate = now;
   // #3219: developer-vocabulary pose readout, shown to admins only (an
-  // ordinary builder has Submit Feedback, which captures the camera pose in
+  // ordinary builder has Submit feedback, which captures the camera pose in
   // its diagnostic payload). Checked each tick because the account settles
   // after this module loads; nothing to format while hidden.
   const visible = Boolean(currentAuthUser?.isAdmin);
@@ -4977,7 +5037,7 @@ function applyEdgePanWhileDraggingProduct() {
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
 export function buildModeFrameUpdate(now) {
-  // #3302: feed the Submit Feedback ring buffer from Build too (it is
+  // #3302: feed the Submit feedback ring buffer from Build too (it is
   // throttled to ~1Hz inside recordRenderStateSample, so calling every frame
   // is cheap). Each field below was added for #3302 so a report sent from
   // Build says where the camera was and what was selected/refused.
@@ -5113,7 +5173,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
+      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete account under Account above to delete that too.`;
     },
     // #2068: Reset Profile releases any owned lándlet back to greenbelt
     // server-side (see deleteWarning's own wording above) -- currentLandletId

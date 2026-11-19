@@ -1,7 +1,7 @@
 // Seller feedback (#1096, docs/API.md's "Seller feedback") — distinct from
 // product reviews: rates a specific seller's own service (listing
 // accuracy, timeliness, communication) for one specific purchase from
-// them, not the product itself. Submission happens from My Purchases
+// them, not the product itself. Submission happens from My purchases
 // (#3198; the immediate post-purchase prompt was removed in #3256), so
 // this exercises the feedback API directly (createSellerFeedback in
 // src/api.js) and covers the Seller modal's own

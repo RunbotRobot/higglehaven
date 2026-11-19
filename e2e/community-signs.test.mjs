@@ -1,5 +1,5 @@
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") — a
-// builder flags a placed instance as a sign via the "Community Sign"
+// builder flags a placed instance as a sign via the "Community sign"
 // toggle in the gizmo-mode-controls row, and shoppers can then leave short
 // posts on it (rendered in-world as fading floating text in Shop mode —
 // see updateSignFade/makeSignPostSprite in src/main.js, not covered here
@@ -10,11 +10,11 @@
 // second click, once already flagged, opens the Manage Posts panel
 // instead of un-flagging directly — see that button's own click-handler
 // comment in src/main.js for why), the Manage Posts moderation panel
-// (#sign-posts-modal, including its own "Remove Community Sign" button),
+// (#sign-posts-modal, including its own "Remove community sign" button),
 // and the backend sign-posts API all three unlock.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
-const LABEL = 'Community Sign Suite Tester';
+const LABEL = 'Community sign Suite Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
@@ -53,12 +53,12 @@ await page.waitForTimeout(800);
 
 const communitySignBtn = () => page.locator('#toggle-community-sign');
 const labelBefore = await communitySignBtn().textContent();
-console.log('Community Sign button label before toggling (should be plain "Community Sign"):', labelBefore);
+console.log('Community sign button label before toggling (should be plain "Community sign"):', labelBefore);
 
 await communitySignBtn().click();
 await page.waitForTimeout(500);
 const labelAfterOn = await communitySignBtn().textContent();
-console.log('Community Sign button label after toggling on (should mention Manage):', labelAfterOn);
+console.log('Community sign button label after toggling on (should mention Manage):', labelAfterOn);
 
 // Read back the persisted flag directly from the API.
 const { landlets } = (await fetchJson('/api/landlets?limit=100')).body;
@@ -171,7 +171,7 @@ console.log('rows shown before attempting to delete an already-gone post (should
 console.log('rows shown after that attempt self-heals (should be 1, not stuck at 2 with a dead row):', rowCountAfterStaleDelete);
 console.log('remaining row after self-heal (should mention "Love this place!"):', remainingRowTextAfterStaleDelete);
 
-// "Remove Community Sign," inside the panel, un-flags and closes it.
+// "Remove community sign," inside the panel, un-flags and closes it.
 await page.click('#sign-posts-unflag-btn');
 await page.waitForTimeout(500);
 const modalHiddenAfterUnflag = await page.locator('#sign-posts-modal').evaluate((el) => !el.classList.contains('visible'));
@@ -179,7 +179,7 @@ const labelAfterOff = await communitySignBtn().textContent();
 const { instances: instancesAfterOff } = (await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`)).body;
 const signInstanceAfterOff = instancesAfterOff.find((i) => i.instanceId === signInstance.instanceId);
 console.log('sign-posts-modal closed after unflagging (should be true):', modalHiddenAfterUnflag);
-console.log('Community Sign button label after unflagging (should be plain again):', labelAfterOff);
+console.log('Community sign button label after unflagging (should be plain again):', labelAfterOff);
 console.log('isCommunitySign persisted after unflagging (should be false):', signInstanceAfterOff.isCommunitySign);
 
 // (The 400 rejection for posting to a non-sign instance is covered by
@@ -192,7 +192,7 @@ console.log('isCommunitySign persisted after unflagging (should be false):', sig
 // credit-orb-collect-offline-notice.test.mjs's own unexpectedErrors uses.)
 const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 
-const pass = labelBefore.trim() === 'Community Sign' &&
+const pass = labelBefore.trim() === 'Community sign' &&
   labelAfterOn.includes('✓') &&
   signInstance.isCommunitySign === true &&
   posts.length === 2 &&
@@ -207,7 +207,7 @@ const pass = labelBefore.trim() === 'Community Sign' &&
   /delete this post/i.test(staleDeleteNotice) &&
   remainingRowTextAfterStaleDelete.includes('Love this place!') &&
   modalHiddenAfterUnflag &&
-  labelAfterOff.trim() === 'Community Sign' &&
+  labelAfterOff.trim() === 'Community sign' &&
   signInstanceAfterOff.isCommunitySign === false &&
   unexpectedErrors.length === 0;
-await finish(browser, { pass, label: 'Community Sign toggle + Manage Posts panel + sign-posts API', errors: unexpectedErrors });
+await finish(browser, { pass, label: 'Community sign toggle + Manage Posts panel + sign-posts API', errors: unexpectedErrors });

@@ -1,4 +1,4 @@
-// Regression test for #738: renderIdentityField's "Delete Account" handler
+// Regression test for #738: renderIdentityField's "Delete account" handler
 // (src/main.js) called deleteBuilder + fetchProfile to refresh the Settings
 // panel's own local display, but never reset the module-level `builderId`
 // variable the rest of the app reads. ensureBuilderIdentity()'s own
@@ -46,7 +46,7 @@ const originalBuilderId = ownerBuilderIdsSeen.at(-1);
 console.log('builderId the Auction section used before delete:', originalBuilderId);
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
-// #1149 renamed this button from "Delete Account" (never true -- it only
+// #1149 renamed this button from "Delete account" (never true -- it only
 // ever reset this profile, not the login) to "Reset Profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
 await page.click('#settings-section button:has-text("Reset Profile")');

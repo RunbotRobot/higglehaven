@@ -67,7 +67,7 @@ const stacking = await page.evaluate(() => {
   return { panelZ, pillZ, level, over };
 });
 console.log('stacking:', JSON.stringify(stacking));
-const ALLOWED_ABOVE = new Set(['confirm-modal', 'verify-modal', 'auth-modal', 'fading-note']);
+const ALLOWED_ABOVE = new Set(['confirm-modal', 'verify-modal', 'auth-modal']);
 const unexpected = stacking.over.filter((entry) => !ALLOWED_ABOVE.has(entry.id));
 const mustWinAbove = ['confirm-modal', 'verify-modal', 'auth-modal'].every((id) => stacking.over.some((entry) => entry.id === id && entry.z > stacking.level));
 

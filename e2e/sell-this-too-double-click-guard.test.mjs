@@ -1,7 +1,7 @@
 // #2795: attachListingTo (src/sell/mode.js)'s alreadyMine guard reads
 // activeCatalog, which only gets the newly-created listing pushed into it
 // *after* createCatalogListing's await resolves -- so a second click on
-// the same "Sell This Too" tile while the first request is still in flight
+// the same "Sell this too" tile while the first request is still in flight
 // used to run its own alreadyMine check against the same stale array,
 // never showing the "Add another one anyway?" confirmation and silently
 // creating two listings for the same product. Fixed with a module-level
@@ -121,7 +121,7 @@ const pass =
 
 await finish(sellerBSession.browser, {
   pass,
-  label: '#2795: double-clicking a "Sell This Too" tile while the first attach is in flight creates only one listing',
+  label: '#2795: double-clicking a "Sell this too" tile while the first attach is in flight creates only one listing',
   errors,
 });
 await sellerASession.browser.close();

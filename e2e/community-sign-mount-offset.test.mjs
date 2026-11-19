@@ -21,7 +21,7 @@
 // via the plain-box fallback -- no GLTF fetch to race at all.
 import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
-const LABEL = 'Community Sign Mount Offset Tester';
+const LABEL = 'Community sign Mount Offset Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
