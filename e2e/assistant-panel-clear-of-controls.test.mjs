@@ -95,6 +95,17 @@ check(second.panel.top > 0, 'the panel is still fully on screen');
 // #3608 (owner's phone, 11-16): the panel's header is not painted over by the head at the top left,
 // and minimise and close are the top element at their own centres, so they can be tapped.
 async function checkHeaderClearOfHead(label) {
+  // The owner's case had a long answer in the log (about nine lines), which is what makes the panel
+  // as tall as it can be; an empty log leaves it short and never reaches the top of a short window.
+  await page.evaluate(() => {
+    const log = document.getElementById('assistant-chat-log');
+    const filler = document.createElement('div');
+    filler.id = 'test-log-filler';
+    filler.style.height = '900px';
+    filler.textContent = 'a long answer';
+    log.appendChild(filler);
+  });
+  await page.waitForTimeout(200);
   const r = await page.evaluate(() => {
     const rect = (id) => document.getElementById(id).getBoundingClientRect().toJSON();
     const topAt = (id) => {
@@ -106,6 +117,7 @@ async function checkHeaderClearOfHead(label) {
   });
   check(r.header.top >= r.head.bottom, `${label}: the panel's header starts below the head (header ${JSON.stringify(r.header)}, head bottom ${r.head.bottom})`);
   check(r.closeTop && r.minimizeTop, `${label}: minimise and close are the top element at their own centres`);
+  await page.evaluate(() => document.getElementById('test-log-filler')?.remove());
 }
 async function headerOnScreenWithKeyboard(label) {
   await page.setViewportSize({ width: 390, height: 420 });
