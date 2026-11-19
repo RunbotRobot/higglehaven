@@ -219,7 +219,7 @@ async function renderTaxEducationField() {
   try {
     result = await fetchMyTaxEducation();
   } catch (err) {
-    status.textContent = err.message || 'Could not load tax education content.';
+    status.textContent = err.message || 'Couldn\'t load tax education content.';
     status.classList.add('error');
     return;
   }
@@ -286,7 +286,7 @@ async function renderNotificationPreferencesField() {
   try {
     prefs = await fetchNotificationPreferences();
   } catch (err) {
-    status.textContent = err.message || 'Could not load your notification preferences.';
+    status.textContent = err.message || 'Couldn\'t load your notification preferences.';
     status.classList.add('error');
     return;
   }
@@ -308,7 +308,7 @@ async function renderNotificationPreferencesField() {
     } catch (err) {
       checkbox.checked = !desired;
       // #3359: shown beside the checkbox, not in a window.alert() a browser can drop.
-      showInlineActionStatus(row, err.message || 'Could not update this preference.');
+      showInlineActionStatus(row, err.message || 'Couldn\'t update this preference.');
     } finally {
       checkbox.disabled = false;
     }
@@ -479,7 +479,7 @@ async function renderTaxPaperworkField() {
       submitBtn.textContent = 'Update tax paperwork';
       formStatus.textContent = 'Submitted.';
     } catch (err) {
-      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.textContent = err.message || 'Couldn\'t submit — check the fields above.';
       formStatus.classList.add('error');
     } finally {
       submitBtn.disabled = false;
@@ -520,13 +520,13 @@ const IDENTITY_FIELD_COPY = {
   Builder: {
     label: 'Username',
     renamePrompt: 'Change your username',
-    loadError: 'Could not load your username.',
+    loadError: 'Couldn\'t load your username.',
     resetDone: 'Reset — a fresh profile was created.',
   },
   Seller: {
     label: 'Shop name',
     renamePrompt: 'Rename your shop',
-    loadError: 'Could not load your shop details.',
+    loadError: 'Couldn\'t load your shop details.',
     resetDone: 'Reset — a fresh seller profile was created.',
   },
 };
@@ -617,7 +617,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
       // patch whatever cache it keeps, same shape as onDeleted above.
       onRenamed?.(profile[idKey], profile.label);
     } catch (err) {
-      status.textContent = err.message || 'Could not rename.';
+      status.textContent = err.message || 'Couldn\'t rename.';
       status.classList.add('error');
     } finally {
       renameBtn.disabled = false;
@@ -647,7 +647,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
           try {
             await deleteProfile(profile[idKey]);
           } catch (err) {
-            throw new Error(err.message || 'Could not delete.');
+            throw new Error(err.message || 'Couldn\'t delete.');
           }
         },
       });
@@ -674,7 +674,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
         redraw();
         return;
       } catch (err) {
-        status.textContent = err.message || 'Could not delete.';
+        status.textContent = err.message || 'Couldn\'t delete.';
         status.classList.add('error');
       } finally {
         deleteBtn.disabled = false;

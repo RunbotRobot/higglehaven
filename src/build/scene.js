@@ -2290,8 +2290,8 @@ async function addLevel(direction, failureMessage) {
     setLevelButtonsDisabled(false);
   }
 }
-levelBuildBtn.addEventListener('click', () => addLevel('up', 'Could not build a new level.'));
-levelDigBtn.addEventListener('click', () => addLevel('down', 'Could not dig a new level.'));
+levelBuildBtn.addEventListener('click', () => addLevel('up', 'Couldn\'t build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', 'Couldn\'t dig a new level.'));
 
 levelRemoveBtn.addEventListener('click', async () => {
   if (levelActionBusy) return;
@@ -2350,7 +2350,7 @@ levelRemoveBtn.addEventListener('click', async () => {
       : '');
     renderLevelControls();
   } catch (err) {
-    setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
+    setLevelStatus(err.message || 'Couldn\'t remove this level.', { isError: true });
   } finally {
     levelActionBusy = false;
     setLevelButtonsDisabled(false);
@@ -5154,7 +5154,7 @@ async function renderLandCapField() {
     status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
       'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
   } catch (err) {
-    status.textContent = err.message || 'Could not load your lándlet cap.';
+    status.textContent = err.message || 'Couldn\'t load your lándlet cap.';
   }
 }
 
@@ -5243,7 +5243,7 @@ async function renderRedeemHigglesField() {
     if (consumeStripeReturnMarker()) await refreshBuilderStripeAccount().catch(() => {});
     redeemStatus = await fetchBuilderRedeemStatus();
   } catch (err) {
-    statusNote.textContent = err.message || 'Could not load your redemption status.';
+    statusNote.textContent = err.message || 'Couldn\'t load your redemption status.';
     statusNote.classList.add('error');
     return;
   }
@@ -5373,7 +5373,7 @@ async function renderRedeemHigglesField() {
       renderSettingsSection();
       return;
     } catch (err) {
-      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.textContent = err.message || 'Couldn\'t submit — check the fields above.';
       formStatus.classList.add('error');
     } finally {
       submitBtn.disabled = false;
@@ -5413,7 +5413,7 @@ async function renderRedeemHigglesField() {
         // pending a fraud-provenance design, and the server's own error
         // message already explains that clearly; surfaced as-is rather
         // than special-cased.
-        redeemStatusNote.textContent = err.message || 'Could not redeem right now.';
+        redeemStatusNote.textContent = err.message || 'Couldn\'t redeem right now.';
         redeemStatusNote.classList.add('error');
       } finally {
         redeemBtn.disabled = false;
@@ -5555,7 +5555,7 @@ export function renderBuildSettingsSection() {
           try {
             await deleteSavedLayout(savedLayout.savedLayoutId);
           } catch (err) {
-            throw new Error(err.message || 'Could not delete this saved layout.');
+            throw new Error(err.message || 'Couldn\'t delete this saved layout.');
           }
         },
       });
@@ -5580,7 +5580,7 @@ export function renderBuildSettingsSection() {
       savedLayoutsList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load saved layouts.';
+      errNote.textContent = err.message || 'Couldn\'t load saved layouts.';
       savedLayoutsList.appendChild(errNote);
       return;
     }
@@ -5667,7 +5667,7 @@ export function renderBuildSettingsSection() {
         publishStatus.classList.remove('error');
         renderVersionHistory();
       } catch (err) {
-        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.textContent = err.message || 'Couldn\'t activate.';
         publishStatus.classList.add('error');
         setLiveBtn.disabled = false;
       }
@@ -5711,7 +5711,7 @@ export function renderBuildSettingsSection() {
             });
             clearDraftIdempotencyKey(landletId);
           } catch (err) {
-            throw new Error(err.message || 'Could not restore.');
+            throw new Error(err.message || 'Couldn\'t restore.');
           }
         },
       });
@@ -5754,7 +5754,7 @@ export function renderBuildSettingsSection() {
       historyList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load version history.';
+      errNote.textContent = err.message || 'Couldn\'t load version history.';
       historyList.appendChild(errNote);
       return;
     }
@@ -5797,7 +5797,7 @@ export function renderBuildSettingsSection() {
       publishStatus.textContent = `Published as "${version.name}" — shoppers now see this.`;
       renderVersionHistory();
     } catch (err) {
-      publishStatus.textContent = err.message || 'Could not publish.';
+      publishStatus.textContent = err.message || 'Couldn\'t publish.';
       publishStatus.classList.add('error');
     } finally {
       publishBtn.disabled = false;
@@ -5897,7 +5897,7 @@ async function renderAuctionSection() {
       activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
       if (myToken !== landletRenderToken) return;
-      startStatus.textContent = err.message || 'Could not check for an existing auction.';
+      startStatus.textContent = err.message || 'Couldn\'t check for an existing auction.';
       startStatus.classList.add('error');
       return;
     }
@@ -5979,7 +5979,7 @@ async function renderAuctionSection() {
         await renderForLandlet(landletId);
         await renderAuctionList();
       } catch (err) {
-        startStatus.textContent = err.message || 'Could not start the auction.';
+        startStatus.textContent = err.message || 'Couldn\'t start the auction.';
         startStatus.classList.add('error');
         startBtn.disabled = false;
       }
@@ -6003,7 +6003,7 @@ async function renderAuctionSection() {
       // one owned landlet" is no longer a safe assumption (#249).
       owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
     } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your lándlets.';
+      startStatus.textContent = err.message || 'Couldn\'t check your lándlets.';
       startStatus.classList.add('error');
       return;
     }
@@ -6071,7 +6071,7 @@ async function renderAuctionSection() {
       auctionList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load auctions.';
+      errNote.textContent = err.message || 'Couldn\'t load auctions.';
       auctionList.appendChild(errNote);
       return;
     }
@@ -6111,7 +6111,7 @@ async function renderAuctionSection() {
         const updated = await fetchAuction(auction.auctionId);
         row.replaceWith(buildAuctionRow(updated));
       } catch (err) {
-        showInlineActionStatus(row, err.message || 'Could not refresh this auction.');
+        showInlineActionStatus(row, err.message || 'Couldn\'t refresh this auction.');
         refreshBtn.disabled = false;
       }
     });
@@ -6176,7 +6176,7 @@ async function renderAuctionSection() {
           bidHistoryList.innerHTML = '';
           const errNote = document.createElement('div');
           errNote.className = 'settings-empty-note';
-          errNote.textContent = err.message || 'Could not load bid history.';
+          errNote.textContent = err.message || 'Couldn\'t load bid history.';
           bidHistoryList.appendChild(errNote);
         } finally {
           bidHistoryToggle.disabled = false;
@@ -6214,7 +6214,7 @@ async function renderAuctionSection() {
           renderSettingsSection();
           return;
         } catch (err) {
-          showInlineActionStatus(row, err.message || 'Could not resolve this auction.');
+          showInlineActionStatus(row, err.message || 'Couldn\'t resolve this auction.');
           resolveBtn.disabled = false;
         }
       });
@@ -6259,7 +6259,7 @@ async function renderAuctionSection() {
           await renderAuctionList();
           await renderStartSection();
         } catch (err) {
-          showInlineActionStatus(row, err.message || 'Could not place bid.');
+          showInlineActionStatus(row, err.message || 'Couldn\'t place bid.');
           bidBtn.disabled = false;
         }
       });
@@ -6380,7 +6380,7 @@ async function renderLowStockSection() {
   } catch (err) {
     if (myToken !== settingsRenderToken) return;
     empty.hidden = false;
-    empty.textContent = err.message || 'Could not load low-stock products.';
+    empty.textContent = err.message || 'Couldn\'t load low-stock products.';
     return;
   }
   if (myToken !== settingsRenderToken) return;
@@ -6455,7 +6455,7 @@ async function renderSoldOutMarkersSection() {
   } catch (err) {
     if (myToken !== settingsRenderToken) return;
     empty.hidden = false;
-    empty.textContent = err.message || 'Could not load sold-out markers.';
+    empty.textContent = err.message || 'Couldn\'t load sold-out markers.';
     return;
   }
   if (myToken !== settingsRenderToken) return;
@@ -6485,7 +6485,7 @@ async function renderSoldOutMarkersSection() {
         row.remove();
         empty.hidden = list.children.length > 0;
       } catch (err) {
-        showInlineActionStatus(row, err.message || 'Could not dismiss this marker.');
+        showInlineActionStatus(row, err.message || 'Couldn\'t dismiss this marker.');
         dismissBtn.disabled = false;
       }
     });

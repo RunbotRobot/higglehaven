@@ -61,7 +61,7 @@ export function syncStripeStepPrompt(host, role, account) {
       const { url } = await (role === 'builder' ? startBuilderStripeStep() : startSellerStripeStep());
       window.location.assign(url);
     } catch (err) {
-      status.textContent = err.message || 'Could not open Stripe right now. Please try again.';
+      status.textContent = err.message || 'Couldn\'t open Stripe right now. Please try again.';
       status.classList.add('error');
       button.disabled = false;
     }

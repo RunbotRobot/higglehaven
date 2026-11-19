@@ -570,7 +570,7 @@ export async function enterShopMode() {
     [world, allLandlets] = await publicLoads.worldAndLandlets;
     markStartup('world-loaded');
   } catch (err) {
-    shopStatusEl.textContent = err.message || 'Could not load the world.';
+    shopStatusEl.textContent = err.message || 'Couldn\'t load the world.';
     // #3738: the opening screen says so too, and offers Try again.
     failLoadingStage(`${err.message || 'The world did not load.'} Check your connection, then tap Try again.`);
     return;
@@ -852,7 +852,7 @@ function renderMyAvatarsField(onEquipped) {
       list.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load your avatars.';
+      errNote.textContent = err.message || 'Couldn\'t load your avatars.';
       list.appendChild(errNote);
       field.hidden = false;
       return;
@@ -906,7 +906,7 @@ function renderMyAvatarsField(onEquipped) {
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
-          showNotice({ title: 'Could not equip this avatar', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t equip this avatar', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -928,7 +928,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Could not load more avatars', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more avatars', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });
@@ -988,7 +988,7 @@ function renderMyAnimationsField() {
       list.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load your animations.';
+      errNote.textContent = err.message || 'Couldn\'t load your animations.';
       list.appendChild(errNote);
       field.hidden = false;
       return;
@@ -1045,7 +1045,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          showNotice({ title: 'Could not apply this animation', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t apply this animation', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -1067,7 +1067,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Could not load more animations', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more animations', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });

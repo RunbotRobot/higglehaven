@@ -457,7 +457,7 @@ export async function renameSellerProduct(template, inlineHost) {
     buildCatalogPickerButtons();
     return { changed: true };
   } catch (err) {
-    return { error: err.message || 'Could not rename.' };
+    return { error: err.message || 'Couldn\'t rename.' };
   }
 }
 
@@ -486,7 +486,7 @@ export async function saveSellerPrice(template, text) {
     Object.assign(template, updated);
     return { saved: true };
   } catch (err) {
-    return { error: err.message || 'Could not save.' };
+    return { error: err.message || 'Couldn\'t save.' };
   } finally {
     metadataSaveBusyByTemplateId.delete(template.templateId);
     syncMetadataSaveButtonsDisabled(template.templateId);
@@ -519,7 +519,7 @@ export async function deleteSellerProduct(template, returnFocusEl) {
         } else if (err.message?.includes('still in use')) {
           throw new Error('Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.');
         }
-        throw new Error(err.message || 'Could not delete.');
+        throw new Error(err.message || 'Couldn\'t delete.');
       }
     },
   });
@@ -739,7 +739,7 @@ function renderSellerList() {
         refreshDigitalGoodText();
         digitalGoodStatus.textContent = 'Saved.';
       } catch (err) {
-        digitalGoodStatus.textContent = err.message || 'Could not save.';
+        digitalGoodStatus.textContent = err.message || 'Couldn\'t save.';
         digitalGoodStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -820,7 +820,7 @@ function renderSellerList() {
         refreshNoReturnsText();
         noReturnsStatus.textContent = 'Saved.';
       } catch (err) {
-        noReturnsStatus.textContent = err.message || 'Could not save.';
+        noReturnsStatus.textContent = err.message || 'Couldn\'t save.';
         noReturnsStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -895,7 +895,7 @@ function renderSellerList() {
         refreshDomesticOnlyText();
         domesticOnlyStatus.textContent = 'Saved.';
       } catch (err) {
-        domesticOnlyStatus.textContent = err.message || 'Could not save.';
+        domesticOnlyStatus.textContent = err.message || 'Couldn\'t save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -1065,7 +1065,7 @@ function renderSellerList() {
         }
         sizeStatus.textContent = 'Saved — any builder with this placed has been notified.';
       } catch (err) {
-        sizeStatus.textContent = err.message || 'Could not resize.';
+        sizeStatus.textContent = err.message || 'Couldn\'t resize.';
         sizeStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -1253,7 +1253,7 @@ function renderSellerList() {
         // dispatcher every other mutation path in this file already uses.
         renderActiveSellerView();
       } catch (err) {
-        rowStatus.textContent = err.message || 'Could not duplicate.';
+        rowStatus.textContent = err.message || 'Couldn\'t duplicate.';
         rowStatus.classList.add('error');
         duplicateBtn.disabled = false;
       }
@@ -1313,7 +1313,7 @@ function renderSellerList() {
         flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
         buildCatalogPickerButtons();
       } catch (err) {
-        rowStatus.textContent = err.message || 'Could not update.';
+        rowStatus.textContent = err.message || 'Couldn\'t update.';
         rowStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -1439,7 +1439,7 @@ function renderSellerList() {
         rowStatus.textContent = 'Saved.';
         extensibilityToggle.textContent = `${anyAxisOn() ? 'Extensibility (on)' : 'Extensibility'} ${extensibilityPanel.hidden ? '▾' : '▴'}`;
       } catch (err) {
-        rowStatus.textContent = err.message || 'Could not save.';
+        rowStatus.textContent = err.message || 'Couldn\'t save.';
         rowStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -1602,7 +1602,7 @@ function renderSellerList() {
         sitLeanStatus.textContent = 'Saved.';
         sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ${sitLeanPanel.hidden ? '▾' : '▴'}`;
       } catch (err) {
-        sitLeanStatus.textContent = err.message || 'Could not save.';
+        sitLeanStatus.textContent = err.message || 'Couldn\'t save.';
         sitLeanStatus.classList.add('error');
       } finally {
         setMetadataSaveBusy(false);
@@ -1666,7 +1666,7 @@ function renderSellerList() {
         ({ reviews, averageRating, count } = await fetchProductReviews(template.templateId));
       } catch (err) {
         if (myLoadToken !== reviewLoadToken) return; // superseded while fetching
-        reviewEmptyEl.textContent = err.message || 'Could not load reviews.';
+        reviewEmptyEl.textContent = err.message || 'Couldn\'t load reviews.';
         reviewEmptyEl.hidden = false;
         return;
       }
@@ -1794,7 +1794,7 @@ function renderSellerList() {
         ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
         if (myLoadToken !== salesLoadToken) return; // superseded while fetching
-        salesEmptyEl.textContent = err.message || 'Could not load sales.';
+        salesEmptyEl.textContent = err.message || 'Couldn\'t load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
@@ -2383,7 +2383,7 @@ async function submitAttachListing(event) {
     closeSellThisTooModal();
     renderActiveSellerView();
   } catch (err) {
-    fail(err.message || 'Could not attach this listing.');
+    fail(err.message || 'Couldn\'t attach this listing.');
   } finally {
     attachListingInFlight = false;
     sellThisTooAddBtn.disabled = false;

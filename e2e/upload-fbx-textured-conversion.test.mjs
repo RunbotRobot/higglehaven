@@ -43,7 +43,7 @@ async function runWizard(fileArg, name) {
   await page.click('#upload-submit-btn');
   await page.waitForFunction(
     () => !document.getElementById('upload-step-dimensions').hidden
-      || /could not convert/i.test(document.getElementById('upload-status').textContent),
+      || /couldn't convert/i.test(document.getElementById('upload-status').textContent),
     null,
     { timeout: 40000 },
   );
@@ -78,7 +78,7 @@ await page.waitForFunction(() => !document.getElementById('upload-modal').classL
 
 const pass =
   good.onDimensions && goodHasImages && good.notice.hidden === true &&
-  bad.onDimensions && bad.notice.hidden === false && /could not be read/.test(bad.notice.text) &&
+  bad.onDimensions && bad.notice.hidden === false && /couldn't be read/.test(bad.notice.text) &&
   !/#\d|No valid image/.test(bad.notice.text + bad.status) &&
   errors.length === 0;
 await finish(browser, {

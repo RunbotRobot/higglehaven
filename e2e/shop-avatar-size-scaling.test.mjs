@@ -91,14 +91,24 @@ const equipped = await fetchJson('/api/builders/me/avatar', {
 });
 console.log('equip response (should carry the uploaded modelUrl):', equipped.status, equipped.body.avatar);
 
+// #3905: hold the avatar's model file back until the test lets it go, to show Shop is ready (the world
+// is on screen, with the default avatar) without waiting for the equipped avatar's model.
+let releaseModel;
+const modelGate = new Promise((resolve) => { releaseModel = resolve; });
+await page.route(`**${equipped.body.avatar.modelUrl}*`, async (route) => { await modelGate; await route.continue(); });
+await goToMode(page, 'shop');
+await page.waitForSelector('body.shop-ready', { timeout: 30000 }); // no networkidle wait: the held model request keeps the network busy
+const readyWhileModelHeld = await page.evaluate(() => ({ settled: window.__shopAvatarSettled, modelUrl: window.__shopAvatarModelUrl }));
+console.log('Shop ready while the equipped avatar model is still held back (settled false, default avatar):', JSON.stringify(readyWhileModelHeld));
 const modelResponsePromise = page.waitForResponse(
   (r) => r.url().includes(equipped.body.avatar.modelUrl) && r.request().method() === 'GET',
   { timeout: 15000 },
 );
-await goToMode(page, 'shop');
-await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('body.shop-ready', { timeout: 15000 });
+releaseModel();
 await modelResponsePromise;
+// #3905: Shop is ready with the default avatar on screen and the equipped one is swapped in once it has
+// loaded, so wait for that swap before reading what is live-rendered.
+await page.waitForFunction(() => window.__shopAvatarSettled === true, null, { timeout: 30000 });
 const equippedMetrics = await page.evaluate(() => window.__shopAvatarMetrics);
 console.log('metrics after equipping a custom avatar (should differ from baseline):', equippedMetrics);
 
@@ -114,6 +124,7 @@ console.log('camera-anchor-to-height ratio preserved across the scale change (sh
 const pass =
   baseline.heightM > 0 && baseline.collisionHalfM > 0 &&
   equippedMetrics.heightM > 0 && equippedMetrics.collisionHalfM > 0 &&
+  readyWhileModelHeld.settled === false && !readyWhileModelHeld.modelUrl &&
   heightChanged && collisionHalfChanged && ratioPreserved &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Shop-mode collision/camera sizing scales to a custom equipped avatar (#1091)', errors });

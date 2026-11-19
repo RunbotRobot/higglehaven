@@ -869,14 +869,14 @@ saveBundleBtn.addEventListener('click', async () => {
         // primary, already-expected action, so a grouping failure doesn't
         // roll it back or block the success message, only appends to it.
         console.error('Bundle saved, but could not group its items:', groupErr);
-        statusMessage += ' (could not bundle the items in place)';
+        statusMessage += ' (couldn\'t bundle the items in place)';
       }
     }
     setProductInfo(statusMessage);
     setTimeout(updateSelectionUI, 1200);
   } catch (err) {
     console.error('Could not save bundle:', err);
-    setProductInfo(err.message || 'Could not save bundle.');
+    setProductInfo(err.message || 'Couldn\'t save bundle.');
   } finally {
     saveBundleBtn.disabled = false;
   }
@@ -1871,7 +1871,7 @@ export function loadStripeJs() {
     const script = document.createElement('script');
     script.src = 'https://js.stripe.com/v3/';
     script.onload = () => resolve(window.Stripe);
-    script.onerror = () => { stripeJsPromise = null; reject(new Error('Could not load Stripe.')); };
+    script.onerror = () => { stripeJsPromise = null; reject(new Error('Couldn\'t load Stripe.')); };
     document.head.appendChild(script);
   });
   return stripeJsPromise;
@@ -1887,7 +1887,7 @@ export function loadTurnstileJs() {
     const script = document.createElement('script');
     script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
     script.onload = () => resolve(window.turnstile);
-    script.onerror = () => { turnstileJsPromise = null; reject(new Error('Could not load Turnstile.')); };
+    script.onerror = () => { turnstileJsPromise = null; reject(new Error('Couldn\'t load Turnstile.')); };
     document.head.appendChild(script);
   });
   return turnstileJsPromise;
