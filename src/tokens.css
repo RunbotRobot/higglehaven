@@ -40,12 +40,18 @@
 :root {
   --ink-rgb: 22 36 10;
   --white-rgb: 255 255 255;
+  --black-rgb: 0 0 0;
   --pill-rgb: 214 232 190;
   --panel-rgb: 250 240 199;
   --pill-text: rgb(var(--ink-rgb));
   --pill-text-soft: rgb(var(--ink-rgb) / 0.65);
   --brand-green: #6ca42e;
   --danger: #e2694f;
+  --brand-green-rgb: 108 164 46;       /* --brand-green as channels, for its tints */
+  --danger-rgb: 226 105 79;            /* --danger as channels, for its lines */
+  --denied-rgb: 255 92 92;             /* a muted or refused voice control */
+  --danger-line-rgb: 255 120 100;      /* the outline of a destructive row action */
+  --danger-soft-rgb: 255 180 168;      /* coral text on the dark delete control */
   /* Owner (df3j71gtdpwkt8y9ze6j, after the first pill-rgb pass):
      "They're still too gray. I want them to really pop with a
      spring green of some kind." pill-rgb (214 232 190) is a very
@@ -138,6 +144,8 @@
   --radius-petal: 24px 5px 24px 5px;   /* a petal: soft on two corners, a point on the others */
   --radius-bloom: 28px 6px 28px 6px;   /* the card that blooms beside a product */
   --radius-leaf: 30px 6px 30px 6px;    /* a leaf that grows from the bud */
+  --radius-petal-flip: 6px 24px 6px 24px;  /* a petal's mirror image, for the side the menu opens toward */
+  --radius-leaf-flip: 6px 30px 6px 30px;   /* a leaf's mirror image */
   --radius-word: 12px 3px 12px 3px;    /* the small word beside the bud ("Menu") */
   --bud-size: 56px;
   --shadow-bud: 0 2px 10px rgb(var(--ink-rgb) / 0.22);
