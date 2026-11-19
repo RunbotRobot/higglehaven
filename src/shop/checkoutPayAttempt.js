@@ -22,10 +22,21 @@ export function isAlreadySucceededConfirmError(error) {
     && error?.payment_intent?.status === 'succeeded';
 }
 
+// #3947: the wait after Pay is two real steps, so the bar follows them and never a timer. The
+// shares are where the bar stands while each step is in flight; the sheet closes on success, so
+// there is no third one.
+export const PAY_STAGES = {
+  checking: { label: 'Checking your card…', share: 0.2 },
+  recording: { label: 'Card confirmed. Recording your order…', share: 0.7 },
+};
+
 // confirm(): () => Promise<{ error?: { message, code, payment_intent } }>
 // finalize(): () => Promise<finalized purchase>
-export async function runPayAttempt(state, { confirm, finalize }) {
+// onStage(name): optional, called with 'checking' before the card is confirmed and 'recording'
+// before the purchase is recorded (so a retry after a charge starts at 'recording').
+export async function runPayAttempt(state, { confirm, finalize, onStage = () => {} }) {
   if (!state.paymentConfirmed) {
+    onStage('checking');
     const result = await confirm();
     if (result?.error) {
       if (!isAlreadySucceededConfirmError(result.error)) {
@@ -38,6 +49,7 @@ export async function runPayAttempt(state, { confirm, finalize }) {
     }
     state.paymentConfirmed = true;
   }
+  onStage('recording');
   return finalize();
 }
 

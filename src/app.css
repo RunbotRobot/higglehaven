@@ -3818,6 +3818,26 @@
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: rgb(var(--ink-rgb) / 0.1);
       }
+      /* #3947: follows the two real steps of paying (src/shop/checkoutPayAttempt.js), never a timer. */
+      #checkout-progress {
+        --checkout-progress: 0;
+        height: var(--space-sm);
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / 0.12);
+        overflow: hidden;
+      }
+      #checkout-progress[hidden] { display: none; }
+      #checkout-progress > span {
+        display: block;
+        height: 100%;
+        width: calc(var(--checkout-progress) * 100%);
+        border-radius: inherit;
+        background: var(--brand-green);
+        transition: width var(--motion-grow) var(--ease-soft);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #checkout-progress > span { transition-duration: var(--motion-reduced); }
+      }
       #checkout-status {
         font-size: var(--text-sm);
         min-height: 18px;
