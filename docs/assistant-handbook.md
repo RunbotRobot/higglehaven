@@ -227,7 +227,7 @@ motion, not the only way to move. Other people see the same.
 3. In "Build" you claim a lándlet of your own and fill it with items.
 4. In "Sell" you put your own products up for sale.
 5. The round logo at the top left (the bud) is the menu. It opens "Shop", "Build"
-   and "Sell", your account, and "?", which holds these pages and a way to ask an
+   and "Sell", your account, and "Help", which holds these pages and a way to ask an
    assistant.
 
 **You will see:** the world, with only the bud on top of it. Tap the bud to see
@@ -241,7 +241,7 @@ everything else.
 .mode-nav-btn[data-mode="shop"] | Shop
 .mode-nav-btn[data-mode="build"] | Build
 .mode-nav-btn[data-mode="sell"] | Sell
-#bud-petal-shop-help | ?
+#bud-petal-shop-help | Help
 ```
 
 ### How do I go between Shop, Build and Sell?
@@ -566,7 +566,7 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 ### How do I talk to an assistant?
 
-1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
+1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "Help",
    then "Ask an assistant".
 2. A small window opens once your earlier messages are in it (a moment after the tap, while the
    "Ask an assistant" row or the bud shows it is working). Type in the box that says "Ask a question…" and tap "Send".
@@ -594,7 +594,7 @@ The message box starts one line tall and grows as you type, up to about five lin
   to the team.
 
 ```controls any
-#bud-petal-shop-help | ?
+#bud-petal-shop-help | Help
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise

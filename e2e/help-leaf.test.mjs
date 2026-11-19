@@ -12,7 +12,7 @@ await page.waitForSelector('body[data-bud="on"]', { timeout: 30000 });
 
 async function openHelp() {
   await openAccountMenu(page);
-  await page.locator('#account-menu-panel button:visible', { hasText: /^\?$/ }).first().click();
+  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 }
 
@@ -70,7 +70,7 @@ const perMode = {};
 await goToMode(page, 'sell', { openProducts: false });
 await page.waitForSelector('body[data-mode="sell"][data-bud="on"]', { timeout: 30000 });
 await openAccountMenu(page);
-perMode.sell = await page.locator('#account-menu-panel button:visible', { hasText: /^\?$/ }).first().isVisible();
+perMode.sell = await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().isVisible();
 await page.keyboard.press('Escape');
 await goToMode(page, 'build', { openProducts: false });
 await page.waitForSelector('body[data-mode="build"][data-bud="on"]', { timeout: 30000 });

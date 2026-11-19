@@ -117,6 +117,6 @@ export function openHelpLeaf() {
 // Shop and Build get the petal here; Sell registers its own list next to the product list it opens
 // (src/sell/mode.js) and adds this one there. A module that imports the bud cannot be imported by it.
 if (typeof document !== 'undefined') {
-  addBudPetals('shop', [{ id: 'help', label: '?', name: 'Help', run: openHelpLeaf }]);
-  addBudPetals('build', [{ id: 'help', label: '?', name: 'Help', run: openHelpLeaf }]);
+  addBudPetals('shop', [{ id: 'help', label: 'Help', run: openHelpLeaf }]);
+  addBudPetals('build', [{ id: 'help', label: 'Help', run: openHelpLeaf }]);
 }

@@ -2201,7 +2201,7 @@ registerBudPetals('sell', [
   { id: 'payouts', label: 'Payouts', run: () => { void openPayoutsFromPetal(); } },
   // #3704 (6/6, slice 2): the shop name (Rename, Reset Profile) is a leaf; Settings has no Sell tab.
   { id: 'storefront', label: 'Storefront', run: () => { void openStorefrontFromPetal(); } },
-  { id: 'help', label: '?', name: 'Help', run: openHelpLeaf },
+  { id: 'help', label: 'Help', run: openHelpLeaf },
 ]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --

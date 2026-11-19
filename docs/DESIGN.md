@@ -115,7 +115,7 @@ Not built yet; do not describe these to a person as if they exist:
   and each mode's tools under that mode's petal, with a fourth petal for the menu.
   Today the stem opened by the head holds both the general leaves and the current
   mode's; the target is in `flower.html`.
-- **One help door** (#3762): a "?" leaf holding how to move, how higglehaven
+- **One help door** (#3762): a "Help" leaf (a question mark) holding how to move, how higglehaven
   works, the manuals for shopping, building and selling, and the way to an
   assistant.
 - **The head's look** (#3754): five drawings are on `flower.html` for the owner to
