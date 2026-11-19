@@ -2286,6 +2286,13 @@ async function bootstrap() {
     setCurrentMode('shop');
     updateModeNavUI();
     await enterShopMode();
+    // #3774: Shop never resolved a builder identity, so its menu counts (and the note beside the head
+    // that announces a friend request or a notice) were never read. Both endpoints answer for the
+    // signed-in account, and Shop is only entered past the verification gate, so read them once it is up.
+    if (document.body.classList.contains('shop-ready')) {
+      refreshNotificationsBadge();
+      refreshFriendsBadge();
+    }
     return;
   }
 
