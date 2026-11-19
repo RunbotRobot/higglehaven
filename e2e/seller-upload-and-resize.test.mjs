@@ -1,6 +1,6 @@
 // Seller uploads a real model, confirms its measured dimensions, creates
 // the product, a builder places it, then the seller corrects its size via
-// the Edit Size panel — which should rescale the actual model file and
+// the Edit size panel — which should rescale the actual model file and
 // notify the builder who has one placed (see docs/API.md's "Notifications"
 // and "Editing a product's size" sections).
 import path from 'node:path';
@@ -102,7 +102,7 @@ await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
 await page.waitForTimeout(1000);
 
-// Back to Sell: expand the row, open Edit Size, double the width, Save.
+// Back to Sell: expand the row, open Edit size, double the width, Save.
 // The seller identity is already active this session (ensureSellerIdentity
 // short-circuits once sellerId is set), so the identity picker doesn't
 // reopen at all this time — just the nav click (now a reload, see above)
@@ -114,7 +114,7 @@ await page.waitForTimeout(300);
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
 await row().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
-await row().locator('button', { hasText: 'Edit Size' }).click();
+await row().locator('button', { hasText: 'Edit size' }).click();
 await page.waitForTimeout(300);
 
 const xInput = row().locator('.seller-size-row').nth(0).locator('input');

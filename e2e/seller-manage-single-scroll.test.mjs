@@ -1,6 +1,6 @@
 // #3583: in Sell > Manage a product's block used to scroll inside the My
 // products modal (which scrolls too), so the block ended in a hard cut and
-// "Edit Price"'s Save button sat under the fold. One scroll now: the product
+// "Edit price"'s Save button sat under the fold. One scroll now: the product
 // list grows to its content and only the modal scrolls. Checked at phone and
 // desktop width.
 import path from 'node:path';
@@ -32,7 +32,7 @@ await page.waitForTimeout(500);
 const row = page.locator('.seller-row').filter({ hasText: NAME });
 await row.locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
-await row.locator('button', { hasText: 'Edit Price' }).click();
+await row.locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
 
 async function check() {
@@ -67,6 +67,6 @@ console.log('desktop:', JSON.stringify(desktop));
 const ok = (l) => Object.values(l).every(Boolean);
 await finish(browser, {
   pass: ok(phone) && ok(desktop),
-  label: '#3583: Sell > Manage has one scroll, and Edit Price\'s Save is reachable by scrolling only the modal',
+  label: '#3583: Sell > Manage has one scroll, and Edit price\'s Save is reachable by scrolling only the modal',
   errors,
 });

@@ -2,7 +2,7 @@
 // exception ... permitted if the listing includes ... a clear
 // higglehaven-controlled disclaimer"). Covers the real upload wizard's
 // checkbox+disclaimer picker round-tripping into the Seller modal's own
-// "Edit Digital Good" panel.
+// "Edit digital good" panel.
 //
 // The prohibited-categories rejection (docs/SPEC.md §4's "weapons ...
 // controlled substances ... adult content ... counterfeit ... live
@@ -75,11 +75,11 @@ const { templates } = await page.evaluate(async () => {
 const digitalTemplate = templates.find((t) => t.name === DIGITAL_PRODUCT);
 console.log('server-side metadata.digitalGoodDisclaimer (should be "gift-card"):', digitalTemplate?.metadata?.digitalGoodDisclaimer);
 
-// Clear it via the row's own "Edit Digital Good" panel.
-await digitalRow().locator('button', { hasText: 'Edit Digital Good' }).click();
+// Clear it via the row's own "Edit digital good" panel.
+await digitalRow().locator('button', { hasText: 'Edit digital good' }).click();
 await page.waitForTimeout(300);
 const checkboxCheckedInPanel = await digitalRow().locator('.seller-digital-good-checkbox-label input').isChecked();
-console.log('Edit Digital Good panel opens pre-checked for an existing digital good (should be true):', checkboxCheckedInPanel);
+console.log('Edit digital good panel opens pre-checked for an existing digital good (should be true):', checkboxCheckedInPanel);
 await digitalRow().locator('.seller-digital-good-checkbox-label input').uncheck();
 await digitalRow().locator('button', { hasText: 'Save digital good' }).click();
 // #2143: waitForFunction's signature is (pageFunction, arg, options) --
@@ -93,8 +93,8 @@ await page.waitForFunction(
 const digitalGoodRowTextAfterClear = await digitalRow().locator('.seller-row-digital-good').textContent();
 console.log('digital-good row text after unchecking + saving (should be "Not a digital good"):', digitalGoodRowTextAfterClear);
 
-// Cross-panel metadata-save race guard (issue #424): "Edit Digital Good"
-// and "Edit Shipping" independently spread-and-replace the whole
+// Cross-panel metadata-save race guard (issue #424): "Edit digital good"
+// and "Edit shipping" independently spread-and-replace the whole
 // template.metadata object (see either save handler's own comment on the
 // server doing a full replace, not a merge), so saving both in an
 // overlapping window used to let whichever response landed last silently
@@ -108,10 +108,10 @@ await page.route('**/api/catalog/*', async (route) => {
   if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 800));
   await route.continue();
 });
-await digitalRow().locator('button', { hasText: 'Edit Shipping' }).click();
+await digitalRow().locator('button', { hasText: 'Edit shipping' }).click();
 await page.waitForTimeout(300);
 await digitalRow().locator('.seller-domestic-only-checkbox-label input').check();
-// "Edit Digital Good" is still open from earlier in this test (its own
+// "Edit digital good" is still open from earlier in this test (its own
 // toggle click above never closed it) — clicking the toggle again here
 // would close it instead of opening it, so just use the panel directly.
 await digitalRow().locator('.seller-digital-good-checkbox-label input').check();

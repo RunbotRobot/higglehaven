@@ -380,9 +380,9 @@ auction), no blame ("invalid", "you must", "error").
 **Capital letters.** Sentence case for every control, title and label: "Add a product", "My
 purchases", "Log in", "Submit feedback". A capital starts the sentence and names a proper thing: Shop,
 Build and Sell (the three places), a person's name, and higglehaven, which is lowercase even at the
-start of a sentence in the logo and capitalised like any word otherwise. Today about forty-five short
-labels in the shell are in Title Case ("My Purchases", "Go to Last Location", "Log In"); they move
-here as each area is read.
+start of a sentence in the logo and capitalised like any word otherwise. A short label (up to six words, no sentence stop) with a capital in the middle that is not one of
+these fails the test run (`scripts/check-copy-voice.mjs`, `CAPITAL_OK` and `ALLOWED_LABELS` list the
+exceptions and why); a sentence is read, not checked.
 
 **How we say no.** Name what can't be done, then what to do or when it lifts, in one or two
 sentences. A limit that has a number gives it from the server: "You can collect up to 20 orbs every 15
@@ -404,7 +404,7 @@ says. A hidden name that differs from the visible word ("Menu" shown, "Account m
 allowed only where the visible word is a picture's label and the announced name is longer, never the
 other way round.
 
-**Not yet checked by a machine, so read for it:** case, "couldn't" against "could not", the length of a
+**Not yet checked by a machine, so read for it:** case inside a sentence, "couldn't" against "could not", the length of a
 sentence, and whether it says what to do next. Add a check here when one can be written without
 false alarms.
 

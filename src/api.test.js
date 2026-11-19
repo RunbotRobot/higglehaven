@@ -408,7 +408,7 @@ describe('confirmCard', () => {
 
 // #2249: PUT /landlets/:id/draft's own auto-version side effect already
 // dedupes on a client-supplied idempotencyKey (#1726/#2184) -- a dropped-
-// response retry of a "Restore to Editor" click should no-op server-side
+// response retry of a "Restore to editor" click should no-op server-side
 // instead of minting a duplicate version -- but replaceLandletDraft never
 // sent one at all, so that protection was never reachable from its only
 // caller. This proves the field is now sent and is a non-empty string

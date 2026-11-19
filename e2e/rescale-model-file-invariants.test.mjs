@@ -44,7 +44,7 @@ const originalZ = Number(await page.locator('.upload-dimension-input[data-axis="
 console.log('measured original dimensions (all should be > 0):', { originalX, originalY, originalZ });
 
 // Editing x alone rescales y/z in lockstep to hold proportions (the same
-// live listener seller-upload-and-resize.test.mjs's own Edit Size panel
+// live listener seller-upload-and-resize.test.mjs's own Edit size panel
 // relies on) — doubling x here is enough to prove rescaleModelFile acted
 // on the whole model, not just the one axis a seller happened to type into.
 const newX = Number((originalX * SCALE_FACTOR).toFixed(2));

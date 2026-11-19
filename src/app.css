@@ -1162,16 +1162,16 @@
         display: block;
         width: 100%;
         min-height: 44px;
-        padding: var(--space-sm) var(--space-lg);
+        padding: var(--space-md) var(--space-lg);
         border: none;
         border-radius: var(--radius-md);
-        background: rgb(var(--white-rgb) / 0.7);
+        background: var(--fill-row);
         color: var(--ink);
         font: inherit;
         text-align: left;
       }
       .help-back {
-        min-height: 36px;
+        min-height: 44px;
         margin: 0 0 var(--space-sm);
         padding: 0 var(--space-sm);
         border: none;
@@ -1181,7 +1181,7 @@
       }
       .bud-leaf .help-page-title { margin: 0 0 var(--space-sm); font-size: var(--text-lg); font-weight: 600; }
       .help-entry { margin: 0 0 var(--space-sm); user-select: text; }
-      .help-entry summary { min-height: 36px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
+      .help-entry summary { min-height: 44px; padding: var(--space-xs) 0; font-weight: 600; cursor: pointer; }
       .help-steps { margin: 0 0 var(--space-sm); padding-left: 20px; }
       .help-steps li { margin: 0 0 var(--space-xs); }
       .help-tips { margin: 0; padding-left: 20px; user-select: text; }
@@ -3139,15 +3139,20 @@
       #upload-modal-actions[hidden] {
         display: none;
       }
+      /* #3940: Add a product's two buttons are the quiet button (Cancel) and the primary button (the
+         submit), DESIGN.md "Inside a leaf". */
       #upload-modal-actions button {
+        min-height: 44px;
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
-      #upload-cancel-btn {
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
+      #upload-modal-actions #upload-cancel-btn {
+        padding: var(--space-xs) var(--space-lg);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
       }
       #upload-submit-btn {
         background: var(--brand-green);
@@ -4210,12 +4215,14 @@
         display: flex;
         gap: var(--space-xs);
       }
+      /* #3940: a quiet button (DESIGN.md, "Inside a leaf"): 44px to hit, the line at --alpha-line, ink text. */
       .seller-view-btn {
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .seller-view-btn.active {
@@ -4324,11 +4331,12 @@
       }
       .seller-row-action-btn {
         flex-shrink: 0;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       .seller-row-action-btn.active {
@@ -4414,7 +4422,7 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 5.5em;
       }
-      /* Edit Size's own panel/row/input — visually identical to
+      /* Edit size's own panel/row/input — visually identical to
          .seller-extensibility-panel/.seller-axis-row/.seller-min-input
          above but kept as fully separate classes (see main.js's own
          comment) so existing per-row lookups that assume exactly one
@@ -4446,7 +4454,8 @@
         width: 5.5em;
       }
       .seller-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4487,8 +4496,11 @@
       .seller-row-status.error {
         color: var(--danger-text);
       }
+      /* #3940: the Sell leaves' save buttons are the primary button (DESIGN.md, "Inside a leaf"):
+         44px to hit, --brand-green, --radius-pill. */
       .seller-size-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4505,7 +4517,7 @@
       .seller-size-status.error {
         color: var(--danger-text);
       }
-      /* Edit Price — same idiom/reasoning as Edit Size's own panel above,
+      /* Edit price — same idiom/reasoning as Edit size's own panel above,
          own classes throughout for the same "don't share a class across
          genuinely different rows/panels" reasoning. */
       .seller-row-price {
@@ -4531,7 +4543,8 @@
         width: 8em;
       }
       .seller-price-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4559,7 +4572,7 @@
          classes throughout despite being visually identical to
          .seller-row-price/.seller-price-* above (same "don't share a
          class across genuinely different rows/panels" reasoning as
-         Extensibility vs. Edit Size). */
+         Extensibility vs. Edit size). */
       .seller-row-digital-good {
         font-size: var(--text-2xs);
         color: var(--pill-text-soft);
@@ -4582,7 +4595,8 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .seller-digital-good-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4601,7 +4615,7 @@
       }
       /* No-returns policy (docs/SPEC.md §5) row display + edit panel — own
          classes throughout, same "don't share a class across genuinely
-         different rows/panels" reasoning as Digital Good vs. Edit Size. */
+         different rows/panels" reasoning as Digital Good vs. Edit size. */
       .seller-row-no-returns {
         font-size: var(--text-2xs);
         color: var(--pill-text-soft);
@@ -4623,7 +4637,8 @@
         color: var(--pill-text);
       }
       .seller-no-returns-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4664,7 +4679,8 @@
         color: var(--pill-text);
       }
       .seller-domestic-only-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -5108,7 +5124,7 @@
         color: var(--pill-text);
         cursor: pointer;
       }
-      /* Sell Your Lándlet's landlet picker (#249) — only rendered when a
+      /* Sell your lándlet's landlet picker (#249) — only rendered when a
          builder owns more than one claimed landlet at once, so it's a
          one-off row rather than reusing .auction-start-form's row-of-
          inputs layout, which assumes several short numeric fields. */
@@ -6962,11 +6978,12 @@
         color: rgb(var(--ink-rgb) / 0.6);
       }
       .product-sale-row-ship-btn {
-        padding: var(--space-2xs) var(--space-md);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-2xs)/var(--leading-normal) var(--font-sans);
       }
       .product-sale-row-ship-btn:disabled {

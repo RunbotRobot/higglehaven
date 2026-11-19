@@ -917,7 +917,7 @@ export async function waitForText(page, selector, expectedSubstring, { timeout =
 // from a test means filling that modal's own fields directly rather than
 // going through launchPage's dialog handler or monkey-patching
 // window.prompt the way every bundle test used to.
-// #3359: "+ Add Friend" asks for the friend's name in the shared in-app name
+// #3359: "+ Add friend" asks for the friend's name in the shared in-app name
 // modal (it used to be a native prompt() the dialog handler answered). Expects
 // the Friends modal to be open already.
 export async function addFriendByName(page, name) {

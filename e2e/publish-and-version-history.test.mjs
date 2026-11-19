@@ -120,12 +120,12 @@ console.log('older version Set Live was enabled (should be true):', olderRowSetL
 console.log('activeVersionId changed after Set Live (should differ from right after the 2nd publish):', landletAfterSetLive.activeVersionId !== activeVersionIdAfterSecondPublish ? 'changed' : 'unchanged');
 console.log('live draft still has 2 items after Set Live (editor untouched, should be 2):', liveInstancesAfterSetLive.length);
 
-// Restore to Editor on that same older (Tree-only) version — this SHOULD
+// Restore to editor on that same older (Tree-only) version — this SHOULD
 // replace the live draft, unlike Set Live.
 await page.click('.settings-tab-btn[data-section="build"]'); // re-render after the reload-triggering click below is safer against a stale row
 await page.waitForTimeout(300);
 const treeOnlyRow = page.locator('.version-row').filter({ hasText: '1 item' }).last();
-await treeOnlyRow.locator('button', { hasText: 'Restore to Editor' }).click();
+await treeOnlyRow.locator('button', { hasText: 'Restore to editor' }).click();
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(() => !document.getElementById('claim-modal')?.classList.contains('visible'), null, { timeout: 25000 }).catch(() => {});
 await page.waitForLoadState('networkidle', { timeout: 15000 });
@@ -140,7 +140,7 @@ await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(1500);
 
 const { instances: instancesAfterRestore } = await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`);
-console.log('live draft instance count after Restore to Editor (should be back to 1):', instancesAfterRestore.length);
+console.log('live draft instance count after Restore to editor (should be back to 1):', instancesAfterRestore.length);
 const restoredCorrectly = instancesAfterRestore.length === 1 && instancesAfterRestore[0].templateId === 'placeholder-tree';
 
 const { versions: versionsAfterRestore } = await fetchJson(`/api/landlets/${myLandlet.landletId}/versions?limit=20`);
@@ -157,4 +157,4 @@ const pass = historyAfterFirstPublish === 1 &&
   restoredCorrectly &&
   versionsAfterRestore.length >= 3 &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Publish + Version History (Set Live vs Restore to Editor)', errors });
+await finish(browser, { pass, label: 'Publish + Version History (Set Live vs Restore to editor)', errors });

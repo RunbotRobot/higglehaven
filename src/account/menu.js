@@ -3,7 +3,7 @@
 // my-lands account-menu chrome, extracted wholesale from src/main.js.
 // refreshNotificationsBadge/refreshFriendsBadge/refreshDmBadge are
 // exported since mode-entry code in main.js (bootstrap()/enterSellMode()/
-// enterLayoutPreviewMode()) and the seller Edit Size save flow refresh
+// enterLayoutPreviewMode()) and the seller Edit size save flow refresh
 // these three badges directly after resolving builderId; everything else
 // below is only ever reached from inside this module's own account-menu
 // panel/modals.
@@ -1393,7 +1393,7 @@ friendsBtn.addEventListener('click', () => {
 friendsCloseBtn.addEventListener('click', closeFriendsModal);
 friendsAddBtn.addEventListener('click', async () => {
   // #3359: the shared in-app name modal instead of window.prompt() (a browser
-  // that suppresses native dialogs made Add Friend do nothing). The title keeps
+  // that suppresses native dialogs made Add friend do nothing). The title keeps
   // the old prompt's one piece of guidance: the name has to match exactly.
   const named = await promptBundleName({ title: "Friend's name (must match their identity exactly)" });
   if (!named) return;

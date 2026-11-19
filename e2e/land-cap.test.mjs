@@ -43,12 +43,12 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // added a Username field ahead of Land Cap in the Build tab.
 const landCapFieldText = await waitForText(page, '#land-cap-field', 'You own 1,000m²');
 const landCapFieldLabel = await page.locator('#land-cap-field').locator('span').textContent();
-console.log('Land Cap field label (should be "Lándlet Cap"):', landCapFieldLabel);
+console.log('Land Cap field label (should be "Lándlet cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1,000m²" twice — owned and cap):', landCapFieldText);
 
 const pass = menuLandCapText === 'Lándlet cap: 1,000m² / 1,000m²' &&
   taxNoticeHidden &&
-  landCapFieldLabel.trim() === 'Lándlet Cap' &&
+  landCapFieldLabel.trim() === 'Lándlet cap' &&
   landCapFieldText.includes('You own 1,000m²') &&
   landCapFieldText.includes('your 1,000m² cap') &&
   errors.length === 0;
