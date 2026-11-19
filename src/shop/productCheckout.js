@@ -37,7 +37,7 @@ import {
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
-import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
+import { createCheckoutPayState, runPayAttempt, describePayFailure, PAY_STAGES } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this product), for focus return after a notice.
 import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders, markProductJustBought } from './productCard.js';
@@ -47,6 +47,7 @@ const checkoutModalEl = document.getElementById('checkout-modal');
 const checkoutSummaryEl = document.getElementById('checkout-summary');
 const checkoutCardElementEl = document.getElementById('checkout-card-element');
 const checkoutStatusEl = document.getElementById('checkout-status');
+const checkoutProgressEl = document.getElementById('checkout-progress');
 const checkoutPayBtn = document.getElementById('checkout-pay-btn');
 const checkoutCancelBtn = document.getElementById('checkout-cancel-btn');
 
@@ -204,6 +205,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     if (!checkoutPayBtn.dataset.defaultLabel) checkoutPayBtn.dataset.defaultLabel = checkoutPayBtn.textContent;
     checkoutPayBtn.textContent = checkoutPayBtn.dataset.defaultLabel;
     checkoutChargedAwaitingFinalize = false;
+    checkoutProgressEl.hidden = true;
     const payState = createCheckoutPayState();
     checkoutModalEl.classList.add('visible');
     // #1730: closeCheckoutModal itself now rejects (see its own comment)
@@ -232,14 +234,20 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         // through for real, silently reporting a completed purchase as
         // cancelled.
         checkoutCancelBtn.disabled = true;
-        checkoutStatusEl.textContent = payState.paymentConfirmed ? 'Finishing your purchase…' : 'Processing…';
         checkoutStatusEl.classList.remove('error');
+        // #3947: the words and the bar follow the real step (see PAY_STAGES), set by runPayAttempt.
+        const showStage = (stage) => {
+          checkoutStatusEl.textContent = PAY_STAGES[stage].label;
+          checkoutProgressEl.style.setProperty('--checkout-progress', String(PAY_STAGES[stage].share));
+          checkoutProgressEl.hidden = false;
+        };
         try {
           // #3116: after the card is charged, a retry only re-runs finalize
           // (see checkoutPayAttempt.js) -- confirming the card again would
           // fail with Stripe's own wording and leave the buyer believing a
           // paid purchase had failed.
           const finalized = await runPayAttempt(payState, {
+            onStage: showStage,
             confirm: () => stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } }),
             finalize: () => {
               checkoutChargedAwaitingFinalize = true;
@@ -255,6 +263,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
           closeCheckoutModal();
           resolve(finalized);
         } catch (err) {
+          checkoutProgressEl.hidden = true;
           checkoutStatusEl.textContent = describePayFailure(payState, err);
           checkoutStatusEl.classList.add('error');
           checkoutPayBtn.disabled = false;

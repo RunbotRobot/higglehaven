@@ -23,6 +23,7 @@ await page.route('**/api/purchases/finalize', async (route) => {
   if (finalizeCalls === 1) {
     await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'upstream exploded: raw provider text' }) });
   } else {
+    await new Promise((r) => setTimeout(r, 900)); // long enough to read the stage while the order is recorded (#3947)
     await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ purchase: { purchaseId: 'checkout-retry-purchase' } }) });
   }
 });
@@ -33,7 +34,7 @@ await page.evaluate(() => {
   // loadStripeJs resolves immediately when window.Stripe already exists.
   window.Stripe = () => ({
     elements: () => ({ create: () => ({ mount() {}, unmount() {} }) }),
-    confirmCardPayment: async () => { window.__confirmCalls += 1; return { paymentIntent: { status: 'succeeded' } }; },
+    confirmCardPayment: async () => { window.__confirmCalls += 1; await new Promise((r) => { window.__releaseConfirm = r; }); return { paymentIntent: { status: 'succeeded' } }; },
   });
   window.__testRunCheckoutFlow(
     { clientSecret: 'cs_test', paymentIntentId: 'pi_test', publishableKey: 'pk_test' },
@@ -47,11 +48,20 @@ const payLabelBefore = await page.textContent('#checkout-pay-btn');
 
 // First attempt: the card is charged, finalize fails.
 await page.click('#checkout-pay-btn');
+// #3947: while the card is being checked the words and the bar say so; nothing moves on a timer.
+await page.waitForFunction(() => /Checking your card/.test(document.getElementById('checkout-status').textContent), null, { timeout: 10000 });
+const checkingBar = await page.evaluate(() => {
+  const bar = document.getElementById('checkout-progress');
+  return { shown: !bar.hidden, share: bar.style.getPropertyValue('--checkout-progress') };
+});
+await page.evaluate(() => window.__releaseConfirm());
 await page.waitForFunction(() => /went through/.test(document.getElementById('checkout-status').textContent), null, { timeout: 10000 });
 const status1 = await page.textContent('#checkout-status');
 const payLabelAfter = await page.textContent('#checkout-pay-btn');
 const payEnabled = await page.locator('#checkout-pay-btn').isEnabled();
 const cancelDisabled = await page.locator('#checkout-cancel-btn').isDisabled();
+const barAfterFailure = await page.evaluate(() => document.getElementById('checkout-progress').hidden);
+console.log('bar while checking (should be shown at 0.2):', JSON.stringify(checkingBar), '| bar hidden after the failure (should be true):', barAfterFailure);
 const rawLeaked = /raw provider text|upstream exploded/.test(status1);
 console.log('Pay button label before (should be "Pay"):', payLabelBefore);
 console.log('status after the failed finalize:', status1);
@@ -68,6 +78,9 @@ console.log('modal still open after Escape (should be 1):', stillOpen, '| flow s
 
 // Retry: only finalize runs again; the card is never confirmed twice.
 await page.click('#checkout-pay-btn');
+await page.waitForFunction(() => /Recording your order/.test(document.getElementById('checkout-status').textContent), null, { timeout: 10000 });
+const recordingBar = await page.evaluate(() => document.getElementById('checkout-progress').style.getPropertyValue('--checkout-progress'));
+console.log('bar while the order is recorded (should be 0.7):', recordingBar);
 await page.waitForFunction(() => window.__flowResult !== null, null, { timeout: 10000 });
 const flowResult = await page.evaluate(() => window.__flowResult);
 const confirmCalls = await page.evaluate(() => window.__confirmCalls);
@@ -77,6 +90,9 @@ console.log('confirmCardPayment calls (should be 1):', confirmCalls, '| finalize
 console.log('modal closed after success (should be true):', modalClosed);
 
 const pass = payLabelBefore.trim() === 'Pay'
+  && checkingBar.shown && checkingBar.share === '0.2'
+  && barAfterFailure === true
+  && recordingBar === '0.7'
   && /went through/.test(status1)
   && !rawLeaked
   && payLabelAfter.trim() === 'Finish purchase'
