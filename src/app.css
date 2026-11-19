@@ -1016,6 +1016,9 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        /* #3762: the name keeps a little air on both sides of the leaf, so a long one is cut short of
+           the edge instead of running to it. */
+        padding-inline: var(--space-xs);
       }
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
       body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
