@@ -59,6 +59,10 @@ const info = await page.evaluate(() => {
     vw: innerWidth, vh: innerHeight,
     buttons: [...document.querySelectorAll('#seller-product-card-actions button')].map((b) => b.textContent.trim()),
     rowsTops: [...document.querySelectorAll('#seller-product-card-actions button')].map((b) => Math.round(b.getBoundingClientRect().top)),
+    // #3702 (seen live at 390px once Stock was the fifth action): every action sits inside the card, and
+    // the first-visit hint is not drawn over it.
+    buttonRights: [...document.querySelectorAll('#seller-product-card-actions button')].map((b) => Math.round(b.getBoundingClientRect().right)),
+    hintVisibility: document.getElementById('world-hint') ? getComputedStyle(document.getElementById('world-hint')).visibility : 'absent',
   };
 });
 console.log('card:', JSON.stringify({ name: info.name, price: info.price, buttons: info.buttons, tops: info.rowsTops }));
@@ -68,6 +72,8 @@ check(info.buttons.join() === 'Rename,Price,Stock,Delete,More', `the actions are
 check(info.actions.top >= info.nameBox.bottom - 1, 'the actions sit directly under the name');
 check(new Set(info.rowsTops).size === 1, `the card's buttons do not wrap (tops ${info.rowsTops})`);
 check(info.card.left >= 0 && info.card.right <= info.vw && info.card.top >= 0 && info.card.bottom <= info.vh, 'the card is inside the screen');
+check(info.buttonRights.every((x) => x <= Math.round(info.card.right)), `every action is inside the card, so "More" is not cut off (rights ${info.buttonRights}, card right ${Math.round(info.card.right)})`);
+check(info.hintVisibility !== 'visible', `the first-visit hint is not drawn over the card (visibility ${info.hintVisibility}; absent when this page never made one)`);
 
 // Price, inline.
 await page.click('#seller-product-card-price-btn');
