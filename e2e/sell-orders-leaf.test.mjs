@@ -16,7 +16,7 @@ async function openOrders() {
 }
 
 await openOrders();
-await page.waitForSelector('#bud-leaf-orders .orders-note:has-text("No orders yet.")', { timeout: 15000 });
+await page.waitForSelector('#bud-leaf-orders .empty-state:has-text("No orders yet.")', { timeout: 15000 });
 console.log('A seller with no sales sees "No orders yet." (should be reached)');
 await page.click('#bud-leaf-orders .bud-leaf-close');
 await page.waitForSelector('#bud-leaf-orders', { state: 'detached', timeout: 5000 });

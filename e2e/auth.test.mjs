@@ -216,7 +216,7 @@ await clearVerifyModalIfShown(page);
 await firstSellerFetch;
 // #3700: Sell opens on the showroom; the list is one tap of the bud away.
 await showMyProductsAfterEntry(page);
-const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No custom products yet');
+const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No products yet');
 console.log('seller status for the first account (should say no products yet):', sellerStatusForFirstAccount);
 await page.click('#seller-close-btn');
 await page.waitForSelector('#seller-modal:not(.visible)', { state: 'attached', timeout: 5000 });
@@ -274,7 +274,7 @@ try {
 console.log('a fresh /sellers/me GET fired for the second account (should be true — a stale cache would skip it):', sellerRefetchedForSecondAccount);
 // #3700: Sell opens on the showroom; the list is one tap of the bud away.
 await showMyProductsAfterEntry(page);
-const sellerStatusForSecondAccount = await waitForText(page, '#seller-status', 'No custom products yet');
+const sellerStatusForSecondAccount = await waitForText(page, '#seller-status', 'No products yet');
 console.log('seller status for the second account (should say no products yet, not the first account\'s list):', sellerStatusForSecondAccount);
 await page.click('#seller-close-btn');
 
@@ -288,10 +288,10 @@ const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   !!resetUrlMatch && resetFormVisible && resetTabsHidden &&
   resetStatus.includes('Password reset!') &&
   btnLabelAfterNewPasswordLogin === 'Ada Suite' &&
-  sellerStatusForFirstAccount.includes('No custom products yet') &&
+  sellerStatusForFirstAccount.includes('No products yet') &&
   btnLabelAfterSecondSignup === 'Bea Suite' &&
   sellerRefetchedForSecondAccount &&
-  sellerStatusForSecondAccount.includes('No custom products yet') &&
+  sellerStatusForSecondAccount.includes('No products yet') &&
   errors.length === 0;
 await finish(browser, {
   pass,

@@ -5523,10 +5523,15 @@
         font-size: var(--text-2xs);
         cursor: pointer;
       }
-      #notifications-empty {
+      /* #3875: the one look for a leaf with nothing in it: a short sentence saying what will appear
+         there, no box, no icon, taking only the room it needs. Replaces six hand-made rules. */
+      .empty-state {
+        margin: 0;
         font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.6);
+        line-height: var(--leading-normal);
+        color: rgb(var(--ink-rgb) / 0.7);
       }
+      .empty-state[hidden] { display: none; }
       #notifications-actions[hidden] { display: none; }
       #notifications-actions {
         display: flex;
@@ -5684,10 +5689,6 @@
       .my-purchase-feedback-status {
         font-size: var(--text-xs);
         color: rgb(var(--ink-rgb) / 0.75);
-      }
-      #my-purchases-empty {
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.6);
       }
       #my-purchases-load-more-btn {
         align-self: center;
@@ -5980,10 +5981,6 @@
       }
       .friend-row-actions button.danger {
         background: var(--danger);
-      }
-      #friends-panel-empty {
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* Same modal shell as #notifications-modal — a builder's moderation
          view for one specific community sign's posts (see "Community
@@ -6861,10 +6858,6 @@
       #my-lands-status.error {
         color: var(--danger-text);
         font-size: var(--text-sm);
-      }
-      #my-lands-empty {
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* A real <button> (see its own click-handler comment, src/main.js),
          styled to read as the clickable land name it is. */

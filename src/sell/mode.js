@@ -39,6 +39,7 @@ import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { registerBudPetals, openLeaf } from '../ui/bud.js';
 import { openPayoutsLeaf } from './payoutsLeaf.js';
 import { buildSaleRow } from './saleRow.js';
+import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openOrdersLeaf } from './ordersLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
@@ -543,7 +544,7 @@ function renderSellerList() {
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
     syncSellerFilterControls(0);
-    sellerStatusEl.textContent = 'No custom products yet — use "Add a product" in the menu.';
+    sellerStatusEl.textContent = EMPTY_COPY.products;
     return;
   }
   syncSellerFilterControls(allTemplates.length);
@@ -1892,7 +1893,7 @@ function renderSellerListView() {
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
     syncSellerFilterControls(0);
-    sellerStatusEl.textContent = 'No custom products yet — use "Add a product" in the menu.';
+    sellerStatusEl.textContent = EMPTY_COPY.products;
     return;
   }
   syncSellerFilterControls(allTemplates.length);
