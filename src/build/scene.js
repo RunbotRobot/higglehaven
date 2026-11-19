@@ -5134,7 +5134,7 @@ async function renderLandCapField() {
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  settingsSectionEl.appendChild(field);
+  appendBeforeHigglesFold(field);
   try {
     // ownedAreaM2 comes straight from the builder object now (#312) —
     // the backend's own recomputeLandCap already sums every owned
@@ -5221,11 +5221,11 @@ async function renderRedeemHigglesField() {
   statusNote.setAttribute('aria-live', 'polite');
   statusNote.textContent = 'Loading…';
   statusField.appendChild(statusNote);
-  settingsSectionEl.appendChild(statusField);
+  higglesHost().appendChild(statusField);
 
   const formField = document.createElement('div');
   formField.className = 'settings-field';
-  settingsSectionEl.appendChild(formField);
+  higglesHost().appendChild(formField);
   // #1912: exposes this call's own formField so a test can tell a fixed
   // early-return (no children ever appended to it) apart from the
   // pre-fix behavior (the form still gets built and appended onto this
@@ -5427,8 +5427,26 @@ async function renderRedeemHigglesField() {
 // backend gets a frontend. Only meaningful while actually in Build mode on
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
+// #3652: Redeem Higgles, Sell Your Lándlet and Active Auctions are occasional money matters, so they
+// sit behind one closed row and the Build tab's first screen holds what a builder checks often
+// (username, lándlet cap, low-stock). The fold is made first, so fields that load later go either
+// into it or in front of it, whatever order their requests come back in.
+let higglesFoldEl = null;
+const higglesHost = () => higglesFoldEl || settingsSectionEl;
+function appendBeforeHigglesFold(el) {
+  if (higglesFoldEl && higglesFoldEl.parentNode === settingsSectionEl) settingsSectionEl.insertBefore(el, higglesFoldEl);
+  else settingsSectionEl.appendChild(el);
+}
+
 export function renderBuildSettingsSection() {
   renderBuilderIdentityField();
+  const fold = document.createElement('details');
+  fold.className = 'settings-account-fold';
+  const foldSummary = document.createElement('summary');
+  foldSummary.textContent = 'Higgles and auctions';
+  fold.appendChild(foldSummary);
+  settingsSectionEl.appendChild(fold);
+  higglesFoldEl = fold;
   renderLandCapField();
   renderRedeemHigglesField();
   renderAuctionSection();
@@ -5863,7 +5881,7 @@ async function renderAuctionSection() {
   const startStatus = document.createElement('div');
   startStatus.className = 'settings-empty-note';
   startField.appendChild(startStatus);
-  settingsSectionEl.appendChild(startField);
+  higglesHost().appendChild(startField);
 
   const listField = document.createElement('div');
   listField.className = 'settings-field';
@@ -5873,7 +5891,7 @@ async function renderAuctionSection() {
   const auctionList = document.createElement('div');
   auctionList.className = 'auction-list';
   listField.appendChild(auctionList);
-  settingsSectionEl.appendChild(listField);
+  higglesHost().appendChild(listField);
 
   // Guards against the picker's `change` handler firing renderForLandlet
   // again before a previous call's own fetchAuctions round-trip has
@@ -6334,7 +6352,7 @@ async function renderLowStockSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  settingsSectionEl.appendChild(field);
+  appendBeforeHigglesFold(field);
 
   // A days-remaining threshold only ever excludes a row that actually has a
   // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
@@ -6442,7 +6460,7 @@ async function renderSoldOutMarkersSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  settingsSectionEl.appendChild(field);
+  appendBeforeHigglesFold(field);
 
   toggle.addEventListener('change', () => {
     setShowSoldOutMarkers(toggle.checked);
