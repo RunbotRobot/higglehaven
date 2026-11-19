@@ -250,6 +250,11 @@ async function runPeerStep(sub, arg, index) {
         await tap('#account-menu-toggle', 'the menu button');
         await peerPage.waitForTimeout(700);
       }
+      // Chat is a leaf of the Shop stem: the petal of the mode you are in opens that stem.
+      if (!(await peerPage.locator('#bud-petal-shop-chat').first().isVisible())) {
+        await tap('#bud-modes .mode-nav-btn[data-mode="shop"]', 'the Shop petal');
+        await peerPage.waitForTimeout(500);
+      }
       await tap('#bud-petal-shop-chat', 'the Chat petal');
       await peerPage.fill('#shop-nearby-chat-input', arg, { timeout: 15000 });
       await peerPage.press('#shop-nearby-chat-input', 'Enter');
