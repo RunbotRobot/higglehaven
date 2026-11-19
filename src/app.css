@@ -3871,9 +3871,11 @@
         gap: var(--space-lg);
         box-sizing: border-box;
       }
+      /* #3941: the leaf's title is the one heading look (DESIGN.md, "Inside a leaf"). */
       #feedback-modal-content h2 {
         margin: 0;
-        font-size: var(--text-lg);
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
       }
       #feedback-screenshot-preview[hidden] {
         display: none;
@@ -3891,20 +3893,22 @@
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: rgb(var(--ink-rgb) / 0.1);
       }
+      /* #3941: the one field look; 16px text so a phone does not zoom on focus. */
       #feedback-description {
         width: 100%;
         min-height: 70px;
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: inherit;
-        font: inherit;
-        padding: var(--space-sm);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
+        padding: var(--space-sm) var(--space-md);
         resize: vertical;
         box-sizing: border-box;
       }
       #feedback-status {
         font-size: var(--text-sm);
+        color: rgb(var(--ink-rgb) / var(--alpha-soft));
         min-height: 18px;
       }
       #feedback-status.error {
@@ -3915,7 +3919,9 @@
         justify-content: flex-end;
         gap: var(--space-sm);
       }
+      /* #3941: the primary button and the quiet button (DESIGN.md, "Inside a leaf"). */
       #feedback-submit-btn {
+        min-height: 44px;
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
@@ -3924,11 +3930,12 @@
         color: var(--ink);
       }
       #feedback-cancel-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: inherit;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #checkout-pay-btn:disabled {
@@ -4213,7 +4220,7 @@
         padding: var(--space-sm);
         border-radius: var(--radius-md);
         border: none;
-        background: rgb(var(--ink-rgb) / 0.08);
+        background: var(--fill-row);
         color: var(--pill-text);
         font: var(--text-xs)/var(--leading-tight) var(--font-sans);
         cursor: pointer;
@@ -4247,9 +4254,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
-        background: rgb(var(--ink-rgb) / 0.08);
-        border-radius: var(--radius-md);
-        padding: var(--space-md) var(--space-lg);
         transition: background-color var(--motion-quick) var(--ease-soft);
       }
       .seller-row.expanded {
@@ -4738,9 +4742,11 @@
         flex-direction: column;
         gap: var(--space-lg);
       }
+      /* #3941: the leaf's title is the one heading look (DESIGN.md, "Inside a leaf"). */
       #settings-modal-content h2 {
         margin: 0;
-        font-size: var(--text-lg);
+        font-size: var(--text-xl);
+        font-weight: var(--weight-semibold);
       }
       #settings-tabs {
         display: flex;
@@ -4784,12 +4790,14 @@
       }
       /* #3567: the utilities share one pill style (the assistant button used
          to fall back to the browser's square default; it has since moved under "?", #3762). */
+      /* #3941: a quiet button (DESIGN.md, "Inside a leaf"). */
       #settings-feedback-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         cursor: pointer;
       }
@@ -4818,7 +4826,7 @@
       }
       .settings-empty-note {
         font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.6);
+        color: rgb(var(--ink-rgb) / var(--alpha-soft));
       }
       .settings-gesture-list {
         margin: 0;
@@ -4869,14 +4877,17 @@
       /* Publish + Version History (Settings' Build tab) — same small-pill
          look as .seller-row-action-btn, kept as its own class since it
          lives outside the Seller modal. */
+      /* #3941: this is the quiet button (DESIGN.md, "Inside a leaf"): 44px to hit,
+         the line at --alpha-line, ink text. */
       .version-action-btn {
         align-self: flex-start;
         flex-shrink: 0;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       .version-action-btn:disabled {
@@ -5122,14 +5133,16 @@
       .stripe-onboarding-form label[hidden] {
         display: none;
       }
+      /* #3941: the one field look (fill --alpha-faint, a --alpha-line border, --radius-md,
+         16px text so a phone does not zoom on focus). */
       .stripe-onboarding-form input {
         flex: 1 1 auto;
         min-width: 0;
-        border: none;
-        border-radius: var(--radius-sm);
-        padding: var(--space-2xs) var(--space-xs);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
-        background: rgb(var(--ink-rgb) / 0.08);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        border-radius: var(--radius-md);
+        padding: var(--space-sm) var(--space-md);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
       }
       #settings-modal-actions {
@@ -5433,12 +5446,15 @@
         flex-direction: column;
         gap: var(--space-md);
       }
-      .notification-row {
+      /* #3939 (part of #3933): one list row. Every list leaf's row wears this fill, shape, padding and
+         text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
+      .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
+      .pending-restoration-row, .friend-row, .dm-row, .seller-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
+        background: var(--fill-row);
         font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
+        color: rgb(var(--ink-rgb) / var(--alpha-strong));
       }
       .notification-row.unread {
         background: rgb(var(--ink-rgb) / 0.16);
@@ -5564,11 +5580,6 @@
         gap: var(--space-md);
       }
       .my-purchase-row {
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
         overflow-wrap: anywhere;
       }
       .my-purchase-name {
@@ -5828,11 +5839,6 @@
       }
       .dm-row {
         max-width: 80%;
-        padding: var(--space-sm) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .dm-row.sent {
         align-self: flex-end;
@@ -5891,11 +5897,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-sm) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .friend-row-body {
         min-width: 0;
@@ -5976,11 +5977,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .sign-post-row-body {
         min-width: 0;
@@ -6069,11 +6065,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .calendar-event-row-body {
         min-width: 0;
@@ -6174,11 +6165,6 @@
         display: flex;
         align-items: center;
         gap: var(--space-sm);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .backup-chain-row-name {
         flex: 1;
@@ -6266,11 +6252,6 @@
         display: flex;
         align-items: center;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .pending-restoration-row-image {
         flex-shrink: 0;
