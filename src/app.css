@@ -5062,9 +5062,6 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .sold-out-marker-row-info {
         font-size: var(--text-xs);
@@ -5436,7 +5433,8 @@
       /* #3939 (part of #3933): one list row. Every list leaf's row wears this fill, shape, padding and
          text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
       .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
-      .pending-restoration-row, .friend-row, .dm-row {
+      .pending-restoration-row, .friend-row, .dm-row, .product-review-row, .seller-feedback-row,
+      .product-sale-row, .sold-out-marker-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
         background: var(--fill-row);
@@ -6826,11 +6824,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-review-row-body,
       .seller-feedback-row-body {
@@ -6893,11 +6886,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-sale-row-body {
         min-width: 0;
