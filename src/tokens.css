@@ -173,4 +173,12 @@
   --motion-petal: 0.42s;
   --motion-fog-away: 6s;
   --ease-bloom: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+
+  /* One motion for each way the flower moves (#3876): a part growing out of its
+     parent, folding back into it, and the plain fade that stands in for both under
+     prefers-reduced-motion. A card's bloom (above) has its own. */
+  --motion-grow: 0.3s;
+  --motion-fold: 0.2s;
+  --ease-fold: ease-in;
+  --motion-reduced: 0.15s;
 }

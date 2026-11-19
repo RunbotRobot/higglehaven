@@ -315,6 +315,10 @@ one pixel at ink 25% where they exist at all.
 | `--motion-petal` | 0.42s | a petal unfolding (40ms apart) |
 | `--motion-fog-away` | 6s | a hint thinning away like fog |
 | `--ease-bloom` | cubic-bezier(0.2, 0.9, 0.3, 1.2) | the bloom curve: a soft overshoot, never a bounce off screen |
+| `--motion-grow` | 0.3s | a part of the flower growing out of its parent: a petal from the head, the stem's leaves, a leaf sheet, the note beside the head (a petal takes `--ease-soft`, not `--ease-bloom`: it travels out from the head and must stay joined to it) |
+| `--motion-fold` | 0.2s | a part folding back into its parent: the petals into the head, the note |
+| `--ease-fold` | ease-in | the curve for folding back: it gathers speed as it goes |
+| `--motion-reduced` | 0.15s | the plain fade that replaces growing and folding under `prefers-reduced-motion` (nothing grows, nothing drifts) |
 
 The world's own motion (fog that resolves into a thing, drift) lives in the
 scene code, not in CSS; see "Things arrive in the world through fog" in AGENTS.md.

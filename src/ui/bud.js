@@ -499,7 +499,7 @@ function showNote(entry) {
   } else if (!el.hidden) {
     document.body.removeAttribute('data-bud-note');
     el.classList.add('folding');
-    noteTimer = setTimeout(() => { el.hidden = true; el.classList.remove('folding'); }, 180);
+    noteTimer = setTimeout(() => { el.hidden = true; el.classList.remove('folding'); }, 200); // = --motion-fold (src/tokens.css)
   }
 }
 

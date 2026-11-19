@@ -42,6 +42,17 @@ for (const f of jsFiles('src')) {
 const used = new Set([...stripComments(appCss).matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
 for (const v of used) if (!known.has(v)) problems.push(`src/app.css uses var(${v}), which is defined nowhere`);
 
+// #3876: every moving part of the flower takes its duration from a motion token, so they
+// share timings and feel like one thing. A literal "0.35s" on one of these animations is how
+// they drifted apart in the first place. (The breath, the pulses and the opening screen's own
+// loops are not parts growing or folding; they are not listed.)
+const FLOWER_MOTIONS = ['bud-note-grow', 'bud-note-fold', 'bud-unfold', 'bud-grow', 'bud-fold', 'bud-fade', 'bud-stem-grow', 'product-card-bloom', 'product-card-fade'];
+for (const d of declarations(appCss)) {
+  if (d.prop !== 'animation') continue;
+  const name = FLOWER_MOTIONS.find((n) => new RegExp(`(^|\\s)${n}(\\s|$)`).test(d.value));
+  if (name && !/var\(--motion-/.test(d.value)) problems.push(`src/app.css: animation "${d.value}" (${name}) must take its duration from a --motion-* token`);
+}
+
 const tokensAt = html.indexOf('/src/tokens.css');
 const appAt = html.indexOf('/src/app.css');
 if (tokensAt < 0 || appAt < tokensAt) problems.push('index.html must load /src/tokens.css before /src/app.css');
