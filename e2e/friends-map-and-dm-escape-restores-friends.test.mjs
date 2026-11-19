@@ -39,7 +39,7 @@ await claimLandlet(alicePage);
 await chooseIdentity(bobPage, { mode: 'build', label: BOB, isNew: true });
 await claimLandlet(bobPage);
 
-// Same real "+ Add Friend" flow as e2e/friends.test.mjs.
+// Same real "+ Add friend" flow as e2e/friends.test.mjs.
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });

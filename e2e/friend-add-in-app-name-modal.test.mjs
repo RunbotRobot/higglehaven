@@ -1,4 +1,4 @@
-// #3359 (part of #3249's native-dialog sweep): "+ Add Friend" asked for the
+// #3359 (part of #3249's native-dialog sweep): "+ Add friend" asked for the
 // friend's name with window.prompt(), which a browser that suppresses native
 // dialogs answers with nothing, so the button silently did nothing. It now uses
 // the in-app name modal. Every native dialog is dismissed the way a suppressing
@@ -7,7 +7,7 @@
 // ever raised.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, addFriendByName, finish } from './helpers.mjs';
 
-const LABEL = 'Add Friend Modal Tester';
+const LABEL = 'Add friend Modal Tester';
 const NOBODY = 'Nobody Has This Builder Name';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 800 } });
 
@@ -50,4 +50,4 @@ console.log('native dialogs raised (should be 0):', nativeDialogs);
 
 const pass = titleMentionsFriend && focusOnInput && friendsStillOpen && statusAfterCancel === ''
   && notFound.includes(NOBODY) && notFoundIsError && nativeDialogs === 0 && errors.length === 0;
-await finish(browser, { pass, label: '+ Add Friend asks for the name in the in-app modal and works with native dialogs suppressed (#3359)', errors });
+await finish(browser, { pass, label: '+ Add friend asks for the name in the in-app modal and works with native dialogs suppressed (#3359)', errors });

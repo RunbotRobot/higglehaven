@@ -115,7 +115,7 @@ console.log('builder balance before/after refund (should differ by exactly the c
 const { purchases: serverPurchases } = (await fetchJson(`/api/purchases?templateId=${template.templateId}`)).body;
 console.log('server-side refundedAt set (should be non-null):', serverPurchases[0]?.refundedAt);
 
-// Separately, exercise the "Edit Returns Policy" panel (no refund attempt
+// Separately, exercise the "Edit returns policy" panel (no refund attempt
 // against this flag — see file header for why that path is worker-test-only).
 const noReturnsTextBefore = await row().locator('.seller-row-no-returns').textContent();
 console.log('returns policy row text before editing (should be "Returns: accepted"):', noReturnsTextBefore);
@@ -143,4 +143,4 @@ const pass = !!template && purchased.status === 201 &&
   noReturnsTextAfter.trim() === 'Returns: not accepted' &&
   serverTemplate.metadata.noReturns === true &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Refunds: Sales panel refund + commission clawback, Edit Returns Policy panel', errors });
+await finish(browser, { pass, label: 'Refunds: Sales panel refund + commission clawback, Edit returns policy panel', errors });

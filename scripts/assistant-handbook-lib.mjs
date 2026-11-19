@@ -6,7 +6,7 @@
 // real app. The format is described at the top of the handbook itself.
 
 // 'sell-row' is Sell mode with one of the seller's own products opened in "My
-// products": its buttons (Rename, Edit Price, Delete) are built when a row is
+// products": its buttons (Rename, Edit price, Delete) are built when a row is
 // opened, so the test uploads a product and opens its row before looking for them.
 export const CONTROL_MODES = ['any', 'shop', 'build', 'sell', 'sell-row'];
 // A control with nothing written on it (a joystick, a picture): the steps name it

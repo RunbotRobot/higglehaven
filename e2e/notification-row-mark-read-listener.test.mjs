@@ -30,7 +30,7 @@ await claimLandlet(alicePage);
 await chooseIdentity(bobPage, { mode: 'build', label: BOB, isNew: true });
 await claimLandlet(bobPage);
 
-// Alice sends Bob a friend request through the real "+ Add Friend" prompt
+// Alice sends Bob a friend request through the real "+ Add friend" prompt
 // -- fires a real notification for Bob (same flow as e2e/friends.test.mjs).
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');

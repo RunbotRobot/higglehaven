@@ -86,7 +86,7 @@ const builderMeFetchLanded = page.waitForResponse(
 );
 await page.click('.settings-tab-btn[data-section="build"]');
 await builderMeFetchLanded;
-const buildTabWorksNormally = (await waitForText(page, '#settings-section', 'Lándlet Cap')).includes('Lándlet Cap');
+const buildTabWorksNormally = (await waitForText(page, '#settings-section', 'Lándlet cap')).includes('Lándlet cap');
 console.log('Build tab still renders Land Cap normally on a fresh, non-superseded switch (should be true):', buildTabWorksNormally);
 
 const pass = !/Lándlet cap|Redeem higgles|Active auctions/i.test(generalTabHtmlRightAfterSwitch) &&

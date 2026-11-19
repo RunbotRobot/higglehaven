@@ -567,14 +567,14 @@ To offer friendship to someone standing near you in Shop: tap their avatar, then
 To add someone who is not nearby:
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"), then "Friends".
-2. Tap "+ Add Friend". A small box asks for the friend's name. Type it exactly as
+2. Tap "+ Add friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
 3. They get your request. When they accept, they show in your list.
 4. To write to an accepted friend, tap "Message" beside their name, type in the box
    that says "Message…" and tap "Send".
 
 **You will see:** your friend's name in the list once they accept, and a thread with
-your messages when you tap "Message". Until then the panel says "No friends yet. Tap + Add Friend to invite someone by name."
+your messages when you tap "Message". Until then the panel says "No friends yet. Tap + Add friend to invite someone by name."
 
 **If something goes wrong:**
 - The panel says there is no one by that name: the name has to match exactly. Ask
@@ -589,9 +589,9 @@ your messages when you tap "Message". Until then the panel says "No friends yet.
 ```controls any
 #account-menu-toggle | Account menu
 #friends-btn | Friends
-#friends-add-btn | + Add Friend
+#friends-add-btn | + Add friend
 #friends-map-btn | Show map
-#friends-panel-empty | No friends yet. Tap + Add Friend to invite someone by name.
+#friends-panel-empty | No friends yet. Tap + Add friend to invite someone by name.
 ```
 
 ### How do I talk to an assistant?
@@ -1034,7 +1034,7 @@ price and stock. The original maker's listing is not changed.
    category and sort boxes beside it.
 3. To rename it, tap "Rename", type the new name in the window that opens and
    confirm.
-4. To change its price, tap "More settings" on the product, then "Edit Price", type the new
+4. To change its price, tap "More settings" on the product, then "Edit price", type the new
    price and tap "Save price". The other "Edit" lines (size, shipping, returns) are under
    "More settings" too and work the same way: open it, change it, tap its own Save button.
 5. To change how many are in stock, tap the product in your showroom. A small card opens
@@ -1063,7 +1063,7 @@ price and stock. The original maker's listing is not changed.
 
 ```controls sell-row
 .seller-rename-btn | Rename
-.seller-price-toggle | Edit Price
+.seller-price-toggle | Edit price
 .seller-price-save-btn | Save Price
 ```
 

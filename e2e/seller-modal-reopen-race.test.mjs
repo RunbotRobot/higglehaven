@@ -57,7 +57,7 @@ await page.route('**/api/catalog/*', async (route) => {
   await route.continue();
 });
 
-await productRow().locator('button', { hasText: 'Edit Digital Good' }).click();
+await productRow().locator('button', { hasText: 'Edit digital good' }).click();
 await page.waitForTimeout(200);
 await productRow().locator('.seller-digital-good-checkbox-label input').check();
 await productRow().locator('.seller-digital-good-select').selectOption('gift-card');
@@ -86,7 +86,7 @@ await page.waitForTimeout(200);
 // serializing across EVERY metadata panel on this row, the same cross-panel
 // guard #424 added, not just re-disabling the one button that happened to
 // be clicked.
-await productRow().locator('button', { hasText: 'Edit Returns Policy' }).click();
+await productRow().locator('button', { hasText: 'Edit returns policy' }).click();
 await page.waitForTimeout(200);
 const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('button', { hasText: 'Save returns policy' }).isDisabled();
 console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
@@ -109,7 +109,7 @@ const { templates: templatesAfterFirstSave } = await page.evaluate(async () => (
 const templateAfterFirstSave = templatesAfterFirstSave.find((t) => t.name === PRODUCT_NAME);
 console.log('server-side metadata.digitalGoodDisclaimer after the pre-close save resolved (should be "gift-card"):', templateAfterFirstSave?.metadata?.digitalGoodDisclaimer);
 
-// "Edit Returns Policy" is still open from the disabled-check above (its
+// "Edit returns policy" is still open from the disabled-check above (its
 // own toggle click was never closed) — clicking it again would close it
 // instead, so the panel is used directly, same reasoning as
 // digital-goods.test.mjs's own analogous comment.
