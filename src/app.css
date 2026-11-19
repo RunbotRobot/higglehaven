@@ -5265,7 +5265,7 @@
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       /* Wraps a password field so a show/hide toggle can sit right next to
          it — lets someone check what they actually typed before submitting,
@@ -5285,8 +5285,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 34px;
-        height: 34px;
+        width: 44px;
+        height: 44px;
         padding: 0;
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
@@ -5390,12 +5390,13 @@
       #auth-logout-btn,
       #auth-change-password-btn,
       #auth-export-data-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
       #auth-change-password-form {
@@ -5407,12 +5408,13 @@
          rather than filled, so the account panel doesn't read as alarming
          until someone actually opens this flow. */
       #auth-delete-account-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--danger-rgb) / 0.5);
         background: none;
-        color: var(--danger);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        color: var(--danger-text);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
       #auth-delete-account-form {
