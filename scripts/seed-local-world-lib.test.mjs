@@ -31,6 +31,6 @@ describe('seed-local-world arguments', () => {
     expect(SEED_PASSWORD).toBe('live-site-local-password-123');
     // The two must not drift, or `--login local --name looker` would sign in to a different account.
     expect(liveSiteSource).toContain(`const password = '${SEED_PASSWORD}';`);
-    expect(liveSiteSource).toContain("const email = `${options.name}@e2e.test`;");
+    expect(liveSiteSource).toContain("const email = `${name}@e2e.test`;"); // #3944 made the local login take the account name as an argument
   });
 });
