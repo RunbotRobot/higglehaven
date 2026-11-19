@@ -16,10 +16,13 @@ describe('empty leaves', () => {
     expect(text('friends-panel-empty')).toBe(EMPTY_COPY.friends);
     expect(text('my-purchases-empty')).toBe(EMPTY_COPY.purchases);
     expect(text('my-lands-empty')).toBe(EMPTY_COPY.lands);
+    expect(text('shop-nearby-chat-empty')).toBe(EMPTY_COPY.chat);
+    // The Build search leaf names the query in the middle, so only its first-step sentence is compared.
+    expect(html).toMatch(new RegExp(`<div id="catalog-picker-empty" class="empty-state" hidden>[^<]*<span id="catalog-picker-empty-query"></span>"\\. ${EMPTY_COPY.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</div>`));
   });
 
   it('wears the one shared look', () => {
-    for (const id of ['notifications-empty', 'friends-panel-empty', 'my-purchases-empty', 'my-lands-empty']) {
+    for (const id of ['notifications-empty', 'friends-panel-empty', 'my-purchases-empty', 'my-lands-empty', 'shop-nearby-chat-empty']) {
       expect(html).toMatch(new RegExp(`<div id="${id}" class="empty-state"`));
     }
   });

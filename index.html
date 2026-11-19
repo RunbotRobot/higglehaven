@@ -71,6 +71,7 @@
          as it closes, so there is no pill on the world. Sending is gated on id_verified
          (docs/SPEC.md section 6); the leaf says so to anyone who is not. -->
     <div id="shop-nearby-chat-panel">
+      <div id="shop-nearby-chat-empty" class="empty-state">Nobody has said anything nearby yet. What you type here is seen by people close to you.</div>
       <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
       <div id="shop-nearby-chat-status" role="status" aria-live="polite"></div>
       <div id="shop-nearby-chat-muted" hidden>
@@ -255,7 +256,7 @@
             </div>
           </div>
           <div id="catalog-picker-grid"></div>
-          <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
+          <div id="catalog-picker-empty" class="empty-state" hidden>No products match "<span id="catalog-picker-empty-query"></span>". Try fewer letters, or clear the search to see everything.</div>
           <div id="bundle-picker-section" hidden>
             <div id="bundle-picker-tabs">
               <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My bundles</button>
