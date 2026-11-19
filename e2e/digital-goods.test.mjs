@@ -81,7 +81,7 @@ await page.waitForTimeout(300);
 const checkboxCheckedInPanel = await digitalRow().locator('.seller-digital-good-checkbox-label input').isChecked();
 console.log('Edit Digital Good panel opens pre-checked for an existing digital good (should be true):', checkboxCheckedInPanel);
 await digitalRow().locator('.seller-digital-good-checkbox-label input').uncheck();
-await digitalRow().locator('button', { hasText: 'Save Digital Good' }).click();
+await digitalRow().locator('button', { hasText: 'Save digital good' }).click();
 // #2143: waitForFunction's signature is (pageFunction, arg, options) --
 // the explicit null reaches the options slot; without it the timeout
 // below silently fell back to Playwright's actual default (30000ms).
@@ -116,8 +116,8 @@ await digitalRow().locator('.seller-domestic-only-checkbox-label input').check()
 // would close it instead of opening it, so just use the panel directly.
 await digitalRow().locator('.seller-digital-good-checkbox-label input').check();
 await digitalRow().locator('.seller-digital-good-select').selectOption('gift-card');
-await digitalRow().locator('button', { hasText: 'Save Shipping' }).click();
-const digitalGoodSaveDisabledMidFlight = await digitalRow().locator('button', { hasText: 'Save Digital Good' }).isDisabled();
+await digitalRow().locator('button', { hasText: 'Save shipping' }).click();
+const digitalGoodSaveDisabledMidFlight = await digitalRow().locator('button', { hasText: 'Save digital good' }).isDisabled();
 console.log('Save Digital Good disabled while Save Shipping request is in flight (should be true):', digitalGoodSaveDisabledMidFlight);
 // #2143: waitForFunction's signature is (pageFunction, arg, options) --
 // the explicit null reaches the options slot; without it the timeout
@@ -127,7 +127,7 @@ await page.waitForFunction(
   null,
   { timeout: 30000 },
 );
-await digitalRow().locator('button', { hasText: 'Save Digital Good' }).click();
+await digitalRow().locator('button', { hasText: 'Save digital good' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-digital-good-status')).some((el) => el.textContent === 'Saved.'),
   null,

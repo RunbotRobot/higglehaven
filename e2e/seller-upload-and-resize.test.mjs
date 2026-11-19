@@ -129,7 +129,7 @@ const yAfter = Number(await yInput.inputValue());
 console.log('Y scaled proportionally after doubling X (should be ~2x):', yBefore, '->', yAfter);
 const scaledProportionally = Math.abs(yAfter - yBefore * 2) < 0.02;
 
-await row().locator('button', { hasText: 'Save Size' }).click();
+await row().locator('button', { hasText: 'Save size' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-size-status')).some((el) => el.textContent.includes('notified')),
   null,

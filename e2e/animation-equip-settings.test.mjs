@@ -1,4 +1,4 @@
-// #1164 (sub-issue of #1161): the "My Animations" picker (Settings > Shop,
+// #1164 (sub-issue of #1161): the "My animations" picker (Settings > Shop,
 // src/main.js's renderMyAnimationsField) and the Shop-mode buy hint's own
 // compatibility note (productInfoText) for an "animation"-category product
 // — the real backend (GET /api/builders/me/animations, GET/PUT
@@ -93,14 +93,14 @@ await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 const productInfoText = await page.evaluate(() => document.getElementById('product-card')?.textContent || '');
 console.log('Shop product card text before any tap (diagnostic only):', productInfoText);
 
-// --- Settings > Shop: the "My Animations" picker ---
+// --- Settings > Shop: the "My animations" picker ---
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
-const myAnimationsField = page.locator('.settings-field', { hasText: 'My Animations' });
+const myAnimationsField = page.locator('.settings-field', { hasText: 'My animations' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Animations') && f.querySelectorAll('.version-row').length >= 1),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My animations') && f.querySelectorAll('.version-row').length >= 1),
   null,
   { timeout: 30000 },
 );
@@ -169,4 +169,4 @@ const pass =
   !purchasedRowAfterClear?.includes('— applied') &&
   equippedAfterClear.equippedTemplateId === null &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Settings > Shop "My Animations" picker applies/clears, with a compatibility note shown (#1164)', errors });
+await finish(browser, { pass, label: 'Settings > Shop "My animations" picker applies/clears, with a compatibility note shown (#1164)', errors });

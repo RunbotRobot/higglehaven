@@ -2347,7 +2347,7 @@ levelRemoveBtn.addEventListener('click', async () => {
       ].filter(Boolean).join(' and ')} come back with them.`
       : '';
     setLevelStatus(sweptCount > 0
-      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your lándlet. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
+      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your lándlet. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
       : '');
     renderLevelControls();
   } catch (err) {
@@ -5225,7 +5225,7 @@ async function renderRedeemHigglesField() {
   const statusField = document.createElement('div');
   statusField.className = 'settings-field';
   const statusLabel = document.createElement('span');
-  statusLabel.textContent = 'Redeem Higgles';
+  statusLabel.textContent = 'Redeem higgles';
   statusField.appendChild(statusLabel);
   const statusNote = document.createElement('div');
   statusNote.className = 'settings-empty-note';
@@ -5496,7 +5496,7 @@ export function renderBuildSettingsSection() {
   const historyField = document.createElement('div');
   historyField.className = 'settings-field';
   const historyLabel = document.createElement('span');
-  historyLabel.textContent = 'Version History';
+  historyLabel.textContent = 'Version history';
   historyField.appendChild(historyLabel);
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
@@ -5518,7 +5518,7 @@ export function renderBuildSettingsSection() {
   const savedLayoutsField = document.createElement('div');
   savedLayoutsField.className = 'settings-field';
   const savedLayoutsLabel = document.createElement('span');
-  savedLayoutsLabel.textContent = 'Saved Layouts';
+  savedLayoutsLabel.textContent = 'Saved layouts';
   savedLayoutsField.appendChild(savedLayoutsLabel);
   const savedLayoutsHint = document.createElement('div');
   savedLayoutsHint.className = 'settings-empty-note';
@@ -5682,7 +5682,7 @@ export function renderBuildSettingsSection() {
     const setLiveBtn = document.createElement('button');
     setLiveBtn.type = 'button';
     setLiveBtn.className = 'version-action-btn';
-    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.textContent = 'Set live';
     setLiveBtn.disabled = version.versionId === activeVersionId;
     setLiveBtn.addEventListener('click', async () => {
       setLiveBtn.disabled = true;
@@ -5874,7 +5874,7 @@ async function renderAuctionSection() {
   if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: see renderLandCapField's own comment — a tab switch/modal reopen
   // during that await already tore down settingsSectionEl for a different
-  // tab, so this section (with a live "Start Auction" button) must not
+  // tab, so this section (with a live "Start auction" button) must not
   // land there.
   if (myToken !== settingsRenderToken) return;
   if (!builderId) {
@@ -5898,7 +5898,7 @@ async function renderAuctionSection() {
   const listField = document.createElement('div');
   listField.className = 'settings-field';
   const listLabel = document.createElement('span');
-  listLabel.textContent = 'Active Auctions';
+  listLabel.textContent = 'Active auctions';
   listField.appendChild(listLabel);
   const auctionList = document.createElement('div');
   auctionList.className = 'auction-list';
@@ -5972,7 +5972,7 @@ async function renderAuctionSection() {
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
     startBtn.className = 'auction-start-btn';
-    startBtn.textContent = 'Start Auction';
+    startBtn.textContent = 'Start auction';
     startBtn.addEventListener('click', async () => {
       const dollars = Number(bidInput.value);
       const hours = Number(durationInput.value);
@@ -6228,7 +6228,7 @@ async function renderAuctionSection() {
       const resolveBtn = document.createElement('button');
       resolveBtn.type = 'button';
       resolveBtn.className = 'auction-resolve-btn';
-      resolveBtn.textContent = 'Resolve Now';
+      resolveBtn.textContent = 'Resolve now';
       resolveBtn.addEventListener('click', async () => {
         resolveBtn.disabled = true;
         try {
@@ -6266,7 +6266,7 @@ async function renderAuctionSection() {
       const bidBtn = document.createElement('button');
       bidBtn.type = 'button';
       bidBtn.className = 'auction-bid-btn';
-      bidBtn.textContent = 'Place Bid';
+      bidBtn.textContent = 'Place bid';
       bidBtn.addEventListener('click', async () => {
         const dollars = Number(bidInput.value);
         if (!Number.isFinite(dollars) || dollars < 0) {
@@ -6326,7 +6326,7 @@ async function renderLowStockSection() {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
-  label.textContent = 'Low Stock';
+  label.textContent = 'Low stock';
   field.appendChild(label);
 
   const filterRow = document.createElement('div');

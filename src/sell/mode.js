@@ -746,7 +746,7 @@ function renderSellerList() {
     const digitalGoodSaveBtn = document.createElement('button');
     digitalGoodSaveBtn.className = 'seller-digital-good-save-btn metadata-save-btn';
     digitalGoodSaveBtn.type = 'button';
-    digitalGoodSaveBtn.textContent = 'Save Digital Good';
+    digitalGoodSaveBtn.textContent = 'Save digital good';
     metadataSaveButtons.push(digitalGoodSaveBtn);
     digitalGoodSaveBtn.addEventListener('click', async () => {
       if (isMetadataSaveBusy()) return;
@@ -827,7 +827,7 @@ function renderSellerList() {
     const noReturnsSaveBtn = document.createElement('button');
     noReturnsSaveBtn.className = 'seller-no-returns-save-btn metadata-save-btn';
     noReturnsSaveBtn.type = 'button';
-    noReturnsSaveBtn.textContent = 'Save Returns Policy';
+    noReturnsSaveBtn.textContent = 'Save returns policy';
     metadataSaveButtons.push(noReturnsSaveBtn);
     noReturnsSaveBtn.addEventListener('click', async () => {
       if (isMetadataSaveBusy()) return;
@@ -902,7 +902,7 @@ function renderSellerList() {
     const domesticOnlySaveBtn = document.createElement('button');
     domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn metadata-save-btn';
     domesticOnlySaveBtn.type = 'button';
-    domesticOnlySaveBtn.textContent = 'Save Shipping';
+    domesticOnlySaveBtn.textContent = 'Save shipping';
     metadataSaveButtons.push(domesticOnlySaveBtn);
     domesticOnlySaveBtn.addEventListener('click', async () => {
       if (isMetadataSaveBusy()) return;
@@ -1018,7 +1018,7 @@ function renderSellerList() {
     const sizeSaveBtn = document.createElement('button');
     sizeSaveBtn.className = 'seller-size-save-btn metadata-save-btn';
     sizeSaveBtn.type = 'button';
-    sizeSaveBtn.textContent = 'Save Size';
+    sizeSaveBtn.textContent = 'Save size';
     metadataSaveButtons.push(sizeSaveBtn);
     sizeSaveBtn.addEventListener('click', async () => {
       if (isMetadataSaveBusy()) return;
@@ -1149,7 +1149,7 @@ function renderSellerList() {
     const priceSaveBtn = document.createElement('button');
     priceSaveBtn.className = 'seller-price-save-btn metadata-save-btn';
     priceSaveBtn.type = 'button';
-    priceSaveBtn.textContent = 'Save Price';
+    priceSaveBtn.textContent = 'Save price';
     metadataSaveButtons.push(priceSaveBtn);
     priceSaveBtn.addEventListener('click', async () => {
       if (isMetadataSaveBusy()) return;

@@ -45,9 +45,9 @@ console.log('Redeem Higgles text before delete (should show the granted $50.00):
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
 // #1149 renamed this button from "Delete account" (never true -- it only
-// ever reset this profile, not the login) to "Reset Profile"; the
+// ever reset this profile, not the login) to "Reset profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
-await page.click('#settings-section button:has-text("Reset Profile")');
+await page.click('#settings-section button:has-text("Reset profile")');
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await waitForText(page, '#settings-section', 'Reset', { timeout: 20000 });
 

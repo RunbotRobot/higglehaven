@@ -72,7 +72,7 @@ await page.route('**/api/catalog/*', async (route) => {
 
 // Kick off Save Size — the delayed PATCH above keeps it in flight long
 // enough to reliably observe the guard holding Save Price disabled.
-await row().locator('button', { hasText: 'Save Size' }).click();
+await row().locator('button', { hasText: 'Save size' }).click();
 await page.waitForTimeout(100);
 const pricebtnDisabledWhileSizeSaving = await row().locator('.seller-price-save-btn').isDisabled();
 console.log('Save Price disabled while Save Size is still in flight (should be true):', pricebtnDisabledWhileSizeSaving);
@@ -86,7 +86,7 @@ const priceBtnReenabledAfter = !(await row().locator('.seller-price-save-btn').i
 console.log('Save Price re-enabled once Save Size finished (should be true):', priceBtnReenabledAfter);
 
 await row().locator('.seller-price-input').fill('7.99');
-await row().locator('button', { hasText: 'Save Price' }).click();
+await row().locator('button', { hasText: 'Save price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-price-status')).some((el) => el.textContent === 'Saved.'),
   null,

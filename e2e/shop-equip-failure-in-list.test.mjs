@@ -38,8 +38,8 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
 
-const avatars = page.locator('.settings-field', { hasText: 'My Avatars' });
-const animations = page.locator('.settings-field', { hasText: 'My Animations' });
+const avatars = page.locator('.settings-field', { hasText: 'My avatars' });
+const animations = page.locator('.settings-field', { hasText: 'My animations' });
 await avatars.locator('.version-row', { hasText: 'Mock Avatar' }).waitFor({ timeout: 30000 });
 await animations.locator('.version-row', { hasText: 'Mock Dance' }).waitFor({ timeout: 30000 });
 

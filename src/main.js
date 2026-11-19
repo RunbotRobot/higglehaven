@@ -650,7 +650,7 @@ export async function persistCatalogThumbnail(template) {
 // imports several Build/Sell-internal pieces back from this module (a
 // temporary circular import, same shape claim/flow.js's and account/auth.js's
 // own already use). dimensionsChanged is imported back from it here because
-// the Seller modal's own "Save Size" resize handler below needs this exact
+// the Seller modal's own "Save size" resize handler below needs this exact
 // same check, not just this modal's own handleUploadDimensionsStep.
 import { dimensionsChanged } from './catalog/upload.js';
 import { promptBundleName } from './ui/bundleNameModal.js';

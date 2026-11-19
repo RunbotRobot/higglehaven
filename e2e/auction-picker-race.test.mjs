@@ -97,7 +97,7 @@ await page.waitForFunction(
 );
 // Scoped to the "Sell Your Lándlet" field's own DIRECT children — its
 // .auction-row/.auction-start-form sit right under the .settings-field
-// wrapper, unlike the world-wide "Active Auctions" list's own .auction-row
+// wrapper, unlike the world-wide "Active auctions" list's own .auction-row
 // items, which are nested one level deeper inside a .auction-list wrapper.
 const sellYourLandRows = () => page.locator('.settings-field > .auction-row, .settings-field > .auction-start-form');
 

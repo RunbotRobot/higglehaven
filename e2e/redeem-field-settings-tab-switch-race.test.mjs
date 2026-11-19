@@ -83,11 +83,11 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem higgles') && f.textContent.includes('Available to redeem')),
   null,
   { timeout: 60000 },
 );
-const buildTabWorksNormally = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).count();
+const buildTabWorksNormally = await page.locator('.settings-field', { hasText: 'Redeem higgles' }).count();
 console.log('Build tab still renders the Redeem Higgles field normally on a fresh, non-superseded switch (should be 1):', buildTabWorksNormally);
 
 const pass = capturedBeforeSwitch &&

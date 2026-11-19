@@ -159,7 +159,7 @@ await page.waitForTimeout(300);
 const priceInputBefore = await unpricedRow().locator('.seller-price-input').inputValue();
 console.log('Edit Price input starts blank for a never-priced product (should be ""):', JSON.stringify(priceInputBefore));
 await unpricedRow().locator('.seller-price-input').fill('7.99');
-await unpricedRow().locator('button', { hasText: 'Save Price' }).click();
+await unpricedRow().locator('button', { hasText: 'Save price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-price-status')).some((el) => el.textContent === 'Saved.'),
   null,
@@ -180,7 +180,7 @@ console.log('server-side priceCents for the edited-after-the-fact product (shoul
 
 // Clearing the price back to blank removes it (null), not zero.
 await unpricedRow().locator('.seller-price-input').fill('');
-await unpricedRow().locator('button', { hasText: 'Save Price' }).click();
+await unpricedRow().locator('button', { hasText: 'Save price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-row-price')).some((el) => el.textContent === 'Not priced'),
   null,
