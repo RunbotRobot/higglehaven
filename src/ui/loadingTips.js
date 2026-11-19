@@ -7,7 +7,7 @@
 // no internal words. When the way of moving changes, change the first two lines and
 // their handbook entries together (#3650, #3749: left half walks, right half looks,
 // double-tap flies).
-import { WALK_WORDS, FLY_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from './gestureWords.js';
+import { WALK_WORDS, FLY_WORDS, FRIEND_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from './gestureWords.js';
 
 export const LOADING_TIPS = [
   {
@@ -26,6 +26,11 @@ export const LOADING_TIPS = [
     text: 'Tap a product to read about it. A small card blooms beside it.',
     handbook: 'How do I look at a product and read about it?',
     words: ['product', 'card'],
+  },
+  {
+    text: `${FRIEND_WORDS}. To add someone who is far away, use Friends in the menu.`,
+    handbook: 'How do I add a friend and send them a message?',
+    words: ['offer friendship', 'friends'],
   },
   {
     text: 'Glowing orbs are free credits for making models. Fly into one to collect it.',
