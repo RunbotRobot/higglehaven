@@ -1943,7 +1943,7 @@ window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geome
 // import, same shape as showShopAccessGate's own below.
 export const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'item-card', 'add-item-panel', 'camera-debug-panel',
-  'level-controls', 'connectivity-indicator',
+  'level-controls',
 ];
 
 // #3550: Notices and Friends are rows in the account menu behind the gear, so

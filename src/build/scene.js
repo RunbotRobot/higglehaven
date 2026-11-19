@@ -114,6 +114,7 @@ import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
+import { sayAtHead, clearSaying } from '../ui/headSaying.js'; // #3889: said beside the flower's head
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
   settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField, closeSettingsModal,
@@ -1525,13 +1526,22 @@ function instanceForSave(mesh) {
 // (this device's own localStorage save) already runs before any of these are
 // even called, so nothing here is ever a data-loss risk — purely a "the
 // server copy might be stale" signal.
-const connectivityIndicatorEl = document.getElementById('connectivity-indicator');
 let serverReachable = true;
 
 function setServerReachable(reachable) {
   if (reachable === serverReachable) return;
   serverReachable = reachable;
-  connectivityIndicatorEl.hidden = reachable;
+  // #3889: said as a word beside the flower's head that opens to the sentence (it used to be a
+  // standing red button on the world). It stays while the server is unreachable.
+  if (reachable) clearSaying('connection');
+  else {
+    sayAtHead('connection', {
+      word: 'Offline',
+      title: 'No connection',
+      message: "Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.",
+      label: "Can't reach the server. Open for details.",
+    });
+  }
 }
 
 // Backlog audit: the six sync* functions below all fire fire-and-forget
@@ -1607,10 +1617,6 @@ function reportSyncResult(attemptId, reachable) {
 function tellBuilder(title, message) {
   return showNotice({ title, message });
 }
-
-connectivityIndicatorEl.addEventListener('click', () => {
-  tellBuilder("No connection", "Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
-});
 
 // A fetch() call rejects with a TypeError specifically when it never
 // reached a server at all (offline, DNS failure, connection refused, CORS) —

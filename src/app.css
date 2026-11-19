@@ -448,32 +448,12 @@
       #camera-debug-panel.admin-visible {
         display: flex;
       }
-      /* #545: only shown when a sync to the backend has failed with a real
-         network-level error (server unreachable) — Build mode's own edits
-         still save fine to this device via localStorage either way
-         (persistLayout, called before any of syncCreate/syncUpdate/
-         syncDelete/syncBatch* ever run), so this exists purely to surface
-         that gap rather than to block anything. Owner: "a little icon in
-         the corner that indicates when server connectivity is not
-         reachable... if they click or tap that icon, it explains what the
-         icon means... when the server is reachable, no icon needs to be
-         displayed" — hidden by default, toggled via setServerReachable in
-         src/main.js. Bottom-left is otherwise unused by any other builder
-         chrome (the other three corners all host something already —
-         #topbar-left, #undo-redo-panel/#mode-nav, #camera-debug-panel). */
-      #connectivity-indicator {
-        position: fixed;
-        bottom: 12px;
-        left: 12px;
-        z-index: 10;
-        width: 34px;
-        height: 34px;
-        border-radius: var(--radius-round);
-        border: none;
-        background: var(--danger);
-        color: var(--white);
-        font-size: var(--text-lg);
-        line-height: 1;
+            /* #3889: the lost-connection and graphics-interrupted messages are words beside the head that
+         open to a sentence (src/ui/headSaying.js); the red button that stood on the world is gone. */
+      .bud-leaf .saying-action {
+        margin-top: var(--space-sm);
+        min-height: 44px;
+        padding: 0 var(--space-md);
         cursor: pointer;
       }
       /* Shop mode's overlay — hidden by default, toggled with the shared
