@@ -102,7 +102,7 @@ check(missing.code === 2 && /step "tap:#no-such-control" failed: "#no-such-contr
 
 // #3930: --with opens a second signed-in page; peer steps move, photograph and speak for it, and its
 // errors are reported apart. Against a local server any two plain names will do.
-const twoPages = await run(['--name', 'localtester', '--with', 'localfriend', 'idle', 'land', 'peer:join', 'peer:shot:beside', 'peer:say:hello there', 'peer:pos'], { login: 'local' });
+const twoPages = await run(['--name', 'localtester', '--with', 'localfriend', 'idle', 'land', 'peer:join', 'peer:shot:beside', 'peer:pos'], { login: 'local' });
 check(twoPages.code === 0, `a run with a second page exits 0 (code ${twoPages.code}, stderr ${twoPages.stderr.slice(0, 300)})`);
 try {
   const t = JSON.parse(twoPages.stdout);
@@ -115,6 +115,9 @@ try {
 } catch {
   check(false, `the two-page run prints a report (${twoPages.stdout.slice(0, 200)})`);
 }
+// A throwaway local account is not ID-verified, so it cannot chat: peer:say says why in one line.
+const cannotSay = await run(['--name', 'localtester', '--with', 'localfriend', 'idle', 'peer:say:hello'], { login: 'local' });
+check(cannotSay.code === 2 && /not ID-verified/.test(cannotSay.stderr), `peer:say on an unverified account fails with one plain line (${cannotSay.stderr.trim().slice(0, 200)})`);
 // On the live site only a fleet account may be the second page, and it stops before any browser opens.
 const notFleet = await run(['--name', 'higglehaven9', '--with', 'someoneelse', 'idle']);
 check(notFleet.code === 1 && /only fleet accounts/.test(notFleet.stderr), `a non-fleet second account is refused (${notFleet.stderr.trim().slice(0, 160)})`);

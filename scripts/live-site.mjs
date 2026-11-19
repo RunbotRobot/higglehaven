@@ -256,6 +256,7 @@ async function runPeerStep(sub, arg, index) {
         await peerPage.waitForTimeout(500);
       }
       await tap('#bud-petal-shop-chat', 'the Chat petal');
+      if (await peerPage.locator('.bud-chat-note').count()) throw new Error('the second account is not ID-verified, so it cannot chat (a fleet account is; a local throwaway one is not)');
       await peerPage.fill('#shop-nearby-chat-input', arg, { timeout: 15000 });
       await peerPage.press('#shop-nearby-chat-input', 'Enter');
       await peerPage.waitForTimeout(800);
