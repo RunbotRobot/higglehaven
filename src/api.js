@@ -189,6 +189,18 @@ export async function changeEmail(password, email) {
 // #556 (docs/SPEC.md §6): lets an existing session attest age after the
 // fact — for accounts created before this requirement existed, since
 // signup's own ageAttested checkbox only covers brand-new ones.
+// #3763: save the account's "Show tips while the app opens" choice so it
+// follows the person to another device. Best effort: the caller ignores a
+// failure, because the device's own switch has already taken effect.
+export async function saveLoadingTipsPreference(off) {
+  const { user } = await requestJson('/auth/loading-tips', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ off }),
+  });
+  return user;
+}
+
 export async function ageAttest() {
   const { user } = await requestJson('/auth/age-attest', {
     method: 'POST',

@@ -2899,6 +2899,29 @@ describe('Authentication', () => {
     expect(allowed.response.status).toBe(200);
   });
 
+  // #3763: the opening-screen tips switch follows the account. null until a
+  // person chooses, then a boolean; a non-boolean is refused.
+  it('saves the loading-tips choice on the account', async () => {
+    const builder = await signupBuilder('loading-tips-builder');
+    const noSession = await api('/auth/loading-tips', { method: 'PUT', body: JSON.stringify({ off: true }) });
+    expect(noSession.response.status).toBe(401);
+
+    const before = await api('/auth/me', builder.session());
+    expect(before.body.user.loadingTipsOff).toBeNull();
+
+    const bad = await api('/auth/loading-tips', builder.session({ method: 'PUT', body: JSON.stringify({ off: 'yes' }) }));
+    expect(bad.response.status).toBe(400);
+
+    const off = await api('/auth/loading-tips', builder.session({ method: 'PUT', body: JSON.stringify({ off: true }) }));
+    expect(off.response.status).toBe(200);
+    expect(off.body.user.loadingTipsOff).toBe(true);
+    const me = await api('/auth/me', builder.session());
+    expect(me.body.user.loadingTipsOff).toBe(true);
+
+    const on = await api('/auth/loading-tips', builder.session({ method: 'PUT', body: JSON.stringify({ off: false }) }));
+    expect(on.body.user.loadingTipsOff).toBe(false);
+  });
+
   // #2240: this endpoint had no rate limit at all, unlike every structurally
   // comparable sibling (card-setup-intent, confirm-card, didit-verification-
   // session) -- an already-attested account repeatedly re-POSTing is a
