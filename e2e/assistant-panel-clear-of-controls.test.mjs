@@ -92,6 +92,33 @@ check(second.panel.top > 0, 'the panel is still fully on screen');
 // focused, flying and on the ground; the log is what gives. A shortened
 // viewport stands in for the keyboard (the visual-viewport arithmetic itself
 // is unit tested).
+// #3608 (owner's phone, 11-16): the panel's header is not painted over by the head at the top left,
+// and minimise and close are the top element at their own centres, so they can be tapped.
+async function checkHeaderClearOfHead(label) {
+  // The owner's case had a long answer in the log (about nine lines), which is what makes the panel
+  // as tall as it can be; an empty log leaves it short and never reaches the top of a short window.
+  await page.evaluate(() => {
+    const log = document.getElementById('assistant-chat-log');
+    const filler = document.createElement('div');
+    filler.id = 'test-log-filler';
+    filler.style.height = '900px';
+    filler.textContent = 'a long answer';
+    log.appendChild(filler);
+  });
+  await page.waitForTimeout(200);
+  const r = await page.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect().toJSON();
+    const topAt = (id) => {
+      const b = document.getElementById(id).getBoundingClientRect();
+      const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      return !!el && (el.id === id || document.getElementById(id).contains(el));
+    };
+    return { head: rect('account-menu-toggle'), header: rect('assistant-chat-header'), closeTop: topAt('assistant-chat-close'), minimizeTop: topAt('assistant-chat-minimize') };
+  });
+  check(r.header.top >= r.head.bottom, `${label}: the panel's header starts below the head (header ${JSON.stringify(r.header)}, head bottom ${r.head.bottom})`);
+  check(r.closeTop && r.minimizeTop, `${label}: minimise and close are the top element at their own centres`);
+  await page.evaluate(() => document.getElementById('test-log-filler')?.remove());
+}
 async function headerOnScreenWithKeyboard(label) {
   await page.setViewportSize({ width: 390, height: 420 });
   await page.focus('#assistant-chat-input');
@@ -103,6 +130,7 @@ async function headerOnScreenWithKeyboard(label) {
   check(box.header.top >= 0 && box.header.bottom <= box.vh, `${label}: the panel's header is on screen with the keyboard up (${JSON.stringify(box.header)}, viewport ${box.vh})`);
   check(box.close.top >= 0 && box.minimize.top >= 0 && box.close.bottom <= box.vh, `${label}: minimise and close are on screen and tappable`);
   check(box.input.bottom <= box.vh, `${label}: the text box is on screen`);
+  await checkHeaderClearOfHead(`${label}, short page`);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(300);
 
@@ -117,6 +145,7 @@ async function headerOnScreenWithKeyboard(label) {
   });
   check(visual.header.top >= 0 && visual.panel.bottom <= 420, `${label}: with only the visible area shrunk to 420, the panel is inside it (panel ${JSON.stringify(visual.panel)})`);
   check(visual.input.bottom <= 420, `${label}: the text box is above the keyboard`);
+  await checkHeaderClearOfHead(`${label}, short visible area`);
   await page.evaluate(() => window.__setVisibleHeight(844));
   await page.waitForTimeout(300);
 }
