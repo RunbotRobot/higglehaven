@@ -2082,6 +2082,7 @@ async function enterSellMode() {
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
   }
+  markLoadingStage('world'); // #3738: Sell's own data is in, the way Shop's world data is
   setSellerShowcasePages(computeSellerShowcasePages(myProducts()));
   // #3295 (leaf 4/6 of #3291): the seller walks the page with Shop's own
   // movement and their equipped avatar. Entered before the first page loads
@@ -2092,6 +2093,7 @@ async function enterSellMode() {
       updateSellerProductCard();
     },
   });
+  requestAnimationFrame(() => markLoadingStage('frame')); // #3738: the first showroom frame, as Shop reports its own
 
   // #3700 (Sell in the bud, 2/6; part of #3655 and #3648): Sell opens on the showroom it just
   // landed on, unobstructed. My products used to open over it here (the owner's audit finding
@@ -2402,6 +2404,7 @@ async function bootstrap() {
     // alongside whatever the builder has actually done.
     instances = loadInstances() ?? DEFAULT_INSTANCES;
   }
+  markLoadingStage('world'); // #3738: Build's data is in (or fell back), the way Shop's world data is
   renderLevelControls();
 
   buildCatalogPickerButtons();
@@ -2412,6 +2415,7 @@ async function bootstrap() {
   await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
   // #3101: only now may a tab refocus reconcile against the server.
   markBuildSceneReady();
+  requestAnimationFrame(() => markLoadingStage('frame')); // #3738: the first Build frame, as Shop reports its own
 }
 // Captured so openSellerModal() (see its own comment) can await whichever
 // bootstrap this page load is running before trusting activeCatalog. #540
