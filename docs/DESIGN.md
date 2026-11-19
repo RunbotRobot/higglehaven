@@ -320,6 +320,66 @@ The world's own motion (fog that resolves into a thing, drift) lives in the
 scene code, not in CSS; see "Things arrive in the world through fog" in AGENTS.md.
 Nothing bounces, snaps or slides in from off screen.
 
+## Voice
+
+The words are part of the look: light, airy, plain and warm. Sixteen sessions wrote them over three
+months, so they disagree with each other in small ways. This page says what we do. It was written
+from reading every string a person can see (`node scripts/list-copy.mjs`, about two thousand lines,
+by area, with a tally), and the part a machine can check is checked on every test run
+(`scripts/check-copy-voice.mjs`). The standing decisions behind it are in AGENTS.md: "The word is
+lándlet, always", "Public-facing copy describes what the user sees, never internals", "A message that
+limits or refuses an action states the limit and when it lifts", "Any text a user can read, they can
+copy", and text that helps nobody act goes. Where this page and today's strings disagree, the page is
+the target and each area's pull request brings its strings in line, listing them before and after.
+
+**How it sounds.** Plain, short, kind. Talk to "you", in the present tense, with contractions
+("couldn't", "you're", "it's"). One idea to a sentence. Say what is, then what to do. No jargon, no
+"please" as filler, no exclamation marks except to celebrate something the person did (winning an
+auction), no blame ("invalid", "you must", "error").
+
+**What we call things.**
+- A plot of ground is a **lándlet**, with the accent, every time, in the app, in emails, in what
+  assistants say. Never "land", "lánd", "landlet" or "plot". (Checked.)
+- **higgles** is lowercase, plural, and starts a sentence only when it has to.
+- A **product** is something for sale. An **item** is a product placed on a lándlet in Build. Do not use
+  one for the other.
+- The **menu** opens from the round logo at the top left. A person never reads "bud", "flower",
+  "petal", "leaf", "stem" or "modal": those are our words for how it is built. Name a thing by what it
+  opens ("Notices", "Orders") and a window by what is in it. (Checked.)
+- A **username** is a person; a **shop name** is a shop. "Profile" only where a reset or a delete needs
+  to say what it resets.
+
+**Capital letters.** Sentence case for every control, title and label: "Add a product", "My
+purchases", "Log in", "Submit feedback". A capital starts the sentence and names a proper thing: Shop,
+Build and Sell (the three places), a person's name, and higglehaven, which is lowercase even at the
+start of a sentence in the logo and capitalised like any word otherwise. Today about forty-five short
+labels in the shell are in Title Case ("My Purchases", "Go to Last Location", "Log In"); they move
+here as each area is read.
+
+**How we say no.** Name what can't be done, then what to do or when it lifts, in one or two
+sentences. A limit that has a number gives it from the server: "You can collect up to 20 orbs every 15
+minutes. Try again in about 7 minutes." Use "can't" for a limit and "couldn't" for something that
+failed ("Couldn't rename this. Try again."). Today "could not" outnumbers "couldn't" about five to one;
+"couldn't" is what a person would say, so it is the target. Never a bare developer sentence ("name
+must be a string") in front of a person.
+
+**How we say it was our fault.** Say so, briefly, and say it will likely work again:
+"higglehaven ran into a problem on its end. Try again in a moment." Do not apologise at length and do
+not show a code. "Please" is not needed.
+
+**What we never say.** An issue number, a file name, a route, a column, "seller identity" or any other
+word from inside; "invalid" or "error" as the whole message; "click" where a person may be touching
+(say "tap", or "tap or click" where both are true); "Are you sure?" without naming the thing.
+
+**A control's word and its name agree.** What a person sees on a control is what a screen reader
+says. A hidden name that differs from the visible word ("Menu" shown, "Account menu" announced) is
+allowed only where the visible word is a picture's label and the announced name is longer, never the
+other way round.
+
+**Not yet checked by a machine, so read for it:** case, "couldn't" against "could not", the length of a
+sentence, and whether it says what to do next. Add a check here when one can be written without
+false alarms.
+
 ## Never
 
 - A heavy or dark panel, a black or near-black surface, a thick border.
