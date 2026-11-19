@@ -44,6 +44,7 @@
 // in main.js. (#3502: the ground disc/wall/dome, with SHOP_WALL_MARGIN_M, the
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
+import { disposeBatchTiers } from './batchTiers.js';
 import * as THREE from 'three';
 import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS } from '../ui/gestureWords.js';
 import { markStartup } from '../ui/startupMarks.js';
@@ -279,6 +280,9 @@ export function unloadShopLandletInstances(entry) {
     worldWorkQueue.enqueue(() => {
       for (const mesh of batch.meshes) mesh.dispose();
       disposeObject3D(batch.container);
+      // #3403: the mid and far sets and the model clones that own their materials.
+      disposeBatchTiers(batch);
+      for (const container of batch.tierContainers ?? []) disposeObject3D(container);
     }, { priority: DISPOSE_QUEUE_PRIORITY });
   }
   entry.batches = [];

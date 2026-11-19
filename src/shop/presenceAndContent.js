@@ -58,9 +58,10 @@ import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { createTierCrossfades } from './tierCrossfade.js';
-import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
+import { initBatchTiers, addBatchTier, moveBatchHandle } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
@@ -462,11 +463,46 @@ function lodApparentPx(entry, object) {
 }
 
 // #3373 / #3416: whether an item has reduced versions to switch between: a
-// placed model (not a box fallback, flooring, or the geometry-free handle of a
-// batched placement, none of which has a loaded model container) that is not
-// cropped to a per-placement shape (the versions are of the whole product).
+// placed model (not a box fallback or flooring, neither of which has a loaded model
+// container) that is not cropped to a per-placement shape (the versions are of
+// the whole product), or (#3403) a placement drawn by a batch, whose batch holds
+// the versions.
 function hasLodTiers(object) {
+  // #3403: a batched placement has no model of its own, but its batch has the versions.
+  if (object.userData.batch) return true;
   return Boolean(object.userData.model) && !extensibleAxes(object.userData.template);
+}
+
+// Where an item's versions are prepared: on the item itself, or (#3403) once for the whole batch of
+// identical placements it is drawn by.
+function lodTiersStateOf(object) {
+  const batch = object.userData.batch;
+  return batch ? batch.tiersState : object.userData.lodTiersState;
+}
+
+// #3403: a batch's mid and far sets are built once, when its first placement first needs a version
+// below full: the cached versions of the product are fetched or built, then one instanced mesh per
+// part of each is added (empty), inside the frame budget. A product with no reduced version leaves
+// the batch on its full set, as an item with none stays on its full model.
+function requestBatchTiers(entry, batch) {
+  batch.tiersState = 'loading';
+  const template = batch.handles[0]?.userData.template;
+  if (!template) { batch.tiersState = 'none'; return; }
+  loadBatchTierSources(template).then((sources) => {
+    const release = () => { for (const source of Object.values(sources)) if (source) disposeObject3D(source.container); };
+    worldWorkQueue.enqueue(() => {
+      if (!entry.batches.includes(batch)) { release(); batch.tiersState = 'none'; return; } // unloaded meanwhile
+      let added = false;
+      batch.tierContainers = [];
+      for (const name of ['mid', 'far']) {
+        if (!sources[name]) continue;
+        addBatchTier(batch, name, sources[name].parts);
+        batch.tierContainers.push(sources[name].container);
+        added = true;
+      }
+      batch.tiersState = added ? 'ready' : 'none';
+    }, { group: entry.loadGroup, priority: -(batch.handles[0]?.userData.lodPx ?? 0) });
+  }).catch(() => { batch.tiersState = 'none'; });
 }
 
 // #3416: an item's mid and far versions are fetched or built only once the
@@ -491,16 +527,17 @@ function requestInstanceTiers(entry, object) {
 // allows, the smallest on screen drop to mid, and past the mid budget to far.
 // Runs on the proximity tick (SHOP_PROXIMITY_INTERVAL_MS), so an item flips
 // within a fraction of a second of crossing a threshold. An item without
-// versions (a box fallback, flooring, a batched placement, a cropped item)
-// has nothing to switch.
+// versions (a box fallback, flooring, a cropped item) has nothing to switch.
+// #3403: a batched placement is decided here like any other, and "changes
+// version" by moving between its batch's instanced sets (src/shop/batchTiers.js).
 const lodItemsScratch = [];
 const lodObjectsScratch = [];
 const lodFlipScratch = []; // positions of the items due to change version this tick
 
 // #3443: the placed bundles of a loaded landlet that have more than one
 // member with versions to switch between, each with its bounding sphere, found once per change in the
-// landlet's object count (Shop items do not move). Members that are drawn by an
-// instanced batch have no versions and are not decided one by one at all.
+// landlet's object count (Shop items do not move). Members drawn by an instanced
+// batch (#3403) are members like any other: a bundle's bricks change detail together.
 function lodSetsFor(entry) {
   if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken) return entry.lodSets;
   const byGroup = new Map();
@@ -583,8 +620,11 @@ function updateInstanceLodTiers() {
     const { entry, object } = lodObjectsScratch[i];
     const tier = tiers[i];
     object.userData.lodTier = tier;
-    if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestInstanceTiers(entry, object);
-    if (object.userData.lodTiersState !== 'ready' || tier === object.userData.lodApplied) continue;
+    if (tier !== TIER_FULL && lodTiersStateOf(object) === undefined) {
+      if (object.userData.batch) requestBatchTiers(entry, object.userData.batch);
+      else requestInstanceTiers(entry, object);
+    }
+    if (lodTiersStateOf(object) !== 'ready' || tier === object.userData.lodApplied) continue;
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -597,7 +637,10 @@ function updateInstanceLodTiers() {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
     object.userData.lodApplied = tier;
-    setInstanceLodState(object, tier, tierCrossfades);
+    // #3403: a batched placement changes version by moving between the batch's instanced sets (an
+    // instant swap: the batch has no per-item children to dissolve between).
+    if (object.userData.batch) moveBatchHandle(object.userData.batch, object, tier);
+    else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
@@ -1537,6 +1580,11 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
+  initBatchTiers(batch, source.parts);
+  for (const handle of handles) {
+    handle.userData.lodTier = TIER_FULL;
+    handle.userData.lodApplied = TIER_FULL;
+  }
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
   // removes the root.
