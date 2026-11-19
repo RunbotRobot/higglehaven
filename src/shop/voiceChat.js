@@ -38,7 +38,6 @@ import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
-import { showFadingNote } from '../ui/fadingNote.js';
 
 // docs/SPEC.md §2: "100 feet (~30m) of complete silence as the outer
 // range, with volume ramping up gradually as avatars get closer — not a
@@ -521,6 +520,10 @@ function escapeVoiceLabel(text) {
   return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// #3889: who has been reported from this list, so "Report sent" is said on
+// that person's row (the list is rebuilt from scratch on every change).
+const reportedVoicePeers = new Set();
+
 function renderVoicePeersList() {
   if (!voicePeersPanelEl || !voicePeersListEl) return;
   const connected = [...peers.entries()]
@@ -540,6 +543,7 @@ function renderVoicePeersList() {
       + `<button type="button" data-action="mute" class="${muted ? 'shop-voice-peer-muted' : ''}">${muted ? 'Unmute' : 'Mute'}</button>`
       + '<button type="button" data-action="report">Report</button>'
       + '<button type="button" data-action="block">Block</button>'
+      + (reportedVoicePeers.has(builderId) ? '<div class="inline-action-status settings-empty-note" role="status" aria-live="polite">Report sent. Thank you.</div>' : '')
       + '</div>';
   }).join('');
 }
@@ -575,8 +579,9 @@ async function reportVoicePeer(builderId) {
   if (answer === null) return;
   try {
     await sendVoiceReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
-    // #3552: a success is a note that fades by itself, not a second modal.
-    showFadingNote('Report sent. Thank you.');
+    // #3889: said on the reported peer's row, not a pill over the world.
+    reportedVoicePeers.add(builderId);
+    renderVoicePeersList();
   } catch (err) {
     await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
   }

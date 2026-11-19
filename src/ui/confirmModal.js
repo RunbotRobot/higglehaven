@@ -13,6 +13,11 @@
 // action succeeded (or, with no onConfirm, once confirmed), false on
 // cancel/Escape/X.
 //
+// `successMessage` (optional, #3889): said in the modal's own status line once
+// the action succeeded, held for `successMs` so it is read where the person
+// tapped, and then the modal closes by itself. It replaces a note that faded
+// in over the world after the modal had gone.
+//
 // The modal opens stacked over whatever modal launched it (same shape as the
 // Upload modal over the Seller modal, #2515), and openModalA11y/
 // closeModalA11y track a single active modal, so `restoreModalEl` +
@@ -76,6 +81,13 @@ async function confirm() {
     confirmBtn.focus({ preventScroll: true });
     return;
   }
+  if (session?.successMessage) {
+    // Keep the modal busy (no double submit, no early cancel) while the
+    // confirmation is read, then close.
+    statusEl.textContent = session.successMessage;
+    const ms = session.successMs;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
   if (session) session.busy = false;
   finish(true);
 }
@@ -96,12 +108,14 @@ export function confirmDestructive({
   restoreModalEl = null,
   restoreCloseFn = null,
   returnFocusEl = null,
+  successMessage = null,
+  successMs = 1600,
 } = {}) {
   // A second request while one is open would orphan the first's promise:
   // resolve the earlier one as cancelled.
   if (session) finish(false);
   return new Promise((resolve) => {
-    session = { resolve, onConfirm, restoreModalEl, restoreCloseFn, returnFocusEl, busy: false };
+    session = { resolve, onConfirm, restoreModalEl, restoreCloseFn, returnFocusEl, successMessage, successMs, busy: false };
     titleEl.textContent = title;
     messageEl.textContent = message;
     statusEl.textContent = '';

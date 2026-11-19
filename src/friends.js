@@ -14,7 +14,6 @@
 // "delivered" or "waiting for them to accept".
 import { sendFriendRequest } from './api.js';
 import { confirmDestructive } from './ui/confirmModal.js';
-import { showFadingNote } from './ui/fadingNote.js';
 
 export function friendOfferTitle(label) {
   return label ? `Offer friendship to ${label}?` : 'Offer friendship?';
@@ -27,6 +26,8 @@ export async function confirmAndOfferFriendship(builderId, label = null) {
     confirmLabel: 'Send request',
     cancelLabel: 'Not now',
     variant: 'primary',
+    // Said in the confirmation, where the person tapped, then it closes (#3889).
+    successMessage: label ? `Friend request sent to ${label}.` : 'Friend request sent.',
     onConfirm: async () => {
       try {
         await sendFriendRequest(builderId);
@@ -38,8 +39,7 @@ export async function confirmAndOfferFriendship(builderId, label = null) {
       }
     },
   });
-  // A success fades by itself (#3552); a failure stayed in the confirmation
-  // above until dismissed, where the person tapped (#3303).
-  if (sent) showFadingNote(label ? `Friend request sent to ${label}.` : 'Friend request sent.');
+  // A success is read in the confirmation above before it closes; a failure
+  // stays in it until dismissed, where the person tapped (#3303).
   return sent;
 }

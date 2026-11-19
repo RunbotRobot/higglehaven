@@ -111,10 +111,10 @@ const sentAfterDismiss = sent.length;
 await page.evaluate((id) => window.__testTapPersonByBuilderId(id), FAKE_ID);
 await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
 await page.click('#confirm-modal-confirm-btn');
-await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
-await page.waitForSelector('#fading-note.visible', { timeout: 5000 });
-const noteText = (await page.textContent('#fading-note')).trim();
-const noteFades = await page.waitForFunction(() => !document.getElementById('fading-note').classList.contains('visible'), null, { timeout: 8000 })
+// The word is said in the confirmation itself, then it closes by itself.
+await page.waitForFunction(() => /sent/i.test(document.getElementById('confirm-modal-status')?.textContent || ''), null, { timeout: 5000 });
+const noteText = (await page.textContent('#confirm-modal-status')).trim();
+const noteFades = await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 8000 })
   .then(() => true).catch(() => false);
 const sentBody = sent[0];
 
@@ -133,7 +133,7 @@ await page.click('#confirm-modal-cancel-btn');
 
 console.log('requests sent after dismissing (should be 0):', sentAfterDismiss);
 console.log('request body:', JSON.stringify(sentBody), '| requests so far (success then refusal):', sent.length);
-console.log('note after sending:', noteText, '| fades by itself:', noteFades);
+console.log('confirmation after sending:', noteText, '| closes by itself:', noteFades);
 console.log('refusal stays in the confirmation:', refusalShownInPlace, '|', refusalText);
 console.log('native dialogs raised (should be 0):', nativeDialogs);
 // The refusal the test provokes shows in the browser console as one 409; nothing else is expected.
