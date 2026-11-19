@@ -12,6 +12,7 @@ import { createPurchaseRow } from './myPurchases.js';
 import { builderId, currentMode, currentLandletId } from '../world/state.js';
 import { currentAuthUser } from './auth.js';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
+import { setBudWord, clearBudWord } from '../ui/bud.js';
 import { formatArea } from '../settings.js';
 // formatHiggles/START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY stay owned by
 // main.js (formatHiggles is a shared money formatter used throughout that
@@ -78,7 +79,7 @@ const notificationsClearReadBtn = document.getElementById('notifications-clear-r
 const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
 export async function refreshNotificationsBadge() {
-  if (!builderId) return;
+  if (!currentAuthUser) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
     // own first page — that list is cursor-paginated (issue #320) one
@@ -88,6 +89,9 @@ export async function refreshNotificationsBadge() {
     const count = await fetchUnreadNotificationCount();
     notificationsBadgeEl.textContent = String(count);
     notificationsBadgeEl.hidden = count === 0;
+    // #3774: the head says so too, and the note is a door to the Notices leaf.
+    if (count > 0) setBudWord('notices', count === 1 ? 'Notice' : `${count} notices`, { open: () => notificationsBtn.click(), label: count === 1 ? 'You have a notice. Open Notices.' : `You have ${count} notices. Open Notices.` });
+    else clearBudWord('notices');
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
   }
@@ -607,12 +611,15 @@ dmComposeForm.addEventListener('submit', async (event) => {
 });
 
 export async function refreshFriendsBadge() {
-  if (!builderId) return;
+  if (!currentAuthUser) return; // #3774: as above
   try {
     const friendships = await fetchFriendships();
     const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
     friendsBadgeEl.textContent = String(incoming.length);
     friendsBadgeEl.hidden = incoming.length === 0;
+    // #3774: the head says so too, and the note is a door to Friends, where the request waits.
+    if (incoming.length > 0) setBudWord('friend-requests', incoming.length === 1 ? 'Friend request' : `${incoming.length} friend requests`, { open: () => friendsBtn.click(), label: incoming.length === 1 ? 'Someone sent you a friend request. Open Friends.' : `${incoming.length} friend requests. Open Friends.` });
+    else clearBudWord('friend-requests');
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
   }
