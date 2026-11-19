@@ -138,6 +138,42 @@ describe('mountShopAvatar (#3294)', () => {
     expect(kinds).toContain('dispose:default-group');
   });
 
+  it('hands the swap to beginAvatarSwap and is settled only once its commit has run (#3905)', async () => {
+    const custom = { group: 'custom-group', modelUrl: '/uploads/a.glb' };
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb', skeletonSignature: 'sig-1' }, customAvatar: custom });
+    let commitSwap;
+    let finish;
+    t.deps.beginAvatarSwap = vi.fn((commit) => {
+      commitSwap = commit;
+      return { done: new Promise((resolve) => { finish = () => { commit(); resolve(); }; }) };
+    });
+    t.deps.cancelAvatarSwap = vi.fn();
+    const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.cancelAvatarSwap).toHaveBeenCalledTimes(1); // an earlier swap is ended on mount
+    await vi.waitFor(() => expect(t.deps.beginAvatarSwap).toHaveBeenCalled());
+    expect(commitSwap).toBeTypeOf('function');
+    expect(t.getCurrent()).toBe(t.defaultAvatar); // still the default body while the fog rises
+    expect(t.win.__shopAvatarSettled).toBe(false);
+    finish();
+    await mounted.settled;
+    expect(t.getCurrent()).toBe(custom);
+    expect(t.win.__shopAvatarSettled).toBe(true);
+  });
+
+  it('drops the custom body when something replaced the avatar while the fog was rising (#3905)', async () => {
+    const custom = { group: 'custom-group', modelUrl: '/uploads/a.glb' };
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb' }, customAvatar: custom });
+    t.deps.beginAvatarSwap = vi.fn((commit) => {
+      t.deps.setShopAvatar({ group: 'someone-else' }); // another equip lands first
+      commit();
+      return { done: Promise.resolve() };
+    });
+    const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    await mounted.settled;
+    expect(t.getCurrent()).toEqual({ group: 'someone-else' });
+    expect(t.deps.disposeObject3D).toHaveBeenCalledWith('custom-group');
+  });
+
   it('keeps the default avatar and is settled at once when nothing is equipped (#3905)', async () => {
     const t = setup();
     const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);

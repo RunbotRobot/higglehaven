@@ -89,6 +89,8 @@ import {
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
 import { mountShopAvatar } from './mountShopAvatar.js';
+import { beginAvatarSwapFog } from './avatarSwapFog.js';
+import { createArrivalFog } from './arrivalEffect.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import { updateShopSky, currentShopSkyTimeS } from './sky.js';
 import {
@@ -380,6 +382,8 @@ export function buildShopGroundMesh(record) {
 // sign-in gate passes before they are used as they are.
 const SHOP_PREFETCH_MAX_AGE_MS = 2000;
 
+let activeAvatarSwap = null; // #3905: the fog hiding the swap of the equipped avatar in, stepped each frame
+
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
   // UI has nothing to do with an identity check, and hiding it before that
@@ -661,6 +665,18 @@ export async function enterShopMode() {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
+    // #3905: the equipped avatar replaces the default body inside a puff of fog, not as a pop.
+    beginAvatarSwap: (commit) => {
+      activeAvatarSwap?.cancel();
+      const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      const swap = beginAvatarSwapFog({
+        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
+        commit, nowMs: performance.now(), reducedMotion,
+      });
+      activeAvatarSwap = swap.released ? null : swap;
+      return swap;
+    },
+    cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
   });
   markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
@@ -697,6 +713,7 @@ export async function enterShopMode() {
   registerModeFrameUpdate((now) => {
     updateShopMovement(now);
     updateShopSky(now);
+    if (activeAvatarSwap?.step(now)) activeAvatarSwap = null; // #3905: the fog over the avatar swap
     // #2717: feed the render-state ring buffer (src/feedback/
     // renderStateBuffer.js) a fresh snapshot every frame -- it throttles
     // itself to ~1Hz internally (see that module's own comment), so it's

@@ -29,6 +29,10 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     getShopAvatar, setShopAvatar, disposeObject3D, createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState, win = globalThis.window,
+    // #3905: optional. beginAvatarSwap(commit) hides the swap of the default body for the equipped one in
+    // fog (src/shop/avatarSwapFog.js) and returns { done }, a promise that resolves once commit has run;
+    // cancelAvatarSwap() ends a swap still in progress. Without them the swap is immediate.
+    beginAvatarSwap = null, cancelAvatarSwap = null,
   } = deps;
 
   // #3905 (leaf of #3873, the mode-switch wait): the world no longer waits for the equipped avatar. The
@@ -38,6 +42,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   // is theirs, and they save the two request round trips that used to sit in front of the first frame.
   setEquippedAvatarSkeletonSignature(null);
   const generation = ++mountGeneration;
+  cancelAvatarSwap?.();
 
   // Re-entering without a reload: remove (and dispose, #1358) any avatar left
   // from a previous round trip before building a fresh one.
@@ -96,15 +101,24 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     }
     // Something else replaced the avatar while this loaded (the person equipped one, or left the mode and
     // came back): this one is stale, drop it rather than put an old body on screen.
-    if (generation !== mountGeneration || getShopAvatar() !== startAvatar) {
+    const isStale = () => generation !== mountGeneration || getShopAvatar() !== startAvatar;
+    if (isStale()) {
       disposeObject3D(custom.group);
       return;
     }
-    scene.remove(startAvatar.group);
-    disposeObject3D(startAvatar.group);
-    setShopAvatar(custom);
-    scene.add(custom.group);
-    publishAvatar(win, custom, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
+    const commit = () => {
+      if (isStale()) {
+        disposeObject3D(custom.group); // superseded while the fog was rising
+        return;
+      }
+      scene.remove(startAvatar.group);
+      disposeObject3D(startAvatar.group);
+      setShopAvatar(custom);
+      scene.add(custom.group);
+      publishAvatar(win, custom, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
+    };
+    if (beginAvatarSwap) await beginAvatarSwap(commit).done;
+    else commit();
   }
 }
 
