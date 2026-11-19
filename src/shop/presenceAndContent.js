@@ -300,6 +300,33 @@ export function assistantFromHit(hit) {
 export function assistantGroups() {
   return [...shopOtherAvatars.values()].filter((entry) => entry.assistantName && entry.userId).map((entry) => entry.group);
 }
+
+// #3555: the other shoppers' avatars (an assistant answers a tap with its chat,
+// above), as raycast targets for "tap a person to offer friendship".
+export function otherPersonGroups() {
+  return [...shopOtherAvatars.values()].filter((entry) => !entry.assistantName).map((entry) => entry.group);
+}
+
+// #3555: the person, if any, whose drawn avatar a raycast hit belongs to. The
+// label is the one the rest of Shop shows for them (shopBuilderLabels); null
+// until labels have loaded, in which case the caller words the offer without it.
+export function personFromHit(hit) {
+  for (const [builderId, entry] of shopOtherAvatars) {
+    if (entry.assistantName) continue;
+    for (let node = hit.object; node; node = node.parent) {
+      if (node === entry.group) return personForBuilderId(builderId);
+    }
+  }
+  return null;
+}
+
+// #3555: a drawn person (not an assistant) by their builder id, or null. Also
+// what the e2e hook in main.js uses, since the suite never aims at a pixel.
+export function personForBuilderId(builderId) {
+  const entry = shopOtherAvatars.get(builderId);
+  if (!entry || entry.assistantName) return null;
+  return { builderId, label: shopBuilderLabels.get(builderId) ?? null };
+}
 // #2045: templateId -> when its model last failed to load (fail open: the
 // default body is shown and the load is retried only after
 // CUSTOM_AVATAR_RETRY_AFTER_MS, see otherAvatarModels.js).

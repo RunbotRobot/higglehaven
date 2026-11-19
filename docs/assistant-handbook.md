@@ -536,6 +536,11 @@ are speaking.
 
 ### How do I add a friend and send them a message?
 
+To offer friendship to someone standing near you in Shop: tap their avatar, then
+"Send request" in the box that asks. Nothing to type. (If you change your mind, "Not now".)
+
+To add someone who is not nearby:
+
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"), then "Friends".
 2. Tap "+ Add Friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
