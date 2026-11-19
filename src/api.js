@@ -1897,6 +1897,12 @@ export function clearPurchaseIdempotencyKey(instanceId) {
   try { localStorage.removeItem(purchaseIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
 }
 
+// #3946: what Buy would do, read-only: `paysWithCard` says whether the purchase
+// opens a card payment or completes on the spot. Creates and charges nothing.
+export async function getPurchaseQuote(instanceId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
+}
+
 export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
