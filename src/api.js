@@ -50,7 +50,7 @@ async function requestJson(path, options) {
     // ("someone else already collected it") -- the former is worth
     // retrying once presence catches up, the latter isn't. apiError sets
     // `error.status` for exactly that.
-    throw apiError(response, body, "Couldn't complete that — higglehaven ran into a problem on its end. Please try again in a moment.");
+    throw apiError(response, body, "Couldn't complete that — higglehaven ran into a problem on its end. Try again in a moment.");
   }
   return response.json();
 }
@@ -856,7 +856,7 @@ export async function uploadModelFile(file, { tier } = {}) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
-    throw apiError(response, body, "Couldn't upload that model — higglehaven ran into a problem on its end. Please try again in a moment.");
+    throw apiError(response, body, "Couldn't upload that model — higglehaven ran into a problem on its end. Try again in a moment.");
   }
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
@@ -879,7 +879,7 @@ export async function submitFeedbackBugReport(form) {
   const response = await fetch(`${API_BASE}/feedback/bug-report`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw apiError(response, body, "Couldn't submit that feedback — higglehaven ran into a problem on its end. Please try again in a moment.");
+    throw apiError(response, body, "Couldn't submit that feedback — higglehaven ran into a problem on its end. Try again in a moment.");
   }
   return response.json();
 }
@@ -894,7 +894,7 @@ export async function createVideoGenerationJob(framesForm) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Video generation request failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
-    throw apiError(response, body, "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Please try again in a moment.");
+    throw apiError(response, body, "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Try again in a moment.");
   }
   return response.json(); // { jobId, status }
 }

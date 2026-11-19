@@ -583,7 +583,7 @@ async function reportVoicePeer(builderId) {
     reportedVoicePeers.add(builderId);
     renderVoicePeersList();
   } catch (err) {
-    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Please try again.' });
+    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Try again.' });
   }
 }
 

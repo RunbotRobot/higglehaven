@@ -358,8 +358,8 @@ promptModeGenerateBtn.addEventListener('click', async () => {
     setPromptModeStatus('');
   } catch (err) {
     console.warn('Prompt mode search failed:', err);
-    // #2440: previously a generic "Something went wrong. Please try again."
-    setPromptModeStatus(err.message || "Couldn't find similar products for that — please try again in a moment.");
+    // #2440: previously a generic "Something went wrong. Try again."
+    setPromptModeStatus(err.message || "Couldn't find similar products for that. Try again in a moment.");
   } finally {
     promptModeGenerateBtn.disabled = false;
   }

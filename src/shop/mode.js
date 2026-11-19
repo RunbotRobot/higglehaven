@@ -939,7 +939,7 @@ function renderMyAvatarsField(onEquipped) {
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t equip this avatar', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t equip this avatar', message: err.message || 'Try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -961,7 +961,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t load more avatars', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more avatars', message: err.message || 'Try again.' });
           moreBtn.disabled = false;
         }
       });
@@ -1078,7 +1078,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t apply this animation', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t apply this animation', message: err.message || 'Try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -1100,7 +1100,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t load more animations', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more animations', message: err.message || 'Try again.' });
           moreBtn.disabled = false;
         }
       });

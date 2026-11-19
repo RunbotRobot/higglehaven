@@ -181,7 +181,7 @@ export async function handleDiditVerificationSession(request, env, db) {
     // check at the top of this handler resolves correctly next time
     // regardless of which of those states it turns out to be.
     if (!diditReservationStillUsable(existing)) {
-      throw new HttpError('A verification session is already starting -- please try again in a moment', 409);
+      throw new HttpError('A verification session is already starting. Try again in a moment', 409);
     }
     return json({ sessionId: existing.session_id, url: existing.url });
   }
@@ -205,7 +205,7 @@ export async function handleDiditVerificationSession(request, env, db) {
     // session_id's TEXT PRIMARY KEY below, which D1 throws on synchronously,
     // surfacing as a generic 500 instead of this clean 502.
     if (!session?.session_id || !session?.url) {
-      throw new HttpError('Didit session creation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
+      throw new HttpError('Didit session creation failed. Try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
     }
     billedSessionId = session.session_id;
     // The reservation's own session_id was only ever a local placeholder --

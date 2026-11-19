@@ -77,7 +77,7 @@ async function confirm() {
     if (!session) return;
     session.busy = false;
     setBusy(false);
-    statusEl.textContent = err?.message || "That didn't work. Please try again.";
+    statusEl.textContent = err?.message || "That didn't work. Try again.";
     confirmBtn.focus({ preventScroll: true });
     return;
   }

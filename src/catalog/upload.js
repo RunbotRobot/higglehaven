@@ -833,7 +833,7 @@ async function handleUploadFileStep() {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product upload failed:', err);
     // #2440: previously a generic "Something went wrong."
-    setUploadStatus(err.message || "Couldn't load a preview of that model — please try again in a moment.", true);
+    setUploadStatus(err.message || "Couldn't load a preview of that model. Try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
@@ -1006,7 +1006,7 @@ async function handleUploadVideoStep() {
     // #1954: err.message is player copy for a coded server error; keep the server's own text in the log for diagnosis.
     console.error('Video-to-3D generation failed:', err, err.serverMessage || '');
     // #2440: previously a generic "Something went wrong starting video generation."
-    setUploadStatus(err.message || "Couldn't start turning that video into a 3D model — please try again in a moment.", true);
+    setUploadStatus(err.message || "Couldn't start turning that video into a 3D model. Try again in a moment.", true);
     uploadSubmitBtn.disabled = false;
   }
 }
@@ -1138,7 +1138,7 @@ async function handleUploadDimensionsStep() {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
     // #2440: previously a generic "Something went wrong."
-    setUploadStatus(err.message || "Couldn't create that product — please try again in a moment.", true);
+    setUploadStatus(err.message || "Couldn't create that product. Try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }

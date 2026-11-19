@@ -10,8 +10,8 @@ describe('findVoiceBreaks', () => {
   });
 
   it('flags the retired and internal words people must not read', () => {
-    const words = ['Open your landlet', 'Your lánd is ready', 'Tap the bud', 'Open a leaf', 'A petal opens', 'Close this modal'].map((t) => findVoiceBreaks([row(t)])[0]?.word);
-    expect(words).toEqual(['landlet', 'lánd', 'bud / flower', 'petal / leaf / stem', 'petal / leaf / stem', 'modal']);
+    const words = ['Open your landlet', 'Your lánd is ready', 'Tap the bud', 'Open a leaf', 'A petal opens', 'Close this modal', 'Please try again'].map((t) => findVoiceBreaks([row(t)])[0]?.word);
+    expect(words).toEqual(['landlet', 'lánd', 'bud / flower', 'petal / leaf / stem', 'petal / leaf / stem', 'modal', 'please']);
   });
 
   it('ignores interpolations, console log prefixes, and rows people do not read', () => {
