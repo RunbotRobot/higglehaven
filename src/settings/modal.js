@@ -50,6 +50,9 @@ import { renderBuildSettingsSection } from '../build/scene.js';
 const settingsModalEl = document.getElementById('settings-modal');
 const settingsTabsEl = document.getElementById('settings-tabs');
 export const settingsSectionEl = document.getElementById('settings-section');
+// #3652: where the account and tax fields of the General tab are mounted (a closed disclosure).
+let accountFoldEl = null;
+const accountHost = () => accountFoldEl || settingsSectionEl;
 const settingsBtn = document.getElementById('settings-btn');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 
@@ -94,6 +97,7 @@ function refreshUnitDisplays() {
 export function renderSettingsSection() {
   settingsRenderToken += 1;
   settingsSectionEl.innerHTML = '';
+  accountFoldEl = null;
   for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
     btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
     btn.setAttribute('aria-pressed', String(btn.dataset.section === activeSettingsTab));
@@ -164,6 +168,15 @@ function renderGeneralSettingsSection() {
   settingsSectionEl.appendChild(versionField);
 
   renderLoadingTipsField();
+  // #3652: paperwork and account matters sit behind one closed row, so the General tab's first
+  // screen holds only what is changed often (units, tips, version).
+  const fold = document.createElement('details');
+  fold.className = 'settings-account-fold';
+  const foldSummary = document.createElement('summary');
+  foldSummary.textContent = 'Account and tax';
+  fold.appendChild(foldSummary);
+  settingsSectionEl.appendChild(fold);
+  accountFoldEl = fold;
   renderTaxPaperworkField();
   renderTaxEducationField();
   renderNotificationPreferencesField();
@@ -213,7 +226,7 @@ async function renderTaxEducationField() {
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  settingsSectionEl.appendChild(field);
+  accountHost().appendChild(field);
 
   let result;
   try {
@@ -280,7 +293,7 @@ async function renderNotificationPreferencesField() {
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  settingsSectionEl.appendChild(field);
+  accountHost().appendChild(field);
 
   let prefs;
   try {
@@ -346,7 +359,7 @@ async function renderTaxPaperworkField() {
   statusNote.setAttribute('role', 'status');
   statusNote.setAttribute('aria-live', 'polite');
   statusField.appendChild(statusNote);
-  settingsSectionEl.appendChild(statusField);
+  accountHost().appendChild(statusField);
 
   function refreshStatusNote() {
     if (currentAuthUser.taxFormType) {
@@ -371,13 +384,13 @@ async function renderTaxPaperworkField() {
   toggleBtn.className = 'version-action-btn';
   toggleBtn.setAttribute('aria-expanded', 'false');
   toggleField.appendChild(toggleBtn);
-  settingsSectionEl.appendChild(toggleField);
+  accountHost().appendChild(toggleField);
 
   const formField = document.createElement('div');
   formField.className = 'settings-field';
   formField.id = 'tax-paperwork-form-field';
   toggleBtn.setAttribute('aria-controls', formField.id);
-  settingsSectionEl.appendChild(formField);
+  accountHost().appendChild(formField);
 
   function setFormOpen(open) {
     formField.hidden = !open;
