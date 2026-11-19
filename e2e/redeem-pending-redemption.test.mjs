@@ -30,14 +30,14 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
 
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem higgles') && f.textContent.includes('Available to redeem')),
   null,
   { timeout: 60000 },
 );
 
-// #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+// #3652: Redeem higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
 await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
-const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
+const statusText = await page.locator('.settings-field', { hasText: 'Redeem higgles' }).locator('.settings-empty-note').first().textContent();
 const finishBtn = page.getByRole('button', { name: `Finish pending redemption of $${(PENDING_CENTS / 100).toFixed(2)}` });
 const finishBtnVisible = await finishBtn.isVisible();
 const plainRedeemVisible = await page.getByRole('button', { name: 'Redeem', exact: true }).isVisible();

@@ -44,7 +44,7 @@ await page.waitForFunction(
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 20000 });
 const historyAfterFirstPublish = await page.locator('.version-row').count();
 const firstRowText = await page.locator('.version-row').first().locator('.version-row-info').textContent();
-const setLiveDisabledOnLiveRow = await page.locator('.version-row').first().locator('button', { hasText: 'Set Live' }).isDisabled();
+const setLiveDisabledOnLiveRow = await page.locator('.version-row').first().locator('button', { hasText: 'Set live' }).isDisabled();
 console.log('version rows after first publish (should be 1):', historyAfterFirstPublish);
 console.log('first row text (should mention 1 item and "live"):', firstRowText);
 console.log('Set Live disabled on the already-live row (should be true):', setLiveDisabledOnLiveRow);
@@ -103,8 +103,8 @@ const activeVersionIdAfterSecondPublish = landletsAfterSecondPublish.find((l) =>
 // Set Live on the OLDER (Tree-only) version — should repoint activeVersionId
 // without touching the live draft (still 2 items).
 const olderRow = page.locator('.version-row').last(); // oldest listed last (newest-first)
-const olderRowSetLiveEnabled = await olderRow.locator('button', { hasText: 'Set Live' }).isEnabled();
-await olderRow.locator('button', { hasText: 'Set Live' }).click();
+const olderRowSetLiveEnabled = await olderRow.locator('button', { hasText: 'Set live' }).isEnabled();
+await olderRow.locator('button', { hasText: 'Set live' }).click();
 // #2200: same CI-load timing-margin shape as the version-row wait above --
 // bumped alongside it rather than leaving this sibling call on the tighter
 // post-#2144 default.

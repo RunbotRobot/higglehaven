@@ -114,9 +114,9 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
 
-const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
+const myAvatarsField = page.locator('.settings-field', { hasText: 'My avatars' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My avatars') && f.querySelectorAll('.version-row').length >= 2),
   null,
   { timeout: 30000 },
 );
@@ -131,9 +131,9 @@ const sourceAfterAvatarEquip = await page.evaluate(() => window.__shopAvatarAnim
 console.log('animation source right after equipping a (skeleton-less) avatar, nothing applied yet (should be null):', sourceAfterAvatarEquip);
 
 // --- Apply the purchased animation, live, from the same Settings tab ---
-const myAnimationsField = page.locator('.settings-field', { hasText: 'My Animations' });
+const myAnimationsField = page.locator('.settings-field', { hasText: 'My animations' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Animations') && f.querySelectorAll('.version-row').length >= 1),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My animations') && f.querySelectorAll('.version-row').length >= 1),
   null,
   { timeout: 30000 },
 );

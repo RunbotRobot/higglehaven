@@ -44,7 +44,7 @@ await page.click('.settings-tab-btn[data-section="general"]');
 await page.waitForTimeout(400);
 const generalTabHtmlRightAfterSwitch = await page.locator('#settings-section').innerHTML();
 console.log('General tab content right after switching away (should not yet mention Land Cap/Redeem Higgles/Auction):',
-  /Lándlet Cap|Redeem Higgles|Active Auctions/.test(generalTabHtmlRightAfterSwitch) ? 'MENTIONS THEM' : 'clean');
+  /Lándlet cap|Redeem higgles|Active auctions/i.test(generalTabHtmlRightAfterSwitch) ? 'MENTIONS THEM' : 'clean');
 
 // Wait past the delayed GET's own delay so the three superseded calls
 // actually resolve and (pre-fix) would have appended onto this tab.
@@ -56,7 +56,7 @@ const stillOnGeneralTab = await page.locator('.settings-tab-btn[data-section="ge
 console.log('still showing the General tab (should be true — no tab-switch happened on our own):', stillOnGeneralTab);
 
 const generalTabHtmlAfterDelay = await page.locator('#settings-section').innerHTML();
-const leaked = /Lándlet Cap|Redeem Higgles|Active Auctions|Sell Your/.test(generalTabHtmlAfterDelay);
+const leaked = /Lándlet cap|Redeem higgles|Active auctions|Sell your/i.test(generalTabHtmlAfterDelay);
 console.log('General tab content after the delayed identity-fetch resolves (should still be clean, not leaked):', leaked ? 'LEAKED' : 'clean');
 
 await page.unroute('**/api/builders/me');
@@ -89,7 +89,7 @@ await builderMeFetchLanded;
 const buildTabWorksNormally = (await waitForText(page, '#settings-section', 'Lándlet Cap')).includes('Lándlet Cap');
 console.log('Build tab still renders Land Cap normally on a fresh, non-superseded switch (should be true):', buildTabWorksNormally);
 
-const pass = !/Lándlet Cap|Redeem Higgles|Active Auctions/.test(generalTabHtmlRightAfterSwitch) &&
+const pass = !/Lándlet cap|Redeem higgles|Active auctions/i.test(generalTabHtmlRightAfterSwitch) &&
   stillOnGeneralTab &&
   !leaked &&
   buildTabWorksNormally &&

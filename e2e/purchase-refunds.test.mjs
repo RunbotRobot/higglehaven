@@ -122,7 +122,7 @@ console.log('returns policy row text before editing (should be "Returns: accepte
 await row().locator('.seller-no-returns-toggle').click();
 await page.waitForTimeout(300);
 await row().locator('.seller-no-returns-checkbox-label input[type="checkbox"]').check();
-await row().locator('button', { hasText: 'Save Returns Policy' }).click();
+await row().locator('button', { hasText: 'Save returns policy' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
   null,

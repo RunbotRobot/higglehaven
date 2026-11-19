@@ -4,7 +4,7 @@
 // later, faster equip (e.g. reverting to the default avatar) had already
 // taken effect. Same out-of-order-resolution hazard as the connectivity-
 // indicator race (#545/#980), just on a different function that never got
-// the same fix. This exercises the live "My Avatars" picker equip path
+// the same fix. This exercises the live "My avatars" picker equip path
 // (refreshEquippedShopAvatar) while already in Shop mode, not a fresh
 // Shop-mode entry (enterShopMode) — that's the function this bug lived in.
 //
@@ -126,9 +126,9 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
-const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
+const myAvatarsField = page.locator('.settings-field', { hasText: 'My avatars' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 3),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My avatars') && f.querySelectorAll('.version-row').length >= 3),
   null,
   { timeout: 30000 },
 );

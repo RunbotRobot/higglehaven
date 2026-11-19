@@ -42,7 +42,7 @@ await page.route('**/api/catalog', async (route) => {
   await route.continue();
 });
 
-await page.click('#upload-submit-btn'); // "Create Product"
+await page.click('#upload-submit-btn'); // "Create product"
 await page.waitForTimeout(200); // let the request actually start
 await page.click('#upload-cancel-btn'); // Cancel while the create is still in flight
 await page.waitForTimeout(2500); // let the delayed request resolve either way

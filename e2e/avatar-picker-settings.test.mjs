@@ -3,7 +3,7 @@
 // in-world rendering of whatever ends up equipped, but nothing in src/main.js
 // ever called any of it — a builder who bought an avatar-category listing had
 // no UI anywhere to ever browse or equip one. This test exercises the real
-// "My Avatars" picker (Settings > Shop) end to end: it lists the owned
+// "My avatars" picker (Settings > Shop) end to end: it lists the owned
 // avatar plus the always-available "Default avatar" revert option, equipping
 // through the picker actually calls PUT .../avatar, and — the point of doing
 // this from inside an already-entered Shop mode rather than reloading into
@@ -113,9 +113,9 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
-const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
+const myAvatarsField = page.locator('.settings-field', { hasText: 'My avatars' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My avatars') && f.querySelectorAll('.version-row').length >= 2),
   null,
   { timeout: 30000 },
 );
@@ -255,4 +255,4 @@ const pass = purchased.status === 201 &&
   memAfterRevert?.textures === memBaseline?.textures &&
   memAfterSecondEquip?.textures === memAfterFirstEquip?.textures &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources, including its afkSprite texture (#1358, #1370)', errors });
+await finish(browser, { pass, label: 'Settings > Shop "My avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources, including its afkSprite texture (#1358, #1370)', errors });

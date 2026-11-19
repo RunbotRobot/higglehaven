@@ -1,4 +1,4 @@
-// Regression test for #1403: the Settings > Build tab's "Redeem Higgles"
+// Regression test for #1403: the Settings > Build tab's "Redeem higgles"
 // field (#723) builds its submit button's label ("Set up payout account" vs.
 // "Update payout account") once, during renderRedeemHigglesField's own
 // initial render, gated on redeemStatus.connected as it stood at that
@@ -72,14 +72,14 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem higgles')),
   null,
   { timeout: 60000 },
 );
 
-// #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+// #3652: Redeem higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
 await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
-// "Redeem Higgles" label and the actual form live in separate sibling
+// "Redeem higgles" label and the actual form live in separate sibling
 // .settings-field divs (per e2e/redeem-higgles-settings.test.mjs's own
 // comment) -- the submit button is found by its own exact text rather
 // than scoped under the label's field.

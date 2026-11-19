@@ -132,7 +132,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop" and "Build".
 3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
-4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
+4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My avatars" and "My animations" once they own any.
 5. "Build" holds the settings for building, including the person's username (with "Rename"). Selling has no tab here: the payout account and the shop name are petals in the Sell menu (see "Where do I set up payouts and tax forms?").
 6. At the bottom of every tab is "Send feedback".
 7. The "×" at the top right closes Settings.
@@ -171,8 +171,8 @@ touches one ends by sending the assistant to the runbook's hand-off.
 ### How do I wear an avatar I bought, or apply an animation?
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings", then the "Shop" tab.
-2. Under "My Avatars", each avatar they own is a row, and the first row is always "Default avatar". Tap "Equip" on the one they want.
-3. Under "My Animations", tap "Apply" on an animation to use it with the avatar they are wearing, or "Clear" to take it off.
+2. Under "My avatars", each avatar they own is a row, and the first row is always "Default avatar". Tap "Equip" on the one they want.
+3. Under "My animations", tap "Apply" on an animation to use it with the avatar they are wearing, or "Clear" to take it off.
 
 **You will see:** their character in the world changes to the avatar. The row they chose says it is equipped.
 
@@ -184,7 +184,7 @@ Animations" replaces the simple motion, so a bought animation is a different
 motion, not the only way to move. Other people see the same.
 
 **If something goes wrong:**
-- "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
+- "My avatars" or "My animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
 - A message says it couldn't equip the avatar: read it out; try once more, then offer to pass it to the team.
 - An animation that does not suit the avatar is marked as not matching: the app says so next to it. Read that note out rather than guessing.
 
@@ -966,7 +966,7 @@ lándlets are shown here.
 
 1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product". A
    small window opens under it and asks which way. Tap "Upload my own model". The
-   window is now called "Upload Model".
+   window is now called "Upload model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
    in dollars, or 0 for a free product.
 3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
@@ -974,10 +974,10 @@ lándlets are shown here.
    file that is delivered, not placed.
 4. Tap "Add product". The app shrinks the model and shows a preview; this can take
    a moment.
-5. The window is now called "Confirm Dimensions". Set the product's real size with
+5. The window is now called "Confirm dimensions". Set the product's real size with
    "Width (X)", "Depth (Y)" and "Height (Z)" in metres; changing one changes the
    other two so the proportions stay the same.
-6. Tap "Create Product".
+6. Tap "Create product".
 
 **You will see:** the window closes and the product is on your showroom shelf (and in
 your "My products" list).
@@ -1035,7 +1035,7 @@ price and stock. The original maker's listing is not changed.
 3. To rename it, tap "Rename", type the new name in the window that opens and
    confirm.
 4. To change its price, tap "More settings" on the product, then "Edit Price", type the new
-   price and tap "Save Price". The other "Edit" lines (size, shipping, returns) are under
+   price and tap "Save price". The other "Edit" lines (size, shipping, returns) are under
    "More settings" too and work the same way: open it, change it, tap its own Save button.
 5. To change how many are in stock, tap the product in your showroom. A small card opens
    beside it showing its price and its stock ("No limit on stock", "3 in stock" or "Sold out").
@@ -1141,12 +1141,12 @@ nobody owns and nothing uses is removed completely.
 ### How do I rename my shop, or start my seller profile over?
 
 1. Switch to Sell, tap the logo and then the "Sell" petal to open Sell's menu, and tap "Storefront".
-2. The leaf shows the shop name. "Rename" changes it. "Reset Profile" starts the seller profile over after a confirmation, and says what it will do first.
+2. The leaf shows the shop name. "Rename" changes it. "Reset profile" starts the seller profile over after a confirmation, and says what it will do first.
 
 **You will see:** the new name in the leaf straight away.
 
 **If something goes wrong:**
-- "Reset Profile" is refused: the leaf shows the reason; do not promise anything about money, and use the runbook's hand-off if it is about unpaid proceeds.
+- "Reset profile" is refused: the leaf shows the reason; do not promise anything about money, and use the runbook's hand-off if it is about unpaid proceeds.
 
 ```controls sell
 .mode-nav-btn[data-mode="sell"] | Sell

@@ -102,13 +102,13 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
 await page.waitForFunction(
-  () => Array.from(document.querySelectorAll('.settings-field span')).some((el) => el.textContent === 'Saved Layouts'),
+  () => Array.from(document.querySelectorAll('.settings-field span')).some((el) => el.textContent === 'Saved layouts'),
   null,
   { timeout: 60000 },
 );
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
 
-const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row');
+const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved layouts' }).locator('.version-row');
 const rowText = await savedLayoutRow.locator('.version-row-info').textContent();
 console.log('saved layout row text (should mention Level 1 and 1 item):', rowText);
 const rowTextCorrect = /Level 1/.test(rowText) && /1 item/.test(rowText);
@@ -176,12 +176,12 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // #2570's own margin bump elsewhere in this suite. No step/job-level
 // timeout configured on this CI job, so there's ample headroom.
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 240000 });
-await page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row')
+await page.locator('.settings-field', { hasText: 'Saved layouts' }).locator('.version-row')
   .locator('button', { hasText: 'Delete' }).click();
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(
   () => document.querySelector('.settings-field')?.textContent.includes('Nothing saved yet') ||
-    !Array.from(document.querySelectorAll('.settings-field')).some((f) => f.textContent.includes('Saved Layouts') && f.querySelector('.version-row')),
+    !Array.from(document.querySelectorAll('.settings-field')).some((f) => f.textContent.includes('Saved layouts') && f.querySelector('.version-row')),
   null,
   { timeout: 60000 },
 );

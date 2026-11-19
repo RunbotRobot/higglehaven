@@ -1,4 +1,4 @@
-// Regression test for #1346: clicking "Resolve Now" on a past-due auction
+// Regression test for #1346: clicking "Resolve now" on a past-due auction
 // (Settings > Build tab) used to call only renderAuctionList()/
 // renderStartSection() -- both inner to renderAuctionSection() itself --
 // instead of the shared renderSettingsSection() redraw every sibling tab
@@ -14,7 +14,7 @@
 // own comment). So this test starts one real 1-hour auction, then mocks
 // just enough of the network (the same route.fetch()-then-fulfill idiom
 // e2e/version-history-race.test.mjs already uses) to make the real auction
-// look past-due client-side and to let the real "Resolve Now" click
+// look past-due client-side and to let the real "Resolve now" click
 // succeed -- everything else (the actual DOM/render behavior being tested)
 // is the real, unmodified app code.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
@@ -91,7 +91,7 @@ await page.waitForFunction(
 // The Active Auctions list's own re-fetch (fired by the Start Auction
 // handler itself) runs through the mock above, so our real auction now
 // shows up there with its endsAt rewritten into the past -- a real
-// "Resolve Now" button, same as any other genuinely past-due auction.
+// "Resolve now" button, same as any other genuinely past-due auction.
 await page.waitForSelector('.auction-resolve-btn', { timeout: 10000 });
 if (!resolvableAuctionId) throw new Error('mock never saw our own auction in the global active-auctions list');
 

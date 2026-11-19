@@ -13,7 +13,7 @@
 // (up to FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS later) re-synced it.
 //
 // Mirrors e2e/friend-voice-channel.test.mjs's own setup almost exactly (two
-// real browser pages, a real accepted friendship, a real "Join Voice"
+// real browser pages, a real accepted friendship, a real "Join voice"
 // click, the same Node-side signal-relay/friend-channels mocks) -- see that
 // file's own header comment for why each piece of the setup below is
 // needed. Trimmed to just what this specific race needs: no "teleport far
@@ -204,12 +204,12 @@ await bumpToIdVerifiedNoReload(pageB);
 await openAccountMenu(pageB);
 await pageB.click('#friends-btn');
 await pageB.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-const joinVoiceBtn = pageB.locator('#friends-accepted-list .friend-row').filter({ hasText: LABEL_A }).locator('button', { hasText: 'Join Voice' });
+const joinVoiceBtn = pageB.locator('#friends-accepted-list .friend-row').filter({ hasText: LABEL_A }).locator('button', { hasText: 'Join voice' });
 await joinVoiceBtn.waitFor({ state: 'visible', timeout: 10000 });
 await joinVoiceBtn.click();
 await pageB.waitForFunction(
   () => [...document.querySelectorAll('#friends-accepted-list .friend-row')]
-    .some((row) => row.textContent.includes('Friend Voice Mute Race Owner') && row.textContent.includes('Leave Voice')),
+    .some((row) => row.textContent.includes('Friend Voice Mute Race Owner') && row.textContent.includes('Leave voice')),
   null,
   { timeout: 10000 },
 );

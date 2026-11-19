@@ -1,6 +1,6 @@
 // #1149 (sub-issue of #1145, real account deletion): covers the real
 // Delete account flow now wired into the Account panel (#auth-modal), as
-// distinct from the Settings > Build/Sell "Reset Profile" buttons (see
+// distinct from the Settings > Build/Sell "Reset profile" buttons (see
 // delete-builder-stale-id.test.mjs and friends), which only ever reset a
 // builder/seller profile, never the login itself.
 //

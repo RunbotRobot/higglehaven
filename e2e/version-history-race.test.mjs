@@ -1,6 +1,6 @@
 // Regression test for #448: the Version History panel's renderVersionHistory()
 // had no stale-response guard, unlike its sibling friendsLoadToken/
-// signPostsLoadToken/calendarEventsLoadToken panels — clicking "Set Live" on
+// signPostsLoadToken/calendarEventsLoadToken panels — clicking "Set live" on
 // one row and then "Publish" in quick succession could let Set Live's
 // slower, now-stale re-render land after Publish's fresher one and silently
 // overwrite the panel with the wrong "live" version. Sends the GET
@@ -100,10 +100,10 @@ await page.route(`**/api/landlets/${myLandlet.landletId}`, async (route) => {
   await route.fulfill({ response });
 });
 
-// Click "Set Live" on the older (version 1) row — fires activateLandletVersion,
+// Click "Set live" on the older (version 1) row — fires activateLandletVersion,
 // then a re-render whose GET /api/landlets/:id is the delayed one above.
 const olderRow = page.locator('.version-row').last(); // oldest listed last (newest-first)
-await olderRow.locator('button', { hasText: 'Set Live' }).click();
+await olderRow.locator('button', { hasText: 'Set live' }).click();
 
 // Immediately (without waiting for the above to settle) click "Publish" —
 // its own save+activate+re-render round trip is NOT delayed, so it should
