@@ -569,7 +569,10 @@
          showed through the menu's edge. Two surfaces never overlap: the
          button steps aside (same fade) while the menu is open and returns
          when it closes, with its own countdown untouched. */
-      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible {
+      /* #3762: and a leaf (Settings, Help, Friends) opens after the menu has folded, so the button
+         steps aside for it too instead of showing through the top of it. */
+      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible,
+      body:has(.bud-leaf) #shop-last-location-btn.visible {
         opacity: 0;
         pointer-events: none;
       }
