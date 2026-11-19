@@ -78,6 +78,10 @@ const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-
 const notificationsClearReadBtn = document.getElementById('notifications-clear-read-btn');
 const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
+// #3774: the faux-layout preview has no flower (its own toolbar sits where the note would grow), so
+// nothing is announced there; the badges on the menu buttons still count.
+const budShowsNotes = () => document.body.dataset.mode !== 'layoutPreview';
+
 export async function refreshNotificationsBadge() {
   if (!currentAuthUser) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
@@ -90,7 +94,7 @@ export async function refreshNotificationsBadge() {
     notificationsBadgeEl.textContent = String(count);
     notificationsBadgeEl.hidden = count === 0;
     // #3774: the head says so too, and the note is a door to the Notices leaf.
-    if (count > 0) setBudWord('notices', count === 1 ? 'Notice' : `${count} notices`, { open: () => notificationsBtn.click(), label: count === 1 ? 'You have a notice. Open Notices.' : `You have ${count} notices. Open Notices.` });
+    if (count > 0 && budShowsNotes()) setBudWord('notices', count === 1 ? 'Notice' : `${count} notices`, { open: () => notificationsBtn.click(), label: count === 1 ? 'You have a notice. Open Notices.' : `You have ${count} notices. Open Notices.` });
     else clearBudWord('notices');
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
@@ -618,7 +622,7 @@ export async function refreshFriendsBadge() {
     friendsBadgeEl.textContent = String(incoming.length);
     friendsBadgeEl.hidden = incoming.length === 0;
     // #3774: the head says so too, and the note is a door to Friends, where the request waits.
-    if (incoming.length > 0) setBudWord('friend-requests', incoming.length === 1 ? 'Friend request' : `${incoming.length} friend requests`, { open: () => friendsBtn.click(), label: incoming.length === 1 ? 'Someone sent you a friend request. Open Friends.' : `${incoming.length} friend requests. Open Friends.` });
+    if (incoming.length > 0 && budShowsNotes()) setBudWord('friend-requests', incoming.length === 1 ? 'Friend request' : `${incoming.length} friend requests`, { open: () => friendsBtn.click(), label: incoming.length === 1 ? 'Someone sent you a friend request. Open Friends.' : `${incoming.length} friend requests. Open Friends.` });
     else clearBudWord('friend-requests');
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
