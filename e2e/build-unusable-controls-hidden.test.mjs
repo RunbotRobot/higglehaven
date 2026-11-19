@@ -24,9 +24,9 @@ await page.mouse.click(200, 380);
 await page.waitForTimeout(800);
 
 const selected = { unbundle: await shown('#ungroup-item'), edit: await shown('#edit-bundle-item'), bundle: await shown('#group-item') };
-// A Tree is not trimmable, so Trim is left out too; the toolbar's own Move and Rotate stay.
+// A Tree is not trimmable, so Trim is left out too (and with Move and Rotate gone, so is the whole tool row, #3689).
 const trimShown = await shown('#mode-trim');
-const moveShown = await shown('#mode-move');
+const toolRowShown = await shown('#gizmo-mode-controls');
 await page.click('#copy-item');
 await page.waitForTimeout(300);
 const pasteAfterCopy = await pasteOffered();
@@ -35,5 +35,5 @@ await page.waitForTimeout(800);
 const redoAfterUndo = await budShows(page, '#redo-btn');
 console.log('before:', JSON.stringify(before), 'one tree selected:', JSON.stringify(selected), 'paste after copy:', pasteAfterCopy, 'redo after undo:', redoAfterUndo);
 
-const pass = !before.paste && !before.redo && !selected.unbundle && !selected.edit && !selected.bundle && !trimShown && moveShown && pasteAfterCopy && redoAfterUndo && errors.length === 0;
+const pass = !before.paste && !before.redo && !selected.unbundle && !selected.edit && !selected.bundle && !trimShown && !toolRowShown && pasteAfterCopy && redoAfterUndo && errors.length === 0;
 await finish(browser, { pass, label: '#3574: Paste, Redo, Bundle, Trim, Unbundle and Edit appear only when usable', errors });

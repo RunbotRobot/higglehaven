@@ -43,7 +43,7 @@ for (const pos of positions) {
 }
 await page.click('#group-item');
 await page.waitForTimeout(700);
-await page.click('#mode-move'); // leaves multi-select, keeps the bundle selected
+await page.click('#toggle-multiselect'); // leaves multi-select, keeps the bundle selected
 await page.waitForTimeout(300);
 
 const editBtn = page.locator('#edit-bundle-item');

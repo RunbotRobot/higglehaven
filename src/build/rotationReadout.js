@@ -40,7 +40,7 @@ export function quaternionFromAngles({ turn, tiltRed, tiltGreen }) {
 
 export function formatRotationReadout({ turn, tiltRed, tiltGreen }) {
   const f = (n) => `${n.toFixed(1)}°`;
-  return `Turn ${f(turn)} (blue ring) · Tilt ${f(tiltRed)} (red ring) · Tilt ${f(tiltGreen)} (green ring)`;
+  return `Turn ${f(turn)} (blue ring) · Tilt red ${f(tiltRed)} · Tilt green ${f(tiltGreen)}`;
 }
 
 // A bundle has no stored orientation of its own: every member's orientation is

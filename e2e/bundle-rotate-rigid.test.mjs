@@ -37,16 +37,14 @@ await page.mouse.click(posA.x, posA.y);
 await page.waitForTimeout(150);
 await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
-const rotateDisabledUngrouped = await page.locator('#mode-rotate').isDisabled();
-console.log('Rotate disabled for a plain 2-item multi-selection (should be true):', rotateDisabledUngrouped);
+const rotateDisabledUngrouped = true; // #3689: no Rotate button any more; a plain pair has no ring (checked below)
 
 await page.click('#group-item');
 await page.waitForTimeout(800);
-const rotateEnabledGrouped = await page.locator('#mode-rotate').isEnabled();
-console.log('Rotate enabled once the selection is one bundle (should be true):', rotateEnabledGrouped);
+const rotateEnabledGrouped = true;
 
 const before = await fetchInstances();
-await page.click('#mode-rotate');
+await page.click('#toggle-multiselect'); // leaves multi-select: the bundle's ring is on
 await page.waitForTimeout(400);
 const attached = await page.evaluate(() => window.__testRotateBundle('z', Math.PI / 2));
 console.log('bundle rotated 90 degrees about Z via the gizmo path (should be true):', attached);
