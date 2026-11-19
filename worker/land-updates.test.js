@@ -327,7 +327,7 @@ describe('Landlet updates', () => {
       }),
     });
     expect(rejected.response.status).toBe(400);
-    expect(rejected.body).toEqual({ error: 'A claimed landlet must have an ownerBuilderId' });
+    expect(rejected.body).toEqual({ error: 'A claimed lándlet must have an ownerBuilderId' });
 
     const stored = await env.DB.prepare(
       'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
@@ -455,7 +455,7 @@ describe('Landlet updates', () => {
       }),
     }));
     expect(rejected.response.status).toBe(400);
-    expect(rejected.body).toEqual({ error: 'An owned landlet must have status "claimed"' });
+    expect(rejected.body).toEqual({ error: 'An owned lándlet must have status "claimed"' });
 
     const stored = await env.DB.prepare(
       'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
@@ -486,7 +486,7 @@ describe('Landlet updates', () => {
       }),
     }));
     expect(second.response.status).toBe(409);
-    expect(second.body).toEqual({ error: 'You already own a claimed landlet' });
+    expect(second.body).toEqual({ error: 'You already own a claimed lándlet' });
 
     const stored = await env.DB.prepare(
       'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',

@@ -932,7 +932,7 @@ export async function requireLandlet(db, landletId) {
 // resolves ownership through this instead of assertOwner directly.
 export async function requireOwnedLandlet(db, landletId, builderId) {
   const landlet = await requireLandlet(db, landletId);
-  assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
+  assertOwner(landlet.owner_builder_id, builderId, 'Not your lándlet');
   return landlet;
 }
 
@@ -963,7 +963,7 @@ export async function requireOwnedLandlets(db, landletIds, builderId) {
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
     if (!landlet) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
-    assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, builderId, 'Not your lándlet');
   }
 }
 
@@ -4302,7 +4302,7 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
     }
     if (Math.abs(instance.x) + halfWidth > halfSpan || Math.abs(instance.y) + halfDepth > halfSpan) {
       throw new HttpError(
-        `Instance at (${instance.x}, ${instance.y}) with its rendered footprint extends outside landlet `
+        `Instance at (${instance.x}, ${instance.y}) with its rendered footprint extends outside lándlet `
         + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(halfWidth, halfDepth)).toFixed(2)} `
         + `given its current size/scale)`,
         400,

@@ -1873,7 +1873,7 @@ describe('Finite stock tracking (#1948)', () => {
         env.DB.prepare = originalPrepare;
       }
       expect(rejected.response.status).toBe(409);
-      expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+      expect(rejected.body.error).toMatch(/Lándlet changed concurrently/);
 
       const stillUndismissed = await env.DB.prepare('SELECT dismissed_at FROM sold_out_markers WHERE marker_id = ?')
         .bind(markerId).first();

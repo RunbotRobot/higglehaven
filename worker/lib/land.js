@@ -212,7 +212,7 @@ export async function handleLandletVersions(request, db, route, url) {
   if (request.method === 'POST' && route.length === 3) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // #1721: reusing version_id itself as the dedup key, same idiom as
@@ -293,7 +293,7 @@ export async function handleLandletVersions(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 4) {
     const version = await getVersion(db, landletId, route[3]);
-    if (!version) return json({ error: 'Landlet version not found' }, 404);
+    if (!version) return json({ error: 'Lándlet version not found' }, 404);
     const { results } = await db.prepare(`
       SELECT * FROM version_instances WHERE version_id = ? ORDER BY source_instance_id
     `).bind(route[3]).all();
@@ -303,10 +303,10 @@ export async function handleLandletVersions(request, db, route, url) {
   if (request.method === 'POST' && route.length === 5 && route[4] === 'activate') {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const version = await getVersion(db, landletId, route[3]);
-    if (!version) return json({ error: 'Landlet version not found' }, 404);
+    if (!version) return json({ error: 'Lándlet version not found' }, 404);
     // #415: re-pins owner_builder_id, the same way the hardened /landlets/:id
     // PUT/PATCH guard does — without it, an auction resolving (transferring
     // ownership) in the await gap between the ownership check above and
@@ -385,7 +385,7 @@ export async function handleLandletLevels(request, db, route) {
   if (request.method === 'POST' && route.length === 3) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-level-add:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.direction !== 'up' && input.direction !== 'down') {
@@ -510,7 +510,7 @@ export async function handleLandletLevels(request, db, route) {
   if (request.method === 'DELETE' && route.length === 4) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     const levelIndex = integerValue(route[3], 'levelIndex');
     if (levelIndex === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
@@ -897,7 +897,7 @@ export async function handleLandlets(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    return row ? json({ landlet: landletFromRow(row) }) : json({ error: 'Landlet not found' }, 404);
+    return row ? json({ landlet: landletFromRow(row) }) : json({ error: 'Lándlet not found' }, 404);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'claim') {
@@ -1007,7 +1007,7 @@ export async function handleLandlets(request, db, route, url) {
     const auctionConflict = await activeAuctionConflict(db, route[1]);
     if (auctionConflict && !cancelActiveAuction) {
       throw new HttpError(
-        'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+        'Lándlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
         + 'to cancel it and reassign in one step',
         409,
         auctionConflict.extra,
@@ -1098,7 +1098,7 @@ export async function handleLandlets(request, db, route, url) {
         const raceConflict = await activeAuctionConflict(db, route[1]);
         if (raceConflict) {
           throw new HttpError(
-            'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+            'Lándlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
             + 'to cancel it and reassign in one step',
             409,
             raceConflict.extra,
@@ -1208,7 +1208,7 @@ export async function handleLandlets(request, db, route, url) {
     let sessionBuilder = null;
     if (landlet.ownerBuilderId !== null) {
       sessionBuilder = await requireSessionBuilder(request, db);
-      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a lándlet owned by yourself');
       // #799: an owner with any status other than 'claimed' would dodge
       // recomputeLandCap's own `status = 'claimed'` filter (a few hundred
       // lines up) while still passing every ownership check downstream
@@ -1287,7 +1287,7 @@ export async function handleLandlets(request, db, route, url) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Landlet not found' }, 404);
+    if (!existing) return json({ error: 'Lándlet not found' }, 404);
     // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
@@ -1302,7 +1302,7 @@ export async function handleLandlets(request, db, route, url) {
     // through that dedicated, invariant-checked endpoint now.
     if (existing.owner_builder_id !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
-      assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+      assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
       // #1150: this endpoint had no rate limit at all before "My Lands"
       // gave it a real, repeatable, owner-facing write affordance (rename)
       // — same bucketing convention as BUILDER_RENAME_RATE_LIMIT_MAX/
@@ -1425,7 +1425,7 @@ export async function handleLandlets(request, db, route, url) {
 
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Landlet not found' }, 404);
+    if (!existing) return json({ error: 'Lándlet not found' }, 404);
     // Blocked outright once owned, for anyone — this raw DELETE has no
     // cascade for the owner's placed_instances/landlet_versions the way
     // DELETE /api/builders/:id's own release path does, so it would leave
@@ -1524,7 +1524,7 @@ export async function handleLandletDraft(request, db, landletId) {
     // has to be "does the target landlet's own owner match the session,"
     // there's nothing else to compare against.
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
