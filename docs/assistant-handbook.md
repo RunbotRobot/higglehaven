@@ -16,7 +16,7 @@ from this one and a test can check them:
 
 - **A title that is the person's question**, ending in a question mark.
 - **Numbered steps.** Each step names the control by the words on it, in quotes
-  ("Add item"), or by what it looks like when it has no words (the gear, the world
+  ("Add item"), or by what it looks like when it has no words (the round logo, the world
   itself). It says what to tap, not where the code keeps it. Where the app's own
   words are not yet spelled the way the product spells them, quote only the part
   that is, so the step stays true when the spelling is fixed.
@@ -58,13 +58,13 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I sign up for an account?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once). When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
 2. Tap the "Sign Up" tab.
 3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
 4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
 5. Tap "Sign Up".
 
-**You will see:** the window closes, and the first row of the gear menu now shows the person's username instead of "Log In / Sign Up". Tapping it opens their account. A verification email is sent to the address they gave.
+**You will see:** the window closes, and the first leaf of the menu now shows the person's username instead of "Log In / Sign Up". Tapping it opens their account. A verification email is sent to the address they gave.
 
 **If something goes wrong:**
 - The app says "Account created, but the verification email failed to send": the account exists; in their account panel, "Resend verification email" sends it again.
@@ -83,12 +83,12 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I log in, or get back in if I forgot my password?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Log In / Sign Up". The "Log In" tab is the first one.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Log In / Sign Up". The "Log In" tab is the first one.
 2. Fill in "Email" and "Password", then tap "Log In".
 3. If they forgot the password, tap "Forgot password?" instead, type their email and tap "Send Reset Link".
 4. The email carries a link. It opens a screen that says "Choose a new password": type one (8 or more characters) and tap "Reset Password".
 
-**You will see:** after "Log In", the gear menu shows their username. After "Send Reset Link", the app says "If that email has an account, a reset link was sent." (it says the same whether or not the address has an account). After "Reset Password", it says "Password reset! You can log in with your new password now." and they log in with the new one.
+**You will see:** after "Log In", the menu shows their username. After "Send Reset Link", the app says "If that email has an account, a reset link was sent." (it says the same whether or not the address has an account). After "Reset Password", it says "Password reset! You can log in with your new password now." and they log in with the new one.
 
 **If something goes wrong:**
 - The email does not arrive: ask them to look in their spam folder, and to check they typed the address they signed up with.
@@ -129,7 +129,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### Where is Settings, and what is in each tab?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop" and "Build".
 3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
@@ -154,7 +154,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I wear an avatar I bought, or apply an animation?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Shop" tab.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings", then the "Shop" tab.
 2. Under "My Avatars", each avatar they own is a row, and the first row is always "Default avatar". Tap "Equip" on the one they want.
 3. Under "My Animations", tap "Apply" on an animation to use it with the avatar they are wearing, or "Clear" to take it off.
 
@@ -178,7 +178,7 @@ motion, not the only way to move. Other people see the same.
 
 ### How do I send feedback about a problem?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tap "Send feedback" at the bottom.
 3. A window titled "Submit Feedback" shows a picture of what they were looking at. In the box under "Describe what happened (optional)", say what went wrong, in as much detail as they like.
 4. Tap "Submit". "Cancel" closes it without sending.
@@ -199,11 +199,11 @@ motion, not the only way to move. Other people see the same.
 
 ### How do I change my password or log out?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then tap their username (the first row) to open "Account".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then tap their username (the first row) to open "Account".
 2. To change the password, tap "Change Password". Fill in "Current password" and "New password (8+ characters)" and tap "Change Password" again. This signs them out of every other device, but keeps this one signed in.
 3. To log out, tap "Log Out".
 
-**You will see:** after a password change, the app says "Your password has been changed. You have been signed out of your other devices." After "Log Out", the first row of the gear menu says "Log In / Sign Up" again.
+**You will see:** after a password change, the app says "Your password has been changed. You have been signed out of your other devices." After "Log Out", the first leaf of the menu says "Log In / Sign Up" again.
 
 **If something goes wrong:**
 - The app says the current password is wrong: they can log out and use "Forgot password?" from the log in screen.
@@ -410,8 +410,8 @@ label:has(#verify-age-attest) | at least 18
 
 ### Where are the things I bought, and how do I rate a seller?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"). A short menu opens, with your name
-   at the top and "Notices", "Friends", "My Purchases" and "Settings" below it.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"). A stem of leaves opens, with your name
+   at the top and "Notices", "Friends", "My Purchases", "Settings" and "Help" below it.
 2. Tap "My Purchases".
 3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
    the seller or the product for that purchase. Once given, the rating shows under the purchase
@@ -549,7 +549,7 @@ To offer friendship to someone standing near you in Shop: tap their avatar, then
 
 To add someone who is not nearby:
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"), then "Friends".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"), then "Friends".
 2. Tap "+ Add Friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
 3. They get your request. When they accept, they show in your list.

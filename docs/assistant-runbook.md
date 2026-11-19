@@ -67,11 +67,11 @@ Anything about *using* the world, in a shopper's terms:
 
 - **Getting around.** Dragging a finger on the left half of the screen walks,
   dragging on the right half looks around (alone, or both at once), and a double-tap takes off or lands (there are no
-  on-screen sticks or fly button). In Shop, the round higglehaven logo
-  button at the top left (it says Menu until it has been opened once) opens a short
-  menu with Build, Sell, Settings, Friends, My Purchases and "Help" (how to move, how higglehaven works, short manuals, and Ask an assistant). In Build
-  and Sell, the three buttons at the top (Shop, Build, Sell) switch what you are
-  doing, and the gear opens the account menu and Settings.
+  on-screen sticks or fly button). In every mode, the round higglehaven logo at the
+  top left (the head of the flower; it says Menu until it has been opened once) opens a stem of
+  leaves: your name, Notices, Friends, My Purchases, Settings and "Help" (how to move, how
+  higglehaven works, short manuals, and Ask an assistant). Shop, Build and Sell are three
+  petals around the head: tap one to go there, and each has its own tools.
 - **Finding things.** Where to look for products, how to tap a product to see it,
   how reviews and prices show.
 - **Building.** What Build mode is for (placing things on your own lándlet),
