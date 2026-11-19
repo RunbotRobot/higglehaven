@@ -82,8 +82,12 @@ const notificationsLoadMoreBtn = document.getElementById('notifications-load-mor
 // nothing is announced there; the badges on the menu buttons still count.
 const budShowsNotes = () => document.body.dataset.mode !== 'layoutPreview';
 
+// #3774: both counts are answered only for a verified account (the endpoints refuse the rest with a
+// 403, which a page would log as an error), the same bar every other social call in Shop uses.
+const canReadMenuCounts = () => Boolean(currentAuthUser?.ageAttested) && currentAuthUser.trustTier !== 'none';
+
 export async function refreshNotificationsBadge() {
-  if (!currentAuthUser) return; // #3774: Shop reads it too, with no builder identity of its own
+  if (!canReadMenuCounts()) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
     // own first page — that list is cursor-paginated (issue #320) one
@@ -615,7 +619,7 @@ dmComposeForm.addEventListener('submit', async (event) => {
 });
 
 export async function refreshFriendsBadge() {
-  if (!currentAuthUser) return; // #3774: as above
+  if (!canReadMenuCounts()) return; // #3774: as above
   try {
     const friendships = await fetchFriendships();
     const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
