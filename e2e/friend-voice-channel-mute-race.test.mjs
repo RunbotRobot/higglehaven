@@ -20,7 +20,7 @@
 // apart and confirm the connection survives" section, since this bug has
 // nothing to do with distance.
 import { chromium } from 'playwright';
-import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
+import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName, budClick } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -140,6 +140,10 @@ async function launchVoicePage(label) {
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
   const page = await browser.newPage({ viewport: { width: 420, height: 860 }, permissions: ['microphone'] });
+  // #3556: the microphone is in the Chat leaf, and an open leaf polls nearby chat. This page's
+  // trust tier is patched client-side only, so the real endpoint refuses (403) and the run would
+  // log page errors; nothing in this test is about chat.
+  await page.route('**/api/nearby-chat?*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], nextCursor: null, landletId: null }) }));
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
   page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
@@ -259,6 +263,7 @@ console.log('A connected to B via the friend channel, before either side has unm
 // window the bug lives in: muting here, before B ever grants their own
 // mic, is something a real user can do (and would want to do, for a
 // friend who joins muted-by-default per #2778).
+await budClick(pageA, '#bud-petal-shop-chat'); // #3556: who is connected is listed in the Chat leaf
 await pageA.waitForSelector('#shop-voice-peers-panel.open', { timeout: 10000 });
 await pageA.click('#shop-voice-peers-list button[data-action="mute"]');
 await pageA.waitForSelector('#shop-voice-peers-list button.shop-voice-peer-muted', { timeout: 5000 });
@@ -272,6 +277,7 @@ console.log('A muted B while B still has no real track/GainNode yet (should be t
 // fires A's pc.ontrack for the first time (A never unmutes at all, so the
 // only renegotiation in this test is the one B's own mic grant triggers),
 // running attachRemoteStream on A's side for its connection to B.
+await budClick(pageB, '#bud-petal-shop-chat'); // #3556: the microphone is in the Chat leaf
 await pageB.click('#shop-voice-btn');
 await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 
