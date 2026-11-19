@@ -100,5 +100,27 @@ try {
 const missing = await run(['--name', 'higglehaven9', 'idle', 'tap:#no-such-control']);
 check(missing.code === 2 && /step "tap:#no-such-control" failed: "#no-such-control" is not on screen/.test(missing.stderr), `a control that is not there fails with one line naming the step (${missing.stderr.trim().slice(0, 160)})`);
 
+// #3930: --with opens a second signed-in page; peer steps move, photograph and speak for it, and its
+// errors are reported apart. Against a local server any two plain names will do.
+const twoPages = await run(['--name', 'localtester', '--with', 'localfriend', 'idle', 'land', 'peer:join', 'peer:shot:beside', 'peer:pos'], { login: 'local' });
+check(twoPages.code === 0, `a run with a second page exits 0 (code ${twoPages.code}, stderr ${twoPages.stderr.slice(0, 300)})`);
+try {
+  const t = JSON.parse(twoPages.stdout);
+  check(t.steps.every((st) => st.ok), `every step, peer steps included, succeeded (${JSON.stringify(t.steps)})`);
+  check(t.peer?.name === 'localfriend' && Array.isArray(t.peer.consoleErrors), `the second page is reported apart (${JSON.stringify(t.peer)})`);
+  const peerShot = t.screenshots.find((file) => /peer-beside/.test(file));
+  check(Boolean(peerShot) && fs.existsSync(peerShot) && fs.statSync(peerShot).size > 5000, `the second page's screenshot exists (${peerShot})`);
+  const join = t.steps.find((st) => st.step === 'peer:join');
+  check(join?.pos?.avatar && Number.isFinite(join.pos.avatar.x), `peer:join reports where the second avatar stands (${JSON.stringify(join)})`);
+} catch {
+  check(false, `the two-page run prints a report (${twoPages.stdout.slice(0, 200)})`);
+}
+// A throwaway local account is not ID-verified, so it cannot chat: peer:say says why in one line.
+const cannotSay = await run(['--name', 'localtester', '--with', 'localfriend', 'idle', 'peer:say:hello'], { login: 'local' });
+check(cannotSay.code === 2 && /not ID-verified/.test(cannotSay.stderr), `peer:say on an unverified account fails with one plain line (${cannotSay.stderr.trim().slice(0, 200)})`);
+// On the live site only a fleet account may be the second page, and it stops before any browser opens.
+const notFleet = await run(['--name', 'higglehaven9', '--with', 'someoneelse', 'idle']);
+check(notFleet.code === 1 && /only fleet accounts/.test(notFleet.stderr), `a non-fleet second account is refused (${notFleet.stderr.trim().slice(0, 160)})`);
+
 fs.rmSync(outDir, { recursive: true, force: true });
 await finish({ close: async () => {} }, { pass, label: '#3430: scripts/live-site.mjs signs in, walks, screenshots at phone size, and reports timings and frame figures without printing a credential' });
