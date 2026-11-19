@@ -119,11 +119,10 @@ for (let y = 370; y >= 280; y -= 10) {
 }
 console.log('selection status with both items selected (should mention 2 items selected):', groupSelectionText);
 
-// Multi-select and the Move gizmo are sibling tools (updateSelectionUI's
-// own comment) -- the gizmo stays fully detached the whole time multi-
-// select is on. Clicking Move exits multi-select without touching the
-// selection just built and attaches translateControls to the group pivot.
-await page.click('#mode-move');
+// Multi-select and the gizmo are sibling tools (updateSelectionUI's own comment) -- the gizmo stays
+// fully detached the whole time multi-select is on. Turning multi-select off leaves the selection just
+// built as it is (the hook below attaches the group pivot the way a drag from the item does, #3689).
+await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 
 const groupDragApplied = await page.evaluate((offsetZ) => window.__testDragGroupMoveZ(offsetZ), 0.5);

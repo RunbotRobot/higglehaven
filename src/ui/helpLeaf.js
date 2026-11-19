@@ -94,7 +94,9 @@ async function renderPage(body, id) {
     const steps = el('ol', 'help-steps');
     for (const step of entry.steps) steps.appendChild(el('li', null, step));
     details.appendChild(steps);
-    if (entry.see) details.appendChild(el('p', 'help-see', entry.see));
+    // The handbook line starts "You will see: ..." and readEntry takes that label off, so it is put
+    // back: without it the line was a lowercase fragment ("the bird reappears ...") under the steps.
+    if (entry.see) details.appendChild(el('p', 'help-see', `You will see: ${entry.see}`));
     body.appendChild(details);
   }
 }

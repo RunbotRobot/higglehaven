@@ -71,7 +71,7 @@ forward there descends; put `land` first to walk on the ground),
 `menu` (open the flower's general menu if it is closed),
 `petal:<shop|build|sell>`, `leaf:<notices|friends|purchases|settings|help>` (these find the
 control by what it is, not by where it sits; prefer them to `tap:<x>:<y>`), `settings`,
-`idle`, `wait:<ms>`, `shot[:name]`, `stats`, `cover`, and
+`idle`, `wait:<ms>`, `shot[:name]`, `stats`, `marks` (the page's own start-up marks, request count and slowest requests, in ms since the navigation: after a `mode:` step it reads the reload that switch caused, #3873), `cover`, and
 `slow:<rate>` (the page's CSS animations run at that fraction of their speed, `slow:0.1` for ten times slower, `slow:1` to restore, so a burst can catch a 300 ms unfold even where each still takes longer),
 `burst:<name>:<count>:<ms>` (stills a few hundred ms apart; add `:burst:<name>:<count>:<ms>`
 to the end of any step to take them while it runs, as in

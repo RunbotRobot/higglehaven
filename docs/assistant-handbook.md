@@ -678,12 +678,12 @@ are inside it: tap the Build petal to see them (the bud opens on the general men
 4. Tap the ground where you want it.
 
 **You will see:** the item stands where you tapped and is already selected, with a
-a small card beside it that has "Move", "Rotate" and the rest, and arrows around it.
+a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
 
 **If something goes wrong:**
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then the Build petal, then that.
-- The item is not where you wanted. It is selected, so use "Move" (below), or tap
+- The item is not where you wanted. It is selected, so drag it (below), or tap
   the round logo button at the top left, the Build petal, then "Undo" to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
@@ -700,11 +700,13 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 ### How do I move an item?
 
-1. Tap the item. It gets arrows around it and a small card beside it with a row of buttons.
-2. Make sure "Move" is the yellow one on the card. Tap it if not.
-3. Drag the item to slide it along the ground. Drag the blue arrow to lift it up
-   or down. Drag the red or green arrow to slide it along only that line.
-4. Let go where you want it. It saves by itself.
+1. Tap the item. It gets a ring around it and a small card beside it.
+2. Put a finger on the item and drag. It slides along the ground under your
+   finger, staying at the same height. If you start the drag on empty ground
+   instead, the view turns and the item stays put.
+3. Let go where you want it. It saves by itself.
+4. To lift it, lower it or move it in small exact steps, tap "More" on the card:
+   see "Nudge" below.
 
 **You will see:** the item follows your finger and stays where you leave it.
 
@@ -723,18 +725,17 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
   the edge of the lándlet, the floor, or something in the way.
 
 ```controls build
-#mode-move | Move
 #toggle-snap | Snap
 ```
 
 ### How do I turn an item?
 
-1. Tap the item, then tap "Rotate" on the card beside it. Three coloured rings
-   appear around it, and a line on the card reads the angles.
-2. Drag the blue ring to turn it flat, like a record on a turntable. The line
+1. Tap the item. A blue ring appears around it, and a line on the card reads the
+   angles.
+2. Drag the ring to turn the item flat, like a record on a turntable. The line
    calls this "Turn".
-3. Drag the red or green ring to tip it over. The line calls these "Tilt".
-4. Tap "Move" to go back to sliding it.
+3. To tip it over instead, tap "More" on the card and type a number under "Angles":
+   "Tilt red" or "Tilt green" (the line calls these "Tilt").
 
 **You will see:** the item turns as you drag, and the line on the card shows how far.
 
@@ -747,8 +748,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
   more without leaving your lándlet. Move it first, or turn it the other way.
 
 ```controls build
-#mode-rotate | Rotate
-#mode-move | Move
+#item-card-more-btn | More
 ```
 
 ### How do I copy an item?
@@ -761,7 +761,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 3. To put the copy somewhere else instead, tap empty ground first so nothing is
    selected, then tap "Paste" the same way. The top of the screen says "Tap a spot to paste 1
    item": tap the ground where it should go.
-4. The copy is selected, so use "Move" to place it exactly.
+4. The copy is selected, so drag it to place it exactly.
 
 **You will see:** a second item, the same as the first.
 
@@ -828,8 +828,8 @@ single item.
 4. Tap the bud, the Build petal, "Tools", then "Multi-Select" again when you want to go back to
    choosing one item at a time. The bud says "Menu" again.
 
-**You will see:** the same buttons on the card as for one item, acting on all of them:
-"Move", "Rotate", "Copy", "Delete" and the rest.
+**You will see:** the same card as for one item, with "Copy", "Delete" and the rest acting
+on all of them; and a drag that starts on any chosen item moves all of them together.
 
 **If something goes wrong:**
 - Some buttons on the card are greyed out, such as "Trim": they work on one item at
@@ -839,7 +839,6 @@ single item.
 ```controls build
 #toggle-multiselect | Multi-Select
 #multiselect-brush-size-input | brush
-#mode-move | Move
 ```
 
 ### How do I make a bundle, and use it again?

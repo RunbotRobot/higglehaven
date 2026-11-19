@@ -861,11 +861,9 @@
       <!-- #3691: while Selecting is on, the brush's size slider blooms here beside the selection
            (src/build/itemCard.js moves #multiselect-brush-control in and back out). Empty otherwise. -->
       <div id="item-card-brush"></div>
-      <!-- #3575: Move, Rotate and Trim are on the item's own card, under its name, not a row standing on
-           the world. Same ids and handlers; the readout and the refusal notice come with them. -->
+      <!-- #3575, #3689: Trim is the one tool left on the item's own card (Move and Rotate are the ring and the drag
+           from the item); the angle readout and the refusal notice sit under it. -->
       <div id="gizmo-mode-controls">
-        <button id="mode-move" type="button">Move</button>
-        <button id="mode-rotate" type="button">Rotate</button>
         <button id="mode-trim" type="button">Trim</button>
         <div id="trim-length-control" class="gizmo-numeric-control">
           <label class="trim-axis-field" data-trim-axis="x">
@@ -881,10 +879,10 @@
             <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
           </label>
         </div>
-        <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
-          <span id="selection-action-status-text" class="shop-notice-text"></span>
-          <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-        </div>
+      </div>
+      <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
+        <span id="selection-action-status-text" class="shop-notice-text"></span>
+        <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
       </div>
       <div id="rotation-readout" role="status" aria-live="off" hidden></div>
       <div id="item-card-actions">

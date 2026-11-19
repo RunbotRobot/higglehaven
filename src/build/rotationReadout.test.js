@@ -38,7 +38,7 @@ describe('anglesFromQuaternion (#3376)', () => {
 describe('formatRotationReadout (#3376)', () => {
   it('names the angles by the gizmo ring colour, in degrees', () => {
     expect(formatRotationReadout({ turn: 90, tiltRed: 0, tiltGreen: -2.5 }))
-      .toBe('Turn 90.0° (blue ring) · Tilt 0.0° (red ring) · Tilt -2.5° (green ring)');
+      .toBe('Turn 90.0° (blue ring) · Tilt red 0.0° · Tilt green -2.5°');
   });
   it('uses no axis letters or internal vocabulary', () => {
     expect(formatRotationReadout({ turn: 1, tiltRed: 2, tiltGreen: 3 })).not.toMatch(/\b[xyz]\b|quaternion|euler/i);
