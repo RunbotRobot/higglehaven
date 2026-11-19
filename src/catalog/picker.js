@@ -243,7 +243,7 @@ function buildCatalogTemplateTile(template) {
   }
 
   tile.addEventListener('click', () => {
-    // #2051: when set, the Backup chain panel's "+ Add Backup" wants the
+    // #2051: when set, the Backup chain panel's "+ Add backup" wants the
     // chosen template handed back to it instead of an ordinary world
     // placement -- captured before closeCatalogPicker() below, which
     // clears it as part of leaving pick mode.
@@ -633,7 +633,7 @@ for (const btn of bundleTabButtons) {
 // real modal dialog in this file.
 //
 // #2051: when the picker was opened via openCatalogPickerForPick (the
-// Backup chain panel's "+ Add Backup" button), closing it by any route —
+// Backup chain panel's "+ Add backup" button), closing it by any route —
 // a tile pick, the close button, Escape, or a backdrop click via
 // openModalA11y — must also leave pick mode: clear the callbacks, restore
 // the ordinary scope-tab row that mode hides, drop the low-opacity

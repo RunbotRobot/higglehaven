@@ -6,7 +6,7 @@
 // src/ui/emptyState.test.js checks that they do.
 export const EMPTY_COPY = {
   notices: 'Nothing new. Updates about your products, your lándlet and your account will show up here.',
-  friends: 'No friends yet. Tap + Add Friend to invite someone by name.',
+  friends: 'No friends yet. Tap + Add friend to invite someone by name.',
   purchases: "You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.",
   lands: "You don't own a lándlet yet. Claim one in Build mode to start building.",
   products: 'No products yet. Tap "Add a product" in the menu to put your first one up for sale.',

@@ -24,7 +24,7 @@
 //
 // MAX_MONEY_CENTS in particular must stay declared in main.js rather than
 // moving here — it's genuinely shared well beyond this leaf (Sell's own
-// Edit Price panel, Start Auction form, auction bidding), same reasoning
+// Edit price panel, Start Auction form, auction bidding), same reasoning
 // #2614's own issue gives for the identical worker-side const.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -683,7 +683,7 @@ async function confirmDuplicateProductName(name) {
 
 // #1601: price is required at upload time -- a free digital good is entered
 // as an explicit 0, not left blank. priceCents can still end up null later
-// via the separate "Edit Price" panel (docs/API.md's "Seller-side: setting a
+// via the separate "Edit price" panel (docs/API.md's "Seller-side: setting a
 // price"), which keeps its own null-means-unset convention; this is just the
 // one-time creation step. #3252: checked on the step that has the price
 // field (file/video), so the error appears where the seller can act on it;

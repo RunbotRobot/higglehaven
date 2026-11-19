@@ -762,7 +762,7 @@ export function formatPriceCents(cents) {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-// N50: the price fields (upload wizard + Seller "Edit Price") let the
+// N50: the price fields (upload wizard + Seller "Edit price") let the
 // seller type a price in whatever format they like — plain digits, a
 // leading $, thousands commas — and reformat it to a consistent
 // "$123,456.78" display once they leave the field, rather than forcing a
@@ -771,7 +771,7 @@ export function formatPriceCents(cents) {
 // submit-time validation still sees a plain number.
 // Exported for src/catalog/upload.js (#2557) -- its own upload-price field
 // needs these same two parse/format helpers, per this comment's own note
-// above ("the price fields (upload wizard + Seller Edit Price)").
+// above ("the price fields (upload wizard + Seller Edit price)").
 export function parsePriceInputDollars(raw) {
   const cleaned = String(raw).trim().replace(/[$,]/g, '');
   return cleaned === '' ? NaN : Number(cleaned);
@@ -1021,7 +1021,7 @@ document.addEventListener('click', (event) => {
 // src/account/menu.js — see that module's own comment for its
 // dependency notes. refreshNotificationsBadge/refreshFriendsBadge/
 // refreshDmBadge (still called directly from this file after Shop/
-// Sell/layout-preview mode entry and the seller Edit Size save flow)
+// Sell/layout-preview mode entry and the seller Edit size save flow)
 // are imported back above.
 
 // Shop: a visitor mode reached straight from the builder-choice screen, no

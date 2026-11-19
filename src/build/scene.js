@@ -5140,7 +5140,7 @@ async function renderLandCapField() {
   field.id = 'land-cap-field';
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
-  fieldLabel.textContent = 'Lándlet Cap';
+  fieldLabel.textContent = 'Lándlet cap';
   field.appendChild(fieldLabel);
   const status = document.createElement('div');
   status.className = 'settings-empty-note';
@@ -5439,7 +5439,7 @@ async function renderRedeemHigglesField() {
 // backend gets a frontend. Only meaningful while actually in Build mode on
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
-// #3652: Redeem Higgles, Sell Your Lándlet and Active Auctions are occasional money matters, so they
+// #3652: Redeem Higgles, Sell your lándlet and Active Auctions are occasional money matters, so they
 // sit behind one closed row and the Build tab's first screen holds what a builder checks often
 // (username, lándlet cap, low-stock). The fold is made first, so fields that load later go either
 // into it or in front of it, whatever order their requests come back in.
@@ -5707,7 +5707,7 @@ export function renderBuildSettingsSection() {
     const restoreBtn = document.createElement('button');
     restoreBtn.type = 'button';
     restoreBtn.className = 'version-action-btn';
-    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.textContent = 'Restore to editor';
     restoreBtn.addEventListener('click', async () => {
       publishStatus.textContent = '';
       publishStatus.classList.remove('error');
@@ -5888,7 +5888,7 @@ async function renderAuctionSection() {
   const startField = document.createElement('div');
   startField.className = 'settings-field';
   const startLabel = document.createElement('span');
-  startLabel.textContent = 'Sell Your Lándlet';
+  startLabel.textContent = 'Sell your lándlet';
   startField.appendChild(startLabel);
   const startStatus = document.createElement('div');
   startStatus.className = 'settings-empty-note';
@@ -6158,14 +6158,14 @@ async function renderAuctionSection() {
       const bidHistoryToggle = document.createElement('button');
       bidHistoryToggle.type = 'button';
       bidHistoryToggle.className = 'auction-bid-history-btn';
-      bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+      bidHistoryToggle.textContent = `View bids (${auction.bidCount})`;
       const bidHistoryList = document.createElement('div');
       bidHistoryList.className = 'auction-bid-history';
       bidHistoryList.hidden = true;
       bidHistoryToggle.addEventListener('click', async () => {
         if (!bidHistoryList.hidden) {
           bidHistoryList.hidden = true;
-          bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+          bidHistoryToggle.textContent = `View bids (${auction.bidCount})`;
           return;
         }
         bidHistoryToggle.disabled = true;
@@ -6193,7 +6193,7 @@ async function renderAuctionSection() {
           }
           // #1275: the server caps this list at 200 rows — flag it when
           // that cap actually bites, instead of silently showing a
-          // partial list under a "Hide Bids (N)" label that implies it's
+          // partial list under a "Hide bids (N)" label that implies it's
           // everything.
           if (totalCount > bids.length) {
             const truncationNote = document.createElement('div');
@@ -6201,7 +6201,7 @@ async function renderAuctionSection() {
             truncationNote.textContent = `Showing top ${bids.length} of ${totalCount} bids.`;
             bidHistoryList.appendChild(truncationNote);
           }
-          bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
+          bidHistoryToggle.textContent = `Hide bids (${auction.bidCount})`;
         } catch (err) {
           bidHistoryList.innerHTML = '';
           const errNote = document.createElement('div');

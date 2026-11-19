@@ -21,7 +21,7 @@
 // friendship needed), this test needs a REAL accepted friendship between
 // the two builders -- the actual "Join voice" UI (src/account/menu.js) only
 // renders a row for an accepted friend in the first place -- done via the
-// same real "+ Add Friend"/Accept Friends-panel flow e2e/friends.test.mjs
+// same real "+ Add friend"/Accept Friends-panel flow e2e/friends.test.mjs
 // and e2e/direct-messages-gating.test.mjs already use. And since the
 // Friends panel (where that button lives) is Build/Sell-mode-only
 // (src/main.js's SHOP_HIDDEN_BUILDER_UI_IDS explicitly hides #friends-btn
@@ -260,7 +260,7 @@ const unreadCountMock = (route) => route.fulfill({ status: 200, contentType: 'ap
 await pageA.route('**/api/direct-messages/unread-count', unreadCountMock);
 await pageB.route('**/api/direct-messages/unread-count', unreadCountMock);
 
-// Real "+ Add Friend"/Accept flow (same as e2e/friends.test.mjs/
+// Real "+ Add friend"/Accept flow (same as e2e/friends.test.mjs/
 // e2e/direct-messages-gating.test.mjs) -- credit_card tier is enough for
 // this, no patch needed yet.
 await openAccountMenu(pageA);

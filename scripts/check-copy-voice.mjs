@@ -38,6 +38,43 @@ export function findVoiceBreaks(rows) {
   return breaks;
 }
 
+// "Capital letters" in docs/DESIGN.md's Voice: a short label is in sentence case, so only its first word and
+// the proper things below start with a capital ("Add a product", not "Add A Product"). A label is a short
+// string (up to six words) with no sentence stops; a longer string is a sentence and is not checked here.
+// Words that may keep a capital in the middle of a label, and why:
+export const CAPITAL_OK = new Set([
+  'Shop', 'Build', 'Sell', // the three places (Voice: "Capital letters")
+  'Stripe', 'Tripo', 'Didit', 'Apple', 'Google', // companies the person meets by name
+  'AI', 'ID', 'PNG', 'GLB', 'SSN', 'USD', 'URL', 'FAQ', // acronyms
+]);
+
+// Exact labels that break the rule on purpose, each with a one-line reason. Keep this short.
+export const ALLOWED_LABELS = new Map([
+  ['e.g. Brick', 'an example of what to type in a field, where the example is a name'],
+]);
+
+const LABEL_SPLIT = /[!?.…✓▾▴+·|\/()—–:;,]|\s-\s/;
+
+export function findCaseBreaks(rows) {
+  const breaks = [];
+  for (const row of rows) {
+    if (!READ_BY_PEOPLE.has(row.area) || isLogLine(row.text)) continue;
+    const whole = row.text.replace(/\$\{[^}]*\}/g, ' ').replace(/\s+/g, ' ').trim();
+    if (ALLOWED_LABELS.has(whole)) continue;
+    const words = whole.split(' ').filter((w) => /[A-Za-z]/.test(w));
+    if (words.length < 2 || words.length > 6 || /[.!?…]\s*$/.test(whole)) continue;
+    for (const segment of whole.split(LABEL_SPLIT)) {
+      const w = segment.trim().split(/\s+/).filter((x) => /[A-Za-z]/.test(x));
+      const bad = w.slice(1).filter((x) => /^[A-Z][a-zà-ÿ]/.test(x) && !CAPITAL_OK.has(x.replace(/[^A-Za-z]/g, '')));
+      if (bad.length) {
+        breaks.push({ file: row.file, line: row.line, text: row.text, word: 'letter case', why: `sentence case, not Title Case: "${bad.join('", "')}"` });
+        break;
+      }
+    }
+  }
+  return breaks;
+}
+
 // The Worker's refusals are read by people too (the client shows them as they are). Only the sentence a
 // person can see is checked: the text of an HttpError(...) or an `error:` field, never a log line or a name.
 const WORKER_SENTENCE = /(?:HttpError\(\s*\d+\s*,\s*|\berror:\s*)(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
@@ -65,9 +102,10 @@ function workerSources(dir = 'worker') {
 }
 
 export function main() {
-  const breaks = [...findVoiceBreaks(collectCopy()), ...findWorkerVoiceBreaks(workerSources())];
+  const rows = collectCopy();
+  const breaks = [...findVoiceBreaks(rows), ...findCaseBreaks(rows), ...findWorkerVoiceBreaks(workerSources())];
   if (breaks.length === 0) {
-    console.log('check-copy-voice: no banned words in what people read');
+    console.log('check-copy-voice: no banned words and no Title Case labels in what people read');
     return 0;
   }
   console.error(`check-copy-voice: ${breaks.length} string(s) use a word the voice note bans (docs/DESIGN.md, "Voice"):`);

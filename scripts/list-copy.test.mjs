@@ -32,7 +32,7 @@ describe('htmlCopy', () => {
     const html = [
       '<!-- Not a sentence for a person. -->',
       '<button id="a" aria-label="Close this window">&times;</button>',
-      '<p>No friends yet. Tap + Add Friend.</p>',
+      '<p>No friends yet. Tap + Add friend.</p>',
       '<script>',
       '  const s = "Not shown here";',
       '</script>',
@@ -41,7 +41,7 @@ describe('htmlCopy', () => {
     const rows = htmlCopy('index.html', html);
     expect(rows.map((r) => [r.line, r.kind, r.text])).toEqual([
       [2, 'aria-label', 'Close this window'],
-      [3, 'text', 'No friends yet. Tap + Add Friend.'],
+      [3, 'text', 'No friends yet. Tap + Add friend.'],
       [7, 'placeholder', 'Say something nearby…'],
     ]);
   });

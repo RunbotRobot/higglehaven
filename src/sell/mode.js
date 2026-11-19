@@ -703,7 +703,7 @@ function renderSellerList() {
     const digitalGoodToggle = document.createElement('button');
     digitalGoodToggle.className = 'seller-extensibility-toggle seller-digital-good-toggle';
     digitalGoodToggle.type = 'button';
-    digitalGoodToggle.textContent = 'Edit Digital Good ▾';
+    digitalGoodToggle.textContent = 'Edit digital good ▾';
     details.appendChild(digitalGoodToggle);
 
     const digitalGoodPanel = document.createElement('div');
@@ -783,7 +783,7 @@ function renderSellerList() {
 
     digitalGoodToggle.addEventListener('click', () => {
       digitalGoodPanel.hidden = !digitalGoodPanel.hidden;
-      digitalGoodToggle.textContent = `Edit Digital Good ${digitalGoodPanel.hidden ? '▾' : '▴'}`;
+      digitalGoodToggle.textContent = `Edit digital good ${digitalGoodPanel.hidden ? '▾' : '▴'}`;
       if (!digitalGoodPanel.hidden) fillDigitalGoodInputs();
     });
 
@@ -793,7 +793,7 @@ function renderSellerList() {
     // single-boolean-in-metadata simplicity as digital goods above. Own
     // classes throughout for the same "don't share a class across
     // genuinely different rows/panels" reasoning as Extensibility vs. Edit
-    // Size vs. Edit Digital Good.
+    // Size vs. Edit digital good.
     const noReturnsText = document.createElement('div');
     noReturnsText.className = 'seller-row-no-returns';
     const refreshNoReturnsText = () => {
@@ -805,7 +805,7 @@ function renderSellerList() {
     const noReturnsToggle = document.createElement('button');
     noReturnsToggle.className = 'seller-extensibility-toggle seller-no-returns-toggle';
     noReturnsToggle.type = 'button';
-    noReturnsToggle.textContent = 'Edit Returns Policy ▾';
+    noReturnsToggle.textContent = 'Edit returns policy ▾';
     details.appendChild(noReturnsToggle);
 
     const noReturnsPanel = document.createElement('div');
@@ -859,7 +859,7 @@ function renderSellerList() {
 
     noReturnsToggle.addEventListener('click', () => {
       noReturnsPanel.hidden = !noReturnsPanel.hidden;
-      noReturnsToggle.textContent = `Edit Returns Policy ${noReturnsPanel.hidden ? '▾' : '▴'}`;
+      noReturnsToggle.textContent = `Edit returns policy ${noReturnsPanel.hidden ? '▾' : '▴'}`;
       if (!noReturnsPanel.hidden) noReturnsCheckbox.checked = !!template.metadata?.noReturns;
     });
 
@@ -880,7 +880,7 @@ function renderSellerList() {
     const domesticOnlyToggle = document.createElement('button');
     domesticOnlyToggle.className = 'seller-extensibility-toggle seller-domestic-only-toggle';
     domesticOnlyToggle.type = 'button';
-    domesticOnlyToggle.textContent = 'Edit Shipping ▾';
+    domesticOnlyToggle.textContent = 'Edit shipping ▾';
     details.appendChild(domesticOnlyToggle);
 
     const domesticOnlyPanel = document.createElement('div');
@@ -934,11 +934,11 @@ function renderSellerList() {
 
     domesticOnlyToggle.addEventListener('click', () => {
       domesticOnlyPanel.hidden = !domesticOnlyPanel.hidden;
-      domesticOnlyToggle.textContent = `Edit Shipping ${domesticOnlyPanel.hidden ? '▾' : '▴'}`;
+      domesticOnlyToggle.textContent = `Edit shipping ${domesticOnlyPanel.hidden ? '▾' : '▴'}`;
       if (!domesticOnlyPanel.hidden) domesticOnlyCheckbox.checked = !!template.metadata?.domesticOnly;
     });
 
-    // Edit Size: correct a mis-measured (or since-outgrown) real-world
+    // Edit size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
     // wizard's own dimensions step (handleUploadDimensionsStep), since
     // Trim (not this) is the tool for changing one instance's own aspect
@@ -957,7 +957,7 @@ function renderSellerList() {
     // shared class would silently shift those indices.
     sizeToggle.className = 'seller-extensibility-toggle seller-size-toggle';
     sizeToggle.type = 'button';
-    sizeToggle.textContent = 'Edit Size ▾';
+    sizeToggle.textContent = 'Edit size ▾';
     details.appendChild(sizeToggle);
 
     const sizePanel = document.createElement('div');
@@ -1104,18 +1104,18 @@ function renderSellerList() {
 
     sizeToggle.addEventListener('click', () => {
       sizePanel.hidden = !sizePanel.hidden;
-      sizeToggle.textContent = `Edit Size ${sizePanel.hidden ? '▾' : '▴'}`;
+      sizeToggle.textContent = `Edit size ${sizePanel.hidden ? '▾' : '▴'}`;
       if (!sizePanel.hidden) fillSizeInputs();
     });
 
-    // Edit Price: the only way a seller can ever set/change a product's
+    // Edit price: the only way a seller can ever set/change a product's
     // priceCents after upload (the upload wizard's own price field only
     // covers creation) — same collapsed-panel-with-a-Save-step idiom as
-    // Edit Size just above, own classes throughout for the same reasons.
+    // Edit size just above, own classes throughout for the same reasons.
     const priceToggle = document.createElement('button');
     priceToggle.className = 'seller-extensibility-toggle seller-price-toggle';
     priceToggle.type = 'button';
-    priceToggle.textContent = 'Edit Price ▾';
+    priceToggle.textContent = 'Edit price ▾';
     details.appendChild(priceToggle);
 
     const pricePanel = document.createElement('div');
@@ -1165,7 +1165,7 @@ function renderSellerList() {
       } else if (out.saved) {
         refreshPriceText();
         priceStatus.textContent = 'Saved.';
-        priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
+        priceToggle.textContent = `Edit price ${pricePanel.hidden ? '▾' : '▴'}`;
       }
     });
     pricePanel.appendChild(priceSaveBtn);
@@ -1173,7 +1173,7 @@ function renderSellerList() {
 
     priceToggle.addEventListener('click', () => {
       pricePanel.hidden = !pricePanel.hidden;
-      priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
+      priceToggle.textContent = `Edit price ${pricePanel.hidden ? '▾' : '▴'}`;
       if (!pricePanel.hidden) fillPriceInput();
     });
 
@@ -1315,7 +1315,7 @@ function renderSellerList() {
 
     // Ground/flooring (docs/SPEC.md §3, see isFlooringTemplate in this
     // file) — a single opt-in flag, not a numeric form like Extensibility
-    // or Edit Size, so a plain immediate-PATCH toggle button fits better
+    // or Edit size, so a plain immediate-PATCH toggle button fits better
     // than a collapsed panel with its own Save step.
     const flooringToggleBtn = document.createElement('button');
     flooringToggleBtn.className = 'seller-row-action-btn metadata-save-btn';
@@ -1576,7 +1576,7 @@ function renderSellerList() {
     const sitLeanSaveBtn = document.createElement('button');
     sitLeanSaveBtn.className = 'seller-sit-lean-save-btn metadata-save-btn';
     sitLeanSaveBtn.type = 'button';
-    sitLeanSaveBtn.textContent = 'Save Sit/Lean Target';
+    sitLeanSaveBtn.textContent = 'Save sit/lean target';
     metadataSaveButtons.push(sitLeanSaveBtn);
 
     sitLeanSaveBtn.addEventListener('click', async () => {
@@ -2200,7 +2200,7 @@ export function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
   closeModalA11y(sellerModalEl);
   disposeAxisPreview();
-  // An Edit Size save while this modal was open can have just created a
+  // An Edit size save while this modal was open can have just created a
   // notification for this same builder identity — refresh the badge now
   // rather than leaving it stale until the next Build-mode entry.
   refreshNotificationsBadge();
@@ -2331,7 +2331,7 @@ let attachListingInFlight = false;
 // #3249: the price and stock questions used to be two native prompt() calls
 // plus a confirm() for "you already have one", which a browser that
 // suppresses native dialogs skipped silently. They are now a small form in
-// the Sell this too modal. The validation mirrors the Edit Price panel's
+// the Sell this too modal. The validation mirrors the Edit price panel's
 // (parsePriceInputDollars/MAX_MONEY_CENTS) since priceCents is required here
 // the same way it's required on this seller's own new listing (#1601's own
 // catalog-create requirement, which POST /api/catalog/listings shares). The

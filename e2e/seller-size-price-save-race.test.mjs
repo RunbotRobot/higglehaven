@@ -45,10 +45,10 @@ const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
 await row().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
 
-// Open both Edit Size and Edit Price at once — independent panels, no
+// Open both Edit size and Edit price at once — independent panels, no
 // mutual-exclusion between them, same as a real seller could do.
-await row().locator('button', { hasText: 'Edit Size' }).click();
-await row().locator('button', { hasText: 'Edit Price' }).click();
+await row().locator('button', { hasText: 'Edit size' }).click();
+await row().locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
 
 const xInput = row().locator('.seller-size-row').nth(0).locator('input');

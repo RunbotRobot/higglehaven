@@ -3,7 +3,7 @@
 // independent browser pages stand in for two different builders, the same
 // pattern e2e/land-auctions.test.mjs already uses, since a friend request
 // is inherently a two-party interaction. Covers sending a request through
-// the real "+ Add Friend" prompt, seeing it as incoming on the other side,
+// the real "+ Add friend" prompt, seeing it as incoming on the other side,
 // accepting it, and both sides then showing each other in "Friends" with
 // their approximate location (their claimed lándlet — see
 // docs/API.md's "Friend requests" for why that's the honest simplification
@@ -45,7 +45,7 @@ async function fetchJson(page, path, options) {
   }, [path, options]);
 }
 
-// Alice sends Bob a request through the real "+ Add Friend" name modal
+// Alice sends Bob a request through the real "+ Add friend" name modal
 // (#3359: it used to be a native prompt()).
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
@@ -149,7 +149,7 @@ console.log('Alice has no friendship record with Carol after the cancel (should 
 
 // #1187 ("all accounts should be unique even when ignoring case") closed
 // the one way this suite could ever have set up the "ambiguous label"
-// scenario this test used to cover here (docs/API.md's "+ Add Friend"
+// scenario this test used to cover here (docs/API.md's "+ Add friend"
 // contract: "an unmatched or ambiguous label surfaces as a status message
 // rather than a dead end") — POST /api/builders now rejects a second
 // builder sharing an existing label with a 409, and this suite doesn't

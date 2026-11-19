@@ -3,8 +3,8 @@
 // frontend anywhere: not settable during upload, not editable afterward,
 // not shown to a shopper). This covers the two seller-side surfaces this
 // change adds: setting a price during the upload wizard, and editing it
-// afterward via a product's own "Edit Price" panel (same collapsed-panel-
-// with-a-Save-step idiom as "Edit Size", see e2e/seller-upload-and-
+// afterward via a product's own "Edit price" panel (same collapsed-panel-
+// with-a-Save-step idiom as "Edit size", see e2e/seller-upload-and-
 // resize.test.mjs). The Shop-mode "name — price" readout in the tapped-
 // product card (#product-card-price, #product-card-notes) isn't covered here
 // for the same reason real camera movement never is in this suite — see
@@ -13,12 +13,12 @@
 //
 // #1601: the upload wizard's own price field is required (owner wants an
 // explicit $0 for a free product, not a blank field) — only the separate
-// "Edit Price" panel keeps the older null-means-unset convention, for a
+// "Edit price" panel keeps the older null-means-unset convention, for a
 // product that predates this requirement. The server itself now enforces
 // the same requirement on any direct POST with a sellerId, so this suite's
 // "unpriced" fixture (below) has to go through a POST-with-a-price followed
 // by a direct PATCH clearing it back to null — the same clear-to-null path
-// "Edit Price" itself uses — rather than a single priceCents-less POST, to
+// "Edit price" itself uses — rather than a single priceCents-less POST, to
 // land in that pre-#1601/legacy null-price state and keep exercising the
 // panel's own give-it-a-price-after-the-fact path.
 import path from 'node:path';
@@ -95,19 +95,19 @@ console.log('priced product\'s row price text (should be "$12.50"):', pricedRowP
 await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
 
-// Same blur-reformat check, now against the Seller "Edit Price" panel —
+// Same blur-reformat check, now against the Seller "Edit price" panel —
 // reopen the row, type a raw value into its price input, and confirm it
 // reformats the same way (without saving, so it doesn't disturb this
 // product's price for the rest of the suite).
 await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
-await pricedRow().locator('button', { hasText: 'Edit Price' }).click();
+await pricedRow().locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
 await pricedRow().locator('.seller-price-input').fill('1234.5');
 await pricedRow().locator('.seller-price-input').blur();
 const editPriceAfterBlur = await pricedRow().locator('.seller-price-input').inputValue();
-console.log('Edit Price input after blur (should be "$1,234.50"):', editPriceAfterBlur);
-await pricedRow().locator('button', { hasText: 'Edit Price' }).click();
+console.log('Edit price input after blur (should be "$1,234.50"):', editPriceAfterBlur);
+await pricedRow().locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(200);
 await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
@@ -153,11 +153,11 @@ await page.waitForTimeout(300);
 const unpricedRowPriceTextBefore = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('unpriced product\'s row price text before editing (should be "Not priced"):', unpricedRowPriceTextBefore);
 
-// Give it a price after the fact via Edit Price.
-await unpricedRow().locator('button', { hasText: 'Edit Price' }).click();
+// Give it a price after the fact via Edit price.
+await unpricedRow().locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
 const priceInputBefore = await unpricedRow().locator('.seller-price-input').inputValue();
-console.log('Edit Price input starts blank for a never-priced product (should be ""):', JSON.stringify(priceInputBefore));
+console.log('Edit price input starts blank for a never-priced product (should be ""):', JSON.stringify(priceInputBefore));
 await unpricedRow().locator('.seller-price-input').fill('7.99');
 await unpricedRow().locator('button', { hasText: 'Save price' }).click();
 await page.waitForFunction(

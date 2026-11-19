@@ -63,7 +63,7 @@ await page.waitForSelector('#backup-chain-modal.visible', { timeout: 5000 });
 const emptyStateShown = await page.locator('#backup-chain-empty').isVisible();
 console.log('"No backups configured yet" shown before adding any (should be true):', emptyStateShown);
 
-// "+ Add Backup" closes this panel (only one modal is ever tracked active
+// "+ Add backup" closes this panel (only one modal is ever tracked active
 // at a time -- see openModalA11y's own comment in src/main.js) and opens the
 // shared catalog picker in "pick" mode: Products-only, scope tabs hidden,
 // and the low-opacity reference mesh of the chair itself shown behind it.

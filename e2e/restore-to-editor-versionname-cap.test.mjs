@@ -1,4 +1,4 @@
-// #2250: "Restore to Editor" constructs its own version name by wrapping
+// #2250: "Restore to editor" constructs its own version name by wrapping
 // the restored version's own name in `Restored from "..."` (src/main.js) --
 // a chain of real restores grows this past the server's own 100-char
 // MAX_LABEL_LENGTH cap (worker/index.js), and the restore then fails
@@ -8,7 +8,7 @@
 // with an already-near-the-cap name directly via POST /landlets/:id/versions
 // (itself capped at 100 server-side, so this is a realistic value a real
 // chain of restores would actually produce) and does a single real
-// "Restore to Editor" click on it.
+// "Restore to editor" click on it.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Restore Version Name Cap Tester';
@@ -45,7 +45,7 @@ await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 20000 });
 
 const seededRow = page.locator('.version-row').filter({ hasText: nearCapName.slice(0, 40) });
-await seededRow.locator('button', { hasText: 'Restore to Editor' }).click();
+await seededRow.locator('button', { hasText: 'Restore to editor' }).click();
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForLoadState('networkidle', { timeout: 15000 });
 await page.waitForTimeout(1500);
@@ -72,6 +72,6 @@ const pass = !!myLandlet &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Restore to Editor truncates a near-cap-length version name instead of failing with a 400 (#2250)',
+  label: 'Restore to editor truncates a near-cap-length version name instead of failing with a 400 (#2250)',
   errors,
 });
