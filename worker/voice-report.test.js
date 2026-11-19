@@ -108,7 +108,7 @@ describe('Voice conduct reports (#2819)', () => {
       expect(created.response.status).toBe(201);
       const note = await noteFor(created.body.reportId);
       expect(note).toContain('Shared voice signaling still on record: no');
-      expect(note).toContain('Both in the same landlet right now: no');
+      expect(note).toContain('Both in the same lándlet right now: no');
       expect(note).toContain('"no" is weak evidence');
       // Invisible to the reporter: the response carries nothing but the id.
       expect(Object.keys(created.body)).toEqual(['reportId']);
@@ -134,7 +134,7 @@ describe('Voice conduct reports (#2819)', () => {
       expect(created.response.status).toBe(201);
       const note = await noteFor(created.body.reportId);
       expect(note).toContain('Shared voice signaling still on record: yes');
-      expect(note).toContain('Both in the same landlet right now: yes');
+      expect(note).toContain('Both in the same lándlet right now: yes');
     });
 
     it('does not count stale presence as co-presence', async () => {
@@ -151,7 +151,7 @@ describe('Voice conduct reports (#2819)', () => {
         method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
       }));
       expect(created.response.status).toBe(201);
-      expect(await noteFor(created.body.reportId)).toContain('Both in the same landlet right now: no');
+      expect(await noteFor(created.body.reportId)).toContain('Both in the same lándlet right now: no');
     });
   });
 
