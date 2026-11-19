@@ -5,6 +5,8 @@
 // leaf, stem, flower, modal) is for people who build the app, not for people who use it, and a plot
 // of ground is a "lándlet" with the accent, never "landlet", "lánd" or "plot". See "The word is
 // lándlet, always" and "Public-facing copy describes what the user sees, never internals" in AGENTS.md.
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { collectCopy } from './list-copy-files.mjs';
 
 // Word, pattern, and why. Each pattern is tested against the sentence with ${...} interpolations removed.
@@ -35,8 +37,34 @@ export function findVoiceBreaks(rows) {
   return breaks;
 }
 
+// The Worker's refusals are read by people too (the client shows them as they are). Only the sentence a
+// person can see is checked: the text of an HttpError(...) or an `error:` field, never a log line or a name.
+const WORKER_SENTENCE = /(?:HttpError\(\s*\d+\s*,\s*|\berror:\s*)(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+
+export function findWorkerVoiceBreaks(files) {
+  const breaks = [];
+  for (const { file, source } of files) {
+    for (const m of source.matchAll(WORKER_SENTENCE)) {
+      const text = m[2].replace(/\$\{[^}]*\}/g, ' ');
+      const line = source.slice(0, m.index).split('\n').length;
+      if (/\blandlets?\b/i.test(text)) breaks.push({ file, line, text: m[2], word: 'landlet', why: 'say "lándlet", with the accent' });
+    }
+  }
+  return breaks;
+}
+
+function workerSources(dir = 'worker') {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) out.push(...workerSources(path));
+    else if (name.endsWith('.js') && !name.endsWith('.test.js')) out.push({ file: path, source: readFileSync(path, 'utf8') });
+  }
+  return out;
+}
+
 export function main() {
-  const breaks = findVoiceBreaks(collectCopy());
+  const breaks = [...findVoiceBreaks(collectCopy()), ...findWorkerVoiceBreaks(workerSources())];
   if (breaks.length === 0) {
     console.log('check-copy-voice: no banned words in what people read');
     return 0;

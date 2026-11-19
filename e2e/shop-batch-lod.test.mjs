@@ -6,7 +6,7 @@
 // Seeds a claimed landlet with a wall of identical placements of a dense sphere (public/models/crate.glb
 // has no reduced versions to switch to) and checks, at phone width in Shop: beside the wall every
 // placement is on the full model; a batch arriving from 26 m is on a reduced version from its first frame; at 26 m (small on screen) they are all on a reduced version and the
-// frame draws a small fraction of the triangles; back beside it they are full again; the three set
+// frame draws a small fraction of the triangles; beside the wall with the full-detail triangle budget lowered only the nearest stay full (#3920); back beside it they are full again; the three set
 // sizes sum to the placements at every step; and a real tap on a brick drawn from a reduced version
 // still resolves to that brick's placement.
 import path from 'node:path';
@@ -167,6 +167,34 @@ console.log('beside the wall:', JSON.stringify(near.batchTiers), 'triangles', ne
 check(near.batchedPlacements === COUNT, `all ${COUNT} placements are batched (${near.batchedPlacements})`);
 check(near.batchTiers.full === COUNT && sum(near.batchTiers) === COUNT, `beside the wall every placement is on the full model (${JSON.stringify(near.batchTiers)})`);
 check(near.triangles > COUNT * FULL_TRIANGLES * 0.8, `and the frame draws them all (${near.triangles} triangles of about ${COUNT * FULL_TRIANGLES})`);
+
+// #3920: the full-detail triangle budget counts protected items too. Beside the wall everything is within
+// the protected radius; with the budget lowered to about 22 spheres the nearest stay full and the
+// farthest drop to mid, and the frame's triangles fall with them.
+const CAP = 100_000;
+await page.evaluate((cap) => { window.__testSetShopFullTriangleCap(cap); window.__testForceShopProximityCheck(); }, CAP);
+await page.waitForFunction(() => { window.__testForceShopProximityCheck(); return window.__testShopDrawStats().batchTiers.full < 60; }, null, { timeout: 60000, polling: 500 }).catch(() => {});
+await page.waitForTimeout(800);
+const budgeted = await stats();
+console.log('beside the wall with the budget lowered:', JSON.stringify(budgeted.batchTiers), 'triangles', budgeted.triangles);
+const maxFull = Math.floor(CAP / FULL_TRIANGLES);
+check(sum(budgeted.batchTiers) === COUNT, `the sets still sum to the placements (${JSON.stringify(budgeted.batchTiers)})`);
+check(budgeted.batchTiers.full > 0 && budgeted.batchTiers.full <= maxFull, `only what the budget allows stays full (${budgeted.batchTiers.full}, at most ${maxFull})`);
+check(budgeted.triangles < near.triangles * 0.5, `and the frame draws far fewer triangles (${budgeted.triangles} against ${near.triangles})`);
+const placementsNow = await page.evaluate((n) => {
+  const p = window.__testShopAvatarPosition();
+  return Array.from({ length: n }, (_, i) => ({ i, tier: window.__testShopInstanceTier(`batch-lod-${i}`), p }));
+}, COUNT);
+const avatarAt = placementsNow[0].p;
+const distanceOf = (i) => Math.hypot(cx + (-7 + (i % 10) * 1.5) - avatarAt.x, cy + (-4 + Math.floor(i / 10) * 1.5) - avatarAt.y);
+const fullDistances = placementsNow.filter((e) => e.tier === 'full').map((e) => distanceOf(e.i));
+const otherDistances = placementsNow.filter((e) => e.tier !== 'full').map((e) => distanceOf(e.i));
+check(fullDistances.length > 0 && otherDistances.length > 0 && Math.max(...fullDistances) <= Math.min(...otherDistances) + 0.01, `the placements that stay full are the nearest to the avatar (farthest full ${Math.max(...fullDistances).toFixed(1)} m, nearest reduced ${Math.min(...otherDistances).toFixed(1)} m)`);
+// Restoring the budget brings them all back.
+await page.evaluate(() => { window.__testSetShopFullTriangleCap(); window.__testForceShopProximityCheck(); });
+await page.waitForFunction(() => { window.__testForceShopProximityCheck(); return window.__testShopDrawStats().batchTiers.full === 60; }, null, { timeout: 60000, polling: 500 }).catch(() => {});
+const restored = await stats();
+check(restored.batchTiers.full === COUNT, `with the budget restored every placement beside the wall is full again (${JSON.stringify(restored.batchTiers)})`);
 
 // 26 m away (a metre-wide ball reads 60 px): past the protected radius and under the mid size.
 // The reduced versions of a product are built in the browser the first time they are needed.
