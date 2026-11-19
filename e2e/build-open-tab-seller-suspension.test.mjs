@@ -2,7 +2,7 @@
 // suspended used to keep showing the removed product, and the next Undo
 // surfaced a misleading "couldn't save moved item(s) ... may not survive a
 // reload" error. Now the rejected save reconciles with the server: the
-// phantom product leaves the scene, the Removed Items button appears without
+// phantom product leaves the scene, the Removed items button appears without
 // a reload, and the message says what actually happened.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -127,10 +127,10 @@ const phantomsAfter = (await page.evaluate(() => window.__testProductScreenPosit
 const alerts = await page.evaluate(() => window.__alerts);
 const buttonShown = await page.locator('#pending-restoration-btn').isVisible();
 console.log('phantom product removed from the open tab (should be 0):', phantomsAfter);
-console.log('Removed Items button visible without a reload (should be true):', buttonShown);
+console.log('Removed items button visible without a reload (should be true):', buttonShown);
 console.log('alerts:', JSON.stringify(alerts));
 const misleading = alerts.some((a) => /may not survive a reload/.test(a));
-const explained = alerts.some((a) => /seller is suspended/.test(a) && /Removed Items/.test(a));
+const explained = alerts.some((a) => /seller is suspended/.test(a) && /Removed items/.test(a));
 
 const pass = placeRes.status === 201
   && undoEnabled

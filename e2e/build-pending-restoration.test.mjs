@@ -1,4 +1,4 @@
-// #2987 (3/5 of #2305): the builder-facing "Removed Items" view of #2986's
+// #2987 (3/5 of #2305): the builder-facing "Removed items" view of #2986's
 // suspended-seller removals (src/build/pendingRestoration.js, backed by
 // GET/DELETE /api/instances/pending-restoration -- see
 // worker/pending-restoration.test.js for the endpoint-level coverage).
@@ -103,7 +103,7 @@ async function reloadBuildMode() {
 
 await reloadBuildMode();
 const hiddenBeforeSuspension = await page.locator('#pending-restoration-btn').isHidden();
-console.log('"Removed Items" button hidden while nothing is pending (should be true):', hiddenBeforeSuspension);
+console.log('"Removed items" button hidden while nothing is pending (should be true):', hiddenBeforeSuspension);
 
 const suspend = await apiFetch('/auth/suspend-account', adminCookie, {
   method: 'POST', body: JSON.stringify({ email: emailForLabel(LABEL_SELLER), reason: 'e2e #2987 pending-restoration coverage' }),
@@ -116,7 +116,7 @@ console.log('instances removed by the suspension (should be 1):', suspend.body.i
 await reloadBuildMode();
 const shownAfterSuspension = await page.locator('#pending-restoration-btn').isVisible();
 const buttonText = shownAfterSuspension ? await page.locator('#pending-restoration-btn').textContent() : '';
-console.log('"Removed Items" button visible after the seller is suspended (should be true):', shownAfterSuspension, buttonText);
+console.log('"Removed items" button visible after the seller is suspended (should be true):', shownAfterSuspension, buttonText);
 
 await page.click('#pending-restoration-btn');
 await page.waitForSelector('#pending-restoration-modal.visible', { timeout: 5000 });
@@ -133,7 +133,7 @@ await page.waitForFunction(() => document.querySelectorAll('.pending-restoration
 const emptyShown = await page.locator('#pending-restoration-empty').isVisible();
 const buttonHiddenAfterClear = await page.locator('#pending-restoration-btn').isHidden();
 console.log('empty state shown after clearing (should be true):', emptyShown);
-console.log('"Removed Items" button hidden again once nothing is pending (should be true):', buttonHiddenAfterClear);
+console.log('"Removed items" button hidden again once nothing is pending (should be true):', buttonHiddenAfterClear);
 
 // Lifting the suspension must NOT bring a cleared slot back.
 const unsuspend = await apiFetch('/auth/unsuspend-account', adminCookie, {

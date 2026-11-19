@@ -318,10 +318,10 @@ function setAuthStatus(text, type) {
 }
 
 const AUTH_VIEW_TITLES = {
-  login: 'Log In',
-  signup: 'Sign Up',
-  forgot: 'Reset Password',
-  reset: 'Reset Password',
+  login: 'Log in',
+  signup: 'Sign up',
+  forgot: 'Reset password',
+  reset: 'Reset password',
 };
 
 // 'reset' is deliberately not one of the tab-switchable views (no
@@ -334,9 +334,9 @@ function showAuthView(view) {
     btn.classList.toggle('active', btn.dataset.authView === view);
     btn.setAttribute('aria-pressed', String(btn.dataset.authView === view));
   }
-  // #3694 (part of #3547): the forgot and reset views are not a Log In or a
-  // Sign Up, so the tab strip (with neither pill selected) is not shown on
-  // them; the forgot view has its own "Back to Log In" link.
+  // #3694 (part of #3547): the forgot and reset views are not a Log in or a
+  // Sign up, so the tab strip (with neither pill selected) is not shown on
+  // them; the forgot view has its own "Back to log in" link.
   authTabsEl.hidden = view === 'forgot' || view === 'reset';
   authModalTitle.textContent = AUTH_VIEW_TITLES[view];
   setAuthStatus('');
@@ -449,7 +449,7 @@ function refreshAccountAuthUI() {
       }).catch(() => {});
     }
   } else {
-    accountAuthBtn.textContent = 'Log In / Sign Up';
+    accountAuthBtn.textContent = 'Log in / Sign up';
     authLoggedOutEl.hidden = false;
     authLoggedInEl.hidden = true;
   }
@@ -1050,7 +1050,7 @@ function closeChangePasswordForm() {
   setPasswordToggleState(authChangePasswordNewInput, authChangePasswordNewToggleBtn, false);
 }
 
-// Same collapsed-behind-its-own-trigger shape as Delete Account above.
+// Same collapsed-behind-its-own-trigger shape as Delete account above.
 authChangePasswordBtn.addEventListener('click', () => {
   setAuthStatus('');
   authChangePasswordBtn.hidden = true;

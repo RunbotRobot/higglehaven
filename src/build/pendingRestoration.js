@@ -2,7 +2,7 @@
 // removals. When a seller is suspended, their products are taken off every
 // builder's land (snapshotted, and put back automatically if the suspension
 // is lifted). This gives the affected builder, in Build mode only, a
-// "Removed Items" button (shown only while at least one slot is pending)
+// "Removed items" button (shown only while at least one slot is pending)
 // opening a list of what used to be there -- name, category, image, where
 // -- plus a "Clear" action to give up on a slot for good and free it up for
 // a different product. Shoppers never see any of this: the endpoint behind
@@ -43,7 +43,7 @@ function describeSlot(slot) {
 function renderSlots(slots) {
   listEl.innerHTML = '';
   buttonEl.hidden = slots.length === 0;
-  buttonEl.textContent = slots.length > 0 ? `Removed Items (${slots.length})` : 'Removed Items';
+  buttonEl.textContent = slots.length > 0 ? `Removed items (${slots.length})` : 'Removed items';
   emptyEl.hidden = slots.length > 0;
   for (const slot of slots) {
     const { name, where, status } = describeSlot(slot);

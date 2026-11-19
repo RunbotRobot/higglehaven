@@ -1854,6 +1854,12 @@ function renderSellerList() {
     // Where the first setting stood: after the product's own facts, before reviews and sales.
     details.insertBefore(moreToggle, settingsEls[0]);
     details.insertBefore(moreBox, settingsEls[0]);
+    // #3702 slice C: Preview, Duplicate and Flooring are secondary to Rename/Delete, so they
+    // fold into the same box, on a row of their own at its top.
+    const moreActions = document.createElement('div');
+    moreActions.className = 'seller-row-actions';
+    moreActions.append(previewBtn, duplicateBtn, flooringToggleBtn);
+    moreBox.appendChild(moreActions);
     for (const el of settingsEls) moreBox.appendChild(el);
     moreToggle.addEventListener('click', () => {
       moreBox.hidden = !moreBox.hidden;
@@ -1880,7 +1886,7 @@ export function resetSellerView() {
   sellerActiveView = 'manage';
 }
 
-// #3302: a Submit Feedback report sent from Sell needs the camera pose and what
+// #3302: a Submit feedback report sent from Sell needs the camera pose and what
 // the seller was looking at. Registered as Sell's frame callback by enterSellMode
 // (src/main.js), and run after the movement core each frame once the Sell world
 // view (#3295) mounts; recordRenderStateSample throttles it to ~1Hz. Every field was added for
@@ -2220,7 +2226,7 @@ async function openPayoutsFromPetal() {
 registerBudPetals('sell', [
   { id: 'my-products', label: 'My products', run: () => { void openSellerModal(); } },
   // #3703 (Sell in the bud, 5/6): one petal starts every way of adding a product. The leaf it opens
-  // (src/catalog/upload.js) asks which way; the + Upload Model and Sell This Too buttons are gone.
+  // (src/catalog/upload.js) asks which way; the + Upload Model and Sell this too buttons are gone.
   { id: 'add-product', label: 'Add a product', run: () => { void openAddProductFromPetal(); } },
   // #3704 (6/6, slice 1): the payout account, balance and Cash out are a leaf now (src/sell/payoutsLeaf.js),
   // not the bottom of Settings > Sell. A seller identity first, as My products has always needed.
@@ -2231,7 +2237,7 @@ registerBudPetals('sell', [
   { id: 'storefront', label: 'Storefront', run: () => { void openStorefrontFromPetal(); } },
 ]);
 
-// #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
+// #2748 (leaf of #2745's shared-products redesign): "Sell this too" --
 // browse every product in the catalog (not just this seller's own) and
 // attach a fresh listing (this seller's own price/stock) to whichever one
 // is picked -- POST /api/catalog/listings (#2747). Deliberately not named
@@ -2242,7 +2248,7 @@ registerBudPetals('sell', [
 //
 // Its own dedicated modal (#sell-this-too-modal) rather than reusing the
 // Build-mode catalog picker (openCatalogPickerForPick, reused by the
-// Backup Chain panel for an analogous "pick one existing catalog item"
+// Backup chain panel for an analogous "pick one existing catalog item"
 // need) -- that picker's DOM lives inside #add-item-panel, one of the
 // Build-only panels SELL_HIDDEN_BUILDER_UI_IDS (src/main.js) sets
 // style.display='none' on for the whole time Sell mode is active, which a
@@ -2298,7 +2304,7 @@ let attachListingInFlight = false;
 // #3249: the price and stock questions used to be two native prompt() calls
 // plus a confirm() for "you already have one", which a browser that
 // suppresses native dialogs skipped silently. They are now a small form in
-// the Sell This Too modal. The validation mirrors the Edit Price panel's
+// the Sell this too modal. The validation mirrors the Edit Price panel's
 // (parsePriceInputDollars/MAX_MONEY_CENTS) since priceCents is required here
 // the same way it's required on this seller's own new listing (#1601's own
 // catalog-create requirement, which POST /api/catalog/listings shares). The
@@ -2475,7 +2481,7 @@ function renderSellerIdentityField(container, rerender) {
     // of deleting while a real purchase's proceeds are still unpaid, so
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
-    deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete Account under Account above to delete that too.',
+    deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete account under Account above to delete that too.',
     onDeleted: () => { setSellerId(null); },
   });
 }

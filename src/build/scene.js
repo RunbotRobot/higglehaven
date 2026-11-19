@@ -196,8 +196,8 @@ function announceLevelLimit() {
   if (!hit) return;
   levelLimitAnnounced = true;
   showSelectionActionStatus(hit === 'top'
-    ? "That's as high as this lándlet goes. Use Build Level Above to build higher."
-    : "That's as deep as this lándlet goes. Use Dig Level Below to go deeper.");
+    ? "That's as high as this lándlet goes. Use Build level above to build higher."
+    : "That's as deep as this lándlet goes. Use Dig level below to go deeper.");
 }
 
 function levelLabel(levelIndex) {
@@ -1685,7 +1685,7 @@ async function handleRejectedSingleSync(err, action) {
   const reverted = isServerRejection(err) && await revertSceneToServer();
   if (!reverted) noteSyncFailure(err);
   if (isSuspendedSellerSyncError(err)) {
-    tellBuilder("Taken off your lándlet", "That item was taken off your lándlet because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
+    tellBuilder("Taken off your lándlet", "That item was taken off your lándlet because its seller is suspended. It's saved under Removed items and will return if the suspension is lifted.");
     return;
   }
   const what = action === 'delete' ? "Couldn't delete that item" : action === 'create' ? "Couldn't save that new item" : "Couldn't save that change";
@@ -1789,7 +1789,7 @@ function isSuspendedSellerSyncError(err) {
 }
 
 // Drops, from the given meshes, every one the server no longer has (the
-// suspended seller's products), refreshes the Removed Items button, and
+// suspended seller's products), refreshes the Removed items button, and
 // returns { removed, remaining }. Triggered on failure rather than polled, to
 // stay cheap on the free tier. If the server can't be reached to compare,
 // nothing is removed locally (never drop a builder's unsaved work on a guess).
@@ -1816,7 +1816,7 @@ async function reconcileAfterSellerSuspension(meshes) {
 // seller's items left their land (failed save, batch update, tab focus, and
 // the general refocus reconcile).
 function suspendedSellerRemovalNotice(count) {
-  return `${count} item(s) were taken off your lándlet because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`;
+  return `${count} item(s) were taken off your lándlet because their seller is suspended. They're saved under Removed items and will return if the suspension is lifted.`;
 }
 
 // #3095 (second half): the tab-focus counterpart to the failed-save
@@ -2094,7 +2094,7 @@ function deleteInstance(mesh, { sync = true, persist = true } = {}) {
 // No longer defaults to an idle "Tap a product to inspect it" hint — that
 // was permanent on-screen real estate spent stating the obvious. The pill
 // itself is still exactly as useful for everything it was already showing
-// (a selected item's name, Measure's readouts, Copy/Save Bundle
+// (a selected item's name, Measure's readouts, Copy/Save bundle
 // confirmations, ...) — it just now hides completely (native `hidden`,
 // which `#product-info`'s own CSS never overrides) rather than falling
 // back to a permanent placeholder when there's nothing to say.
@@ -2143,7 +2143,7 @@ function trimInputEl(axis) {
 }
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
-// Community Sign/Calendar/Backup Chain buttons belong to #2560's own
+// Community sign/Calendar/Backup chain buttons belong to #2560's own
 // src/build/metadataModals.js -- updateSelectionUI below needs to reflect
 // their enabled/active state
 // off the current selection the same way it does for this module's own
@@ -2197,7 +2197,7 @@ function setLevelStatus(message, { isError = false } = {}) {
 // discarding wherever the builder was actually looking.
 let lastAppliedLevelFloorZ = 0;
 
-// Shared across addLevel (Build Level Above / Dig Level Below) and the
+// Shared across addLevel (Build level above / Dig level below) and the
 // Remove handler below — all three mutate currentLevelIndex/
 // currentLandletLevels from an async server round-trip, and each handler
 // used to disable only its own button while in flight, leaving the other
@@ -2229,8 +2229,8 @@ export function renderLevelControls() {
   levelUpBtn.disabled = currentLevelIndex >= top;
   const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
-  levelBuildBtn.textContent = `Build Level Above (${formatArea(upCostM2)})`;
-  levelDigBtn.textContent = `Dig Level Below (${formatArea(downCostM2)})`;
+  levelBuildBtn.textContent = `Build level above (${formatArea(upCostM2)})`;
+  levelDigBtn.textContent = `Dig level below (${formatArea(downCostM2)})`;
   // Only the outermost existing level (in whichever direction it's on) can
   // actually be removed (worker/index.js's own 409 otherwise) — ground
   // (index 0) is never a real row and can never be removed at all.
@@ -2500,7 +2500,7 @@ async function applySnapshotLocally(snapshot) {
       // crop, so it carries the mesh's own (pre-restore) flag values
       // forward rather than the snapshot's — a reused mesh needs these
       // explicitly re-applied too, or an undo/redo jump across a
-      // Community Sign/Calendar flag change leaves the flag untouched.
+      // Community sign/Calendar flag change leaves the flag untouched.
       mesh.userData.isCommunitySign = inst.isCommunitySign ?? false;
       mesh.userData.isCommunityCalendar = inst.isCommunityCalendar ?? false;
       mesh.userData.safePosition = mesh.position.clone();
@@ -3685,7 +3685,7 @@ export function updateSelectionUI() {
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   // #3574 -- a mode this item cannot use is left out, not greyed (the "gone when not needed" rule).
   modeTrimBtn.hidden = modeTrimBtn.disabled;
-  // Community Sign (docs/API.md's "Community signs") only makes sense for
+  // Community sign (docs/API.md's "Community signs") only makes sense for
   // one specific placed object at a time, same reasoning as Trim above —
   // disabled (not hidden) for a multi-item selection so the button row
   // doesn't reflow.
@@ -3699,18 +3699,18 @@ export function updateSelectionUI() {
   // identical toggle. #3576: the on-label is deliberately no wider than
   // the off-label (index.html's data-width-sizer reserves the off-label's
   // width), so flipping the toggle never re-wraps the selection toolbar.
-  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community Sign';
-  // Community Calendar (docs/API.md's "Community calendar") — same
-  // reasoning and same toggle-then-manage button design as Community Sign
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community sign';
+  // Community calendar (docs/API.md's "Community calendar") — same
+  // reasoning and same toggle-then-manage button design as Community sign
   // just above, independent of it.
   communityCalendarBtn.disabled = !singleMesh;
   const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
-  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community Calendar';
-  // Backup Chain (#2050/#2051): every placed instance can have one, not
+  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community calendar';
+  // Backup chain (#2050/#2051): every placed instance can have one, not
   // just flagged ones, so this is a plain "open the manage panel" button —
-  // same single-selection-only gating as Trim/Community Sign/Calendar
+  // same single-selection-only gating as Trim/Community sign/Calendar
   // above, but no toggle/active state of its own to reflect.
   backupChainBtn.disabled = !singleMesh;
   // #2764: Group needs 2+ items to form anything; Ungroup needs the
@@ -3913,7 +3913,7 @@ deleteBtn.addEventListener('click', () => {
 // follow-up for whoever revisits this, same as #2763's other explicitly
 // open owner-judgment items.
 // Feedback is the same brief press-flash copyBtn's own handler uses (see
-// its comment), not a delayed setProductInfo message like Save Bundle's —
+// its comment), not a delayed setProductInfo message like Save bundle's —
 // unlike Copy, forming/dissolving a group is a real persisted state change
 // that Ungroup/Group's own enabled state needs to reflect the instant it
 // lands, so updateSelectionUI() runs synchronously right after, not behind
@@ -4149,7 +4149,7 @@ ungroupBtn.addEventListener('click', async () => {
 // bottom surface in Z (its "base") — rather than absolute coordinates, so
 // the result can be re-anchored wherever a builder taps next (see
 // handlePlacementClick/placeClipboardItems). Shared by Copy (kept in the
-// in-memory clipboard for this session only) and Save Bundle (persisted to
+// in-memory clipboard for this session only) and Save bundle (persisted to
 // the backend so it survives a reload and works on any landlet) — both
 // just want "this exact arrangement, portable."
 export function relativeItemsForMeshes(meshes) {
@@ -4897,7 +4897,7 @@ function updateCameraDebug(now) {
   if (now - lastDebugUpdate < 200) return;
   lastDebugUpdate = now;
   // #3219: developer-vocabulary pose readout, shown to admins only (an
-  // ordinary builder has Submit Feedback, which captures the camera pose in
+  // ordinary builder has Submit feedback, which captures the camera pose in
   // its diagnostic payload). Checked each tick because the account settles
   // after this module loads; nothing to format while hidden.
   const visible = Boolean(currentAuthUser?.isAdmin);
@@ -5037,7 +5037,7 @@ function applyEdgePanWhileDraggingProduct() {
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
 export function buildModeFrameUpdate(now) {
-  // #3302: feed the Submit Feedback ring buffer from Build too (it is
+  // #3302: feed the Submit feedback ring buffer from Build too (it is
   // throttled to ~1Hz inside recordRenderStateSample, so calling every frame
   // is cheap). Each field below was added for #3302 so a report sent from
   // Build says where the camera was and what was selected/refused.
@@ -5173,7 +5173,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
+      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete account under Account above to delete that too.`;
     },
     // #2068: Reset Profile releases any owned lándlet back to greenbelt
     // server-side (see deleteWarning's own wording above) -- currentLandletId

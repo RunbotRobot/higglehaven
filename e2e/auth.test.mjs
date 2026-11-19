@@ -122,8 +122,8 @@ await openAuthModal(page);
 const verifiedText = await page.textContent('#auth-account-verified');
 console.log('verified status shown in the account panel (should say verified):', verifiedText);
 await page.click('#auth-logout-btn');
-const btnLabelAfterLogout = await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
-console.log('account button after logout (should be "Log In / Sign Up"):', btnLabelAfterLogout);
+const btnLabelAfterLogout = await waitForText(page, '#account-auth-btn', 'Log in / Sign up');
+console.log('account button after logout (should be "Log in / Sign up"):', btnLabelAfterLogout);
 
 // --- Log back in with the real password ---
 // #2754: logging out while in Shop mode now reloads (same as Build/Sell/
@@ -132,8 +132,8 @@ console.log('account button after logout (should be "Log In / Sign Up"):', btnLa
 // one Shop's own ensureShopperIdentity gate just auto-opened on page load,
 // not the one openAuthModal's account-menu route would have opened itself.
 // That gate calls requireLogin('signup', ...) explicitly, so it defaults
-// to the Sign Up tab regardless of which view this modal last showed
-// before the reload -- switch to Log In before filling its fields.
+// to the Sign up tab regardless of which view this modal last showed
+// before the reload -- switch to Log in before filling its fields.
 await openAuthModal(page);
 await page.click('.auth-tab-btn[data-auth-view="login"]');
 await page.fill('#auth-login-email', email);
@@ -157,7 +157,7 @@ await clearVerifyModalIfShown(page);
 // handler), so it needs reopening before the logout button is reachable.
 await openAuthModal(page);
 await page.click('#auth-logout-btn');
-await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
+await waitForText(page, '#account-auth-btn', 'Log in / Sign up');
 
 // --- Forgot password -> reset link -> new password works, old one doesn't ---
 // #2754: same post-reload Sign-Up-tab default as the re-login above --
@@ -177,9 +177,9 @@ await page.goto(resetUrlMatch[1]);
 await page.waitForTimeout(1000);
 const resetFormVisible = await page.locator('#auth-reset-form').isVisible();
 console.log('reset-password form visible after following the link (should be true):', resetFormVisible);
-// #3694: the Log In / Sign Up tab strip is not shown on the reset view.
+// #3694: the Log in / Sign up tab strip is not shown on the reset view.
 const resetTabsHidden = await page.locator('#auth-tabs').isHidden();
-console.log('the Log In / Sign Up tabs are hidden on the reset view (should be true):', resetTabsHidden);
+console.log('the Log in / Sign up tabs are hidden on the reset view (should be true):', resetTabsHidden);
 const newPassword = 'a totally new password';
 await page.fill('#auth-reset-password', newPassword);
 await page.click('#auth-reset-form button[type="submit"]');
@@ -224,7 +224,7 @@ await page.waitForTimeout(200);
 
 await openAuthModal(page);
 await page.click('#auth-logout-btn');
-await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
+await waitForText(page, '#account-auth-btn', 'Log in / Sign up');
 
 const secondEmail = `auth-suite-second-${Date.now()}@example.com`;
 await openAuthModal(page);
@@ -283,7 +283,7 @@ const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   verifyStatus.includes('Email verified!') &&
   !urlAfterVerify.includes('?') &&
   verifiedText.includes('verified') && !verifiedText.includes('not verified') &&
-  btnLabelAfterLogout === 'Log In / Sign Up' &&
+  btnLabelAfterLogout === 'Log in / Sign up' &&
   btnLabelAfterLogin === 'Ada Suite' &&
   !!resetUrlMatch && resetFormVisible && resetTabsHidden &&
   resetStatus.includes('Password reset!') &&

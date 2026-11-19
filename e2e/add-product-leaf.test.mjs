@@ -1,19 +1,19 @@
 // #3703 (Sell in the bud, 5/6; part of #3655, #3648): every way of adding a product starts at the
 // bud's Add a product petal, which opens one leaf under the bud (no dimming scrim) asking which
 // way. Upload keeps its steps and refuses an empty required field on the step that holds it; Sell
-// This Too is the other answer. The + Upload Model and Sell This Too buttons are gone from My
+// This Too is the other answer. The + Upload Model and Sell this too buttons are gone from My
 // products, and closing the leaf puts My products back only if it was open underneath.
 import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
 
-const { browser, page, errors } = await launchPage({ promptAnswer: 'Add Product Leaf', viewport: { width: 390, height: 844 } });
-await chooseIdentity(page, { mode: 'sell', label: 'Add Product Leaf', isNew: true });
+const { browser, page, errors } = await launchPage({ promptAnswer: 'Add product Leaf', viewport: { width: 390, height: 844 } });
+await chooseIdentity(page, { mode: 'sell', label: 'Add product Leaf', isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 
 check((await page.locator('#upload-model-btn').count()) === 0, 'the + Upload Model button is gone');
-check((await page.locator('#sell-this-too-btn').count()) === 0, 'the Sell This Too button is gone');
+check((await page.locator('#sell-this-too-btn').count()) === 0, 'the Sell this too button is gone');
 
 async function openLeaf() {
   const expanded = await page.evaluate(() => document.getElementById('account-menu-panel').classList.contains('expanded'));
@@ -51,7 +51,7 @@ check(m.content.left < 30, `the leaf grows from the bud's corner (left ${Math.ro
 check(m.content.bottom <= m.vh && m.content.top >= 0, 'the leaf is inside the screen');
 check(m.close.left + m.close.width / 2 > m.content.left + m.content.width * 0.75, 'the close control is upper right');
 check((await stepsShown()).file === false, 'the upload steps wait for the answer');
-check(!(await page.locator('#upload-submit-btn').isVisible()), 'no Add Product button shows while the leaf is still asking which way');
+check(!(await page.locator('#upload-submit-btn').isVisible()), 'no Add product button shows while the leaf is still asking which way');
 
 // Upload my own model: the upload steps, a required field refused on its own step.
 await page.click('#add-product-upload-btn');
@@ -84,9 +84,9 @@ check(!(await sellerOpen()), 'My products stays closed when it was not open unde
 await openLeaf();
 await page.click('#add-product-sell-too-btn');
 await page.waitForSelector('#sell-this-too-modal.visible', { timeout: 5000 });
-check(await page.evaluate(() => !document.getElementById('upload-modal').classList.contains('visible')), 'the leaf hands over to the Sell This Too sheet');
+check(await page.evaluate(() => !document.getElementById('upload-modal').classList.contains('visible')), 'the leaf hands over to the Sell this too sheet');
 await page.click('#sell-this-too-close-btn');
 await page.waitForSelector('#sell-this-too-modal', { state: 'hidden', timeout: 5000 });
-check(!(await sellerOpen()), 'closing Sell This Too does not bring My products back either');
+check(!(await sellerOpen()), 'closing Sell this too does not bring My products back either');
 
 await finish(browser, { pass: pass && errors.length === 0, label: 'add-product-leaf (#3703)', errors });

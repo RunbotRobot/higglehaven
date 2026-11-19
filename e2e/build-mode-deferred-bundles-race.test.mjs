@@ -1,7 +1,7 @@
 // Regression test for #1831: Build mode's own entry no longer blocks the
 // scene on fetchBundles()/fetchSharedBundles() -- that pair is deferred to
 // run in the background instead. Without sharing bundlePickerLoadToken with
-// Save Bundle (which mutates myBundles/communityBundles locally, with no
+// Save bundle (which mutates myBundles/communityBundles locally, with no
 // refetch of its own), a builder who creates a bundle before that deferred
 // fetch resolves could have it silently wiped from the picker once the
 // fetch's own stale (pre-creation) snapshot landed and overwrote it.
@@ -15,7 +15,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 // Delay only the FIRST GET /api/bundles* request pair (Build mode's own
 // deferred initial load, fired right after the scene starts rendering) --
 // long enough that the test can place an item and save a bundle (which
-// never itself calls GET /api/bundles -- Save Bundle mutates myBundles/
+// never itself calls GET /api/bundles -- Save bundle mutates myBundles/
 // communityBundles locally) before that delayed response lands.
 let getBundlesCalls = 0;
 await page.route('**/api/bundles?*', async (route) => {
@@ -54,7 +54,7 @@ await saveBundleAs(page, BUNDLE_NAME);
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 
 // Reopen the picker right away -- the bundle should already show, from
-// Save Bundle's own local update, well before the deferred fetch resolves.
+// Save bundle's own local update, well before the deferred fetch resolves.
 // isVisible(), not count() -- renderBundlePicker() hides the whole
 // #bundle-picker-section (via its own `hidden` property, which only
 // affects CSS display) without ever clearing its grid's child nodes when
@@ -64,7 +64,7 @@ await page.waitForFunction(() => document.getElementById('product-info').textCon
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 const bundleVisibleRightAfterSave = await page.locator('.bundle-tile').filter({ hasText: BUNDLE_NAME }).isVisible();
-console.log('bundle tile visible right after Save Bundle, before the deferred fetch lands (should be true):', bundleVisibleRightAfterSave);
+console.log('bundle tile visible right after Save bundle, before the deferred fetch lands (should be true):', bundleVisibleRightAfterSave);
 await page.click('#catalog-picker-close-btn');
 await page.waitForTimeout(300);
 

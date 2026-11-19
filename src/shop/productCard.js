@@ -5,7 +5,7 @@
 // screen), arriving through fog. It carries the name and price, any disclosure
 // the buyer must see before buying (digital good, ships to the United States
 // only, no returns, animation compatibility, test model), and one yellow Buy
-// petal. A "More" petal opens Rate this Product and Return Policy, so the card
+// petal. A "More" petal opens Rate this product and Return policy, so the card
 // never becomes a wall of controls. Tapping anywhere else in the world, the
 // close button or Escape folds it away.
 //

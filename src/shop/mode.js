@@ -538,7 +538,7 @@ export async function enterShopMode() {
   // function the Sell world view uses); it only fetches when logged in.
 
   // #1176: the shopper's own last-reported position, if any — powers the
-  // "Go to Last Location" button shown during the spawn orbit below. Never
+  // "Go to last location" button shown during the spawn orbit below. Never
   // blocks Shop mode entry on failure, same as equippedAvatarModelUrl just
   // above — but unlike that one, this also skips the call entirely during
   // accountRecoveryFlowActive, not just when logged out: GET /api/presence/me

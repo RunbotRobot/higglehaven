@@ -110,7 +110,7 @@ console.log('landlet renamed normally with a valid value (should be true):', lan
 await page.click('#my-lands-close-btn');
 await page.waitForTimeout(300);
 
-// --- 3. Bundle create (Build mode, multiselect + Save Bundle) ---
+// --- 3. Bundle create (Build mode, multiselect + Save bundle) ---
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
@@ -136,7 +136,7 @@ await saveBundleAs(page, NEW_BUNDLE_NAME, { shared: true });
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 console.log('bundle saved normally with a valid name (should reach here without timing out)');
 
-// --- 4. Bundle rename (catalog picker's My Bundles tab) ---
+// --- 4. Bundle rename (catalog picker's My bundles tab) ---
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.click('.bundle-tab-btn[data-bundle-tab="mine"]');

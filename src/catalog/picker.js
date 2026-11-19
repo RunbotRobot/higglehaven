@@ -14,9 +14,9 @@
 // call), same reasoning MAX_MONEY_CENTS's own comment in main.js gives for
 // staying put. Imported back from main.js below.
 //
-// Build mode's own Backup Chain panel now lives in
+// Build mode's own Backup chain panel now lives in
 // src/build/metadataModals.js (#2560), which calls openCatalogPickerForPick
-// directly. Save Bundle flow (bundlePickerLoadToken's own external bumps)
+// directly. Save bundle flow (bundlePickerLoadToken's own external bumps)
 // hasn't been extracted yet, so this module still exports several pieces
 // main.js needs to call back (renderBundlePicker, bumpBundlePickerLoadToken,
 // buildCatalogPickerButtons, closeCatalogPicker -- the last of these for its
@@ -243,7 +243,7 @@ function buildCatalogTemplateTile(template) {
   }
 
   tile.addEventListener('click', () => {
-    // #2051: when set, the Backup Chain panel's "+ Add Backup" wants the
+    // #2051: when set, the Backup chain panel's "+ Add Backup" wants the
     // chosen template handed back to it instead of an ordinary world
     // placement -- captured before closeCatalogPicker() below, which
     // clears it as part of leaving pick mode.
@@ -393,7 +393,7 @@ function currentBundleTabList() {
 // have the slower refetch land last and redraw from a snapshot that's
 // already stale relative to the other's already-applied change. Same
 // monotonic-token fix as friendsLoadToken/notificationsLoadToken.
-// Exported for main.js's own Save Bundle flow and bundle-list refresh
+// Exported for main.js's own Save bundle flow and bundle-list refresh
 // (not yet extracted) -- a live binding, so comparisons there
 // (`loadToken !== bundlePickerLoadToken`) always see this module's current
 // value. An ES import binding is read-only from the importing side though,
@@ -406,7 +406,7 @@ export function bumpBundlePickerLoadToken() {
   return ++bundlePickerLoadToken;
 }
 
-// Exported for main.js's own Save Bundle flow and bundle-list refresh
+// Exported for main.js's own Save bundle flow and bundle-list refresh
 // (not yet extracted) -- also still used directly here.
 export function renderBundlePicker() {
   const hasAnyBundles = myBundles.length > 0 || communityBundles.length > 0;
@@ -423,7 +423,7 @@ export function renderBundlePicker() {
   bundlePickerEmptyEl.hidden = bundles.length > 0;
   if (bundles.length === 0) {
     bundlePickerEmptyEl.textContent = activeBundleTab === 'mine'
-      ? "You haven't saved any bundles yet — select items and use Save Bundle."
+      ? "You haven't saved any bundles yet — select items and use Save bundle."
       : 'No one has shared a bundle yet.';
     return;
   }
@@ -633,7 +633,7 @@ for (const btn of bundleTabButtons) {
 // real modal dialog in this file.
 //
 // #2051: when the picker was opened via openCatalogPickerForPick (the
-// Backup Chain panel's "+ Add Backup" button), closing it by any route —
+// Backup chain panel's "+ Add Backup" button), closing it by any route —
 // a tile pick, the close button, Escape, or a backdrop click via
 // openModalA11y — must also leave pick mode: clear the callbacks, restore
 // the ordinary scope-tab row that mode hides, drop the low-opacity
@@ -644,7 +644,7 @@ for (const btn of bundleTabButtons) {
 // pick (see buildCatalogTemplateTile's tile click, which calls
 // closeCatalogPicker before invoking the picked template's own callback)
 // or a plain cancel — openModalA11y only ever tracks one modal at a time
-// (see its own comment above), so the Backup Chain panel closes itself
+// (see its own comment above), so the Backup chain panel closes itself
 // before opening this picker and relies on onDone to reopen+re-render
 // itself afterward, rather than both staying visible at once.
 let catalogPickerPickCallback = null;
@@ -654,7 +654,7 @@ let catalogPickerPickDoneCallback = null;
 // picker, which must close before the Upload modal opens on top of it).
 // Also exported for main.js's own world-click-away handler, which closes
 // the picker (and so ends whatever pick session is active -- today, only
-// src/build/metadataModals.js's Backup Chain panel, via
+// src/build/metadataModals.js's Backup chain panel, via
 // openCatalogPickerForPick below) on any tap outside it.
 export function closeCatalogPicker() {
   catalogPickerEl.classList.remove('visible');
@@ -674,7 +674,7 @@ export function closeCatalogPicker() {
 // tile calls its own multi-item placement flow, never this callback).
 // Reuses the exact same picker UI/search/thumbnails as the ordinary
 // "+ Add Item" flow below rather than building a second one.
-// Exported for src/build/metadataModals.js's own Backup Chain panel (#2560).
+// Exported for src/build/metadataModals.js's own Backup chain panel (#2560).
 export function openCatalogPickerForPick(onPick, onDone) {
   catalogPickerPickCallback = onPick;
   catalogPickerPickDoneCallback = onDone;

@@ -1,4 +1,4 @@
-// "Report a problem" on a My Purchases row (#3199): plain-language outcomes
+// "Report a problem" on a My purchases row (#3199): plain-language outcomes
 // of POST /api/purchases/:id/dispute. Kept free of DOM and fetch so the copy
 // can be unit tested. The copy says what the buyer will see next and never
 // the internal rule that decided it (who counts as "established", the dollar

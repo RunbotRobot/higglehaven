@@ -78,7 +78,7 @@
       /* #3678: while the sign-in card is up, the bar and the bud behind its
          scrim cannot be used and read as a second, broken interface. They are
          not drawn until the card closes; closing it brings them back, so a
-         person who declines still has the Log In row. */
+         person who declines still has the Log in row. */
       body:has(#auth-modal.visible) #topbar-left,
       body:has(#auth-modal.visible) #mode-nav { visibility: hidden; }
       #loading-screen.loading-screen-hidden {
@@ -802,7 +802,7 @@
         position: relative;
       }
       #account-menu-toggle {
-        /* #3569: it is the only way to Notices, Friends, My Purchases and Settings, so it
+        /* #3569: it is the only way to Notices, Friends, My purchases and Settings, so it
            reads on any ground: a near-solid backing, an ink outline, a larger glyph and a
            44x36 touch target (it was a 55%-clear pill with a 12px emoji). */
         min-width: 44px;
@@ -2319,7 +2319,7 @@
       #add-item-panel > * {
         pointer-events: auto;
       }
-      /* #3576: Community Sign and Community Calendar change their label
+      /* #3576: Community sign and Community calendar change their label
          once on, and the wrapping selection toolbar re-flowed when the width
          changed (Delete jumped under the finger). The on-label is now no
          wider than the off-label, and each button reserves the off-label's
@@ -2737,10 +2737,10 @@
       }
       /* Bundles (saved multi-item groups, see migrations/0039_bundles.sql,
          0040_bundle_sharing.sql) — a separate section below the ordinary
-         product grid. My Bundles / Community mirror the tab-toggle look
+         product grid. My bundles / Community mirror the tab-toggle look
          .settings-tab-btn already uses. The whole section only shows once
          there's something in *either* tab to see — a builder who's never
-         used Save Bundle but whose landlet neighbors have shared some still
+         used Save bundle but whose landlet neighbors have shared some still
          gets to discover the Community tab; one where nobody's shared
          anything yet doesn't show an empty section for no reason. No
          thumbnail (composing one from several items isn't worth the
@@ -2992,7 +2992,7 @@
         flex-direction: column;
         gap: var(--space-lg);
       }
-      /* #3703 (Sell in the bud, 5/6): in Sell the Add a product leaf, and the Sell This Too sheet it
+      /* #3703 (Sell in the bud, 5/6): in Sell the Add a product leaf, and the Sell this too sheet it
          leads to, grow from under the bud like Settings does (#3652): no dimming scrim, the leaf's
          own shape, scrolling inside itself. */
       body[data-bud="on"] #upload-modal,
@@ -3229,7 +3229,7 @@
         gap: var(--space-sm);
       }
       /* #3703: hidden while the leaf is still asking which way (an author display rule beats the
-         attribute otherwise, and Add Product showed under the two choices). */
+         attribute otherwise, and Add product showed under the two choices). */
       #upload-modal-actions[hidden] {
         display: none;
       }
@@ -3251,7 +3251,7 @@
         opacity: 0.5;
       }
       /* #2761: same modal shell as #upload-modal — the reusable name-input
-         modal src/ui/bundleNameModal.js opens for both Save Bundle (with
+         modal src/ui/bundleNameModal.js opens for both Save bundle (with
          the share checkbox) and the bundle-tile rename prompt (without
          it), replacing the native prompt()/confirm() pair this app's
          bundle flow was the last holdout still using. */
@@ -3932,7 +3932,7 @@
         background: var(--brand-green);
         color: var(--ink);
       }
-      /* #2718 (sub-issue of #2715): "Submit Feedback" modal -- same shell
+      /* #2718 (sub-issue of #2715): "Submit feedback" modal -- same shell
          shape as #checkout-modal just above (fixed, centered, dimming
          backdrop; a scrollable max-height so a small phone viewport never
          clips the actions row below a tall screenshot preview). */
@@ -4526,7 +4526,7 @@
       .seller-save-btn:disabled {
         opacity: 0.5;
       }
-      /* #3249: "Sell This Too" price/stock form. */
+      /* #3249: "Sell this too" price/stock form. */
       #sell-this-too-form label {
         display: block;
         margin-top: var(--space-md);
@@ -5345,7 +5345,7 @@
       }
       /* Tactile press feedback, same .pressed pattern as the gizmo
          controls' own Copy button (see #gizmo-mode-controls button.pressed)
-         — a brief scale-down + darken so tapping Log In/Sign Up while
+         — a brief scale-down + darken so tapping Log in/Sign up while
          waiting on the network still visibly registers, rather than the
          button looking inert until the request resolves. Bigger than the
          gizmo buttons' own 0.92/no-color-change version and paired with an
@@ -5591,7 +5591,7 @@
       #saved-layouts-load-more-btn:disabled {
         opacity: 0.5;
       }
-      /* "My Purchases" (#3197): same modal shell as #notifications-modal,
+      /* "My purchases" (#3197): same modal shell as #notifications-modal,
          opened from #my-purchases-btn. */
       #my-purchases-modal {
         position: fixed;
@@ -6283,7 +6283,7 @@
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
-      /* #2987: the builder-facing "Removed Items" list (src/build/
+      /* #2987: the builder-facing "Removed items" list (src/build/
          pendingRestoration.js) -- products taken off this builder's land
          because their seller was suspended. Same modal shell as
          #backup-chain-modal above. */
@@ -6495,7 +6495,7 @@
       #product-card-more[hidden] {
         display: none;
       }
-      /* Review and Return Policy only exist for a product the shopper can reach
+      /* Review and Return policy only exist for a product the shopper can reach
          (the same range gate as Buy), so they stay out of the way otherwise. */
       #product-card-review-btn,
       #product-card-return-policy-btn {
@@ -6716,7 +6716,7 @@
         display: none;
       }
       /* #3692: while painting a selection the card keeps the bundle actions (Bundle, Unbundle, Edit,
-         Save Bundle; the design's "several" card) and only those buttons take taps. */
+         Save bundle; the design's "several" card) and only those buttons take taps. */
       #item-card.pass-through #copy-item,
       #item-card.pass-through #delete-item {
         display: none;

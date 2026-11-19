@@ -8,7 +8,7 @@
 //   - it sits BESIDE the product, never over it, stays on screen, and follows the
 //     product when the view moves;
 //   - its text can be selected;
-//   - "More" opens Rate this Product and Return Policy, and Return Policy opens
+//   - "More" opens Rate this product and Return policy, and Return policy opens
 //     and closes without folding the card;
 //   - Buy asks for confirmation naming the price; cancelling starts no checkout
 //     and leaves the card open (the real checkout itself is covered by
@@ -223,18 +223,18 @@ check(followFrame.longestGapMs < Number(process.env.E2E_MAX_FRAME_GAP_MS || 250)
 await moveTo([cx - (view.dx / heading) * 2.5, cy - (view.dy / heading) * 2.5]);
 await page.waitForTimeout(800);
 
-// More: Return Policy opens from the card (Rate this Product too, with an unrated order, #3775).
-// #3775: Rate this Product is only drawn for a product the shopper has an unrated order of; this
-// shopper has bought nothing, so More holds the Return Policy alone.
-check(!(await page.locator('#product-card-review-btn').isVisible()), 'Rate this Product is not offered without an order of it');
+// More: Return policy opens from the card (Rate this product too, with an unrated order, #3775).
+// #3775: Rate this product is only drawn for a product the shopper has an unrated order of; this
+// shopper has bought nothing, so More holds the Return policy alone.
+check(!(await page.locator('#product-card-review-btn').isVisible()), 'Rate this product is not offered without an order of it');
 await page.click('#product-card-more-btn');
-check(!(await page.locator('#product-card-review-btn').isVisible()), 'More does not offer Rate this Product without an order of it');
-check(await page.locator('#product-card-return-policy-btn').isVisible(), 'More opens Return Policy');
+check(!(await page.locator('#product-card-review-btn').isVisible()), 'More does not offer Rate this product without an order of it');
+check(await page.locator('#product-card-return-policy-btn').isVisible(), 'More opens Return policy');
 await page.click('#product-card-return-policy-btn');
 await page.waitForSelector('#refund-policy-modal.visible', { timeout: 5000 });
 await page.click('#refund-policy-close-btn');
 await page.waitForFunction(() => !document.getElementById('refund-policy-modal').classList.contains('visible'), null, { timeout: 5000 });
-check(await cardOpen(), 'closing the Return Policy leaves the card open');
+check(await cardOpen(), 'closing the Return policy leaves the card open');
 
 // Buy asks first, naming the price; cancelling starts no checkout.
 await page.click('#product-card-buy-btn');

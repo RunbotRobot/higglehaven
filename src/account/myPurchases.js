@@ -1,4 +1,4 @@
-// "My Purchases" (#3197/#3198/#3199): row rendering for the account-menu panel.
+// "My purchases" (#3197/#3198/#3199): row rendering for the account-menu panel.
 // Kept out of menu.js so the plain-language wording is testable. Copy
 // describes what the buyer sees, never internals.
 import {

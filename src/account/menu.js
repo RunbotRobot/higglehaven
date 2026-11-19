@@ -347,7 +347,7 @@ const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
 async function refreshAccountMenuLandCap() {
   // #3700 (follow-up, from #3655): the cap is Build information, and in Shop and Sell it showed as
   // a bare line of text between the bud's petals ("Lándlet cap: 0m² / 1,000m²"). It stays in
-  // Settings > Build everywhere; in the account column it is shown in Build only, like My Lándlets.
+  // Settings > Build everywhere; in the account column it is shown in Build only, like My lándlets.
   if (!builderId || currentMode !== 'build') {
     accountMenuLandCapEl.hidden = true;
     return;
@@ -1129,7 +1129,7 @@ friendsMapBtn.addEventListener('click', () => {
 friendsMapCloseBtn.addEventListener('click', closeFriendsMapModal);
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
-// Log In/Notices/Friends/Settings buttons above are unchanged in every
+// Log in/Notices/Friends/Settings buttons above are unchanged in every
 // other respect; this only adds the expand/collapse chrome around them.
 // Each row's own click handler (accountAuthBtn/notificationsBtn/
 // friendsBtn/settingsBtn, all defined elsewhere) already opens its own
@@ -1297,7 +1297,7 @@ function closeMyLandsModal() {
 }
 myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
 
-// "My Purchases" (#3197): the signed-in account's own receipts, newest first.
+// "My purchases" (#3197): the signed-in account's own receipts, newest first.
 // Same load-token guard as the Notices panel so a response that lands after
 // the panel was closed (or reopened) never paints into it.
 const myPurchasesBtn = document.getElementById('my-purchases-btn');

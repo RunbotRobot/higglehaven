@@ -1,4 +1,4 @@
-// Regression test for #1124: Delete Account in Settings > Build only
+// Regression test for #1124: Delete account in Settings > Build only
 // patched its own identity field's nameRow/status, leaving Land
 // Cap/Redeem Higgles/Active Auctions showing the just-deleted builder's
 // stale figures until a tab switch or modal reopen. Fixed by having the
@@ -44,7 +44,7 @@ const beforeText = await waitForText(page, '#settings-section', 'Available to re
 console.log('Redeem Higgles text before delete (should show the granted $50.00):', beforeText.includes('$50.00'));
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
-// #1149 renamed this button from "Delete Account" (never true -- it only
+// #1149 renamed this button from "Delete account" (never true -- it only
 // ever reset this profile, not the login) to "Reset Profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
 await page.click('#settings-section button:has-text("Reset Profile")');

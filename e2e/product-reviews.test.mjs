@@ -8,7 +8,7 @@
 // first (standard marketplace practice) — this test "buys" the product via
 // the API before posting each review, same as a real reviewer would need
 // to. Posting a review is exercised directly via the API here (the
-// in-world Shop-mode "Rate this Product" hint isn't reachable without real
+// in-world Shop-mode "Rate this product" hint isn't reachable without real
 // camera movement — see docs/API.md's own testing note for this feature);
 // this test covers the Seller modal's display/moderation of reviews and
 // the backend contract those routes rely on. Same reasoning for #1975's
@@ -87,7 +87,7 @@ for (let i = 0; i < 2; i++) {
 }
 
 // Reviews attach to the product with no opt-in needed — post directly via
-// the API the in-world "Rate this Product" hint calls (createProductReview
+// the API the in-world "Rate this product" hint calls (createProductReview
 // in src/api.js). authorLabel is no longer accepted from the client at all
 // (#1113) — the server derives it from the session, so both reviews below
 // are authored as LABEL.
@@ -143,7 +143,7 @@ const afterDelete = (await fetchJson(`/api/catalog/${template.templateId}/review
 console.log('reviews persisted server-side after the panel delete (should be 1, the surviving one with text "Lovely product!"):', afterDelete.reviews.map((r) => r.text));
 
 // #1975: the surviving review now records who actually wrote it, and its
-// own author can PATCH it directly. The in-world "Rate this Product" hint
+// own author can PATCH it directly. The in-world "Rate this product" hint
 // this now also drives (handleShopProductReviewClick's own edit/delete
 // offer, same shape as #1830's sign-post hint) isn't reachable here for
 // the same real-camera-movement reason noted at the top of this file — this

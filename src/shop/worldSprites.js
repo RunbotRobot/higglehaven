@@ -81,7 +81,7 @@ const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 // proximity-as-opacity idea the spec's own in-world social feed calls for
 // generally ("size/opacity as a function of distance"). SIGN_INTERACT_RADIUS_M
 // is deliberately much tighter than the fade radius — close enough to
-// plausibly be able to read the sign at all before "Leave a Note" appears.
+// plausibly be able to read the sign at all before "Leave a note" appears.
 const SIGN_FADE_NEAR_M = 4; // fully opaque at/within this distance
 const SIGN_FADE_FAR_M = 20; // fully transparent at/beyond this distance
 const SIGN_INTERACT_RADIUS_M = 8;
@@ -472,7 +472,7 @@ export function updateReviewFade() {
     // #3651: which petals the card shows is decided in one place
     // (productCardState, src/shop/productCardLayout.js), not here: Buy only
     // for a priced, in-stock, non-test product the shopper stands next to
-    // (the old rules, #1946/#994, plus out of stock), Rate and Return Policy
+    // (the old rules, #1946/#994, plus out of stock), Rate and Return policy
     // for one they can reach. The card says in plain words why it offers
     // nothing when it offers nothing.
     syncProductCardActions(shopTappedProduct, tappedInRange);
@@ -515,7 +515,7 @@ export function productInfoParts(template) {
   // do: right where a shopper would otherwise assume every item can be
   // returned like the rest of the catalog. A product that DOES accept
   // returns gets no extra text here — the general 99% refund policy
-  // (see the Return Policy link this same tap also reveals) already
+  // (see the Return policy link this same tap also reveals) already
   // covers the default case, and repeating "returns accepted" on every
   // single product would just be noise.
   if (metadata?.noReturns) notes.push('no returns');

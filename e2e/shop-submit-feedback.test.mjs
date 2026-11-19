@@ -1,5 +1,5 @@
-// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit Feedback' bug
-// reports..."): the "Submit Feedback" button/modal -- screenshot capture,
+// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit feedback' bug
+// reports..."): the "Submit feedback" button/modal -- screenshot capture,
 // WebGL/browser info, and the #2717 ring buffer, submitted via
 // src/api.js's submitFeedbackBugReport to POST /api/feedback/bug-report.
 //

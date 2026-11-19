@@ -180,7 +180,7 @@ await page.keyboard.press('Enter');
 await page.waitForTimeout(400);
 check((await page.getAttribute('#product-card-more-btn', 'aria-expanded')) === 'true', 'More announces that it is open');
 const afterMore = await page.locator('#product-card').ariaSnapshot();
-check(/button "Return Policy"/.test(afterMore), `More opens Return Policy as a named button (got ${JSON.stringify(afterMore)})`);
+check(/button "Return policy"/.test(afterMore), `More opens Return policy as a named button (got ${JSON.stringify(afterMore)})`);
 const missedMore = await smallAreas();
 check(missedMore.length === 0, `with More open, every control can be hit in a 44px square (${JSON.stringify(missedMore)})`);
 

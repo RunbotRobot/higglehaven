@@ -1,4 +1,4 @@
-// #3576: turning Community Sign on changed that button's label to the wider
+// #3576: turning Community sign on changed that button's label to the wider
 // a wider "...Manage" label, the selection toolbar re-wrapped and Delete
 // moved onto the item. Every toolbar button must stay exactly where it was
 // when the toggle flips, at phone width.
@@ -41,4 +41,4 @@ console.log('after: ', JSON.stringify(afterSign));
 const unchanged = JSON.stringify(before) === JSON.stringify(afterSign);
 const pass = unchanged && label.includes('Manage') &&
   errors.filter((e) => !e.includes('Failed to load resource')).length === 0;
-await finish(browser, { pass, label: 'The selection toolbar does not move when Community Sign is toggled on (#3576)', errors });
+await finish(browser, { pass, label: 'The selection toolbar does not move when Community sign is toggled on (#3576)', errors });

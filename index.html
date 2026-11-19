@@ -46,9 +46,9 @@
     </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <div id="shop-nearby-status" class="visually-hidden" role="status" aria-live="polite"></div>
-    <button id="shop-last-location-btn" type="button">Go to Last Location</button>
-    <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
-    <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
+    <button id="shop-last-location-btn" type="button">Go to last location</button>
+    <button id="shop-sign-hint" class="shop-ui" type="button">Leave a note</button>
+    <button id="shop-calendar-hint" class="shop-ui" type="button">Add an event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
     <!-- #3441: the three orb notices share one stack so two shown at once are
          both readable (each used to sit in its own fixed slot and a taller one
@@ -146,7 +146,7 @@
         <button id="account-menu-toggle" type="button" aria-label="Account menu" aria-expanded="false"><span class="bud-gear" aria-hidden="true">&#9881;&#65039;</span><img class="bud-logo" src="/favicon.svg" alt="" width="36" height="36" /><span class="bud-word">Menu</span></button>
         <div id="account-menu-panel" role="group" aria-label="Menu">
           <button id="add-item-btn" type="button" hidden>Add item</button>
-          <button id="account-auth-btn" type="button">Log In / Sign Up</button>
+          <button id="account-auth-btn" type="button">Log in / Sign up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
           <!-- #1661: dm-badge is a second, independent count (unread direct
                messages) sharing this same button, since that's the only
@@ -156,8 +156,8 @@
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
           <!-- #3653: only while a conversation is minimised: its way back, now the pill is gone. -->
           <button id="assistant-menu-btn" type="button" hidden>Assistant</button>
-          <button id="my-purchases-btn" type="button">My Purchases</button>
-          <button id="my-lands-btn" type="button">My Lándlets</button>
+          <button id="my-purchases-btn" type="button">My purchases</button>
+          <button id="my-lands-btn" type="button">My lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
@@ -189,7 +189,7 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled hidden>Redo</button>
-      <button id="pending-restoration-btn" type="button" hidden>Removed Items</button>
+      <button id="pending-restoration-btn" type="button" hidden>Removed items</button>
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
@@ -218,9 +218,9 @@
           <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
           <button id="level-up-btn" type="button" aria-label="Level up">&#9650;</button>
         </div>
-        <button id="level-build-btn" type="button">Build Level Above</button>
-        <button id="level-dig-btn" type="button">Dig Level Below</button>
-        <button id="level-remove-btn" type="button" hidden>Remove This Level</button>
+        <button id="level-build-btn" type="button">Build level above</button>
+        <button id="level-dig-btn" type="button">Dig level below</button>
+        <button id="level-remove-btn" type="button" hidden>Remove this level</button>
         <div id="level-status" role="status" aria-live="polite"></div>
       </div>
     </div>
@@ -258,7 +258,7 @@
           <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
           <div id="bundle-picker-section" hidden>
             <div id="bundle-picker-tabs">
-              <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My Bundles</button>
+              <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My bundles</button>
               <button class="bundle-tab-btn" type="button" data-bundle-tab="community">Community</button>
             </div>
             <div id="bundle-picker-grid"></div>
@@ -275,7 +275,7 @@
       </div>
     </div>
     <!-- #2761: replaces the native prompt()/confirm() pair this app's
-         bundle flow was the last holdout still using (Save Bundle's name
+         bundle flow was the last holdout still using (Save bundle's name
          prompt + its own follow-up share confirm, and the bundle-tile
          rename prompt in src/catalog/picker.js) — see
          src/ui/bundleNameModal.js, shared by both call sites. -->
@@ -315,7 +315,7 @@
         </div>
       </div>
     </div>
-    <!-- #3249: the product review modal Shop's "Rate this Product" opens
+    <!-- #3249: the product review modal Shop's "Rate this product" opens
          (write, edit, delete), replacing a chain of native prompt()/alert()
          calls. See src/ui/productReviewModal.js. -->
     <div id="product-review-modal" role="dialog" aria-modal="true" aria-labelledby="product-review-modal-title" tabindex="-1">
@@ -533,11 +533,11 @@
         </div>
         <div id="upload-status" role="status" aria-live="polite"></div>
         <div id="upload-modal-actions">
-          <button id="upload-submit-btn" type="button">Add Product</button>
+          <button id="upload-submit-btn" type="button">Add product</button>
         </div>
       </div>
     </div>
-    <!-- #2748 (leaf of #2745's shared-products redesign): "Sell This Too"
+    <!-- #2748 (leaf of #2745's shared-products redesign): "Sell this too"
          -- browse every product in the catalog (any seller's, not just
          this one's own) and attach a fresh listing to whichever one is
          picked, instead of uploading a new model. Its own modal, stacked
@@ -548,7 +548,7 @@
     <div id="sell-this-too-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="sell-this-too-modal-content">
         <button id="sell-this-too-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Sell This Too</h2>
+        <h2>Sell this too</h2>
         <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
         <div id="sell-this-too-grid"></div>
         <div id="sell-this-too-empty" hidden>No products match your search.</div>
@@ -587,7 +587,7 @@
     <div id="refund-policy-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="refund-policy-modal-content">
         <button id="refund-policy-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Refund Policy</h2>
+        <h2>Refund policy</h2>
         <p>
           When you return a purchase, you'll get back 99% of what you paid — not the full 100%.
         </p>
@@ -714,7 +714,7 @@
     <div id="my-purchases-modal" role="dialog" aria-modal="true" aria-labelledby="my-purchases-title" tabindex="-1">
       <div id="my-purchases-modal-content">
         <button id="my-purchases-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2 id="my-purchases-title">My Purchases</h2>
+        <h2 id="my-purchases-title">My purchases</h2>
         <div id="my-purchases-list"></div>
         <button id="my-purchases-load-more-btn" type="button" hidden>Load more</button>
         <div id="my-purchases-empty" class="empty-state" role="status" aria-live="polite" hidden>You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.</div>
@@ -726,7 +726,7 @@
         <h2>Friends</h2>
         <div class="friends-toolbar">
           <button id="friends-add-btn" type="button">+ Add Friend</button>
-          <button id="friends-map-btn" type="button">Show Map</button>
+          <button id="friends-map-btn" type="button">Show map</button>
         </div>
         <div id="friends-status" role="status" aria-live="polite"></div>
         <!-- #2781 (sub-issue of #2777): "Group voice channels for friends
@@ -757,7 +757,7 @@
     <div id="friends-map-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="friends-map-modal-content">
         <button id="friends-map-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Friends Map</h2>
+        <h2>Friends map</h2>
         <canvas id="friends-map-canvas"></canvas>
         <div id="friends-map-empty">None of your friends have claimed a lándlet yet.</div>
       </div>
@@ -780,7 +780,7 @@
     <div id="my-lands-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="my-lands-modal-content">
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>My Lándlets</h2>
+        <h2>My lándlets</h2>
         <div id="my-lands-status" role="status" aria-live="polite"></div>
         <div id="my-lands-list"></div>
         <div id="my-lands-empty" class="empty-state">You don't own a lándlet yet. Claim one in Build mode to start building.</div>
@@ -789,27 +789,27 @@
     <div id="sign-posts-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="sign-posts-modal-content">
         <button id="sign-posts-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Sign Posts</h2>
+        <h2>Sign posts</h2>
         <div id="sign-posts-truncated" hidden></div>
         <div id="sign-posts-list"></div>
         <div id="sign-posts-empty">No posts on this sign yet.</div>
-        <button id="sign-posts-unflag-btn" type="button">Remove Community Sign</button>
+        <button id="sign-posts-unflag-btn" type="button">Remove community sign</button>
       </div>
     </div>
     <div id="calendar-events-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="calendar-events-modal-content">
         <button id="calendar-events-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Calendar Events</h2>
+        <h2>Calendar events</h2>
         <div id="calendar-events-truncated" hidden></div>
         <div id="calendar-events-list"></div>
         <div id="calendar-events-empty">No events on this calendar yet.</div>
-        <button id="calendar-events-unflag-btn" type="button">Remove Community Calendar</button>
+        <button id="calendar-events-unflag-btn" type="button">Remove community calendar</button>
       </div>
     </div>
     <div id="backup-chain-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="backup-chain-modal-content">
         <button id="backup-chain-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Backup Chain</h2>
+        <h2>Backup chain</h2>
         <p id="backup-chain-intro">If this item sells out, the next one in this list automatically takes its place.</p>
         <div id="backup-chain-list"></div>
         <div id="backup-chain-empty">No backups configured yet.</div>
@@ -819,7 +819,7 @@
     <div id="pending-restoration-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="pending-restoration-modal-content">
         <button id="pending-restoration-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Removed Items</h2>
+        <h2>Removed items</h2>
         <p id="pending-restoration-intro">These were taken off your lándlet because their seller was suspended. They come back automatically if the suspension is lifted, or you can clear one for good to free up the spot.</p>
         <div id="pending-restoration-list"></div>
         <div id="pending-restoration-empty">Nothing is waiting to be restored.</div>
@@ -842,8 +842,8 @@
         <button id="product-card-more-btn" type="button" aria-expanded="false" aria-controls="product-card-more">More</button>
       </div>
       <div id="product-card-more" hidden>
-        <button id="product-card-review-btn" type="button">Rate this Product</button>
-        <button id="product-card-return-policy-btn" type="button">Return Policy</button>
+        <button id="product-card-review-btn" type="button">Rate this product</button>
+        <button id="product-card-return-policy-btn" type="button">Return policy</button>
       </div>
       <button id="product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>
@@ -889,7 +889,7 @@
         <button id="group-item" type="button">Bundle</button>
         <button id="ungroup-item" type="button">Unbundle</button>
         <button id="edit-bundle-item" type="button">Edit</button>
-        <button id="save-bundle-item" type="button">Save Bundle</button>
+        <button id="save-bundle-item" type="button">Save bundle</button>
         <button id="copy-item" type="button">Copy</button>
         <button id="delete-item" type="button">Delete</button>
         <button id="item-card-more-btn" type="button" aria-expanded="false" aria-controls="item-card-more">More</button>
@@ -917,9 +917,9 @@
           <label class="item-card-angle-field">Tilt green<input id="angle-tilt-green" aria-label="Tilt (green ring), in degrees" data-angle="tiltGreen" type="number" step="1" inputmode="decimal" /></label>
         </div>
         <!-- #3693 (Build in the bud 6/6): rare, and about one item, so they live in the card's More; ids and handlers unchanged. -->
-        <button id="toggle-community-sign" type="button" data-width-sizer="Community Sign">Community Sign</button>
-        <button id="toggle-community-calendar" type="button" data-width-sizer="Community Calendar">Community Calendar</button>
-        <button id="toggle-backup-chain" type="button">Backup Chain</button>
+        <button id="toggle-community-sign" type="button" data-width-sizer="Community sign">Community sign</button>
+        <button id="toggle-community-calendar" type="button" data-width-sizer="Community calendar">Community calendar</button>
+        <button id="toggle-backup-chain" type="button">Backup chain</button>
       </div>
       <button id="item-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>
@@ -950,7 +950,7 @@
     <div id="feedback-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="feedback-modal-content">
         <button id="feedback-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Submit Feedback</h2>
+        <h2>Submit feedback</h2>
         <img id="feedback-screenshot-preview" alt="Screenshot of the current view" hidden />
         <label>Describe what happened (optional)
           <textarea id="feedback-description" maxlength="1000" placeholder="What went wrong? The more detail, the better."></textarea>
@@ -986,8 +986,8 @@
 
         <div id="auth-logged-out">
           <div id="auth-tabs">
-            <button class="settings-tab-btn auth-tab-btn active" type="button" data-auth-view="login">Log In</button>
-            <button class="settings-tab-btn auth-tab-btn" type="button" data-auth-view="signup">Sign Up</button>
+            <button class="settings-tab-btn auth-tab-btn active" type="button" data-auth-view="login">Log in</button>
+            <button class="settings-tab-btn auth-tab-btn" type="button" data-auth-view="signup">Sign up</button>
           </div>
 
           <form id="auth-login-form" class="auth-form">
@@ -998,7 +998,7 @@
                 <button type="button" id="auth-login-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
-            <button type="submit">Log In</button>
+            <button type="submit">Log in</button>
             <button type="button" id="auth-forgot-btn" class="auth-link-btn">Forgot password?</button>
           </form>
 
@@ -1027,20 +1027,20 @@
                  shape as Stripe.js). Absent entirely, not just empty, when
                  GET /api/auth/turnstile-sitekey returns no sitekey. -->
             <div id="auth-signup-turnstile"></div>
-            <button type="submit">Sign Up</button>
+            <button type="submit">Sign up</button>
           </form>
 
           <form id="auth-forgot-form" class="auth-form" hidden>
             <div class="auth-hint">Enter your email and we'll send a password reset link.</div>
             <label>Email<input type="email" id="auth-forgot-email" required autocomplete="email" /></label>
-            <button type="submit">Send Reset Link</button>
-            <button type="button" id="auth-forgot-back-btn" class="auth-link-btn">Back to Log In</button>
+            <button type="submit">Send reset link</button>
+            <button type="button" id="auth-forgot-back-btn" class="auth-link-btn">Back to log in</button>
           </form>
 
           <form id="auth-reset-form" class="auth-form" hidden>
             <div class="auth-hint">Choose a new password.</div>
             <label>New password (8+ characters)<input type="password" id="auth-reset-password" required autocomplete="new-password" minlength="8" /></label>
-            <button type="submit">Reset Password</button>
+            <button type="submit">Reset password</button>
           </form>
         </div>
 
@@ -1058,10 +1058,10 @@
           <div id="auth-account-verified"></div>
           <!-- #1182 (sub-issue of #1126): an in-session way to change
                account email. Collapsed behind its own trigger, same shape
-               as Delete Account below — not destructive, but still a real
+               as Delete account below — not destructive, but still a real
                form with two fields rather than something worth showing
                open by default. -->
-          <button id="auth-change-email-btn" type="button">Change Email</button>
+          <button id="auth-change-email-btn" type="button">Change email</button>
           <form id="auth-change-email-form" class="auth-form" hidden>
             <label>New email
               <input type="email" id="auth-change-email-new" required autocomplete="email" />
@@ -1072,24 +1072,24 @@
                 <button type="button" id="auth-change-email-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
-            <button type="submit">Change Email</button>
+            <button type="submit">Change email</button>
             <button type="button" id="auth-change-email-cancel-btn" class="auth-link-btn">Cancel</button>
           </form>
           <!-- docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
                verification via Didit — the higher trust tier that gates
                full social features, above the credit-card tier. -->
           <div id="auth-account-trust-tier"></div>
-          <button id="auth-verify-id-btn" type="button" hidden>Verify with Government ID</button>
+          <button id="auth-verify-id-btn" type="button" hidden>Verify with government ID</button>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
-          <button id="auth-logout-btn" type="button">Log Out</button>
+          <button id="auth-logout-btn" type="button">Log out</button>
 
           <!-- #1181 (sub-issue of #1126): a real in-session change-password
                form, separate from the forgot-password email-link flow
                above (auth-forgot-form/auth-reset-form), which stays as the
                logged-out path. Collapsed behind its own trigger, same
-               shape as Delete Account below, since it's a sensitive action
+               shape as Delete account below, since it's a sensitive action
                too even though it isn't irreversible the way deletion is. -->
-          <button id="auth-change-password-btn" type="button">Change Password</button>
+          <button id="auth-change-password-btn" type="button">Change password</button>
           <form id="auth-change-password-form" class="auth-form" hidden>
             <div class="auth-hint">
               Changing your password signs you out of every other device, but keeps this one signed in.
@@ -1106,16 +1106,16 @@
                 <button type="button" id="auth-change-password-new-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
-            <button type="submit">Change Password</button>
+            <button type="submit">Change password</button>
             <button type="button" id="auth-change-password-cancel-btn" class="auth-link-btn">Cancel</button>
           </form>
 
           <!-- #1987 (sub-issue of #1983): GDPR/CCPA "right to access" --
                triggers a browser download of the GET /auth/export-data
                JSON bundle. Read-only and immediate, unlike Change
-               Password/Delete Account below, so no collapsed
+               Password/Delete account below, so no collapsed
                confirmation form of its own. -->
-          <button id="auth-export-data-btn" type="button">Download My Data</button>
+          <button id="auth-export-data-btn" type="button">Download my data</button>
 
           <!-- #1146/#1149: real account deletion, distinct from the
                builder/seller "reset" actions under Settings → Build/Sell
@@ -1123,7 +1123,7 @@
                stays active through them). Starts collapsed behind its own
                trigger button rather than a single click, since this one
                really is irreversible. -->
-          <button id="auth-delete-account-btn" type="button">Delete Account</button>
+          <button id="auth-delete-account-btn" type="button">Delete account</button>
           <form id="auth-delete-account-form" class="auth-form" hidden>
             <div class="auth-hint">
               Permanently deletes your login — you'll be signed out everywhere, and this email and username become available for a new signup. Your builder/seller profile and any lándlet you own are not affected (reset those separately in Settings if you want a fresh start there too). Financial and tax records are retained for as long as the law requires, disconnected from your identity. This cannot be undone.
@@ -1134,7 +1134,7 @@
                 <button type="button" id="auth-delete-account-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
-            <button type="submit" class="danger">Permanently Delete Account</button>
+            <button type="submit" class="danger">Permanently delete account</button>
             <button type="button" id="auth-delete-account-cancel-btn" class="auth-link-btn">Cancel</button>
           </form>
         </div>

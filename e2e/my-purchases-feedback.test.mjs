@@ -1,11 +1,11 @@
-// "My Purchases" feedback controls (#3198). The feedback endpoints themselves
+// "My purchases" feedback controls (#3198). The feedback endpoints themselves
 // are covered by the worker tests (worker/purchases-mine.test.js and the
 // feedback suites), so this fulfils them from fixtures to pin the panel:
 // leave, edit and delete from a row, no control on an ineligible row, and a
 // 409 showing the refetched value rather than the stale one.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
-const LABEL = 'My Purchases Feedback Tester';
+const LABEL = 'My purchases Feedback Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);

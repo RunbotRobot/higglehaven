@@ -1,7 +1,7 @@
 // #3302 (owner decision 2026-11-09): "Send feedback" lives in Settings, in
 // every mode, instead of as a Shop-only HUD pill. Walks Build, Shop and Sell
 // on one account at phone width: the old pill is gone, Settings offers Send
-// feedback, it opens the Submit Feedback modal over Settings with a real
+// feedback, it opens the Submit feedback modal over Settings with a real
 // screenshot, closing it returns to Settings, and the submitted report
 // carries `mode` plus a ring-buffer sample taken in that same mode (so Build
 // and Sell reports are no longer empty). The POST is intercepted so the exact

@@ -3,7 +3,7 @@
 // rule if it is measured, so every frame's gap is recorded here and the long
 // stalls the browser itself reports (the Long Tasks API, any task over 50 ms)
 // are counted. The numbers are exposed to e2e (window.__frameMonitor) and sent
-// with a Submit Feedback report (frameMonitorSample, below).
+// with a Submit feedback report (frameMonitorSample, below).
 //
 // Dependency-free apart from the optional PerformanceObserver, with the clock
 // passed in, so it runs in the plain vitest pool.

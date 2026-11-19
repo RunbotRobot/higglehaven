@@ -1,5 +1,5 @@
 // #2761: replaces the native prompt()/confirm() pair this app's bundle
-// flow was the last holdout still using (Save Bundle's name prompt plus
+// flow was the last holdout still using (Save bundle's name prompt plus
 // its own follow-up share confirm in src/main.js, and the bundle-tile
 // rename prompt in src/catalog/picker.js). One small reusable modal
 // covers both call sites -- the public/private choice (public selected by default, #3326) only shown for the Save
