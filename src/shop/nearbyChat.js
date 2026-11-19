@@ -18,7 +18,6 @@ import { confirmAndBlockPerson } from '../blocks.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
-import { showNotice } from '../ui/noticeModal.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { addBudPetals, openLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
 
@@ -159,7 +158,8 @@ async function reportNearbyChatSender(builderId, lineEl) {
     // pill over the world.
     if (lineEl?.isConnected) showInlineActionStatus(lineEl, 'Report sent. Thank you.', { error: false });
   } catch (err) {
-    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Please try again.' });
+    // #3889: a failure is said on the same message, in the leaf, and stays.
+    if (lineEl?.isConnected) showInlineActionStatus(lineEl, `Couldn't submit the report. ${err?.message || 'Please try again.'}`, { error: true });
   }
 }
 
