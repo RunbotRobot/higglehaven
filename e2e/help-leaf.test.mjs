@@ -34,7 +34,10 @@ await page.waitForSelector('#bud-leaf-help .help-entry', { timeout: 10000 });
 const entries = await page.$$eval('#bud-leaf-help .help-entry summary', (els) => els.map((el) => el.textContent.trim()));
 await page.click('#bud-leaf-help .help-entry summary');
 const stepCount = await page.locator('#bud-leaf-help .help-entry[open] .help-steps li').count();
-console.log('shopping questions:', entries.length, 'steps in the first:', stepCount);
+// What you will see: the line keeps its label, so it never reads as a lowercase fragment under the steps.
+const seeLine = (await page.locator('#bud-leaf-help .help-entry[open] .help-see').first().textContent()) || '';
+const seeLabelled = seeLine.startsWith('You will see: ');
+console.log('shopping questions:', entries.length, 'steps in the first:', stepCount, '| see line labelled:', seeLabelled);
 
 // Tips: every tip the opening screen shows, readable here.
 await page.click('#bud-leaf-help .help-back');
@@ -77,7 +80,7 @@ await page.waitForSelector('body[data-mode="build"][data-bud="on"]', { timeout: 
 perMode.build = (await page.locator('#bud-petal-general-help').count()) === 1 && !(await page.locator('#bud-petal-build-help').count()); // #3760: one general petal, registered once
 console.log('"?" petal in Build and Sell:', JSON.stringify(perMode));
 
-const pass = JSON.stringify(rows) === JSON.stringify(['How to move', 'How higglehaven works', 'Shopping', 'Building', 'Selling', 'Tips', 'Ask an assistant'])
+const pass = seeLabelled && JSON.stringify(rows) === JSON.stringify(['How to move', 'How higglehaven works', 'Shopping', 'Building', 'Selling', 'Tips', 'Ask an assistant'])
   && tipLines.length >= 4 && noOldPetal && entries.length >= 4 && stepCount >= 2 && leafGone && settingsAskGone
   && perMode.build && perMode.sell && teachOnFirstOpen && teachGoneAfterHelp && errors.length === 0;
 await finish(browser, { pass, label: '"?" leaf: pages from the handbook, Ask an assistant, in every mode (#3762)', errors });
