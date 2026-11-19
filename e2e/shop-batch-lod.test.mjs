@@ -5,7 +5,7 @@
 //
 // Seeds a claimed landlet with a wall of identical placements of a dense sphere (public/models/crate.glb
 // has no reduced versions to switch to) and checks, at phone width in Shop: beside the wall every
-// placement is on the full model; at 26 m (small on screen) they are all on a reduced version and the
+// placement is on the full model; a batch arriving from 26 m is on a reduced version from its first frame; at 26 m (small on screen) they are all on a reduced version and the
 // frame draws a small fraction of the triangles; back beside it they are full again; the three set
 // sizes sum to the placements at every step; and a real tap on a brick drawn from a reduced version
 // still resolves to that brick's placement.
@@ -142,6 +142,20 @@ await moveTo(at(130));
 await page.waitForFunction(() => window.__testShopLoadedInstanceCount() === 0, null, { timeout: 30000 });
 await page.waitForTimeout(2500);
 const baseline = await stats();
+
+// Arriving from a distance: the batch is drawn from reduced versions from the first frame it exists, not
+// at full detail until its reduced versions load and a tick converts it (a thousand-brick wall seen
+// from afar was one draw of millions of triangles for its first frames).
+await moveTo(at(26));
+await page.waitForFunction((n) => {
+  window.__testForceShopProximityCheck();
+  const stats = window.__testShopDrawStats();
+  if (stats.batchedPlacements > 0 && !window.__firstBatchTiers) window.__firstBatchTiers = { ...stats.batchTiers, placements: stats.batchedPlacements };
+  return stats.batchedPlacements === n;
+}, COUNT, { timeout: 120000, polling: 'raf' });
+const firstTiers = await page.evaluate(() => window.__firstBatchTiers);
+console.log('first frame the batch exists, from 26 m:', JSON.stringify(firstTiers));
+check(firstTiers && firstTiers.placements === COUNT && firstTiers.full === 0 && firstTiers.mid + firstTiers.far === COUNT, `a batch arriving from 26 m is on reduced versions from its first frame (${JSON.stringify(firstTiers)})`);
 
 // Beside the wall: every placement is the full model.
 await moveTo([cx, cy]);

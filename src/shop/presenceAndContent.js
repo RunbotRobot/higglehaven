@@ -61,7 +61,7 @@ import { createTierCrossfades } from './tierCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { initBatchTiers, addBatchTier, moveBatchHandle } from './batchTiers.js';
+import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
@@ -1552,6 +1552,18 @@ async function loadShopLandletInstances(entry, myToken) {
 // sit/lean search, attention and reviews see it like any placed item; only the
 // drawing is shared. A model that cannot be drawn this way falls back to
 // ordinary per-item meshes for the whole batch.
+// #3403: the version a batched placement should first be drawn from: the real model beside the
+// avatar, otherwise by how big it looks on screen (the same rule as every later tick, with no
+// history yet). The per-tick pass reconciles anything the full-detail budget or a bundle's size
+// changes from here.
+function initialBatchTier(entry, handle) {
+  const nearAvatar = isNearFullDetail(horizontalDistanceM(
+    entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
+    shopAvatarPosition.x, shopAvatarPosition.y,
+  ));
+  return nearAvatar ? TIER_FULL : nextTier(null, lodApparentPx(entry, handle));
+}
+
 async function buildAndAttachBatch(entry, members, myToken, group, run) {
   const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
   if (myToken !== entry.loadToken) { // superseded while queued
@@ -1577,6 +1589,22 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
     return;
   }
   const handles = members.map((instance) => createPlacementHandle(instance, template));
+  // #3403: a batch arrives drawn from the versions its first decision calls for (size on screen, the
+  // protected radius around the avatar), not at full detail for its first frames and then converted:
+  // a wall of a thousand bricks seen from afar was one draw of millions of triangles until its
+  // reduced versions loaded. The versions are fetched before anything is added to the scene.
+  const initialTiers = handles.map((handle) => initialBatchTier(entry, handle));
+  let tierSources = null;
+  if (initialTiers.some((tier) => tier !== TIER_FULL)) {
+    tierSources = await loadBatchTierSources(template).catch(() => null);
+    if (myToken !== entry.loadToken) { // superseded while the versions loaded
+      for (const tierSource of Object.values(tierSources ?? {})) if (tierSource) disposeObject3D(tierSource.container);
+      disposeObject3D(source.container);
+      window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+      settleAll();
+      return;
+    }
+  }
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
@@ -1590,6 +1618,24 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   // removes the root.
   batch.root = new THREE.Group();
   for (const mesh of batch.meshes) batch.root.add(mesh);
+  if (tierSources) {
+    let added = false;
+    batch.tierContainers = [];
+    for (const name of ['mid', 'far']) {
+      if (!tierSources[name]) continue;
+      addBatchTier(batch, name, tierSources[name].parts);
+      batch.tierContainers.push(tierSources[name].container);
+      added = true;
+    }
+    batch.tiersState = added ? 'ready' : 'none';
+    if (added) {
+      const applied = partitionBatch(batch, initialTiers);
+      handles.forEach((handle, index) => {
+        handle.userData.lodTier = applied[index];
+        handle.userData.lodApplied = applied[index];
+      });
+    }
+  }
   entry.group.add(batch.root);
   entry.batches.push(batch);
   let topZ = -Infinity;

@@ -222,6 +222,8 @@ await page.waitForTimeout(4000);
 const unloaded = await page.evaluate(() => window.__testShopDrawStats());
 console.log('after unload:', JSON.stringify(unloaded));
 check(unloaded.batches === 0 && unloaded.instancedMeshes === 0, 'leaving drops every batch');
-check(unloaded.geometries <= baseline.geometries && unloaded.textures <= baseline.textures, `geometries and textures return to the baseline (geometries ${unloaded.geometries} vs ${baseline.geometries}, textures ${unloaded.textures} vs ${baseline.textures})`);
+// #3403: a wall seen from 30 m now arrives on its reduced versions, which are built once per product and
+// cached for the session (loadTierScenes), so up to two cached geometries stay after the landlet unloads.
+check(unloaded.geometries <= baseline.geometries + 2 && unloaded.textures <= baseline.textures, `geometries and textures return to the baseline (geometries ${unloaded.geometries} vs ${baseline.geometries}, textures ${unloaded.textures} vs ${baseline.textures})`);
 
 await finish(browser, { pass: pass && errors.length === 0, label: '#3402: 829 identical placements are drawn as instanced batches, still tappable, and unload releases them', errors });
