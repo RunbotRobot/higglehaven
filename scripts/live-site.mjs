@@ -249,6 +249,15 @@ const frameStats = () => page.evaluate(() => {
 });
 const settle = async () => {
   await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+  // The opening screen can still be up when the network goes quiet (a mode switch returns while
+  // "Loading the world" is half way), and a shot taken then shows the loading screen, not the
+  // thing asked for (seen on #3577). Wait for it to lift; a failed screen stays up on purpose,
+  // so it ends the wait, and a stuck one gives up after 30 s rather than hanging the run.
+  await page.waitForFunction(() => {
+    const splash = document.getElementById('loading-screen');
+    return !splash || splash.classList.contains('loading-screen-hidden')
+      || splash.classList.contains('loading-screen-failed') || getComputedStyle(splash).display === 'none';
+  }, null, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(500);
 };
 
