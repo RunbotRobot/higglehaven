@@ -81,6 +81,14 @@ to the end of any step to take them while it runs, as in
 with the Read tool. Against a local `wrangler dev`, add
 `--url http://127.0.0.1:8787 --login local`.
 
+**A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
+and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;
+`--throttle` is the slow-4G one for waits. Which figures to trust: the cloud machine's script side is
+far faster than a phone's and its GPU side (software GL) far slower, so under `--phone` trust long
+tasks, the longest script task and request timings; do not trust frame time or anything GPU-bound;
+for the GPU use triangles and draw calls per frame (`live-frame-cost.mjs`), which hold on any
+machine. A figure without its profile named says little about the owner's phone.
+
 **A seeded local world (#3930).** `npm run seed:local-world` fills a local `wrangler dev` (with
 `.dev.vars` holding `ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret`, the e2e fixture) so looks that
 need a lándlet, a purchase or another person can be taken locally: `--name looker` is a builder and

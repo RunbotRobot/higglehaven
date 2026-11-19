@@ -5,11 +5,16 @@
 // prints, for a few frames spread over the run, the draw calls, triangles (instances counted) and
 // the biggest single draw, with the frame time.
 //
-//   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...]
+//   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...] [--phone]
+//
+// --phone (#3935) slows the CPU 4x and uses a home-wifi phone connection (see PHONE_PROFILE in
+// scripts/live-site-lib.mjs) and prints what that profile can and cannot tell: triangles and draw
+// calls per frame are the GPU proxy that holds on any machine; the frame time is software GL.
 //
 // Signs in with the fleet login like scripts/live-site.mjs (the session's proxy adds the fleet key;
 // nothing is printed or stored). Standing still at the arrival spot in Shop at 390x844.
 import { chromium } from 'playwright';
+import { PHONE_PROFILE, applyProfile } from './live-site-lib.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
@@ -17,6 +22,7 @@ const name = flag('--name', null);
 if (!name || !/^higglehaven\d+$/.test(name)) { console.error('live-frame-cost: --name higglehaven<N> is required (this session\'s name)'); process.exit(1); }
 const base = flag('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const seconds = Number(flag('--seconds', 35));
+const phone = args.includes('--phone');
 
 const launch = {};
 if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launch.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
@@ -26,6 +32,12 @@ const context = await browser.newContext({ viewport: { width: 390, height: 844 }
 const login = await context.request.post(`${base}/api/auth/fleet-login`, { data: { name } });
 if (!login.ok()) { console.error(`live-frame-cost: fleet login answered ${login.status()}`); await browser.close(); process.exit(1); }
 const page = await context.newPage();
+if (phone) {
+  await applyProfile(await context.newCDPSession(page), PHONE_PROFILE);
+  console.log(`Profile: phone (CPU ${PHONE_PROFILE.cpuSlowdown}x slower, ${PHONE_PROFILE.latencyMs} ms, ${PHONE_PROFILE.downKbps / 1000}/${PHONE_PROFILE.upKbps / 1000} Mbps). ${PHONE_PROFILE.limits}`);
+} else {
+  console.log('Profile: none (a cloud machine: fast CPU, software GL). Add --phone for a phone-like CPU and connection.');
+}
 await page.addInitScript(() => {
   const state = window.__frameCost = { draws: [], frames: [] };
   const wrap = (proto) => {
