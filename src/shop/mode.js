@@ -765,10 +765,26 @@ export function renderShopSettingsSection() {
   const label = document.createElement('span');
   label.textContent = 'Controls';
   field.appendChild(label);
-  const note = document.createElement('div');
-  note.className = 'settings-empty-note';
+  // #3652: one short line per gesture instead of one paragraph, touch first, then the keyboard.
+  // The sentences still come from gestureWords.js, so they stay the same words the "?" leaf uses.
+  const note = document.createElement('ul');
+  note.className = 'settings-empty-note settings-gesture-list';
+  const addLine = (text, heading = false) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    if (heading) li.className = 'settings-gesture-heading';
+    note.appendChild(li);
+  };
   // #3650: moving is done by touching the world (no sticks, no fly button).
-  note.textContent = `${WALK_WORDS} (drag further to run). ${LOOK_WORDS}. Both work at once, one thumb each. ${FLY_WORDS}, and again to land. ${FRIEND_WORDS} (on a computer, click them). While flying you go where the view points: look up and walk forward to climb, look down to descend (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down, or hold the left mouse button on the world and drag to look around, T or a double-press of space to fly, and N to open the nearest product's card).`;
+  addLine(`${WALK_WORDS} (drag further to run)`);
+  addLine(LOOK_WORDS);
+  addLine(`${FLY_WORDS}, and again to land`);
+  addLine('While flying you go where the view points: look up and walk forward to climb, look down to descend');
+  addLine(`${FRIEND_WORDS} (on a computer, click them)`);
+  addLine('On a keyboard', true);
+  addLine('WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down');
+  addLine('Hold the left mouse button on the world and drag to look around');
+  addLine('T or a double-press of space to fly, N to open the nearest product\'s card');
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
