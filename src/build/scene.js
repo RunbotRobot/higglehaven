@@ -2347,7 +2347,7 @@ levelRemoveBtn.addEventListener('click', async () => {
       ].filter(Boolean).join(' and ')} come back with them.`
       : '';
     setLevelStatus(sweptCount > 0
-      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your lándlet. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
+      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your lándlet. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
       : '');
     renderLevelControls();
   } catch (err) {
