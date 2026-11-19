@@ -42,7 +42,7 @@ await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 const DELAY_MS = 2000;
 await page.evaluate((ms) => { window.__testUploadPreviewLoadDelayMs = ms; }, DELAY_MS);
 
-await page.click('#upload-submit-btn'); // "Create Product" on the file step
+await page.click('#upload-submit-btn'); // "Create product" on the file step
 // Confirms showUploadDimensionPreview has actually started (status text
 // updates to "Loading preview…" right before it's called) and is therefore
 // sitting inside its artificial delay, not a guess at timing.

@@ -12,7 +12,7 @@ await page.waitForSelector('#bud-leaf-storefront button:has-text("Rename")', { t
 const text = await page.locator('#bud-leaf-storefront').innerText();
 const showsName = text.includes(LABEL);
 console.log('Leaf shows the shop name (should be true):', showsName);
-const hasReset = await page.locator('#bud-leaf-storefront button:has-text("Reset Profile")').count();
+const hasReset = await page.locator('#bud-leaf-storefront button:has-text("Reset profile")').count();
 console.log('Leaf offers Reset Profile (should be 1):', hasReset);
 
 // Close the leaf, open Settings: no Sell tab, and it opens on General.

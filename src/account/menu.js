@@ -887,18 +887,18 @@ async function renderFriends() {
       // #2781: same id_verified gate as Message just above (voice signaling
       // requires it too, worker/lib/social.js's requireIdVerifiedSessionBuilder).
       // Only one of the two buttons below ever shows for a given friend:
-      // "Leave Voice" once already a member of THIS friend's channel
+      // "Leave voice" once already a member of THIS friend's channel
       // (friendsVoiceChannelStatusEl above already covers ending/leaving
       // whichever channel is active in general -- this is just the
       // same action, reachable from this friend's own row too), or
-      // "Join Voice" only while the caller isn't a member of ANY channel
+      // "Join voice" only while the caller isn't a member of ANY channel
       // yet -- this simple one-row-per-friend UI doesn't attempt to show
       // "switch channels" or multi-channel membership at once.
       const myChannelWithThisFriend = friendVoiceChannels.find((c) => c.ownerBuilderId === friendship.otherBuilderId);
       if (myChannelWithThisFriend) {
         const leaveVoiceBtn = document.createElement('button');
         leaveVoiceBtn.type = 'button';
-        leaveVoiceBtn.textContent = 'Leave Voice';
+        leaveVoiceBtn.textContent = 'Leave voice';
         leaveVoiceBtn.addEventListener('click', async () => {
           leaveVoiceBtn.disabled = true;
           try {
@@ -914,7 +914,7 @@ async function renderFriends() {
       } else if (friendVoiceChannels.length === 0) {
         const joinVoiceBtn = document.createElement('button');
         joinVoiceBtn.type = 'button';
-        joinVoiceBtn.textContent = 'Join Voice';
+        joinVoiceBtn.textContent = 'Join voice';
         joinVoiceBtn.addEventListener('click', async () => {
           joinVoiceBtn.disabled = true;
           try {

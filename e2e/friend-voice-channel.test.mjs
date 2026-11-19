@@ -19,7 +19,7 @@
 //
 // Unlike #2818's own voice-chat-core.test.mjs (pure proximity, no
 // friendship needed), this test needs a REAL accepted friendship between
-// the two builders -- the actual "Join Voice" UI (src/account/menu.js) only
+// the two builders -- the actual "Join voice" UI (src/account/menu.js) only
 // renders a row for an accepted friend in the first place -- done via the
 // same real "+ Add Friend"/Accept Friends-panel flow e2e/friends.test.mjs
 // and e2e/direct-messages-gating.test.mjs already use. And since the
@@ -286,7 +286,7 @@ await pageB.click('#friends-close-btn');
 await bumpToIdVerifiedNoReload(pageA);
 await bumpToIdVerifiedNoReload(pageB);
 
-// The real "Join Voice" click -- joinFriendVoiceChannel (src/shop/
+// The real "Join voice" click -- joinFriendVoiceChannel (src/shop/
 // voiceChat.js) calls the (mocked) POST .../join then
 // reconcileFriendVoiceChannels directly, so the first peer-connection
 // attempt starts right here, in Build mode, before Shop mode's own render
@@ -294,12 +294,12 @@ await bumpToIdVerifiedNoReload(pageB);
 await openAccountMenu(pageB);
 await pageB.click('#friends-btn');
 await pageB.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-const joinVoiceBtn = pageB.locator('#friends-accepted-list .friend-row').filter({ hasText: LABEL_A }).locator('button', { hasText: 'Join Voice' });
+const joinVoiceBtn = pageB.locator('#friends-accepted-list .friend-row').filter({ hasText: LABEL_A }).locator('button', { hasText: 'Join voice' });
 await joinVoiceBtn.waitFor({ state: 'visible', timeout: 10000 });
 await joinVoiceBtn.click();
 await pageB.waitForFunction(
   () => [...document.querySelectorAll('#friends-accepted-list .friend-row')]
-    .some((row) => row.textContent.includes('Friend Voice Suite Owner') && row.textContent.includes('Leave Voice')),
+    .some((row) => row.textContent.includes('Friend Voice Suite Owner') && row.textContent.includes('Leave voice')),
   null,
   { timeout: 10000 },
 );

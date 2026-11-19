@@ -2,7 +2,7 @@
 // Auctions" world-wide list in Settings' Build tab) had no stale-response
 // guard, unlike its sibling renderForLandlet() in the exact same panel
 // (#442, see e2e/auction-picker-race.test.mjs). Each auction row's own
-// "Place Bid" button only disables itself, not the whole panel or any other
+// "Place bid" button only disables itself, not the whole panel or any other
 // row, so two overlapping renderAuctionList() reloads (one per bid) can
 // race: whichever fetchAllAuctions() round-trip resolves last wins the
 // repaint, regardless of which one was actually issued most recently.
@@ -31,7 +31,7 @@
 // *after* auction A's reload has already dispatched and captured its own
 // snapshot -- guaranteeing that snapshot is genuinely from before B's bid,
 // not just a data point that happens to arrive late. Steps:
-//   1. Fill both bid inputs and fire both "Place Bid" clicks back-to-back
+//   1. Fill both bid inputs and fire both "Place bid" clicks back-to-back
 //      via a single synchronous in-page evaluate() (so neither click has to
 //      survive a DOM wipe triggered by the other -- see first bullet
 //      above).
@@ -154,7 +154,7 @@ await bidderPage.route((url) => isWorldListReload(url.toString()), async (route)
   await route.continue();
 });
 
-// Fire both "Place Bid" clicks back-to-back in one synchronous browser
+// Fire both "Place bid" clicks back-to-back in one synchronous browser
 // task -- see the big comment above for why.
 await bidderPage.evaluate(() => {
   const rows = [...document.querySelectorAll('.auction-list .auction-row')];

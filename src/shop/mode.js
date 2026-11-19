@@ -868,7 +868,7 @@ function renderMyAvatarsField(onEquipped) {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
-  label.textContent = 'My Avatars';
+  label.textContent = 'My avatars';
   field.appendChild(label);
   const hint = document.createElement('div');
   hint.className = 'settings-empty-note';
@@ -988,7 +988,7 @@ function renderMyAvatarsField(onEquipped) {
   renderMyAvatarsList();
 }
 
-// #1164: the "My Animations" sibling of renderMyAvatarsField just above —
+// #1164: the "My animations" sibling of renderMyAvatarsField just above —
 // same row shape, equip/unequip against owned_animations (#1163) instead
 // of owned_avatars, plus a compatibility badge per row (see
 // animationCompatibility) since, unlike an avatar, whether an animation
@@ -1003,7 +1003,7 @@ function renderMyAnimationsField() {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
-  label.textContent = 'My Animations';
+  label.textContent = 'My animations';
   field.appendChild(label);
   const hint = document.createElement('div');
   hint.className = 'settings-empty-note';

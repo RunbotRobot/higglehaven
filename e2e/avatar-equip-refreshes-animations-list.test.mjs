@@ -1,10 +1,10 @@
-// #1340: renderShopSettingsSection (src/main.js) mounts "My Avatars" and
-// "My Animations" as two independent sibling fields in the same open
-// Settings > Shop panel. "My Animations"' own compatibility badges
+// #1340: renderShopSettingsSection (src/main.js) mounts "My avatars" and
+// "My animations" as two independent sibling fields in the same open
+// Settings > Shop panel. "My animations"' own compatibility badges
 // (animationCompatibilityLabel(animationCompatibility(...))) are a pure
 // function of whichever avatar is currently equipped, fetched fresh only
 // when renderMyAnimationsList itself runs -- but re-equipping through "My
-// Avatars"' own Equip button never told "My Animations" to re-render, so
+// Avatars"' own Equip button never told "My animations" to re-render, so
 // its badges went stale until Settings was closed and reopened.
 //
 // public/models/crate.glb (this repo's only e2e-friendly upload fixture)
@@ -99,15 +99,15 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
-const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
-const myAnimationsField = page.locator('.settings-field', { hasText: 'My Animations' });
+const myAvatarsField = page.locator('.settings-field', { hasText: 'My avatars' });
+const myAnimationsField = page.locator('.settings-field', { hasText: 'My animations' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My avatars') && f.querySelectorAll('.version-row').length >= 2),
   null,
   { timeout: 30000 },
 );
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Animations') && f.querySelectorAll('.version-row').length >= 2),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My animations') && f.querySelectorAll('.version-row').length >= 2),
   null,
   { timeout: 30000 },
 );
@@ -145,7 +145,7 @@ console.log('purchased avatar row shows equipped after the click (should be true
 // #1200's flight-direction-tilt.test.mjs.
 await page.waitForFunction(
   (name) => [...document.querySelectorAll('.settings-field')]
-    .some((f) => f.textContent.includes('My Animations')
+    .some((f) => f.textContent.includes('My animations')
       && [...f.querySelectorAll('.version-row')].some((r) => r.textContent.includes(name))),
   ANIMATION_PRODUCT_NAME,
   { timeout: 10000 },

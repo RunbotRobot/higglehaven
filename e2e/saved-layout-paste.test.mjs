@@ -76,7 +76,7 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
-const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row');
+const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved layouts' }).locator('.version-row');
 await savedLayoutRow.locator('button', { hasText: 'Preview' }).click();
 await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForTimeout(1000); // let the model actually load/render before interacting with it

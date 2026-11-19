@@ -41,7 +41,7 @@ console.log('status after removing a level holding one item:', JSON.stringify(sw
 
 const pass = emptyStatus === '' &&
   sweptStatus.includes('1 item on that level was taken off your lándlet') &&
-  sweptStatus.includes('Saved Layouts') &&
+  sweptStatus.includes('Saved layouts') &&
   !/#\d+|docs\/|API\.md|swept|snapshot/i.test(sweptStatus) &&
   errors.filter((e) => !e.includes('Failed to load resource')).length === 0;
 await finish(browser, { pass, label: 'Removing a level that holds items tells the builder where they went; an empty level stays silent (#3099)', errors });

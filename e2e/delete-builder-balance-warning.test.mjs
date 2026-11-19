@@ -30,11 +30,11 @@ let dialogMessage = null; // #3278: now the in-app confirm modal's own message t
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-// #1149 renamed this button from "Delete account" to "Reset Profile" --
+// #1149 renamed this button from "Delete account" to "Reset profile" --
 // the confirm() dialog text this test checks (via dialogMessage below) is
 // unaffected since the balance-forfeit note is appended after the
 // (now-updated) opening sentence either way.
-await page.click('#settings-section button:has-text("Reset Profile")');
+await page.click('#settings-section button:has-text("Reset profile")');
 // #3278: the confirm is the shared in-app modal now; read its message, then
 // accept it, and give the delete's own async follow-up (fetchProfile/
 // renderName) time to settle.
