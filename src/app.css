@@ -6420,6 +6420,7 @@
       #product-card-buy-btn {
         display: none;
         flex: 1;
+        min-height: 44px; /* #3824: a tap target of at least 44px */
         padding: var(--space-md) 0;
         border: none;
         border-radius: var(--radius-petal);
@@ -6451,6 +6452,9 @@
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-sm);
+        /* #3824: the buttons here are tapped in a 44px square, 7px above and below their drawn
+           30px; this keeps that from reaching into Buy's last pixel on the row above. */
+        margin-top: 2px;
       }
       #product-card-more[hidden] {
         display: none;
@@ -6469,6 +6473,23 @@
         position: absolute;
         top: var(--space-xs);
         right: var(--space-xs);
+      }
+      /* #3824: the small controls on the card are drawn small and tapped at 44px: an invisible area,
+         centred on the control, reaches that size without changing the card's look. */
+      #product-card-more-btn,
+      #product-card-more button {
+        position: relative;
+      }
+      #product-card-more-btn::after,
+      #product-card-more button::after,
+      #product-card-close-btn::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: max(100%, 44px);
+        height: max(100%, 44px);
+        transform: translate(-50%, -50%);
       }
       /* A small pointer toward the product, on the side facing it, drawn fully
          outside the card. Gone when the product is off screen: there is nothing
