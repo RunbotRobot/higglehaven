@@ -2699,8 +2699,6 @@
       }
       #catalog-picker-empty {
         padding: var(--space-lg) var(--space-2xs);
-        color: rgb(var(--ink-rgb) / 0.65);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #catalog-picker-empty[hidden] {
         display: none;

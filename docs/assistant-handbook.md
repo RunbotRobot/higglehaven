@@ -514,7 +514,7 @@ its corner when you reach the limit.
    see who.
 
 **You will see:** your message appears in the box, and messages from people near you
-appear in the same box.
+appear in the same box. With nobody having spoken yet the box says: Nobody has said anything nearby yet. What you type here is seen by people close to you.
 
 **If something goes wrong:**
 - The box says chatting opens once their ID is verified: nearby chat, like direct
@@ -681,6 +681,7 @@ are inside it: tap the Build petal to see them (the bud opens on the general men
 a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
 
 **If something goes wrong:**
+- The search finds nothing: the list says No products match what they typed, and then: Try fewer letters, or clear the search to see everything.
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then the Build petal, then that.
 - The item is not where you wanted. It is selected, so drag it (below), or tap
