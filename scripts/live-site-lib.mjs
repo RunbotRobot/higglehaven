@@ -298,7 +298,34 @@ export function gateRefusalMessage(status) {
 // Everything else is a step.
 // #3736: `--throttle` -- a slow phone on a slow connection, so a wait that is
 // invisible on fast hardware shows up. The standard "slow 4G" mobile profile.
-export const THROTTLE_PROFILE = { cpuSlowdown: 4, latencyMs: 150, downKbps: 1600, upKbps: 750 };
+export const THROTTLE_PROFILE = { name: 'throttle', cpuSlowdown: 4, latencyMs: 150, downKbps: 1600, upKbps: 750 };
+
+// #3935: `--phone` -- what a frame costs on a phone, not on a cloud machine. The script side of this
+// machine is far faster than a phone's, so the CPU is slowed 4x through the DevTools protocol, and the
+// network is a phone on a home connection (20/5 Mbps, 40 ms), not a slow one: a figure from it is about
+// the app's own work, where `--throttle` is about waiting on a bad connection. `limits` is printed in
+// the report so a number is never read without it.
+export const PHONE_PROFILE = {
+  name: 'phone', cpuSlowdown: 4, latencyMs: 40, downKbps: 20000, upKbps: 5000,
+  limits: 'Trust: long tasks, longest script task and request timings (the CPU is slowed 4x, the network is a phone on home wifi). '
+    + 'Do not trust: frame time and anything GPU-bound (this is software GL, not a phone GPU, and its draw time says nothing of a real one). '
+    + 'For the GPU use triangles and draw calls per frame (scripts/live-frame-cost.mjs), which do not depend on the machine.',
+};
+
+export function profileFor(options) {
+  if (options.phone) return PHONE_PROFILE;
+  if (options.throttle) return THROTTLE_PROFILE;
+  return null;
+}
+
+// Slows the page the way the profile says. `cdp` is a DevTools session on the page.
+export async function applyProfile(cdp, profile) {
+  await cdp.send('Network.enable');
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: profile.cpuSlowdown });
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: profile.latencyMs, downloadThroughput: profile.downKbps * 1024 / 8, uploadThroughput: profile.upKbps * 1024 / 8,
+  });
+}
 
 const PEER_STEPS = ['join', 'shot', 'pos', 'say'];
 
@@ -314,6 +341,7 @@ export function parseArgs(argv, env = {}) {
     with: null,
     coverReport: false,
     throttle: false,
+    phone: false,
   };
   const steps = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -333,9 +361,11 @@ export function parseArgs(argv, env = {}) {
     else if (arg === '--with') options.with = value();
     else if (arg === '--cover-report') options.coverReport = true;
     else if (arg === '--throttle') options.throttle = true;
+    else if (arg === '--phone') options.phone = true;
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
     else steps.push(parseStep(arg));
   }
+  if (options.phone && options.throttle) throw new Error('--phone and --throttle do not go together: --phone is a phone on a home connection, --throttle a phone on a slow one');
   if (options.size && options.desktop) throw new Error('--size and --desktop do not go together: --size is a touch screen of that size');
   if (!['fleet', 'local'].includes(options.login)) throw new Error('--login must be "fleet" (the live site) or "local" (a wrangler dev instance)');
   if (!options.name) throw new Error('--name is required: this session\'s name, e.g. --name higglehaven10');

@@ -53,6 +53,8 @@
 // e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
 // --throttle (CPU 4x slower, 150 ms round trip, 1.6/0.75 Mbps: a slow phone, #3736),
+// --phone (CPU 4x slower, 40 ms, 20/5 Mbps: a phone on home wifi, so a frame or a long task means a
+// phone; the report's `profile` says which figures to trust, #3935),
 // --cover-report (instead of steps: walk a fixed list of states and print one table of how
 // much of the screen the interface covers in each; for an interface change's before and after).
 //
@@ -64,7 +66,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, THROTTLE_PROFILE,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -106,13 +108,12 @@ const page = await context.newPage();
 const mainPage = page;
 
 const result = { url: baseUrl, name: options.name, device: options.size ? `touch ${options.size.width}x${options.size.height}` : options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
-if (options.throttle) {
+const profile = profileFor(options);
+if (profile) {
   // Applied after sign-in would miss the sign-in, which is fine; applied here it covers every step.
-  const cdp = await context.newCDPSession(page);
-  await cdp.send('Network.enable');
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE_PROFILE.cpuSlowdown });
-  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: THROTTLE_PROFILE.latencyMs, downloadThroughput: THROTTLE_PROFILE.downKbps * 1024 / 8, uploadThroughput: THROTTLE_PROFILE.upKbps * 1024 / 8 });
-  result.throttle = THROTTLE_PROFILE;
+  await applyProfile(await context.newCDPSession(page), profile);
+  result.profile = profile;
+  result.throttle = profile; // kept for #3736's readers; `profile` is the one that names which ran
 }
 const timingSamples = new Map();
 page.on('pageerror', (error) => result.consoleErrors.push(error.message));

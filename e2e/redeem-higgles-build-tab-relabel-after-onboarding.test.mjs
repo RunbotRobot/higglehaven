@@ -77,6 +77,8 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 
+// #3652: Redeem higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
 // "Redeem higgles" label and the actual form live in separate sibling
 // .settings-field divs (per e2e/redeem-higgles-settings.test.mjs's own
 // comment) -- the submit button is found by its own exact text rather
@@ -109,6 +111,8 @@ await page.waitForFunction(
   null,
   { timeout: 60000 },
 );
+// #3652: the redraw above rebuilt the tab, so the "Higgles and auctions" row is closed again.
+await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
 const relabeledBtnPresent = await page.getByRole('button', { name: 'Update payout account' }).count();
 console.log('Submit button relabeled to "Update payout account" right after the first successful submit, no tab switch needed (should be 1 -- was the #1403 bug):', relabeledBtnPresent);
 

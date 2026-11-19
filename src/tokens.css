@@ -160,6 +160,7 @@
 
   /* The short list of opacities a surface may use (the census found 61 colours
      but 24 hues: most are the ink at free-choice opacities). */
+  --fill-row: rgb(var(--ink-rgb) / 0.08);  /* a list row's fill, one step quieter than --alpha-faint */
   --alpha-faint: 0.12;
   --alpha-line: 0.25;
   --alpha-half: 0.5;
