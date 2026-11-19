@@ -839,6 +839,10 @@ export async function openLevelMenu(page) {
 export async function budClick(page, selector) {
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!open) await openAccountMenu(page);
+  // #3760: a place's tool is in that place's own menu, so on a page the budAware wrapper was not put on
+  // (a second page a test opens for itself) this opens the place's menu first.
+  const menu = budMenuOf(selector);
+  if (menu && !(await page.locator(selector).isVisible())) await openBudMenuOf(page, menu);
   await page.click(selector);
 }
 
