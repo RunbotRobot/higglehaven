@@ -40,7 +40,7 @@ import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this product), for focus return after a notice.
-import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders } from './productCard.js';
+import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders, markProductJustBought } from './productCard.js';
 
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const checkoutModalEl = document.getElementById('checkout-modal');
@@ -298,6 +298,16 @@ export function handleShopReturnPolicyClick() {
   openModalA11y(refundPolicyModalEl, closeRefundPolicyModal);
 }
 
+// #3945: confetti at the product it was bought from, and the card says so. Never blocks, never
+// throws into the purchase: the order is already recorded by the time this runs.
+function showPurchaseCelebration(review) {
+  try {
+    const mesh = review?.mesh;
+    if (mesh?.parent) spawnConfettiBurst(mesh.position, mesh.parent);
+  } catch { /* the celebration is decoration */ }
+  markProductJustBought(review);
+}
+
 export async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
@@ -342,20 +352,24 @@ export async function handleShopProductBuyClick() {
       // out instantly with nothing to confirm.
       // #3249: a notice the buyer can select and copy from, not alert() --
       // a suppressed alert would also have lost the link for good.
-      await showNotice(finalized.deliveryConfirmUrl
-        ? {
+      // #3945: the confirmation is in the world (confetti at the product, "Yours now." on its
+      // card). A sheet stays only where something would be lost without it: the delivery link is
+      // shown once and the buyer must be able to select it (#3249).
+      showPurchaseCelebration(review);
+      if (finalized.deliveryConfirmUrl) {
+        await showNotice({
           title: 'Purchase complete',
-          message: 'Thank you! Once you receive it, confirm delivery with this link so the seller gets paid. It is shown only once, so copy it now.',
+          message: 'Once you receive it, confirm delivery with this link so the seller gets paid. It is shown only once, so copy it now.',
           copyText: finalized.deliveryConfirmUrl,
           returnFocusEl: productCardBuyButton(),
-        }
-        : { title: 'Purchase complete', message: 'Thank you!', returnFocusEl: productCardBuyButton() });
+        });
+      }
     } else {
       clearPurchaseIdempotencyKey(instanceId);
       // #3255: real payments are live, so this branch (free / zero-price items
       // and any path that returns the purchase directly) reads the same as the
       // paid branch above rather than the dev-era "simulated" wording.
-      await showNotice({ title: 'Purchase complete', message: 'Thank you!', returnFocusEl: productCardBuyButton() });
+      showPurchaseCelebration(review);
     }
     // #3681: what was just bought may now be owned (an avatar, an animation).
     refreshOwnedAfterPurchase();
