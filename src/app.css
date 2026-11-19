@@ -1699,8 +1699,12 @@
         /* #3608: never taller than the visible area above its own bottom
            offset, so its header can never be pushed off the top; the log is
            the part that shrinks (and scrolls). */
-        max-height: calc(100vh - var(--assistant-bottom) - 8px);
-        max-height: calc(100dvh - var(--assistant-bottom) - 8px);
+        /* #3608 (owner's phone, 11-16): the header must also stay clear of the head at the top left,
+           which paints under this panel's z-index and so would hide the title, minimise and close
+           when the window is short. */
+        --assistant-head-clear: calc(var(--bud-size) + 24px);
+        max-height: calc(100vh - var(--assistant-bottom) - 8px - var(--assistant-head-clear));
+        max-height: calc(100dvh - var(--assistant-bottom) - 8px - var(--assistant-head-clear));
         max-width: 420px;
         margin: 0 auto;
         display: flex;
@@ -1733,7 +1737,7 @@
         --assistant-kb-inset: 0px;
         --assistant-visible-height: 100dvh;
         bottom: calc(var(--assistant-kb-inset, 0px) + 8px);
-        max-height: calc(var(--assistant-visible-height, 100dvh) - 16px);
+        max-height: calc(var(--assistant-visible-height, 100dvh) - 16px - var(--assistant-head-clear));
       }
       #assistant-chat-panel[hidden],
       #assistant-chat-panel.minimized {
