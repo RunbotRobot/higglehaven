@@ -3947,7 +3947,7 @@ groupBtn.addEventListener('click', async () => {
       setTimeout(() => groupBtn.classList.remove('pressed'), 150);
     } catch (err) {
       console.error('Could not group selection:', err);
-      showSelectionActionStatus(`Couldn't bundle these items. ${err.message || 'Please try again.'}`);
+      showSelectionActionStatus(`Couldn't bundle these items. ${err.message || 'Try again.'}`);
     } finally {
       syncSettled();
     }
@@ -4070,7 +4070,7 @@ async function syncBundleTemplate(baseline) {
     showSelectionActionStatus('Saved. This bundle now looks the same everywhere it is placed.');
   } catch (err) {
     console.error('Could not save the bundle edit:', err);
-    showSelectionActionStatus(`Couldn't save your changes to this bundle everywhere. ${err.message || 'Please try again.'}`);
+    showSelectionActionStatus(`Couldn't save your changes to this bundle everywhere. ${err.message || 'Try again.'}`);
   }
 }
 
@@ -4091,7 +4091,7 @@ editBundleBtn.addEventListener('click', async () => {
   if (info.bundleId) {
     isCreator = creatorOfBundle(info.bundleId);
     if (isCreator === null) {
-      try { await loadOwnBundles(); } catch (err) { showSelectionActionStatus("Couldn't check who saved this bundle. Please try again."); return; }
+      try { await loadOwnBundles(); } catch (err) { showSelectionActionStatus("Couldn't check who saved this bundle. Try again."); return; }
       checkedBundleIds.add(info.bundleId);
       isCreator = creatorOfBundle(info.bundleId);
     }
@@ -4138,7 +4138,7 @@ ungroupBtn.addEventListener('click', async () => {
     setTimeout(() => ungroupBtn.classList.remove('pressed'), 150);
   } catch (err) {
     console.error('Could not ungroup selection:', err);
-    showSelectionActionStatus(`Couldn't unbundle these items. ${err.message || 'Please try again.'}`);
+    showSelectionActionStatus(`Couldn't unbundle these items. ${err.message || 'Try again.'}`);
   } finally {
     syncSettled();
     updateSelectionUI();

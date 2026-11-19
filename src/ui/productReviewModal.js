@@ -90,7 +90,7 @@ async function save() {
     if (!session) return;
     session.busy = false;
     setBusy(false);
-    setStatus(err?.message || "Couldn't save your review. Please try again.");
+    setStatus(err?.message || "Couldn't save your review. Try again.");
     saveBtn.focus({ preventScroll: true });
     return;
   }

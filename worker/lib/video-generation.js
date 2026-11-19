@@ -73,7 +73,7 @@ async function tripoUploadFile(env, bytes, filename, contentType) {
   // carry an undefined file_token all the way into the multiview-to-model
   // call below instead of failing here with a clean error.
   if (!response.ok || data?.code !== 0 || !data?.data?.file_token) {
-    throw new HttpError('Video-to-3D image upload failed — please try again', response.status >= 500 ? 502 : 400);
+    throw new HttpError('Video-to-3D image upload failed. Try again', response.status >= 500 ? 502 : 400);
   }
   return data.data.file_token;
 }
@@ -298,8 +298,8 @@ const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned'
 const TRIPO_FAILURE_MESSAGES = {
   failed: 'We couldn\'t turn this video into a 3D model. Your credit has been returned. You can try again, ideally with a different video.',
   cancelled: 'This generation was cancelled before it finished. Your credit has been returned.',
-  banned: 'This video can\'t be turned into a 3D model. The credit for this attempt was used; please try a different video.',
-  expired: 'The finished model expired before we could save it. Your credit has been returned; please start a new generation.',
+  banned: 'This video can\'t be turned into a 3D model. The credit for this attempt was used. Try a different video.',
+  expired: 'The finished model expired before we could save it. Your credit has been returned. Start a new generation.',
 };
 
 // Statuses whose credit is NOT returned (see the comment above).
@@ -364,7 +364,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // status-poll path).
     if (!task?.output?.model_url) {
       await failVideoGenerationJob(db, jobId,
-        'We couldn\'t retrieve the finished model. Your credit has been returned; please start a new generation.',
+        'We couldn\'t retrieve the finished model. Your credit has been returned. Start a new generation.',
         { refundCredit: true });
       return;
     }
@@ -402,7 +402,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
         if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
       }
       await failVideoGenerationJob(db, jobId,
-        'We couldn\'t retrieve the generated model. Your credit has been returned; please try again.',
+        'We couldn\'t retrieve the generated model. Your credit has been returned. Try again.',
         { refundCredit: true });
       return;
     }
@@ -448,7 +448,7 @@ export async function expireStaleVideoGenerationJobs(db) {
   `).bind(cutoff).all();
   for (const { job_id: jobId } of stale) {
     await failVideoGenerationJob(db, jobId,
-      'This generation timed out. Your credit has been returned; please try again.',
+      'This generation timed out. Your credit has been returned. Try again.',
       { refundCredit: true });
   }
 }
@@ -564,7 +564,7 @@ export async function handleVideoGenerationJobCreate(request, env, db) {
     // check at the top of this handler reports the real current state
     // next time.
     if (!videoGenerationReservationStillUsable(existing)) {
-      throw new HttpError('A video-generation job is already starting -- please try again in a moment', 409);
+      throw new HttpError('A video-generation job is already starting. Try again in a moment', 409);
     }
     return json({ jobId: existing.job_id, status: existing.status });
   }
@@ -587,7 +587,7 @@ export async function handleVideoGenerationJobCreate(request, env, db) {
       model: TRIPO_MODEL_VERSION,
     });
     if (!task?.task_id) {
-      throw new HttpError('Video-to-3D job creation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
+      throw new HttpError('Video-to-3D job creation failed. Try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
     }
     billedTaskId = task.task_id;
     await db.prepare(`

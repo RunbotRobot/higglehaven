@@ -386,7 +386,7 @@ export async function handlePresence(request, db, route, url) {
     // between the upsert above and this re-SELECT -- a genuine 404, same
     // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
     // an uncaught null-dereference crash.
-    if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
+    if (!row) return json({ error: 'Your account was deleted concurrently. Sign in again' }, 404);
     return json({
       presence: {
         userId: row.user_id,
