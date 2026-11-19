@@ -688,7 +688,7 @@ withdrawEl.addEventListener('click', async () => {
 closeEl.addEventListener('click', () => { closeAssistantChat(); });
 
 // #3636 part 2: "Take me there" walks the shopper's avatar to where she stands
-// (the same fade and landing as Go to Last Location), then tucks the window
+// (the same fade and landing as Go to last location), then tucks the window
 // away so the world is in view. The conversation stays open.
 goEl.addEventListener('click', () => {
   if (!standing) return;

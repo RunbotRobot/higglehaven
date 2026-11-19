@@ -353,7 +353,7 @@ import {
   syncUpdate, footprintsOverlap, footprintCorners,
   removeLowStockHighlight, landletElevationGroup, markBuildSceneReady,
 } from './build/scene.js';
-// #2987: builder-facing "Removed Items" view of suspended-seller removals
+// #2987: builder-facing "Removed items" view of suspended-seller removals
 // (wires its own button/modal; enterBuildMode below triggers its load).
 import { refresh as refreshPendingRestorations } from './build/pendingRestoration.js';
 
@@ -670,8 +670,8 @@ startFirstVisitHints();
 // circular import, same shape the other extracted modules above already
 // use). addItemBtn/buildCatalogPickerButtons/closeCatalogPicker/
 // openCatalogPickerForPick/renderBundlePicker/bumpBundlePickerLoadToken are
-// imported back from it here because main.js's own Backup Chain panel and
-// Save Bundle/bundle-list-refresh call sites (not yet extracted) still
+// imported back from it here because main.js's own Backup chain panel and
+// Save bundle/bundle-list-refresh call sites (not yet extracted) still
 // need them.
 import {
   addItemBtn, buildCatalogPickerButtons, closeCatalogPicker,
@@ -807,7 +807,7 @@ const saveBundleBtn = document.getElementById('save-bundle-item');
 // #2560: communitySignBtn/communityCalendarBtn/backupChainBtn and the
 // modals they open now live in src/build/metadataModals.js.
 
-// Save Bundle persists the current selection's relative arrangement to the
+// Save bundle persists the current selection's relative arrangement to the
 // backend (see relativeItemsForMeshes) so it can be stamped down again
 // later — in a different session, or on a different landlet entirely —
 // rather than only living in this session's in-memory clipboard the way an
@@ -1086,7 +1086,7 @@ export const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, genera
 export function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
-// #1176: the "Go to Last Location" button's own fade in/out — same
+// #1176: the "Go to last location" button's own fade in/out — same
 // duration both ways, applied via CSS transition (#shop-last-location-btn
 // in index.html), not JS-driven opacity.
 const SHOP_LAST_LOCATION_BUTTON_FADE_S = 0.4;
@@ -1243,7 +1243,7 @@ export function setShopDomeMesh(value) {
 
 export let shopAvatarFacing = 0;
 // #2624: shop/flightMovement.js reassigns this in several places (turning
-// to face movement, the spawn-orbit/"Go to Last Location" sequences) --
+// to face movement, the spawn-orbit/"Go to last location" sequences) --
 // an ES import binding is read-only from the importing side, so it needs
 // this setter rather than a direct assignment, same shape world/state.js's
 // own setCurrentMode etc. already established for cross-cutting state.
@@ -2021,7 +2021,7 @@ async function enterSellMode() {
   // #2552: an explicit registration rather than leaving whatever an earlier
   // load registered (see world/scene.js's own comment). Until the Sell world
   // view mounts below (#3295), and if it never does (a declined login), the
-  // only per-frame work is the tiny callback that feeds the Submit Feedback
+  // only per-frame work is the tiny callback that feeds the Submit feedback
   // ring buffer (#3302); the world view then takes over the slot and runs that
   // same callback after the movement core each frame.
   registerModeFrameUpdate(recordSellFeedbackSample);
@@ -2382,7 +2382,7 @@ async function bootstrap() {
     // opens the catalog picker -- deferring this pair off the critical
     // path too, re-rendering the (already-safe-to-redraw) picker once it
     // resolves instead of blocking the whole scene on it. Shares
-    // bundlePickerLoadToken with Save Bundle and the rename/share/delete
+    // bundlePickerLoadToken with Save bundle and the rename/share/delete
     // handlers below (#1349/#1787's own guard) -- this fetch was already
     // in flight by the time Build mode's scene renders, so a builder who
     // saves a new bundle before it resolves must not have it clobbered by

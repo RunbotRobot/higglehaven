@@ -1,4 +1,4 @@
-// #1182 (sub-issue of #1126): covers the real in-session Change Email form
+// #1182 (sub-issue of #1126): covers the real in-session Change email form
 // in the Account panel. Modeled directly on delete-account.test.mjs's own
 // structure -- same collapsed-behind-its-own-trigger reveal/cancel check,
 // plus the happy path confirming the displayed email and verified badge
@@ -11,7 +11,7 @@ import {
   launchPage, finish, waitForText, clearVerifyModalIfShown,
 } from './helpers.mjs';
 
-const { browser, page, errors } = await launchPage({ promptAnswer: 'Change Email Suite' });
+const { browser, page, errors } = await launchPage({ promptAnswer: 'Change email Suite' });
 const email = `change-email-suite-${Date.now()}@example.com`;
 const newEmail = `change-email-suite-new-${Date.now()}@example.com`;
 const password = 'a fine long password';
@@ -27,20 +27,20 @@ async function openAuthModal(page) {
 // --- Sign up ---
 await openAuthModal(page);
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
-await page.fill('#auth-signup-username', 'Change Email Suite');
+await page.fill('#auth-signup-username', 'Change email Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
 await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
-await waitForText(page, '#account-auth-btn', 'Change Email Suite');
+await waitForText(page, '#account-auth-btn', 'Change email Suite');
 await clearVerifyModalIfShown(page);
 
-// --- Open the account panel; Change Email starts collapsed ---
+// --- Open the account panel; Change email starts collapsed ---
 await openAuthModal(page);
 const changeBtnVisibleBefore = await page.locator('#auth-change-email-btn').isVisible();
 const formHiddenBefore = await page.locator('#auth-change-email-form').isHidden();
-console.log('Change Email trigger visible before any click (should be true):', changeBtnVisibleBefore);
-console.log('Change Email form hidden before any click (should be true):', formHiddenBefore);
+console.log('Change email trigger visible before any click (should be true):', changeBtnVisibleBefore);
+console.log('Change email form hidden before any click (should be true):', formHiddenBefore);
 const emailBeforeChange = await page.locator('#auth-account-email').textContent();
 console.log('Displayed email before change (should be the signup email):', emailBeforeChange);
 
@@ -81,4 +81,4 @@ const pass = changeBtnVisibleBefore &&
   emailAfterChange.includes(newEmail) &&
   !verifiedBadgeAfterChange.includes('✓') &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Change Email in the Account panel updates the displayed email end-to-end (#1182)', errors });
+await finish(browser, { pass, label: 'Change email in the Account panel updates the displayed email end-to-end (#1182)', errors });

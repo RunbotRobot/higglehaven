@@ -1,4 +1,4 @@
-// #3586 (interface week): in Sell, Upload Model, Sell This Too, the delete
+// #3586 (interface week): in Sell, Upload Model, Sell this too, the delete
 // confirmation and Settings all open from My products. Each used to leave
 // My products drawn underneath a translucent sheet, so its heading and rows
 // read through the new one. One sheet at a time now: My products is hidden
@@ -25,7 +25,7 @@ await page.click('#upload-cancel-btn');
 await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 10000 });
 results.backAfterUpload = !(await sellerHidden());
 
-// Sell This Too.
+// Sell this too.
 await openAddProductLeaf(page, 'sell-this-too');
 await page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 results.hiddenUnderSellThisToo = await sellerHidden();
@@ -57,6 +57,6 @@ results.backAfterConfirm = !(await sellerHidden());
 console.log(JSON.stringify(results));
 await finish(browser, {
   pass: Object.values(results).every(Boolean),
-  label: '#3586: My products is hidden while Upload, Sell This Too, Settings or a confirmation is open, and returns when it closes',
+  label: '#3586: My products is hidden while Upload, Sell this too, Settings or a confirmation is open, and returns when it closes',
   errors,
 });

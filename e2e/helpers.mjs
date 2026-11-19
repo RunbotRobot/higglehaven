@@ -409,7 +409,7 @@ export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
 // #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
 // they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
 const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
-// #3693: Community Sign, Community Calendar and Backup Chain sit in the item card's More, so they
+// #3693: Community sign, Community calendar and Backup chain sit in the item card's More, so they
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
 export function budAware(page) {
@@ -905,7 +905,7 @@ export async function waitForText(page, selector, expectedSubstring, { timeout =
   return text;
 }
 
-// #2761: Save Bundle and the bundle-tile rename (✎) button used to be the
+// #2761: Save bundle and the bundle-tile rename (✎) button used to be the
 // app's last native prompt()/confirm() holdouts — both now open the real
 // #bundle-name-modal (src/ui/bundleNameModal.js) instead, so driving them
 // from a test means filling that modal's own fields directly rather than
@@ -925,7 +925,7 @@ export async function fillBundleNameModal(page, name) {
   await page.click('#bundle-name-save-btn');
 }
 
-// Covers the common case — click Save Bundle, then fill the modal it
+// Covers the common case — click Save bundle, then fill the modal it
 // opens. A rename (opened from a specific bundle tile's own ✎ button
 // instead) has too many different ways callers locate that tile to cover
 // here too; those call fillBundleNameModal directly after their own click.

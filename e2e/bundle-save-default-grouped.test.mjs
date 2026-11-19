@@ -1,7 +1,7 @@
-// #2765 (sub-issue of #2763, depends on #2764): Save Bundle groups the
+// #2765 (sub-issue of #2763, depends on #2764): Save bundle groups the
 // selected items in place, not just the bundle *definition* for later reuse
 // — per the owner's direct request on #2763. Confirms the real Build-mode
-// UI flow: Save Bundle on a 2-item multi-select persists a shared groupId
+// UI flow: Save bundle on a 2-item multi-select persists a shared groupId
 // (same groupInstancesRemote mechanism #2764's own Group button uses), and
 // that this round-trips through a reload the same way an explicit Group
 // action does (e2e/group-ungroup.test.mjs's own #2764 test covers that
@@ -51,7 +51,7 @@ await page.waitForTimeout(300);
 const multiSelectInfo = await page.textContent('#item-card-name');
 console.log('status after multi-selecting both trees (should be "2 items selected"):', multiSelectInfo);
 
-// #2761: Save Bundle now opens a themed name-prompt modal instead of
+// #2761: Save bundle now opens a themed name-prompt modal instead of
 // resolving immediately (replacing the native prompt()/confirm() this test
 // originally wrote against) -- saveBundleAs covers the click plus filling
 // and confirming that modal, same helper e2e/bundles.test.mjs's own Save
@@ -63,34 +63,34 @@ await saveBundleAs(page, LABEL);
 // timeout was always Playwright's actual default (30000ms), never the
 // smaller number written here. The explicit `null` arg reaches the options
 // slot, and the timeout itself is widened to 60000ms for real headroom under
-// CI load, same as e2e/bundles.test.mjs's own Save Bundle wait.
+// CI load, same as e2e/bundles.test.mjs's own Save bundle wait.
 await page.waitForFunction(
   () => document.getElementById('product-info').textContent.includes('Saved'),
   null,
   { timeout: 60000 },
 );
 const savedStatus = await page.textContent('#product-info');
-console.log('status right after Save Bundle (should mention Saved, 2 items, and NOT mention a grouping failure):', savedStatus);
+console.log('status right after Save bundle (should mention Saved, 2 items, and NOT mention a grouping failure):', savedStatus);
 
 // The actual #2765 assertion: the two instances' persisted groupId, set by
-// Save Bundle's own grouping call -- not just the bundle definition.
+// Save bundle's own grouping call -- not just the bundle definition.
 const afterSaveFetch = await page.evaluate(async ([a, b]) => {
   const [resA, resB] = await Promise.all([fetch(`/api/instances/${a}`), fetch(`/api/instances/${b}`)]);
   const [bodyA, bodyB] = await Promise.all([resA.json(), resB.json()]);
   return { groupIdA: bodyA.instance?.groupId, groupIdB: bodyB.instance?.groupId };
 }, [instanceAId, instanceBId]);
-console.log('both instances\' persisted groupId right after Save Bundle (should be equal, non-null):', afterSaveFetch);
+console.log('both instances\' persisted groupId right after Save bundle (should be equal, non-null):', afterSaveFetch);
 
-// Save Bundle's own toolbar refresh is deliberately deferred
+// Save bundle's own toolbar refresh is deliberately deferred
 // (setTimeout(updateSelectionUI, 1200), same delay the "Saved ..." message
 // itself rides on) rather than synchronous like Group/Ungroup's own click
 // handlers -- wait past that window before reading the button's enabled
 // state, or this would just be racing that existing debounce.
 await page.waitForTimeout(1500);
 const ungroupEnabledAfterSave = await page.locator('#ungroup-item').isEnabled();
-console.log('Ungroup enabled after Save Bundle\'s deferred toolbar refresh (should be true -- current selection is now a real group):', ungroupEnabledAfterSave);
+console.log('Ungroup enabled after Save bundle\'s deferred toolbar refresh (should be true -- current selection is now a real group):', ungroupEnabledAfterSave);
 
-// Clear the selection, then reload entirely — confirms Save Bundle's
+// Clear the selection, then reload entirely — confirms Save bundle's
 // grouping call actually persisted server-side and round-trips back through
 // createMeshForInstance's own groupId carry-through, not just in-memory
 // state left over from the click that formed it.
@@ -112,7 +112,7 @@ const reloadedA = positionsAfterReload.find((p) => p.instanceId === instanceAId)
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
 const selectionAfterTappingOneMember = await page.textContent('#item-card-name');
-console.log('status after tapping only A post-reload (should still be "2 items selected" -- Save Bundle\'s grouping expanded the selection):', selectionAfterTappingOneMember);
+console.log('status after tapping only A post-reload (should still be "2 items selected" -- Save bundle\'s grouping expanded the selection):', selectionAfterTappingOneMember);
 
 const pass =
   multiSelectInfo.includes('2 items selected') &&
@@ -126,6 +126,6 @@ const pass =
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2765: Save Bundle groups the selected items in place, surviving a reload',
+  label: '#2765: Save bundle groups the selected items in place, surviving a reload',
   errors,
 });

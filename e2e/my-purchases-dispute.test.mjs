@@ -1,4 +1,4 @@
-// "Report a problem" on a My Purchases row (#3199). The dispute endpoint itself
+// "Report a problem" on a My purchases row (#3199). The dispute endpoint itself
 // is covered by worker/purchase-disputes.test.js, so this test fulfils
 // GET /api/purchases/mine and POST /api/purchases/:id/dispute from fixtures to
 // pin the UI: the control only shows when the list says the order can be
@@ -8,7 +8,7 @@
 // sending exactly one request.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
-const LABEL = 'My Purchases Dispute Tester';
+const LABEL = 'My purchases Dispute Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);

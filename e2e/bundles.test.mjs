@@ -1,5 +1,5 @@
 // Bundles: a builder selects several placed items, saves them as a named
-// group, sees it listed under Add Item's "My Bundles" section, places it
+// group, sees it listed under Add Item's "My bundles" section, places it
 // again elsewhere (all items land together, preserving their relative
 // layout — see relativeItemsForMeshes/placeClipboardItems), and can delete
 // it.
@@ -84,7 +84,7 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 const savedStatus = await page.textContent('#product-info');
-console.log('status right after Save Bundle (should mention Saved and 2 items):', savedStatus);
+console.log('status right after Save bundle (should mention Saved and 2 items):', savedStatus);
 
 // Reopen Add Item — the bundle should now be listed.
 await page.click('#add-item-btn');

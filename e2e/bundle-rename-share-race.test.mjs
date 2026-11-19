@@ -87,7 +87,7 @@ await page.waitForTimeout(200);
 await tile(BUNDLE_B).locator('.bundle-tile-share').click();
 
 // B's own (undelayed) refetch+render should land first, showing its new
-// unshared state (it started shared, per Save Bundle's auto-accepted
+// unshared state (it started shared, per Save bundle's auto-accepted
 // confirm() above) -- aria-label flips from "Stop sharing" to "Share ...".
 await page.waitForFunction(
   (name) => {

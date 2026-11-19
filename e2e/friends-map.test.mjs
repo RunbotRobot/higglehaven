@@ -5,8 +5,8 @@
 // e2e/friends.test.mjs already uses for a friend request.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
-const ALICE = 'Friends Map Alice';
-const BOB = 'Friends Map Bob';
+const ALICE = 'Friends map Alice';
+const BOB = 'Friends map Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });

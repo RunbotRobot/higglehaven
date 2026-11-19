@@ -58,13 +58,13 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I sign up for an account?
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
-2. Tap the "Sign Up" tab.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first row says "Log in / Sign up"; tap it.
+2. Tap the "Sign up" tab.
 3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
 4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
-5. Tap "Sign Up".
+5. Tap "Sign up".
 
-**You will see:** the window closes, and the first leaf of the menu now shows the person's username instead of "Log In / Sign Up". Tapping it opens their account. A verification email is sent to the address they gave.
+**You will see:** the window closes, and the first leaf of the menu now shows the person's username instead of "Log in / Sign up". Tapping it opens their account. A verification email is sent to the address they gave.
 
 **If something goes wrong:**
 - The app says "Account created, but the verification email failed to send": the account exists; in their account panel, "Resend verification email" sends it again.
@@ -73,22 +73,22 @@ touches one ends by sending the assistant to the runbook's hand-off.
 - Nothing happens, or the screen looks different from this: ask what they see, and offer to pass it to the team.
 
 ```controls any
-#auth-tabs [data-auth-view="signup"] | Sign Up
+#auth-tabs [data-auth-view="signup"] | Sign up
 #auth-signup-form label:nth-of-type(1) | Username
 #auth-signup-form label:nth-of-type(2) | Email
 #auth-signup-form label:nth-of-type(3) | Password (8+ characters)
 #auth-signup-form .auth-checkbox-label | I confirm I am at least 18 years old
-#auth-signup-form button[type="submit"] | Sign Up
+#auth-signup-form button[type="submit"] | Sign up
 ```
 
 ### How do I log in, or get back in if I forgot my password?
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Log In / Sign Up". The "Log In" tab is the first one.
-2. Fill in "Email" and "Password", then tap "Log In".
-3. If they forgot the password, tap "Forgot password?" instead, type their email and tap "Send Reset Link".
-4. The email carries a link. It opens a screen that says "Choose a new password": type one (8 or more characters) and tap "Reset Password".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Log in / Sign up". The "Log in" tab is the first one.
+2. Fill in "Email" and "Password", then tap "Log in".
+3. If they forgot the password, tap "Forgot password?" instead, type their email and tap "Send reset link".
+4. The email carries a link. It opens a screen that says "Choose a new password": type one (8 or more characters) and tap "Reset password".
 
-**You will see:** after "Log In", the menu shows their username. After "Send Reset Link", the app says "If that email has an account, a reset link was sent." (it says the same whether or not the address has an account). After "Reset Password", it says "Password reset! You can log in with your new password now." and they log in with the new one.
+**You will see:** after "Log in", the menu shows their username. After "Send reset link", the app says "If that email has an account, a reset link was sent." (it says the same whether or not the address has an account). After "Reset password", it says "Password reset! You can log in with your new password now." and they log in with the new one.
 
 **If something goes wrong:**
 - The email does not arrive: ask them to look in their spam folder, and to check they typed the address they signed up with.
@@ -96,12 +96,12 @@ touches one ends by sending the assistant to the runbook's hand-off.
 - They cannot get in after resetting, or the app says something about their account's standing: do not guess, use the runbook's hand-off.
 
 ```controls any
-#auth-tabs [data-auth-view="login"] | Log In
+#auth-tabs [data-auth-view="login"] | Log in
 #auth-login-form label:nth-of-type(1) | Email
-#auth-login-form button[type="submit"] | Log In
+#auth-login-form button[type="submit"] | Log in
 #auth-forgot-btn | Forgot password?
-#auth-forgot-form button[type="submit"] | Send Reset Link
-#auth-reset-form button[type="submit"] | Reset Password
+#auth-forgot-form button[type="submit"] | Send reset link
+#auth-reset-form button[type="submit"] | Reset password
 ```
 
 ### Why am I asked to confirm I am 18, and how do I verify?
@@ -152,11 +152,11 @@ touches one ends by sending the assistant to the runbook's hand-off.
 #settings-close-btn | Close
 ```
 
-### What do "Notices" and "My Lándlets" say when there is nothing in them?
+### What do "Notices" and "My lándlets" say when there is nothing in them?
 
-1. Tap the round logo at the top left to open the menu, then tap "Notices" or "My Lándlets".
+1. Tap the round logo at the top left to open the menu, then tap "Notices" or "My lándlets".
 2. A person with nothing to read in "Notices" sees "Nothing new. Updates about your products, your lándlet and your account will show up here."
-3. A person who has not claimed a lándlet sees, in "My Lándlets", "You don't own a lándlet yet. Claim one in Build mode to start building." (The steps for claiming are in "How do I get my own lándlet?".)
+3. A person who has not claimed a lándlet sees, in "My lándlets", "You don't own a lándlet yet. Claim one in Build mode to start building." (The steps for claiming are in "How do I get my own lándlet?".)
 
 **You will see:** one plain sentence saying what will appear there. An empty list is not a fault.
 
@@ -165,7 +165,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ```controls any
 #notifications-btn | Notices
-#my-lands-btn | My Lándlets
+#my-lands-btn | My lándlets
 ```
 
 ### How do I wear an avatar I bought, or apply an animation?
@@ -196,7 +196,7 @@ motion, not the only way to move. Other people see the same.
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tap "Send feedback" at the bottom.
-3. A window titled "Submit Feedback" shows a picture of what they were looking at. In the box under "Describe what happened (optional)", say what went wrong, in as much detail as they like.
+3. A window titled "Submit feedback" shows a picture of what they were looking at. In the box under "Describe what happened (optional)", say what went wrong, in as much detail as they like.
 4. Tap "Submit". "Cancel" closes it without sending.
 
 **You will see:** the app says "Thanks! Your feedback was submitted." and the window closes by itself.
@@ -207,7 +207,7 @@ motion, not the only way to move. Other people see the same.
 
 ```controls any
 #settings-feedback-btn | Send feedback
-#feedback-modal h2 | Submit Feedback
+#feedback-modal h2 | Submit feedback
 #feedback-modal label | Describe what happened (optional)
 #feedback-submit-btn | Submit
 #feedback-cancel-btn | Cancel
@@ -216,21 +216,21 @@ motion, not the only way to move. Other people see the same.
 ### How do I change my password or log out?
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then tap their username (the first row) to open "Account".
-2. To change the password, tap "Change Password". Fill in "Current password" and "New password (8+ characters)" and tap "Change Password" again. This signs them out of every other device, but keeps this one signed in.
-3. To log out, tap "Log Out".
+2. To change the password, tap "Change password". Fill in "Current password" and "New password (8+ characters)" and tap "Change password" again. This signs them out of every other device, but keeps this one signed in.
+3. To log out, tap "Log out".
 
-**You will see:** after a password change, the app says "Your password has been changed. You have been signed out of your other devices." After "Log Out", the first leaf of the menu says "Log In / Sign Up" again.
+**You will see:** after a password change, the app says "Your password has been changed. You have been signed out of your other devices." After "Log out", the first leaf of the menu says "Log in / Sign up" again.
 
 **If something goes wrong:**
 - The app says the current password is wrong: they can log out and use "Forgot password?" from the log in screen.
-- The same panel also has "Change Email" and "Download My Data". "Delete Account" is permanent and cannot be undone: only describe where it is if asked, and never suggest it. Anything about an account's standing goes to the runbook's hand-off.
+- The same panel also has "Change email" and "Download my data". "Delete account" is permanent and cannot be undone: only describe where it is if asked, and never suggest it. Anything about an account's standing goes to the runbook's hand-off.
 
 ```controls any
-#auth-change-password-btn | Change Password
-#auth-change-password-form button[type="submit"] | Change Password
-#auth-logout-btn | Log Out
-#auth-change-email-btn | Change Email
-#auth-export-data-btn | Download My Data
+#auth-change-password-btn | Change password
+#auth-change-password-form button[type="submit"] | Change password
+#auth-logout-btn | Log out
+#auth-change-email-btn | Change email
+#auth-export-data-btn | Download my data
 ```
 
 ## Getting around and Shop
@@ -266,7 +266,7 @@ everything else.
 2. Four petals grow out of it in an arc: "Shop", "Build", "Sell" and "Menu". The place you
    are in is shaded green.
 3. Tap the place you want. To open the menu of the place you are in, tap its own petal; to open the
-   general menu (your name, Notices, Friends, My Purchases, Settings and "?"), tap "Menu".
+   general menu (your name, Notices, Friends, My purchases, Settings and "?"), tap "Menu".
 
 **You will see:** a petal for another place turns green at once and the petals stay out while that
 place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
@@ -358,7 +358,7 @@ ground.
   it back until the next time you arrive.
 
 ```controls shop
-#shop-last-location-btn | Go to Last Location
+#shop-last-location-btn | Go to last location
 ```
 
 ### How do I look at a product and read about it?
@@ -368,7 +368,7 @@ ground.
    about it (for example that it ships to the United States only, or that it has no
    returns).
 3. When the product is for sale and you are standing near it, the card has a yellow
-   "Buy" button. "More" opens "Rate this Product" and "Return Policy".
+   "Buy" button. "More" opens "Rate this product" and "Return policy".
 4. Tap anywhere else in the world, or the cross at the top right of the card, when
    you are done.
 5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
@@ -384,14 +384,14 @@ behind it.
 - The card has no "Buy" button: it says why in a line of its own. "Walk closer to buy
   this." means to go up to the product. "Out of stock." and "Not for sale." mean it
   cannot be bought right now.
-- "Return Policy" tells the person what the seller says about returns, which can
+- "Return policy" tells the person what the seller says about returns, which can
   differ by product. Read it with them, and do not promise more than it says.
 
 ```controls any
 #product-card-more-btn | More
-#product-card-review-btn | Rate this Product
+#product-card-review-btn | Rate this product
 #product-card-buy-btn | Buy
-#product-card-return-policy-btn | Return Policy
+#product-card-return-policy-btn | Return policy
 ```
 
 ### How do I buy something?
@@ -402,7 +402,7 @@ behind it.
 3. Tap "Pay".
 
 **You will see:** the sheet closes when the payment goes through, and the product
-shows under "My Purchases".
+shows under "My purchases".
 
 **If something goes wrong:**
 - A sheet titled "Verify to continue" appears instead. It is the adult check: it asks
@@ -427,8 +427,8 @@ label:has(#verify-age-attest) | at least 18
 ### Where are the things I bought, and how do I rate a seller?
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"). A stem of leaves opens, with your name
-   at the top and "Notices", "Friends", "My Purchases", "Settings" and "Help" below it.
-2. Tap "My Purchases".
+   at the top and "Notices", "Friends", "My purchases", "Settings" and "Help" below it.
+2. Tap "My purchases".
 3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
    the seller or the product for that purchase. Once given, the rating shows under the purchase
    with buttons to edit or delete it.
@@ -445,7 +445,7 @@ label:has(#verify-age-attest) | at least 18
 
 ```controls any
 #account-menu-toggle | Account menu
-#my-purchases-btn | My Purchases
+#my-purchases-btn | My purchases
 #my-purchases-empty | You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.
 ```
 
@@ -453,11 +453,11 @@ label:has(#verify-age-attest) | at least 18
 
 A product is rated from a purchase: one rating for each thing someone bought.
 
-1. Open the account menu and tap "My Purchases", then tap "Rate this product" under the purchase.
+1. Open the account menu and tap "My purchases", then tap "Rate this product" under the purchase.
 2. Choose a rating from 1 to 5 stars (5 is chosen to begin with), add a comment if you want (it is
    optional), and tap "Save product rating".
 
-The product's card also offers "Rate this Product" (under "More") when that person has a purchase
+The product's card also offers "Rate this product" (under "More") when that person has a purchase
 of that product they have not rated yet; it opens a sheet titled "Review this product". They tap a
 rating, write a comment if they want, and tap "Post review". If they have no unrated purchase of it,
 the card does not offer it.
@@ -472,7 +472,7 @@ the card does not offer it.
   to back out, tap "Cancel".
 
 ```controls any
-#product-card-review-btn | Rate this Product
+#product-card-review-btn | Rate this product
 #product-review-modal-title | Review this product
 #product-review-save-btn | Post review
 #product-review-cancel-btn | Cancel
@@ -583,13 +583,13 @@ your messages when you tap "Message". Until then the panel says "No friends yet.
   not told. For anything worse, use the runbook's hand-off.
 - Like chat and voice, messages are only for people whose age and identity the app
   has checked.
-- "Show Map" in the Friends panel shows where friends are.
+- "Show map" in the Friends panel shows where friends are.
 
 ```controls any
 #account-menu-toggle | Account menu
 #friends-btn | Friends
 #friends-add-btn | + Add Friend
-#friends-map-btn | Show Map
+#friends-map-btn | Show map
 #friends-panel-empty | No friends yet. Tap + Add Friend to invite someone by name.
 ```
 
@@ -792,7 +792,7 @@ single item.
 ```controls build
 #delete-item | Delete
 #undo-btn | Undo
-#pending-restoration-btn | Removed Items
+#pending-restoration-btn | Removed items
 ```
 
 ### How do I undo a mistake, or redo it?
@@ -847,7 +847,7 @@ single item.
 1. Select two or more items (see the entry above).
 2. Tap "Bundle" on the card that opens beside them. They become one thing: one box around them,
    moved and turned together.
-3. To keep it for later, tap "Save Bundle", give it a name, choose whether
+3. To keep it for later, tap "Save bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
    "Save".
 4. To use a saved bundle, tap the bud, then the Build petal, then "Add item", then "All items", then
@@ -865,7 +865,7 @@ single item.
 
 ```controls build
 #group-item | Bundle
-#save-bundle-item | Save Bundle
+#save-bundle-item | Save bundle
 #ungroup-item | Unbundle
 #edit-bundle-item | Edit
 #bundle-name-save-btn | Save
@@ -878,12 +878,12 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then the Build petal, then "Levels". A sheet
    opens that says which level you are on: "You are on Ground" when you are on the
    ground level.
-2. Tap "Build Level Above" to add a level over the one you are on, or "Dig Level
+2. Tap "Build level above" to add a level over the one you are on, or "Dig Level
    Below" to add one underneath. The button shows in brackets how much space the
    new level uses.
 3. Use the up and down arrows ("Level up", "Level down") to move between levels.
    The sheet says which level you are on.
-4. On a level above or below the ground, "Remove This Level" appears. It removes
+4. On a level above or below the ground, "Remove this level" appears. It removes
    that level.
 5. The "×" at the top right of the sheet puts it away. It stays open while you move
    between levels, so you can read what the app says after each tap.
@@ -891,22 +891,22 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 **You will see:** the world shifts to the new level and the level's name on the sheet changes.
 
 **If something goes wrong:**
-- The app says "That's as high as this lándlet goes. Use Build Level Above to
-  build higher." or "That's as deep as this lándlet goes. Use Dig Level Below to
+- The app says "That's as high as this lándlet goes. Use Build level above to
+  build higher." or "That's as deep as this lándlet goes. Use Dig level below to
   go deeper." It means an item has hit the top or bottom level you have.
 - Adding a level is refused: the app says why in words. Read it out with the
   person and do not promise more than it says. If money or allowances are
   involved, use the runbook's hand-off.
-- "Remove This Level" takes the items on that level off your lándlet. Say so
+- "Remove this level" takes the items on that level off your lándlet. Say so
   before the person taps it.
 
 ```controls build
 #bud-petal-build-levels | Levels
-#level-build-btn | Build Level Above
-#level-dig-btn | Dig Level Below
+#level-build-btn | Build level above
+#level-dig-btn | Dig level below
 #level-up-btn | Level up
 #level-down-btn | Level down
-#level-remove-btn | Remove This Level
+#level-remove-btn | Remove this level
 ```
 
 ### How do I measure something?
@@ -971,7 +971,7 @@ lándlets are shown here.
 3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
    20MB. Tick "This is a digital good" only for things like an avatar or an art
    file that is delivered, not placed.
-4. Tap "Add Product". The app shrinks the model and shows a preview; this can take
+4. Tap "Add product". The app shrinks the model and shows a preview; this can take
    a moment.
 5. The window is now called "Confirm Dimensions". Set the product's real size with
    "Width (X)", "Depth (Y)" and "Height (Z)" in metres; changing one changes the
@@ -988,7 +988,7 @@ your "My products" list).
 - You have no model file: tap "Or generate a model from a video instead" at the
   bottom of the first step. It takes a short video of one object and uses one of
   your video credits, which that part of the window shows. "Back to manual file upload" returns.
-- The window shows an error after "Add Product" that is not one of those: ask the
+- The window shows an error after "Add product" that is not one of those: ask the
   person to read it out, and offer to pass it to the team.
 - You already have a product with that name: the app asks you to confirm before it
   makes a second one.
@@ -996,7 +996,7 @@ your "My products" list).
 ```controls sell
 #bud-petal-sell-add-product | Add a product
 #add-product-upload-btn | Upload my own model
-#upload-submit-btn | Add Product
+#upload-submit-btn | Add product
 #upload-mode-video-btn | generate a model from a video
 ```
 

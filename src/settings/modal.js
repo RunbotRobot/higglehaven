@@ -56,7 +56,7 @@ const settingsCloseBtn = document.getElementById('settings-close-btn');
 let activeSettingsTab = 'general';
 
 // #1124: set right before renderSettingsSection() redraws the tab a
-// Delete Account click just fired from, so the freshly re-rendered
+// Delete account click just fired from, so the freshly re-rendered
 // identity field (renderIdentityField below) can still show its own
 // "Deleted" confirmation even though the DOM node that would have shown
 // it got torn down along with everything else in the tab. Consumed
@@ -574,7 +574,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
   if (deleteProfile) {
     deleteBtn.type = 'button';
     deleteBtn.className = 'version-action-btn';
-    // #1149: this used to say "Delete Account," which was never true — it
+    // #1149: this used to say "Delete account," which was never true — it
     // only ever reset this one profile (land/build/balance released, a
     // fresh profile auto-created), while the real login account kept
     // working the whole time. Real account deletion now lives in the
@@ -707,7 +707,7 @@ export function closeSettingsModal() {
   closeModalA11y(settingsModalEl);
 }
 settingsBtn.addEventListener('click', openSettingsModal);
-// #3302: Send feedback, in every mode. Opens the Submit Feedback modal over
+// #3302: Send feedback, in every mode. Opens the Submit feedback modal over
 // Settings; closing it returns to Settings (see openFeedbackModal's returnTo).
 document.getElementById('settings-feedback-btn').addEventListener('click', () => {
   // #3676: Settings steps aside while the feedback card is the thing being done

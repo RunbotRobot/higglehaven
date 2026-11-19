@@ -39,7 +39,7 @@ import { ensureBuilderIdentity } from '../account/identity.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
-// #3651: the card's own buttons (Buy, Rate this Product), for focus return after a notice.
+// #3651: the card's own buttons (Buy, Rate this product), for focus return after a notice.
 import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders } from './productCard.js';
 
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
@@ -126,7 +126,7 @@ export async function handleShopProductReviewClick() {
   // #3775 (owner, 2026-11-18): a rating belongs to one order. The card offers this only when
   // the shopper has an order of the product that is not rated yet, so what it opens is always
   // a new rating for the oldest such order (the server picks it); changing or removing a
-  // rating you gave is done on that order in My Purchases (#1975's edit/delete moved there).
+  // rating you gave is done on that order in My purchases (#1975's edit/delete moved there).
   // #3249: one in-app modal, not native prompt()/alert(); failures are thrown out of the
   // callback and shown inside the modal.
   productCardReviewButton().disabled = true;
@@ -309,7 +309,7 @@ export async function handleShopProductBuyClick() {
   // already has with its own .visible toggle.
   if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
-  // full Return Policy button this same tapped product already surfaces
+  // full Return policy button this same tapped product already surfaces
   // (#product-card-return-policy-btn) -- a plain sentence, the fact
   // worth knowing before saying yes.
   // #3278: its own in-app modal, not window.confirm(): a browser that
@@ -317,7 +317,7 @@ export async function handleShopProductBuyClick() {
   // said nothing (the same failure Sell > Manage Delete had, #3249).
   const confirmed = await confirmDestructive({
     title: 'Buy this item?',
-    message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`,
+    message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return policy.)`,
     confirmLabel: 'Buy',
     variant: 'primary',
     returnFocusEl: productCardBuyButton(),
@@ -362,7 +362,7 @@ export async function handleShopProductBuyClick() {
     // #3256 (owner report): no immediate "Leave feedback for the seller?"
     // prompt here. Right after buying is too early to judge accuracy,
     // timeliness or communication (the buyer had not even equipped the
-    // item); My Purchases offers "Rate this seller" per purchase for when
+    // item); My purchases offers "Rate this seller" per purchase for when
     // they actually know how it went (#3198).
   } catch (err) {
     if (err.message !== 'Checkout cancelled.') {

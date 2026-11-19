@@ -861,7 +861,7 @@ export async function uploadModelFile(file, { tier } = {}) {
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
 
-// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit Feedback' bug
+// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit feedback' bug
 // reports..."): submits a bug report -- form holds an optional `screenshot`
 // image blob plus a `metadata` JSON string field (WebGL renderer/vendor,
 // browser info, the render-state ring buffer from src/feedback/
@@ -966,7 +966,7 @@ export async function deleteCatalogTemplate(templateId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }
 
-// #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
+// #2748 (leaf of #2745's shared-products redesign): "Sell this too" --
 // attaches the caller's own listing (price/stock) to a product someone
 // else originally uploaded, via the POST /api/catalog/listings endpoint
 // #2747 shipped. No idempotency key here unlike createCatalogTemplate
@@ -1047,7 +1047,7 @@ export async function fetchNotifications({ unreadOnly = false, cursor = null } =
 // undercount if it just read that first page's own .length, same shape
 // as the bug #245/#288 already fixed for the unread badge specifically.
 // This hits a dedicated COUNT query instead, with no page cap at all.
-// "My Purchases" (#3197): the signed-in account's own receipts, newest first,
+// "My purchases" (#3197): the signed-in account's own receipts, newest first,
 // cursor-paginated like fetchNotifications. Server: GET /api/purchases/mine.
 export async function fetchMyPurchases({ cursor = null } = {}) {
   const query = new URLSearchParams();
@@ -1352,7 +1352,7 @@ export async function fetchBundles() {
 // #1720: same shape as purchaseIdempotencyKey above (#473/#974) — persist
 // a key across a retry of what the caller considers the same save attempt
 // (most commonly a dropped response after the server's INSERT already
-// landed, leading to a second "Save Bundle" click with the same content).
+// landed, leading to a second "Save bundle" click with the same content).
 // There's no pre-existing id to key the storage entry off of the way
 // purchaseIdempotencyKey keys off instanceId (a bundle doesn't exist yet
 // at the point this key is minted), so the exact content being saved
@@ -1757,7 +1757,7 @@ export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
   return feedback;
 }
 
-// "My Purchases" (#3198): author-direct edit/delete of one's own seller
+// "My purchases" (#3198): author-direct edit/delete of one's own seller
 // feedback (PATCH/DELETE /api/purchases/:id/feedback, #1975). Errors carry
 // error.status so the panel can tell 409 (changed concurrently) apart.
 export async function editSellerFeedback(purchaseId, { rating, text } = {}) {
@@ -2022,7 +2022,7 @@ export async function fetchNearbyPresence() {
 
 // #1176: the caller's own last-reported position — unlike fetchNearbyPresence
 // above, not scoped by landletId or filtered by staleness, since "wherever I
-// was last" is exactly what the "Go to Last Location" spawn button needs,
+// was last" is exactly what the "Go to last location" spawn button needs,
 // however long ago that was. null when the caller has never reported a
 // position at all (a brand-new account, or one that's never entered Shop
 // mode before).

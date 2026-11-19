@@ -1,4 +1,4 @@
-// Regression test for #740: renderBuilderIdentityField's Delete Account
+// Regression test for #740: renderBuilderIdentityField's Delete account
 // confirm() dialog never disclosed that a real-money-backed higgles balance
 // is forfeited along with the account -- DELETE /api/builders/:id hard-
 // deletes the builder row (and its higgles_balance_cents) with no guard and
@@ -30,7 +30,7 @@ let dialogMessage = null; // #3278: now the in-app confirm modal's own message t
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-// #1149 renamed this button from "Delete Account" to "Reset Profile" --
+// #1149 renamed this button from "Delete account" to "Reset Profile" --
 // the confirm() dialog text this test checks (via dialogMessage below) is
 // unaffected since the balance-forfeit note is appended after the
 // (now-updated) opening sentence either way.

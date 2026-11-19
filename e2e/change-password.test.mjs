@@ -1,4 +1,4 @@
-// #1181 (sub-issue of #1126): covers the real Change Password flow now
+// #1181 (sub-issue of #1126): covers the real Change password flow now
 // wired into the Account panel (#auth-modal), separate from the
 // forgot-password email-link flow (auth.test.mjs already covers that).
 //
@@ -14,7 +14,7 @@ import {
   launchPage, finish, waitForText, clearVerifyModalIfShown,
 } from './helpers.mjs';
 
-const { browser, page, errors } = await launchPage({ promptAnswer: 'Change Password Suite' });
+const { browser, page, errors } = await launchPage({ promptAnswer: 'Change password Suite' });
 const email = `change-password-suite-${Date.now()}@example.com`;
 const password = 'a fine long password';
 const newPassword = 'a different fine long password';
@@ -30,20 +30,20 @@ async function openAuthModal(page) {
 // --- Sign up ---
 await openAuthModal(page);
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
-await page.fill('#auth-signup-username', 'Change Password Suite');
+await page.fill('#auth-signup-username', 'Change password Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
 await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
-await waitForText(page, '#account-auth-btn', 'Change Password Suite');
+await waitForText(page, '#account-auth-btn', 'Change password Suite');
 await clearVerifyModalIfShown(page);
 
-// --- Open the account panel; Change Password starts collapsed ---
+// --- Open the account panel; Change password starts collapsed ---
 await openAuthModal(page);
 const changeBtnVisibleBefore = await page.locator('#auth-change-password-btn').isVisible();
 const formHiddenBefore = await page.locator('#auth-change-password-form').isHidden();
-console.log('Change Password trigger visible before any click (should be true):', changeBtnVisibleBefore);
-console.log('Change Password form hidden before any click (should be true):', formHiddenBefore);
+console.log('Change password trigger visible before any click (should be true):', changeBtnVisibleBefore);
+console.log('Change password form hidden before any click (should be true):', formHiddenBefore);
 
 // --- Clicking it reveals the form, not an immediate action ---
 await page.click('#auth-change-password-btn');
@@ -56,7 +56,7 @@ await page.click('#auth-change-password-cancel-btn');
 await page.waitForSelector('#auth-change-password-form[hidden]', { state: 'attached', timeout: 5000 });
 const triggerVisibleAfterCancel = await page.locator('#auth-change-password-btn').isVisible();
 console.log('Trigger visible again after Cancel (should be true):', triggerVisibleAfterCancel);
-const stillLoggedInAfterCancel = await waitForText(page, '#account-auth-btn', 'Change Password Suite');
+const stillLoggedInAfterCancel = await waitForText(page, '#account-auth-btn', 'Change password Suite');
 console.log('Still logged in after Cancel (should still show the username):', stillLoggedInAfterCancel);
 
 // --- The real happy path: confirm with the correct current password ---
@@ -77,8 +77,8 @@ const pass = changeBtnVisibleBefore &&
   formHiddenBefore &&
   triggerHiddenAfterOpen &&
   triggerVisibleAfterCancel &&
-  stillLoggedInAfterCancel.includes('Change Password Suite') &&
+  stillLoggedInAfterCancel.includes('Change password Suite') &&
   changedStatus.toLowerCase().includes('changed') &&
-  stillLoggedInAfterChange.includes('Change Password Suite') &&
+  stillLoggedInAfterChange.includes('Change password Suite') &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Change Password in the Account panel updates login in-session (#1181)', errors });
+await finish(browser, { pass, label: 'Change password in the Account panel updates login in-session (#1181)', errors });

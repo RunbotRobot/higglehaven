@@ -35,7 +35,7 @@ await page.setInputFiles('#upload-file-input', FBX_FIXTURE_PATH);
 const DELAY_MS = 2000;
 await page.evaluate((ms) => { window.__testFbxConvertDelayMs = ms; }, DELAY_MS);
 
-await page.click('#upload-submit-btn'); // "Add Product" on the file step
+await page.click('#upload-submit-btn'); // "Add product" on the file step
 // Confirms convertFbxToGlb has actually started and is sitting inside the
 // artificial delay (set right before the delay, per its own placement in
 // modelOptimizer.js), not a guess at timing.

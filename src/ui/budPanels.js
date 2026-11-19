@@ -1,5 +1,5 @@
 // #3843 (part of #3539): the flower is one menu or leaf at a time, and Settings, Notices, Friends,
-// My Purchases and My Lándlets are the panels a person opens from it. Opening one of them while
+// My purchases and My lándlets are the panels a person opens from it. Opening one of them while
 // another is up closes the other, so two never stand on the world together. Dialogs that are
 // opened from inside a panel on purpose (a confirm, a direct message, the friends map) are not in
 // this set and still stack over it.

@@ -1,5 +1,5 @@
 // Regression test for #435: renaming a bundle only patched whichever tab
-// (My Bundles vs Community) the rename was triggered from — a shared
+// (My bundles vs Community) the rename was triggered from — a shared
 // bundle exists as two separate JS objects (one per tab's own fetch), so
 // the other tab's tile kept showing the stale name until some unrelated
 // action happened to refetch both lists.
@@ -23,7 +23,7 @@ await page.waitForTimeout(800);
 
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-// Shared from the start, so this bundle lands in both My Bundles and
+// Shared from the start, so this bundle lands in both My bundles and
 // Community.
 await saveBundleAs(page, ORIGINAL_NAME, { shared: true });
 // #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
@@ -36,7 +36,7 @@ await saveBundleAs(page, ORIGINAL_NAME, { shared: true });
 // wait.
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 
-// Save Bundle's own handler pushes the exact same object reference into
+// Save bundle's own handler pushes the exact same object reference into
 // both myBundles and communityBundles (see its own code), so renaming
 // right after saving wouldn't actually exercise the bug — both tabs would
 // already be looking at the same in-memory object. A reload forces
@@ -62,7 +62,7 @@ await page.waitForTimeout(300);
 const beforeRenameCommunityCount = await page.locator('.bundle-tile').filter({ hasText: ORIGINAL_NAME }).count();
 console.log('bundle visible in Community before rename (should be 1):', beforeRenameCommunityCount);
 
-// Rename it from the My Bundles tab.
+// Rename it from the My bundles tab.
 await page.click('.bundle-tab-btn[data-bundle-tab="mine"]');
 await page.waitForTimeout(300);
 await page.click('.bundle-tile-rename');
@@ -73,7 +73,7 @@ await page.waitForFunction(
   { timeout: 10000 },
 );
 const myBundlesTileText = await page.locator('.bundle-tile').first().textContent();
-console.log('My Bundles tile shows the new name right after renaming (should be true):', myBundlesTileText.includes(NEW_NAME));
+console.log('My bundles tile shows the new name right after renaming (should be true):', myBundlesTileText.includes(NEW_NAME));
 
 // The Community tab's own copy of the same bundle should show the new
 // name too, without any other action forcing a refetch in between.

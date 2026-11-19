@@ -173,7 +173,7 @@ new MutationObserver(() => {
 
 // Enters the Sell world view. Called from enterSellMode once the seller
 // identity is confirmed. Re-entrant (a second call re-mounts the avatar).
-// `onFrame(now)` is Sell's own per-frame side work (the Submit Feedback ring
+// `onFrame(now)` is Sell's own per-frame side work (the Submit feedback ring
 // buffer's sample, #3302), run after the movement core each frame: registering
 // the movement callback replaces whatever Sell had registered before it, so the
 // caller hands its own back here instead of losing it.

@@ -1,5 +1,5 @@
 // #1149 (sub-issue of #1145, real account deletion): covers the real
-// Delete Account flow now wired into the Account panel (#auth-modal), as
+// Delete account flow now wired into the Account panel (#auth-modal), as
 // distinct from the Settings > Build/Sell "Reset Profile" buttons (see
 // delete-builder-stale-id.test.mjs and friends), which only ever reset a
 // builder/seller profile, never the login itself.
@@ -18,7 +18,7 @@ import {
   launchPage, finish, waitForText, clearVerifyModalIfShown,
 } from './helpers.mjs';
 
-const { browser, page, errors } = await launchPage({ promptAnswer: 'Delete Account Suite' });
+const { browser, page, errors } = await launchPage({ promptAnswer: 'Delete account Suite' });
 const email = `delete-account-suite-${Date.now()}@example.com`;
 const password = 'a fine long password';
 
@@ -33,12 +33,12 @@ async function openAuthModal(page) {
 // --- Sign up ---
 await openAuthModal(page);
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
-await page.fill('#auth-signup-username', 'Delete Account Suite');
+await page.fill('#auth-signup-username', 'Delete account Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
 await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
-await waitForText(page, '#account-auth-btn', 'Delete Account Suite');
+await waitForText(page, '#account-auth-btn', 'Delete account Suite');
 // #556: same gate chooseIdentity's own signup clears (see its own
 // comment) -- this fresh account is logged in but not yet age/card-
 // verified, and Shop mode's own concurrent gate (ensureShopperIdentity)
@@ -46,11 +46,11 @@ await waitForText(page, '#account-auth-btn', 'Delete Account Suite');
 // every later click in this test until cleared.
 await clearVerifyModalIfShown(page);
 
-// --- Open the account panel; Delete Account starts collapsed ---
+// --- Open the account panel; Delete account starts collapsed ---
 await openAuthModal(page);
 const deleteBtnVisibleBefore = await page.locator('#auth-delete-account-btn').isVisible();
 const formHiddenBefore = await page.locator('#auth-delete-account-form').isHidden();
-console.log('Delete Account trigger visible before any click (should be true):', deleteBtnVisibleBefore);
+console.log('Delete account trigger visible before any click (should be true):', deleteBtnVisibleBefore);
 console.log('Confirmation form hidden before any click (should be true):', formHiddenBefore);
 
 // --- Clicking it reveals the confirmation form, not an immediate action ---
@@ -69,7 +69,7 @@ await page.click('#auth-delete-account-cancel-btn');
 await page.waitForSelector('#auth-delete-account-form[hidden]', { state: 'attached', timeout: 5000 });
 const triggerVisibleAfterCancel = await page.locator('#auth-delete-account-btn').isVisible();
 console.log('Trigger visible again after Cancel (should be true):', triggerVisibleAfterCancel);
-const stillLoggedInAfterCancel = await waitForText(page, '#account-auth-btn', 'Delete Account Suite');
+const stillLoggedInAfterCancel = await waitForText(page, '#account-auth-btn', 'Delete account Suite');
 console.log('Still logged in after Cancel (should still show the username):', stillLoggedInAfterCancel);
 
 // --- The real happy path: confirm with the correct password ---
@@ -79,8 +79,8 @@ await page.fill('#auth-delete-account-password', password);
 await page.click('#auth-delete-account-form button[type="submit"]');
 const deletedStatus = await waitForText(page, '#auth-status', 'deleted', { timeout: 8000 });
 console.log('Status after deleting (should confirm deletion):', deletedStatus);
-const loggedOutLabel = await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
-console.log('Account button after deletion (should be "Log In / Sign Up"):', loggedOutLabel);
+const loggedOutLabel = await waitForText(page, '#account-auth-btn', 'Log in / Sign up');
+console.log('Account button after deletion (should be "Log in / Sign up"):', loggedOutLabel);
 const loggedOutViewVisible = await page.locator('#auth-logged-out').isVisible();
 console.log('Panel flipped back to the logged-out login/signup view (should be true):', loggedOutViewVisible);
 
@@ -88,9 +88,9 @@ const pass = deleteBtnVisibleBefore &&
   formHiddenBefore &&
   triggerHiddenAfterOpen &&
   triggerVisibleAfterCancel &&
-  stillLoggedInAfterCancel.includes('Delete Account Suite') &&
+  stillLoggedInAfterCancel.includes('Delete account Suite') &&
   deletedStatus.toLowerCase().includes('deleted') &&
-  loggedOutLabel.includes('Log In / Sign Up') &&
+  loggedOutLabel.includes('Log in / Sign up') &&
   loggedOutViewVisible &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Delete Account in the Account panel revokes login end-to-end (#1146/#1149)', errors });
+await finish(browser, { pass, label: 'Delete account in the Account panel revokes login end-to-end (#1146/#1149)', errors });

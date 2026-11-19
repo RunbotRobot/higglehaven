@@ -322,7 +322,7 @@ function setUploadFileMode(mode) {
   uploadHintBtn.setAttribute('aria-expanded', 'false');
   uploadModeVideoBtn.hidden = mode !== 'file';
   uploadVideoSectionEl.hidden = mode !== 'video';
-  uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
+  uploadSubmitBtn.textContent = mode === 'video' ? 'Generate model' : 'Add product';
   // #2442: refreshed every time video mode is (re-)entered, not just once
   // per modal open -- a generation attempt since the last time this
   // section was shown (success or the 402 no-credits rejection) changes
@@ -386,7 +386,7 @@ function openUploadModal() {
   openModalA11y(uploadModalEl, closeUploadModal);
 }
 
-// The Add a product leaf: the question first, then the upload steps (or Sell This Too).
+// The Add a product leaf: the question first, then the upload steps (or Sell this too).
 function openAddProductLeaf() {
   openUploadModal();
   uploadModalTitleEl.textContent = 'Add a product';
@@ -667,7 +667,7 @@ function updateUploadDimensionLabels() {
 
 // #3249: the duplicate-name warning is a soft confirm shown next to the submit
 // button, not window.confirm() -- a browser that suppresses native dialogs
-// answers one with "no" at once, which made Add Product do nothing with no
+// answers one with "no" at once, which made Add product do nothing with no
 // message. Submit is disabled while the question is up so a second tap can't
 // stack a second one.
 async function confirmDuplicateProductName(name) {

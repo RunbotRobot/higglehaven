@@ -1,5 +1,5 @@
 // #3636 part 2: the assistant window says where she is standing while she is on shift and
-// out of sight, with "Take me there" (the same fade and landing as Go to Last Location), and
+// out of sight, with "Take me there" (the same fade and landing as Go to last location), and
 // says nothing when she is off shift or right here. Setup is assistant-chat-panel's: A is an
 // ordinary shopper in the Shop world; B is made an assistant account directly in the local D1
 // (fleet-login needs a deployment secret) and kept on shift by an inbox poll's timestamp.

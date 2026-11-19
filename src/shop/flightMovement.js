@@ -4,7 +4,7 @@
 // third-person camera, collision movement, sustained-attention tracking,
 // and item-handling pose -- the per-frame orchestrator (updateShopMovement)
 // that ties all of it together each frame, plus the spawn-orbit and
-// "Go to Last Location" sequences layered on top of flight state.
+// "Go to last location" sequences layered on top of flight state.
 // Depends on the shop/avatar.js leaf (#2623) having landed first --
 // updateShopMovement calls into updateShopAvatarPose/
 // setShopAvatarAnimationState/updateShopAvatarIdle, and several functions
@@ -536,7 +536,7 @@ function bindWorldGestures(canvas) {
 // descending while flying is steered by the view (#3769, see updateShopFlight
 // and flightPitch.js); there are no up/down buttons.
 
-// #1176: "Go to Last Location" — see startGoToLastLocation's own comment.
+// #1176: "Go to last location" — see startGoToLastLocation's own comment.
 // A plain click, not pointerdown like the fly button above: this one has
 // no in-air-vs-grounded ambiguity to resolve quickly, and it's only ever
 // shown during the spawn orbit anyway, never competing with another
@@ -734,7 +734,7 @@ let shopSpawnOrbitRadiusM = 0;
 // #1176: the shopper's own last-reported avatar_presence position (fetched
 // once in enterShopMode via fetchOwnLastPresence), or null when there is
 // none (a brand-new account, or one that's never entered Shop mode
-// before) — the "Go to Last Location" button is only ever shown when this
+// before) — the "Go to last location" button is only ever shown when this
 // is non-null. shopLastLocationHideTimerS counts seconds since the
 // shopper began navigating on their own (null while not counting — see
 // stopShopSpawnRotationForNavigation); shopGoToLastLocationPhase/
@@ -904,7 +904,7 @@ function toggleShopFlight() {
   // #1175/#1176: a deliberate tap of the fly button is navigation input
   // same as any joystick deflection — stop the hands-off spawn orbit
   // immediately rather than leaving it fighting the player's own
-  // takeoff/landing, and start the "Go to Last Location" button's own
+  // takeoff/landing, and start the "Go to last location" button's own
   // auto-hide countdown the same way (see stopShopSpawnRotationForNavigation).
   stopShopSpawnRotationForNavigation();
   if (shopFlightState === 'grounded') {
@@ -942,7 +942,7 @@ function stopShopSpawnRotation() {
 
 
 // #1176: the navigation-input-specific wrapper around stopShopSpawnRotation
-// above — also starts the "Go to Last Location" button's own 5-second
+// above — also starts the "Go to last location" button's own 5-second
 // auto-hide countdown, but only the first time (shopLastLocationHideTimerS
 // stays non-null once started, so a second navigation input while it's
 // already counting down doesn't restart the clock), and only when the
@@ -971,7 +971,7 @@ function stopShopSpawnRotationForNavigation() {
 let shopAvatarOriginalTransparent = new WeakMap();
 
 // #1176: fades every material in the avatar's own group uniformly — used
-// by the "Go to Last Location" sequence's fade-out/fade-in (see
+// by the "Go to last location" sequence's fade-out/fade-in (see
 // updateGoToLastLocation). Skips the AFK sprite: that one already drives
 // its own opacity every frame from shopAfkBlend (updateShopAvatarIdle),
 // independently of this sequence, and fighting it here would just lose to
@@ -1708,7 +1708,7 @@ export function updateShopMovementCore(now) {
       updateShopSpawnRotation(dt);
     }
   }
-  // #1176: counts down to the "Go to Last Location" button's own auto-hide
+  // #1176: counts down to the "Go to last location" button's own auto-hide
   // (started by stopShopSpawnRotationForNavigation above, or by the fly
   // button's own tap in toggleShopFlight — either way, "the shopper began
   // navigating on their own") independently of whichever phase the orbit
@@ -2176,7 +2176,7 @@ export function beginShopSpawn(spawnOrbitRadiusM, yaw) {
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   flightLimitNoticed = null;
   setShopFlyBtnFlying(true);
-  // #1176: the "Go to Last Location" button, offered only when there's
+  // #1176: the "Go to last location" button, offered only when there's
   // actually somewhere to offer — reset alongside the rest of this
   // function's own re-entrant spawn state (Shop mode being re-enterable
   // without a reload) rather than carrying over a previous round trip's

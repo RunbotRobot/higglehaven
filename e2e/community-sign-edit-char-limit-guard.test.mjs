@@ -36,7 +36,7 @@ async function fetchJson(p, options) {
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
-// Place a Tree (placeholder-tree) and flag it as a Community Sign, same
+// Place a Tree (placeholder-tree) and flag it as a Community sign, same
 // setup as community-signs.test.mjs.
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
