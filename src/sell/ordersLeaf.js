@@ -7,6 +7,7 @@
 import { openLeaf } from '../ui/bud.js';
 import { fetchSellerOrders } from '../api.js';
 import { buildSaleRow } from './saleRow.js';
+import { emptyState, EMPTY_COPY } from '../ui/emptyState.js';
 
 function note(text, className = 'orders-note') {
   const node = document.createElement('p');
@@ -33,7 +34,7 @@ export function openOrdersLeaf() {
     if (mine !== token) return;
     const { purchases, totalCount } = result;
     if (!purchases.length) {
-      body.replaceChildren(note('No orders yet.'));
+      body.replaceChildren(emptyState(EMPTY_COPY.orders));
       return;
     }
     const list = document.createElement('div');

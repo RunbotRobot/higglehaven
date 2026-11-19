@@ -152,6 +152,22 @@ touches one ends by sending the assistant to the runbook's hand-off.
 #settings-close-btn | Close
 ```
 
+### What do "Notices" and "My Lándlets" say when there is nothing in them?
+
+1. Tap the round logo at the top left to open the menu, then tap "Notices" or "My Lándlets".
+2. A person with nothing to read in "Notices" sees "Nothing new. Updates about your products, your lándlet and your account will show up here."
+3. A person who has not claimed a lándlet sees, in "My Lándlets", "You don't own a lándlet yet. Claim one in Build mode to start building." (The steps for claiming are in "How do I get my own lándlet?".)
+
+**You will see:** one plain sentence saying what will appear there. An empty list is not a fault.
+
+**If something goes wrong:**
+- The sentence is different from what is described here: ask what they see, and offer to pass it to the team.
+
+```controls any
+#notifications-btn | Notices
+#my-lands-btn | My Lándlets
+```
+
 ### How do I wear an avatar I bought, or apply an animation?
 
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Shop" tab.
@@ -418,7 +434,7 @@ label:has(#verify-age-attest) | at least 18
    with buttons to edit or delete it.
 
 **You will see:** a list of what you bought. Someone who has bought nothing yet sees
-"You haven't bought anything yet."
+"You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here."
 
 **If something goes wrong:**
 - The list is empty but they remember buying: ask which account they are signed in
@@ -430,7 +446,7 @@ label:has(#verify-age-attest) | at least 18
 ```controls any
 #account-menu-toggle | Account menu
 #my-purchases-btn | My Purchases
-#my-purchases-empty | You haven't bought anything yet.
+#my-purchases-empty | You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.
 ```
 
 ### How do I leave a review for a product?
@@ -557,7 +573,7 @@ To add someone who is not nearby:
    that says "Message…" and tap "Send".
 
 **You will see:** your friend's name in the list once they accept, and a thread with
-your messages when you tap "Message". Until then the panel says "No friends yet".
+your messages when you tap "Message". Until then the panel says "No friends yet. Tap + Add Friend to invite someone by name."
 
 **If something goes wrong:**
 - The panel says there is no one by that name: the name has to match exactly. Ask
@@ -574,7 +590,7 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 #friends-btn | Friends
 #friends-add-btn | + Add Friend
 #friends-map-btn | Show Map
-#friends-panel-empty | No friends yet
+#friends-panel-empty | No friends yet. Tap + Add Friend to invite someone by name.
 ```
 
 ### How do I talk to an assistant?
@@ -932,7 +948,7 @@ top of the screen.
 lándlets are shown here.
 
 **If something goes wrong:**
-- "My products" says "No custom products yet — use "Add a product" in the menu."
+- "My products" says "No products yet. Tap "Add a product" in the menu to put your first one up for sale."
   You have not uploaded anything yet. The next entry shows how.
 - The list is not on screen: it does not open by itself. Tap the round logo at the top
   left, then "My products".
@@ -1104,7 +1120,7 @@ nobody owns and nothing uses is removed completely.
 2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when.
 3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. A sale that has been refunded says "Refunded".
 
-**You will see:** "No orders yet." until something sells.
+**You will see:** "No orders yet. When someone buys one of your products, it will show up here." until something sells.
 
 **If something goes wrong:**
 - A refund, a missing payment or an amount that looks wrong is not for the assistant to answer: say so plainly and use the runbook's hand-off.

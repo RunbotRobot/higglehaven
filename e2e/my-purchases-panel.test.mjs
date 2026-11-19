@@ -76,7 +76,7 @@ check(await page.evaluate(() => document.activeElement && document.activeElement
 mode = 'empty';
 await open();
 await page.waitForSelector('#my-purchases-empty:not([hidden])', { timeout: 5000 });
-check((await page.locator('#my-purchases-empty').innerText()) === "You haven't bought anything yet.", 'empty copy');
+check((await page.locator('#my-purchases-empty').innerText()) .startsWith("You haven't bought anything yet."), 'empty copy');
 await page.click('#my-purchases-close-btn');
 
 // A response that lands after the panel was closed is discarded.

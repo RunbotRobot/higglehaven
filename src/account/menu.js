@@ -7,6 +7,7 @@
 // these three badges directly after resolving builderId; everything else
 // below is only ever reached from inside this module's own account-menu
 // panel/modals.
+import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { createPurchaseRow } from './myPurchases.js';
 import { builderId, currentMode, currentLandletId } from '../world/state.js';
@@ -228,7 +229,7 @@ async function renderNotifications() {
   // modal — without it a past fetch failure leaves this stuck on its
   // error message forever, even once a later load succeeds with zero
   // notifications.
-  notificationsEmptyEl.textContent = 'Nothing here yet.';
+  notificationsEmptyEl.textContent = EMPTY_COPY.notices;
   notificationsEmptyEl.hidden = page.notifications.length > 0;
   for (const notification of page.notifications) appendNotificationRow(notification);
   notificationsNextCursor = page.nextCursor;
@@ -1324,7 +1325,7 @@ async function renderMyPurchases() {
     return;
   }
   if (myLoadToken !== myPurchasesLoadToken) return;
-  if (page.purchases.length === 0) showMyPurchasesMessage("You haven't bought anything yet.");
+  if (page.purchases.length === 0) showMyPurchasesMessage(EMPTY_COPY.purchases);
   for (const purchase of page.purchases) appendMyPurchaseRow(purchase);
   myPurchasesNextCursor = page.nextCursor;
   myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
