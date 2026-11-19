@@ -46,7 +46,7 @@ async function placeTreeAt(x, y) {
 
 // ---- 1. A single item ----
 await placeTreeAt(160, 380);
-await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt 0\.0° \(green ring\)/, 'single item at rest reads 0, 0, 0 in plain words');
+await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt red 0\.0° · Tilt green 0\.0°/, 'single item at rest reads 0, 0, 0 in plain words');
 
 const box = await page.evaluate(() => document.getElementById('rotation-readout').getBoundingClientRect().toJSON());
 // #3575: the readout is a line of the item's card (under its tool row), which sits beside the item.
@@ -90,9 +90,9 @@ await page.click('#toggle-snap');
 await page.evaluate((r) => window.__testRotateSelected('z', r, { dragAxis: true }), 29.4 * DEG);
 await waitReadout(/Turn 90\.0° /, 'Snap off: 89.4 settles onto exactly 90.0');
 await page.evaluate((r) => window.__testRotateSelected('x', r, { dragAxis: true }), 7.5 * DEG);
-await waitReadout(/Tilt 7\.5° \(red ring\)/, 'Snap off: a free turn stays where it is (7.5)');
+await waitReadout(/Tilt red 7\.5°/, 'Snap off: a free turn stays where it is (7.5)');
 await page.evaluate((r) => window.__testRotateSelected('x', r, { dragAxis: true }), -7.1 * DEG);
-await waitReadout(/Tilt 0\.0° \(red ring\)/, 'Snap off: 0.4 off upright settles onto exactly 0.0');
+await waitReadout(/Tilt red 0\.0°/, 'Snap off: 0.4 off upright settles onto exactly 0.0');
 
 // The readout stays up between drags (the ring is always on a selected item, #3689).
 await page.waitForTimeout(600);
@@ -114,15 +114,15 @@ await page.waitForTimeout(300);
 await page.click('#group-item');
 await page.waitForTimeout(800);
 await page.click('#toggle-multiselect'); // leaves multi-select: the bundle's ring is on
-await waitReadout(/Tilt \S+° \(red ring\)/, 'a bundle shows a readout with its ring on');
+await waitReadout(/Tilt red \S+°/, 'a bundle shows a readout with its ring on');
 const startText = await readoutText();
 
 // The two trees were left at different turns above (the first item is at 90): the
 // bundle reads as the orientation most members share; with a tie, the earliest.
 await page.evaluate((r) => window.__testRotateBundle('x', r, { dragAxis: true }), 20 * DEG);
-await waitReadout(/Tilt 15\.0° \(red ring\)/, 'Snap on: a bundle tilted 20 degrees lands on exactly 15.0');
+await waitReadout(/Tilt red 15\.0°/, 'Snap on: a bundle tilted 20 degrees lands on exactly 15.0');
 await page.evaluate((r) => window.__testRotateBundle('x', r, { dragAxis: true }), 8 * DEG);
-await waitReadout(/Tilt 30\.0° \(red ring\)/, 'Snap on: the next 8 degrees land on 30.0 (absolute, not 15 + 8)');
+await waitReadout(/Tilt red 30\.0°/, 'Snap on: the next 8 degrees land on 30.0 (absolute, not 15 + 8)');
 const afterTilt = await page.evaluate(() => window.__testBundleRotateResult());
 check(afterTilt.lowestZ >= Math.max(afterTilt.floorZ, afterTilt.levelRange.minZ) - 1e-6, 'the tilted bundle is still above the floor');
 
@@ -133,13 +133,13 @@ check(await readoutText() === null, 'nothing selected: no readout');
 const positions = await page.evaluate(() => window.__testProductScreenPositions());
 await page.mouse.click(positions[0].x, positions[0].y);
 await page.waitForTimeout(500);
-await waitReadout(/Tilt 30\.0° \(red ring\)/, 'selecting the bundle again still reads 30.0');
+await waitReadout(/Tilt red 30\.0°/, 'selecting the bundle again still reads 30.0');
 
 // Back to exactly upright with Snap off: 30 - 29.5 = 0.5 absolute settles onto 0.
 await openSnap();
 await page.click('#toggle-snap');
 await page.evaluate((r) => window.__testRotateBundle('x', r, { dragAxis: true }), -29.5 * DEG);
-await waitReadout(/Tilt 0\.0° \(red ring\)/, 'Snap off: 0.5 off upright settles onto exactly 0.0');
+await waitReadout(/Tilt red 0\.0°/, 'Snap off: 0.5 off upright settles onto exactly 0.0');
 console.log('bundle readout at the start:', startText);
 
 await finish(browser, { pass: pass && errors.length === 0, label: '#3376: Rotate shows the absolute angle in plain words and lands on exact angles (Snap steps; settle onto right angles)', errors });
