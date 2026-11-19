@@ -29,6 +29,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     getShopAvatar, setShopAvatar, disposeObject3D, createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState, win = globalThis.window,
+    runSwap = null, cancelSwap = null, // #3905: optional runner that plays the fog around the swap, and its cancel
   } = deps;
 
   // #3905 (leaf of #3873, the mode-switch wait): the world no longer waits for the equipped avatar. The
@@ -38,6 +39,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   // is theirs, and they save the two request round trips that used to sit in front of the first frame.
   setEquippedAvatarSkeletonSignature(null);
   const generation = ++mountGeneration;
+  cancelSwap?.(); // a swap still playing for the previous mount is dropped, with its fog
 
   // Re-entering without a reload: remove (and dispose, #1358) any avatar left
   // from a previous round trip before building a fresh one.
@@ -100,11 +102,28 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
       disposeObject3D(custom.group);
       return;
     }
-    scene.remove(startAvatar.group);
-    disposeObject3D(startAvatar.group);
-    setShopAvatar(custom);
-    scene.add(custom.group);
-    publishAvatar(win, custom, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
+    const swap = () => {
+      scene.remove(startAvatar.group);
+      disposeObject3D(startAvatar.group);
+      setShopAvatar(custom);
+      scene.add(custom.group);
+      publishAvatar(win, custom, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
+    };
+    // With a transition runner (the real world: src/shop/avatarSwapFog.js) the swap happens behind rising fog
+    // and the body resolves out of it; `settled` waits for that to finish. Without one, it is immediate.
+    if (!runSwap) {
+      swap();
+      return;
+    }
+    await new Promise((resolve) => {
+      const transition = runSwap({
+        // `settled` is "the equipped avatar is the one on screen": it resolves when the models change.
+        swap: () => { swap(); resolve(); },
+        abort: () => { disposeObject3D(custom.group); resolve(); },
+        getAvatar: getShopAvatar,
+      });
+      if (!transition) resolve(); // a runner that swapped at once (reduced motion) has nothing left to wait for
+    });
   }
 }
 

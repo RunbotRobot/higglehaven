@@ -50,6 +50,7 @@
 // an ES import binding can't do from outside this module. Bundling that
 // reset into one exported function mirrors shop/avatar.js's own
 // resetShopAvatarIdleState() precedent for the identical problem.
+import { stepAvatarSwapTransition } from './avatarSwapFog.js';
 import * as THREE from 'three';
 import { camera, renderer } from '../world/scene.js';
 import { curvatureDropM } from '../../worker/earthCurvature.js';
@@ -1687,6 +1688,7 @@ export function updateShopMovement(now) {
 // Returns null on the very first frame (no dt yet), otherwise
 // { dt, moveMagnitude, airborne } for this frame.
 export function updateShopMovementCore(now) {
+  stepAvatarSwapTransition(now); // #3905: the fog around the player's avatar swap, if one is playing
   if (shopLastFrameTime === null) {
     shopLastFrameTime = now;
     return null;

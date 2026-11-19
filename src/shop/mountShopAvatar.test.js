@@ -175,4 +175,35 @@ describe('mountShopAvatar (#3294)', () => {
     await first.settled;
     expect(t.getCurrent()).toBe(t.defaultAvatar);
   });
+
+  // #3905: with a transition runner the swap is the runner's to time, and `settled` waits for it.
+  it('hands the swap to a transition runner when there is one, and settles when the models change', async () => {
+    const custom = { group: 'custom-group', modelUrl: '/m.glb' };
+    const t = setup({ avatar: { modelUrl: '/m.glb', skeletonSignature: 'sig' }, customAvatar: custom });
+    let run = null;
+    t.deps.runSwap = vi.fn((args) => { run = args; return { pending: true }; });
+    t.deps.cancelSwap = vi.fn();
+    const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.cancelSwap).toHaveBeenCalledTimes(1); // a swap left over from an earlier mount is dropped
+    let settled = false;
+    mounted.settled.then(() => { settled = true; });
+    await vi.waitFor(() => expect(t.deps.runSwap).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+    expect(t.getCurrent()).toBe(t.defaultAvatar); // the default avatar stays until the runner swaps
+    run.swap();
+    await mounted.settled;
+    expect(t.getCurrent()).toBe(custom);
+    expect(t.scene.add).toHaveBeenCalledWith('custom-group');
+    expect(t.win.__shopAvatarModelUrl).toBe('/m.glb');
+  });
+
+  it('a runner that aborts disposes the incoming body and keeps the default', async () => {
+    const custom = { group: 'custom-group', modelUrl: '/m.glb' };
+    const t = setup({ avatar: { modelUrl: '/m.glb', skeletonSignature: 'sig' }, customAvatar: custom });
+    t.deps.runSwap = vi.fn((args) => { args.abort(); return { pending: true }; });
+    t.deps.cancelSwap = vi.fn();
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.disposeObject3D).toHaveBeenCalledWith('custom-group');
+    expect(t.getCurrent()).toBe(t.defaultAvatar);
+  });
 });

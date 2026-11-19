@@ -29,6 +29,7 @@ import {
   updateShopMovementCore, beginShopStanding, isShopStandingSpotBlocked, releaseShopMovementInput,
 } from '../shop/flightMovement.js';
 import { mountShopAvatar } from '../shop/mountShopAvatar.js';
+import { runAvatarSwapFog, cancelAvatarSwapTransition } from '../shop/avatarSwapFog.js';
 import { setMovementWorld, createSellMovementWorld } from '../shop/movementWorld.js';
 import { createWorldEnclosure } from '../shop/enclosure.js';
 import { updateShopSky, currentShopSkyTimeS, shopDomeRiseM, growShopDomeIfNeeded } from '../shop/sky.js';
@@ -193,6 +194,7 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
+    runSwap: (args) => runAvatarSwapFog(scene, args), cancelSwap: cancelAvatarSwapTransition, // #3905: through fog
   });
   mounted = true;
   fitEnclosureToPage();

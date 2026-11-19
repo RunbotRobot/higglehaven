@@ -89,6 +89,7 @@ import {
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
 import { mountShopAvatar } from './mountShopAvatar.js';
+import { runAvatarSwapFog, cancelAvatarSwapTransition } from './avatarSwapFog.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import { updateShopSky, currentShopSkyTimeS } from './sky.js';
 import {
@@ -661,6 +662,7 @@ export async function enterShopMode() {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
+    runSwap: (args) => runAvatarSwapFog(scene, args), cancelSwap: cancelAvatarSwapTransition, // #3905: through fog
   });
   markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
