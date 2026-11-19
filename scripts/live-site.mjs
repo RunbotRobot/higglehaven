@@ -569,10 +569,17 @@ async function runStepAction(step, index) {
       if (typeof a === 'number') await (device.hasTouch ? page.touchscreen.tap(a, b) : page.mouse.click(a, b));
       else await press(await controlOrFail(a, `"${a}"`));
       return null;
-    case 'mode':
+    case 'mode': {
+      const before = await page.evaluate(() => document.body.dataset.mode);
       await clickModeButton(page, a);
       await settle();
+      // #3935: a press that lands on something else (Build's claim sheet covers the petals of an account with
+      // no lándlet) used to report success while the page stayed where it was, and every figure after it was
+      // for the wrong mode. Say so instead.
+      const after = await page.evaluate(() => document.body.dataset.mode);
+      if (a !== before && after !== a) throw new Error(`still in ${after} after pressing ${a}: something is covering its petal (Build's claim sheet does, for an account with no lándlet; go through Shop)`);
       return null;
+    }
     case 'fly':
       await doubleTapWorld();
       return null;
@@ -610,6 +617,12 @@ async function runStepAction(step, index) {
     }
     case 'stats':
       return frameStats();
+    case 'lap': {
+      // #3935: the figures since the last lap (or the start), then a fresh count: one row per phase of a run.
+      const lap = await frameStats();
+      await page.evaluate(() => window.__frameMonitor?.reset()).catch(() => {});
+      return lap;
+    }
     case 'pos':
       return page.evaluate(() => ({
         avatar: window.__testShopAvatarPosition?.() ?? null,
@@ -732,7 +745,7 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
