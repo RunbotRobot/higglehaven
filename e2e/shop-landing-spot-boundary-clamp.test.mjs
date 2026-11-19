@@ -111,9 +111,22 @@ await pageA.evaluate(() => window.__testToggleShopFlight());
 // see that branch's own code) -- safe to pin the exact spot here.
 await pageA.evaluate((x) => window.__testTeleportShopAvatar(x, 0), nearRadiusM);
 
-// Past SHOP_FLIGHT_LANDING_DURATION_S (2s) so the "landed" tick (and the
-// nudge-and-clamp this issue is about) has actually run.
-await pageA.waitForTimeout(2500);
+// Until the avatar is down, so the "landed" tick (and the nudge-and-clamp this issue is about)
+// has actually run. #3932: this used to be a fixed 2.5 s wait past the 2 s landing duration, but
+// the landing advances by frame time and the server forgets a presence row after 10 s
+// (PRESENCE_STALE_AFTER_MS). On a loaded CI machine with few frames per second the avatar was
+// read still landing, or B had gone stale, and A "landed" on B un-nudged. Wait for the real
+// state, and keep B present the way a live avatar would (it re-posts every second or so).
+const bPresenceBody = JSON.stringify({ x: nearRadiusM, y: 0, z: 0, heading: 0, landletId: LANDLET_ID });
+const keepBPresent = setInterval(() => {
+  fetchJson(pageB, '/api/presence', { method: 'POST', headers: { 'content-type': 'application/json' }, body: bPresenceBody }).catch(() => {});
+}, 1000);
+try {
+  await pageA.waitForFunction(() => window.__testShopFlightState() === 'grounded', null, { timeout: 30000 });
+} finally {
+  clearInterval(keepBPresent);
+}
+await pageA.waitForTimeout(500);
 const finalPosition = await pageA.evaluate(() => window.__testShopAvatarPosition());
 const finalRadiusM = Math.hypot(finalPosition.x, finalPosition.y);
 console.log('A\'s own final landed position (should be nudged away from B, never past the world wall):', finalPosition);
