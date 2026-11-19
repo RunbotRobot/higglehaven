@@ -111,6 +111,8 @@ await page.waitForFunction(
   null,
   { timeout: 60000 },
 );
+// #3652: the redraw above rebuilt the tab, so the "Higgles and auctions" row is closed again.
+await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
 const relabeledBtnPresent = await page.getByRole('button', { name: 'Update payout account' }).count();
 console.log('Submit button relabeled to "Update payout account" right after the first successful submit, no tab switch needed (should be 1 -- was the #1403 bug):', relabeledBtnPresent);
 
