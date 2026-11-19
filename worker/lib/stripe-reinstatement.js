@@ -196,21 +196,37 @@ async function performReinstatementReset(db, subjectType, subjectId, currentStri
 
 async function recordDecision(db, { subjectType, subjectId, outcome, reasoning }) {
   const decisionId = `moderation-decision-${crypto.randomUUID()}`;
-  await db.prepare(`
-    INSERT INTO account_moderation_decisions
-      (decision_id, decision_type, subject_builder_id, subject_ref, outcome, rubric_version, reasoning, decided_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
+  const subjectRef = `${subjectType}:${subjectId}`;
+  // #2994: an 'approved' decision is one row per flag history. Two concurrent requests for a
+  // subject whose stripe_account_id is already null both evaluate 'approved' from the same flags
+  // and would each log a row for what is one event; the second now finds the first's row (decided
+  // since the subject's latest flag) and writes nothing. A newer flag starts a new history, so a
+  // later, genuine approval is still logged. Denied/escalated rows are unchanged (#2983).
+  const guard = outcome === 'approved'
+    ? `AND NOT EXISTS (
+         SELECT 1 FROM account_moderation_decisions
+         WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ? AND outcome = 'approved'
+           AND decided_at >= COALESCE((SELECT MAX(flagged_at) FROM stripe_account_flags WHERE subject_type = ? AND subject_id = ?), '')
+       )`
+    : '';
+  const params = [
     decisionId,
     'stripe_reinstatement',
     subjectType === 'builder' ? subjectId : null,
-    `${subjectType}:${subjectId}`,
+    subjectRef,
     outcome,
     REINSTATEMENT_RUBRIC_VERSION,
     reasoning,
     'ai:stripe-reinstatement-flow',
-  ).run();
-  return decisionId;
+  ];
+  if (outcome === 'approved') params.push(subjectRef, subjectType, subjectId);
+  const result = await db.prepare(`
+    INSERT INTO account_moderation_decisions
+      (decision_id, decision_type, subject_builder_id, subject_ref, outcome, rubric_version, reasoning, decided_by)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE 1 = 1 ${guard}
+  `).bind(...params).run();
+  return result.meta.changes > 0 ? decisionId : null;
 }
 
 // Generic, user-facing-safe messages -- the full `reasoning` (which flag
