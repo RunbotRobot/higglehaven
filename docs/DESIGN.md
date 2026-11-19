@@ -115,7 +115,7 @@ Not built yet; do not describe these to a person as if they exist:
   and each mode's tools under that mode's petal, with a fourth petal for the menu.
   Today the stem opened by the head holds both the general leaves and the current
   mode's; the target is in `flower.html`.
-- **One help door** (#3762): a "?" leaf holding how to move, how higglehaven
+- **One help door** (#3762): a "Help" leaf (a question mark) holding how to move, how higglehaven
   works, the manuals for shopping, building and selling, and the way to an
   assistant.
 - **The head's look** (#3754): five drawings are on `flower.html` for the owner to
@@ -282,6 +282,12 @@ Soft shapes: a pill or a circle before a rectangle with corners.
 | `--shadow-bud` | 0 2px 10px, ink at 22% | the bud |
 | `--shadow-petal` | 0 4px 14px, ink at 20% | a petal |
 | `--shadow-leaf` | 0 8px 26px, ink at 20% | a leaf and a card that blooms |
+| `--shadow-breath` | 0 6px 18px ink at 18%, and a 5px white ring at 35% | the bud's breath at its fullest |
+| `--filter-petals` | drop shadow 0 4px 8px, ink at 20% | one shadow for the ring's three petals together (a filter, so a clip-path cannot cut it off) |
+| `--glow-teach` | 4px spring-green ring at 35% | the "?" icon while the bud teaches |
+| `--glow-pulse` | 8px spring-green ring at 35% | the bud's pulse until it is first opened |
+| `--ring-badge` | 2px white ring at 90% | the dot on a leaf that holds something waiting |
+| `--ring-focus` | 3px spring-green ring at 60% | a focus ring |
 
 The opacities a surface may use are a short list, not free choice:
 

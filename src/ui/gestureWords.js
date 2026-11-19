@@ -8,6 +8,9 @@ export const WALK_WORDS = 'Drag on the left half of the screen to walk';
 export const LOOK_WORDS = 'Drag on the right half of the screen to look around';
 export const FLY_WORDS = 'Double-tap the world to fly';
 export const LAND_WORDS = 'Double-tap the world to land';
+// #3555 (taught under #3657): a tap on another person in Shop offers friendship. Not one of the
+// three movement gestures, but a gesture nothing on screen shows, so it is taught the same way.
+export const FRIEND_WORDS = 'Tap a person to offer friendship';
 // #3832: the same three, for a computer with a mouse and a keyboard (#3831: a mouse drag looks).
 export const KEY_WALK_WORDS = 'Press W, A, S and D (or the arrow keys) to walk';
 export const KEY_LOOK_WORDS = 'Hold the left mouse button on the world and drag to look around';
@@ -17,4 +20,5 @@ export const KEY_FLY_WORDS = 'Press T to fly';
 export const GESTURE_HANDBOOK = [
   { entry: 'How do I walk around and look around?', phrases: ['left half of the screen', 'right half of the screen', 'drag', 'w, a, s and d', 'left button on the world'] },
   { entry: 'How do I fly, go up and come back down?', phrases: ['double-tap the world', 'look up', 'look down', 'press t'] },
+  { entry: 'How do I add a friend and send them a message?', phrases: ['offer friendship', 'tap their avatar', 'send request'] },
 ];

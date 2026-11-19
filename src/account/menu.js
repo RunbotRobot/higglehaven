@@ -12,6 +12,7 @@ import { createPurchaseRow } from './myPurchases.js';
 import { builderId, currentMode, currentLandletId } from '../world/state.js';
 import { currentAuthUser } from './auth.js';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
+import { setBudWord, clearBudWord } from '../ui/bud.js';
 import { formatArea } from '../settings.js';
 // formatHiggles/START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY stay owned by
 // main.js (formatHiggles is a shared money formatter used throughout that
@@ -77,8 +78,16 @@ const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-
 const notificationsClearReadBtn = document.getElementById('notifications-clear-read-btn');
 const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
+// #3774: the faux-layout preview has no flower (its own toolbar sits where the note would grow), so
+// nothing is announced there; the badges on the menu buttons still count.
+const budShowsNotes = () => document.body.dataset.mode !== 'layoutPreview';
+
+// #3774: both counts are answered only for a verified account (the endpoints refuse the rest with a
+// 403, which a page would log as an error), the same bar every other social call in Shop uses.
+const canReadMenuCounts = () => Boolean(currentAuthUser?.ageAttested) && currentAuthUser.trustTier !== 'none';
+
 export async function refreshNotificationsBadge() {
-  if (!builderId) return;
+  if (!canReadMenuCounts()) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
     // own first page — that list is cursor-paginated (issue #320) one
@@ -88,6 +97,9 @@ export async function refreshNotificationsBadge() {
     const count = await fetchUnreadNotificationCount();
     notificationsBadgeEl.textContent = String(count);
     notificationsBadgeEl.hidden = count === 0;
+    // #3774: the head says so too, and the note is a door to the Notices leaf.
+    if (count > 0 && budShowsNotes()) setBudWord('notices', count === 1 ? 'Notice' : `${count} notices`, { open: () => notificationsBtn.click(), label: count === 1 ? 'You have a notice. Open Notices.' : `You have ${count} notices. Open Notices.` });
+    else clearBudWord('notices');
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
   }
@@ -607,12 +619,15 @@ dmComposeForm.addEventListener('submit', async (event) => {
 });
 
 export async function refreshFriendsBadge() {
-  if (!builderId) return;
+  if (!canReadMenuCounts()) return; // #3774: as above
   try {
     const friendships = await fetchFriendships();
     const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
     friendsBadgeEl.textContent = String(incoming.length);
     friendsBadgeEl.hidden = incoming.length === 0;
+    // #3774: the head says so too, and the note is a door to Friends, where the request waits.
+    if (incoming.length > 0 && budShowsNotes()) setBudWord('friend-requests', incoming.length === 1 ? 'Friend request' : `${incoming.length} friend requests`, { open: () => friendsBtn.click(), label: incoming.length === 1 ? 'Someone sent you a friend request. Open Friends.' : `${incoming.length} friend requests. Open Friends.` });
+    else clearBudWord('friend-requests');
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
   }

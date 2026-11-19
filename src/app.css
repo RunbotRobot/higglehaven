@@ -569,7 +569,10 @@
          showed through the menu's edge. Two surfaces never overlap: the
          button steps aside (same fade) while the menu is open and returns
          when it closes, with its own countdown untouched. */
-      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible {
+      /* #3762: and a leaf (Settings, Help, Friends) opens after the menu has folded, so the button
+         steps aside for it too instead of showing through the top of it. */
+      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible,
+      body:has(.bud-leaf) #shop-last-location-btn.visible {
         opacity: 0;
         pointer-events: none;
       }
@@ -919,7 +922,7 @@
         animation: bud-pulse 1.6s ease-in-out 3;
       }
       @media (prefers-reduced-motion: reduce) {
-        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: 0 0 0 4px rgb(var(--spring-green-rgb) / 0.35); }
+        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: var(--glow-teach); }
       }
       /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
          stem is set in from the screen edge (the head is in the upper left, so there is little
@@ -1016,6 +1019,9 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        /* #3762: the name keeps a little air on both sides of the leaf, so a long one is cut short of
+           the edge instead of running to it. */
+        padding-inline: var(--space-xs);
       }
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
       body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
@@ -1061,7 +1067,7 @@
         width: 0;
         height: 0;
         /* One shadow for the three shapes together: a clip-path would cut a box-shadow off. */
-        filter: drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.2));
+        filter: var(--filter-petals);
       }
       body[data-bud-corner="bottom-right"] #bud-modes { --ring-flip: 1; }
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes,
@@ -1146,8 +1152,8 @@
       .bud-pair[hidden] { display: none; }
       .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
-      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(var(--white-rgb) / 0.35); } }
-      @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
+      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--shadow-breath); } }
+      @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--glow-pulse); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
@@ -1461,7 +1467,7 @@
         margin-left: var(--space-xs);
         border-radius: var(--radius-round);
         background: var(--petal-yellow);
-        box-shadow: 0 0 0 2px rgb(var(--white-rgb) / 0.9);
+        box-shadow: var(--ring-badge);
         font-size: 0;
         line-height: 0;
         overflow: hidden;
@@ -1916,7 +1922,7 @@
         background: rgb(var(--spring-green-rgb) / 0.65);
       }
       #shop-voice-btn.speaking {
-        box-shadow: 0 0 0 3px rgb(var(--spring-green-rgb) / 0.6);
+        box-shadow: var(--ring-focus);
       }
       #shop-voice-btn.denied {
         background: rgb(var(--denied-rgb) / 0.55);
@@ -6636,6 +6642,69 @@
       }
       #item-card-more[hidden] {
         display: none;
+      }
+      /* #3689: the nudge pad and the angle fields under More. Small pills like the card's other buttons; the
+         numbers are plain selectable text. */
+      #item-card-nudge,
+      #item-card-angles {
+        flex-basis: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        align-items: center;
+      }
+      #item-card-nudge[hidden],
+      #item-card-angles[hidden] {
+        display: none;
+      }
+      .item-card-block-title {
+        flex-basis: 100%;
+        font-weight: var(--weight-semibold);
+        font-size: var(--text-sm);
+      }
+      #nudge-height-readout {
+        font-weight: normal;
+        margin-left: var(--space-sm);
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .item-card-nudge-pad {
+        flex-basis: 100%;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--space-xs);
+      }
+      #item-card-more .item-card-nudge-pad button {
+        padding: var(--space-xs) var(--space-2xs);
+        min-width: 0;
+        white-space: nowrap;
+        font-size: var(--text-xs);
+      }
+      #item-card-angles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--space-xs);
+      }
+      #item-card-angles .item-card-block-title {
+        grid-column: 1 / -1;
+      }
+      .item-card-angle-field {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3xs);
+        font-size: var(--text-xs);
+        min-width: 0;
+      }
+      .item-card-angle-field input {
+        width: 100%;
+        box-sizing: border-box;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: var(--space-3xs) var(--space-2xs);
+        font: inherit;
+        background: rgb(0 0 0 / 0.1);
+        color: var(--pill-text);
       }
       /* Multi-select: the next taps add items, so the card shrinks to its title
          (what is selected) and every tap goes through it to the world. Copy,
