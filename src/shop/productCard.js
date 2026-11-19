@@ -136,6 +136,8 @@ function fillCard(review) {
   refreshOwnedState(review);
   notesEl.textContent = notes.map((note) => `(${note})`).join(' ');
   cardEl.setAttribute('aria-label', name);
+  // #3824: the Buy button names what it buys and for how much; the visible word "Buy" stays first.
+  buyBtn.setAttribute('aria-label', `Buy ${name}${priceText ? `, ${priceText}` : ''}`);
   stateEl.textContent = '';
   for (const btn of [buyBtn, reviewBtn, returnPolicyBtn]) btn.classList.remove('visible');
   moreEl.hidden = true;
