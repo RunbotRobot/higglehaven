@@ -544,6 +544,11 @@ are speaking.
 
 ### How do I add a friend and send them a message?
 
+To offer friendship to someone standing near you in Shop: tap their avatar, then
+"Send request" in the box that asks. Nothing to type. (If you change your mind, "Not now".)
+
+To add someone who is not nearby:
+
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once) ("Account menu"), then "Friends".
 2. Tap "+ Add Friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
@@ -789,11 +794,12 @@ single item.
 ### How do I select several items at once?
 
 1. Tap the bud, then the Build petal, then "Tools", then "Multi-Select". The sheet goes away and the bud
-   says "Selecting" while it is on. A "Brush" slider is in the Tools sheet: tap
-   the bud, the Build petal, then "Tools" again to change it.
+   says "Selecting" while it is on. Before anything is chosen, the "Brush" slider
+   is in the Tools sheet: tap the bud, the Build petal, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
-   sweep is.
-3. The top of the screen says how many are chosen, for example "2 items
+   sweep is. Once something is chosen, the slider is on the card beside the
+   chosen items, so you can change the sweep without leaving them.
+3. The card beside the items says how many are chosen, for example "2 items
    selected".
 4. Tap the bud, the Build petal, "Tools", then "Multi-Select" again when you want to go back to
    choosing one item at a time. The bud says "Menu" again.
@@ -804,8 +810,7 @@ single item.
 **If something goes wrong:**
 - Some buttons on the card are greyed out, such as "Trim": they work on one item at
   a time.
-- The row of buttons and the count at the top only show once something is
-  chosen.
+- The card, with its count and the slider, only shows once something is chosen.
 
 ```controls build
 #toggle-multiselect | Multi-Select
