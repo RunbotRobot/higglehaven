@@ -21,7 +21,7 @@ const BY_CODE = {
   incomplete_cvc: 'That security code is not complete.',
   incorrect_zip: 'That postal code does not match the card.',
   incomplete_zip: 'That postal code is not complete.',
-  processing_error: 'The card could not be processed just now.',
+  processing_error: 'The card couldn\'t be processed just now.',
   rate_limit: 'Too many tries in a row.',
   setup_intent_authentication_failure: 'Your bank did not confirm the card.',
   authentication_required: 'Your bank asked for a confirmation that did not complete.',
@@ -38,7 +38,7 @@ export function describeCardRefusal(error) {
   let lead;
   if (BY_CODE[code]) lead = BY_CODE[code];
   else if (code === 'card_declined' || type === 'card_error') lead = DECLINED;
-  else lead = 'The card could not be verified.';
+  else lead = 'The card couldn\'t be verified.';
   return `${lead} ${END}`;
 }
 

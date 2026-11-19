@@ -127,7 +127,7 @@ async function enterVerifyCardStep() {
     setVerifyStatus('');
     verifyContinueBtn.disabled = false;
   } catch (err) {
-    setVerifyStatus(err.message || 'Could not load card verification.', 'error');
+    setVerifyStatus(err.message || 'Couldn\'t load card verification.', 'error');
   }
 }
 
@@ -183,7 +183,7 @@ verifyContinueBtn.addEventListener('click', async () => {
       if (user.trustTier !== 'none') { notifyVerifyResult(user); return; }
       await enterVerifyCardStep();
     } catch (err) {
-      setVerifyStatus(err.message || 'Could not confirm age.', 'error');
+      setVerifyStatus(err.message || 'Couldn\'t confirm age.', 'error');
       verifyContinueBtn.disabled = false;
     }
     return;
@@ -249,7 +249,7 @@ verifyIdInsteadBtn.addEventListener('click', async () => {
       currentAuthUser = refreshed;
       if (refreshed.trustTier !== 'none') { notifyVerifyResult(refreshed); return; }
     } catch { /* fall through to showing the original error below */ }
-    setVerifyStatus(err.message || 'Could not start government-ID verification.', 'error');
+    setVerifyStatus(err.message || 'Couldn\'t start government-ID verification.', 'error');
   } finally {
     verifyIdInsteadBtn.disabled = false;
   }
@@ -606,7 +606,7 @@ authForms.login.addEventListener('submit', async (event) => {
     authForms.login.reset();
     notifyAuthResult(currentAuthUser);
   } catch (err) {
-    setAuthStatus(err.message || 'Could not log in.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t log in.', 'error');
   }
 });
 
@@ -650,7 +650,7 @@ authForms.signup.addEventListener('submit', async (event) => {
     // unblocks.
     notifyAuthResult(currentAuthUser);
   } catch (err) {
-    setAuthStatus(err.message || 'Could not sign up.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t sign up.', 'error');
   }
 });
 
@@ -669,7 +669,7 @@ authForms.forgot.addEventListener('submit', async (event) => {
       'success',
     );
   } catch (err) {
-    setAuthStatus(err.message || 'Could not request a password reset.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t request a password reset.', 'error');
   }
 });
 
@@ -689,7 +689,7 @@ authForms.reset.addEventListener('submit', async (event) => {
     showAuthView('login');
     setAuthStatus('Password reset! You can log in with your new password now.', 'success');
   } catch (err) {
-    setAuthStatus(err.message || 'Could not reset the password.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t reset the password.', 'error');
   }
 });
 
@@ -701,12 +701,12 @@ authResendVerifyBtn.addEventListener('click', async () => {
       setAuthStatus(`Verification email sent. (dev mode: ${result.devVerifyUrl})`, 'success');
     } else if (!result.verificationEmailSent) {
       // #1451: same real-Resend-failure gap as the signup handler above.
-      setAuthStatus('Could not send the verification email — please try again in a moment.', 'error');
+      setAuthStatus('Couldn\'t send the verification email — please try again in a moment.', 'error');
     } else {
       setAuthStatus('Verification email sent.', 'success');
     }
   } catch (err) {
-    setAuthStatus(err.message || 'Could not resend the verification email.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t resend the verification email.', 'error');
   }
 });
 
@@ -783,7 +783,7 @@ authVerifyIdBtn.addEventListener('click', async () => {
     setAuthStatus('Complete verification in the new tab, then come back here.');
     pollDiditVerificationStatus();
   } catch (err) {
-    setAuthStatus(err.message || 'Could not start government-ID verification.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t start government-ID verification.', 'error');
   }
 });
 
@@ -931,7 +931,7 @@ authChangeEmailForm.addEventListener('submit', async (event) => {
       setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
     }
   } catch (err) {
-    setAuthStatus(err.message || 'Could not change your email.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t change your email.', 'error');
   } finally {
     submitBtn.disabled = false;
   }
@@ -957,7 +957,7 @@ authExportDataBtn.addEventListener('click', async () => {
     URL.revokeObjectURL(url);
     setAuthStatus('Your data export has started downloading.', 'success');
   } catch (err) {
-    setAuthStatus(err.message || 'Could not export your data.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t export your data.', 'error');
   } finally {
     authExportDataBtn.disabled = false;
   }
@@ -1006,7 +1006,7 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   } catch (err) {
     setAccountSessionEnding(false);
     submitBtn.disabled = false;
-    setAuthStatus(err.message || 'Could not delete your account.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t delete your account.', 'error');
     return;
   }
   submitBtn.disabled = false;
@@ -1074,7 +1074,7 @@ authChangePasswordForm.addEventListener('submit', async (event) => {
     await changePassword(currentPassword, newPassword);
   } catch (err) {
     submitBtn.disabled = false;
-    setAuthStatus(err.message || 'Could not change your password.', 'error');
+    setAuthStatus(err.message || 'Couldn\'t change your password.', 'error');
     return;
   }
   submitBtn.disabled = false;

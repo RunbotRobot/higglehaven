@@ -17,9 +17,9 @@ describe('describeCardRefusal', () => {
   });
   it('falls back to a general sentence, never the raw one', () => {
     const text = describeCardRefusal({ type: 'api_error', message: 'Something raw from the provider' });
-    expect(text).toMatch(/^The card could not be verified\./);
+    expect(text).toMatch(/^The card couldn't be verified\./);
     expect(text).not.toContain('raw');
-    expect(describeCardRefusal(undefined)).toMatch(/^The card could not be verified\./);
+    expect(describeCardRefusal(undefined)).toMatch(/^The card couldn't be verified\./);
   });
   it('every refusal ends by saying nothing was charged and naming the ID route', () => {
     for (const error of [{ code: 'expired_card' }, { code: 'card_declined' }, {}, null]) {

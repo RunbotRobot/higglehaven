@@ -86,7 +86,7 @@ let uploadConversionNoticeCount = 0;
 function refreshConversionNotice() {
   const n = uploadConversionNoticeCount;
   uploadConversionNoticeEl.textContent = n > 0
-    ? `${n === 1 ? '1 texture' : `${n} textures`} in this file could not be read, so the model will look plain where ${n === 1 ? 'it was' : 'they were'} used. The shape and animations are unaffected.`
+    ? `${n === 1 ? '1 texture' : `${n} textures`} in this file couldn't be read, so the model will look plain where ${n === 1 ? 'it was' : 'they were'} used. The shape and animations are unaffected.`
     : '';
   uploadConversionNoticeEl.hidden = n === 0;
 }
@@ -760,7 +760,7 @@ async function handleUploadFileStep() {
         // #3300: the technical reason stays in the console; the seller gets
         // what to do next.
         setUploadStatus(
-          'Could not convert this .fbx file. ' +
+          'Couldn\'t convert this .fbx file. ' +
             'Try exporting it to .glb in Blender first and uploading that instead.',
           true,
         );
@@ -785,7 +785,7 @@ async function handleUploadFileStep() {
       // fall back to uploading the original file rather than blocking
       // the whole thing on it.
       console.warn('Client-side model optimization failed, uploading original file:', err);
-      setUploadStatus('Could not auto-reduce the model — uploading as-is…');
+      setUploadStatus('Couldn\'t auto-reduce the model — uploading as-is…');
     }
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
     const { modelUrl, sizeBytes } = await uploadModelFile(uploadable);
@@ -877,10 +877,10 @@ async function extractVideoFrames(videoFile, frameCount) {
     video.src = url;
     await new Promise((resolve, reject) => {
       video.onloadedmetadata = resolve;
-      video.onerror = () => reject(new Error('Could not read this video file.'));
+      video.onerror = () => reject(new Error('Couldn\'t read this video file.'));
     });
     if (!Number.isFinite(video.duration) || video.duration <= 0) {
-      throw new Error("Could not determine this video's length.");
+      throw new Error("Couldn't determine this video's length.");
     }
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
@@ -894,7 +894,7 @@ async function extractVideoFrames(videoFile, frameCount) {
       const t = ((i + 0.5) / frameCount) * video.duration;
       await new Promise((resolve, reject) => {
         video.onseeked = resolve;
-        video.onerror = () => reject(new Error('Could not read this video file.'));
+        video.onerror = () => reject(new Error('Couldn\'t read this video file.'));
         video.currentTime = t;
       });
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -918,7 +918,7 @@ async function extractVideoFrames(videoFile, frameCount) {
 async function finishVideoGeneration(modelUrl) {
   setUploadStatus('Generated! Optimizing…');
   const response = await fetch(modelUrl);
-  if (!response.ok) throw new Error('Could not download the generated model.');
+  if (!response.ok) throw new Error('Couldn\'t download the generated model.');
   const bytes = await response.blob();
   const file = new File([bytes], 'generated-model.glb', { type: 'model/gltf-binary' });
   const dataTransfer = new DataTransfer();

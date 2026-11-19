@@ -117,7 +117,7 @@ console.log('status after tapping only A post-reload (should still be "2 items s
 const pass =
   multiSelectInfo.includes('2 items selected') &&
   savedStatus.includes('Saved') && savedStatus.includes('2 item') &&
-  !savedStatus.includes('could not group') &&
+  !savedStatus.includes("couldn't bundle") &&
   !!afterSaveFetch.groupIdA &&
   afterSaveFetch.groupIdA === afterSaveFetch.groupIdB &&
   ungroupEnabledAfterSave &&

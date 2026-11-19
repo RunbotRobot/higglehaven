@@ -238,7 +238,7 @@ async function loadLandletMap(resolve) {
     landlets = [...greenbeltLandlets, ...claimedLandlets];
   } catch (err) {
     if (myLoadToken !== claimMapLoadToken) return; // superseded — a newer load owns the UI now
-    claimStatusEl.textContent = err.message || 'Could not load the world.';
+    claimStatusEl.textContent = err.message || 'Couldn\'t load the world.';
     claimStatusEl.classList.add('error');
     return;
   }

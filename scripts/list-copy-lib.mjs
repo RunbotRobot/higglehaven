@@ -68,7 +68,7 @@ export function htmlCopy(file, source) {
 }
 
 // Where in JS a string is something a person reads.
-const READS = /(textContent|innerHTML|innerText|placeholder|ariaLabel|\.title|setAttribute\(\s*['"](?:aria-label|title|placeholder|alt)['"]|\blabel\s*:|\bname\s*:|\btitle\s*:|\bmessage\s*:|\btext\s*:|\bhint\s*:|\bnote\s*:|\bnotice\s*:|\bsentence\s*:|Error\(|HttpError\(|showInlineActionStatus|setBudWord|status\.text|Status\(|Message\(|announce|confirmLabel|cancelLabel)/;
+const READS = /(textContent|innerHTML|innerText|placeholder|ariaLabel|\.title|setAttribute\(\s*['"](?:aria-label|title|placeholder|alt)['"]|\blabel\s*:|\bname\s*:|\btitle\s*:|\bmessage\s*:|\btext\s*:|\bhint\s*:|\bnote\s*:|\bnotice\s*:|\bsentence\s*:|Error\(|HttpError\(|showInlineActionStatus|setBudWord|status\.text|Status\(|Message\(|announce|confirmLabel|cancelLabel|\berror\s*:|loadError|\blead\b\s*=|\bstatus\s*=|\bfail\(|statusMessage|setProductInfo|replaceChildren|\baddLevel\()/;
 const STRING = /'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\\n]|\\.)*)`/g;
 
 // Strings in a JS file that sit on a line that sets or raises something a person reads.

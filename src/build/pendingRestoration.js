@@ -36,7 +36,7 @@ function describeSlot(slot) {
   // #3094: this is every other restore-skip (its level was removed while it
   // was pending, #3047; its template was deleted; the land changed hands).
   // The bare "could not be put back" gave no reason and no next step.
-  else status = 'It could not be put back where it was (for example, the level it was on has since been removed). Clear it to free up the spot.';
+  else status = 'It couldn\'t be put back where it was (for example, the level it was on has since been removed). Clear it to free up the spot.';
   return { name, where, status };
 }
 
@@ -86,7 +86,7 @@ function renderSlots(slots) {
           try {
             await clearPendingRestoration(slot.snapshotId);
           } catch (err) {
-            throw new Error(err.message || 'Could not clear this item.');
+            throw new Error(err.message || 'Couldn\'t clear this item.');
           }
         },
       });
