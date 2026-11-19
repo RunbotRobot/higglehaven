@@ -1,6 +1,6 @@
 // #3702 (Sell in the bud, 4/6; part of #3655, #3648): a product tapped in the showroom blooms a
-// card beside it, with the actions on the product directly under its name: Rename, Price (an
-// inline field, so the price is on the card), Delete (its own in-app confirmation) and More (My
+// card beside it, with the actions on the product directly under its name: Rename, Price and Stock
+// (inline fields, so both are on the card), Delete (its own in-app confirmation) and More (My
 // products on that product's row). The card follows the product, closes on its X, on Escape and
 // on a tap on empty ground, and tapping a product no longer opens My products by itself.
 import path from 'node:path';
@@ -64,7 +64,7 @@ const info = await page.evaluate(() => {
 console.log('card:', JSON.stringify({ name: info.name, price: info.price, buttons: info.buttons, tops: info.rowsTops }));
 check(info.name === 'Card Crate', `the card is titled with the product's name (${info.name})`);
 check(info.price === '$5.00', `the price is on the card (${info.price})`);
-check(info.buttons.join() === 'Rename,Price,Delete,More', `the actions are Rename, Price, Delete, More (${info.buttons})`);
+check(info.buttons.join() === 'Rename,Price,Stock,Delete,More', `the actions are Rename, Price, Stock, Delete, More (${info.buttons})`);
 check(info.actions.top >= info.nameBox.bottom - 1, 'the actions sit directly under the name');
 check(new Set(info.rowsTops).size === 1, `the card's buttons do not wrap (tops ${info.rowsTops})`);
 check(info.card.left >= 0 && info.card.right <= info.vw && info.card.top >= 0 && info.card.bottom <= info.vh, 'the card is inside the screen');
@@ -80,6 +80,30 @@ await page.fill('#seller-product-card-price-input', 'abc');
 await page.click('#seller-product-card-price-save-btn');
 await page.waitForFunction(() => document.getElementById('seller-product-card-status').textContent.length > 0, null, { timeout: 5000 });
 check((await page.textContent('#seller-product-card-status')).includes('non-negative'), 'a bad price is refused on the card, in words');
+
+// Stock, inline: a new product has no limit; a number is what is left; 0 reads as sold out.
+check((await page.textContent('#seller-product-card-stock')) === 'No limit on stock', 'a new product reads as no limit on stock');
+await page.click('#seller-product-card-stock-btn');
+check(!(await page.locator('#seller-product-card-price-edit').isVisible()), 'opening Stock puts the price field away');
+check(await page.locator('#seller-product-card-stock-hint').isVisible(), 'the stock field says what blank means');
+await page.fill('#seller-product-card-stock-input', '3');
+await page.click('#seller-product-card-stock-save-btn');
+await page.waitForFunction(() => document.getElementById('seller-product-card-stock').textContent === '3 in stock', null, { timeout: 10000 });
+check(true, 'stock saved from the card');
+await page.click('#seller-product-card-stock-btn');
+await page.fill('#seller-product-card-stock-input', '0');
+await page.click('#seller-product-card-stock-save-btn');
+await page.waitForFunction(() => document.getElementById('seller-product-card-stock').textContent === 'Sold out', null, { timeout: 10000 });
+check(true, 'zero reads as sold out');
+await page.click('#seller-product-card-stock-btn');
+await page.fill('#seller-product-card-stock-input', '-2');
+await page.click('#seller-product-card-stock-save-btn');
+await page.waitForFunction(() => document.getElementById('seller-product-card-status').textContent.length > 0, null, { timeout: 5000 });
+check((await page.textContent('#seller-product-card-status')).includes('whole number'), 'a bad stock is refused on the card, in words');
+await page.fill('#seller-product-card-stock-input', '');
+await page.click('#seller-product-card-stock-save-btn');
+await page.waitForFunction(() => document.getElementById('seller-product-card-stock').textContent === 'No limit on stock', null, { timeout: 10000 });
+check(true, 'a blank field puts the product back to no limit');
 
 // Rename, in its modal.
 await page.click('#seller-product-card-rename-btn');

@@ -80,7 +80,7 @@ async function renderPage(body, id) {
     pages = await loadPages();
   } catch {
     // Said plainly, and the way back stays (selectable text, never a silent blank).
-    body.replaceChildren(el('p', 'help-note', 'These pages could not be opened just now. Check your connection and try again.'));
+    body.replaceChildren(el('p', 'help-note', 'These pages couldn\'t be opened just now. Check your connection and try again.'));
     body.appendChild(backButton(body));
     return;
   }

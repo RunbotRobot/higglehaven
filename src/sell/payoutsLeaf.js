@@ -190,7 +190,7 @@ function buildForm(account, onSubmitted) {
       return;
     } catch (err) {
       // The server names the field; going Back is how to reach it from the second step.
-      formStatus.textContent = err.message || 'Could not submit — check the fields and go Back to fix them.';
+      formStatus.textContent = err.message || 'Couldn\'t submit — check the fields and go Back to fix them.';
       formStatus.classList.add('error');
     } finally {
       submitBtn.disabled = false;
@@ -223,7 +223,7 @@ function buildBalance() {
       note.classList.remove('error');
       cashOutBtn.hidden = payouts.availableCents <= 0;
     } catch (err) {
-      note.textContent = err.message || 'Could not load your payout balance.';
+      note.textContent = err.message || 'Couldn\'t load your payout balance.';
       note.classList.add('error');
     }
   }
@@ -237,7 +237,7 @@ function buildBalance() {
       // #3249: shown beside the balance, not alert() (a suppressed dialog is silent).
       showInlineActionStatus(block, 'Payout requested.', { error: false });
     } catch (err) {
-      showInlineActionStatus(block, err.message || 'Could not request a payout.');
+      showInlineActionStatus(block, err.message || 'Couldn\'t request a payout.');
     } finally {
       cashOutBtn.disabled = false;
     }
@@ -265,7 +265,7 @@ async function renderPayouts(body) {
     account = await fetchSellerStripeAccount({ refresh: consumeStripeReturnMarker() });
   } catch (err) {
     if (stale()) return;
-    status.textContent = err.message || 'Could not load your payout account status.';
+    status.textContent = err.message || 'Couldn\'t load your payout account status.';
     status.classList.add('error');
     return;
   }

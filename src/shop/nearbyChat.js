@@ -159,7 +159,7 @@ async function reportNearbyChatSender(builderId, lineEl) {
     // pill over the world.
     if (lineEl?.isConnected) showInlineActionStatus(lineEl, 'Report sent. Thank you.', { error: false });
   } catch (err) {
-    await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
+    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Please try again.' });
   }
 }
 
@@ -333,7 +333,7 @@ if (chatPanelEl) {
       ownMessageIds.add(message.messageId);
       appendMessage(message);
     }).catch((err) => {
-      chatStatusEl.textContent = err.message || 'Could not send this message.';
+      chatStatusEl.textContent = err.message || 'Couldn\'t send this message.';
       chatStatusEl.classList.add('error');
     });
   });

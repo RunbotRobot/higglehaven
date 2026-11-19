@@ -44,6 +44,7 @@
 // in main.js. (#3502: the ground disc/wall/dome, with SHOP_WALL_MARGIN_M, the
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
+import { disposeBatchTiers } from './batchTiers.js';
 import * as THREE from 'three';
 import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS } from '../ui/gestureWords.js';
 import { markStartup } from '../ui/startupMarks.js';
@@ -279,6 +280,9 @@ export function unloadShopLandletInstances(entry) {
     worldWorkQueue.enqueue(() => {
       for (const mesh of batch.meshes) mesh.dispose();
       disposeObject3D(batch.container);
+      // #3403: the mid and far sets and the model clones that own their materials.
+      disposeBatchTiers(batch);
+      for (const container of batch.tierContainers ?? []) disposeObject3D(container);
     }, { priority: DISPOSE_QUEUE_PRIORITY });
   }
   entry.batches = [];
@@ -566,7 +570,7 @@ export async function enterShopMode() {
     [world, allLandlets] = await publicLoads.worldAndLandlets;
     markStartup('world-loaded');
   } catch (err) {
-    shopStatusEl.textContent = err.message || 'Could not load the world.';
+    shopStatusEl.textContent = err.message || 'Couldn\'t load the world.';
     // #3738: the opening screen says so too, and offers Try again.
     failLoadingStage(`${err.message || 'The world did not load.'} Check your connection, then tap Try again.`);
     return;
@@ -761,10 +765,26 @@ export function renderShopSettingsSection() {
   const label = document.createElement('span');
   label.textContent = 'Controls';
   field.appendChild(label);
-  const note = document.createElement('div');
-  note.className = 'settings-empty-note';
+  // #3652: one short line per gesture instead of one paragraph, touch first, then the keyboard.
+  // The sentences still come from gestureWords.js, so they stay the same words the "?" leaf uses.
+  const note = document.createElement('ul');
+  note.className = 'settings-empty-note settings-gesture-list';
+  const addLine = (text, heading = false) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    if (heading) li.className = 'settings-gesture-heading';
+    note.appendChild(li);
+  };
   // #3650: moving is done by touching the world (no sticks, no fly button).
-  note.textContent = `${WALK_WORDS} (drag further to run). ${LOOK_WORDS}. Both work at once, one thumb each. ${FLY_WORDS}, and again to land. ${FRIEND_WORDS} (on a computer, click them). While flying you go where the view points: look up and walk forward to climb, look down to descend (on a keyboard: WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down, or hold the left mouse button on the world and drag to look around, T or a double-press of space to fly, and N to open the nearest product's card).`;
+  addLine(`${WALK_WORDS} (drag further to run)`);
+  addLine(LOOK_WORDS);
+  addLine(`${FLY_WORDS}, and again to land`);
+  addLine('While flying you go where the view points: look up and walk forward to climb, look down to descend');
+  addLine(`${FRIEND_WORDS} (on a computer, click them)`);
+  addLine('On a keyboard', true);
+  addLine('WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down');
+  addLine('Hold the left mouse button on the world and drag to look around');
+  addLine('T or a double-press of space to fly, N to open the nearest product\'s card');
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
@@ -848,7 +868,7 @@ function renderMyAvatarsField(onEquipped) {
       list.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load your avatars.';
+      errNote.textContent = err.message || 'Couldn\'t load your avatars.';
       list.appendChild(errNote);
       field.hidden = false;
       return;
@@ -902,7 +922,7 @@ function renderMyAvatarsField(onEquipped) {
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
-          showNotice({ title: 'Could not equip this avatar', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t equip this avatar', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -924,7 +944,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Could not load more avatars', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more avatars', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });
@@ -984,7 +1004,7 @@ function renderMyAnimationsField() {
       list.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
-      errNote.textContent = err.message || 'Could not load your animations.';
+      errNote.textContent = err.message || 'Couldn\'t load your animations.';
       list.appendChild(errNote);
       field.hidden = false;
       return;
@@ -1041,7 +1061,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          showNotice({ title: 'Could not apply this animation', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t apply this animation', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -1063,7 +1083,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Could not load more animations', message: err.message || 'Please try again.' });
+          showNotice({ title: 'Couldn\'t load more animations', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });

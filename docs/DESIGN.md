@@ -384,6 +384,37 @@ other way round.
 sentence, and whether it says what to do next. Add a check here when one can be written without
 false alarms.
 
+## Things said out of turn
+
+Something the app says to a person that they did not just ask for (it worked, it was refused, it
+failed) is said in one of three places, never as a toast floating over the world and never in a
+browser dialog (#3889; the table of what existed is in the first comment on that issue).
+
+- **(a) At the thing it is about.** A card says it about its own product; the Build selection status
+  sits under the item it is about; a reversal plays where the thing was (the orb's grey puff).
+  Planned, not built yet: the purchase result, which carries a one-time delivery link and so has to
+  be read and kept, is said on the product card it came from, with the link in selectable text, and
+  stays until the person closes the card.
+- **(b) In the leaf or the modal, by the control that was used.** `showInlineActionStatus`
+  (`src/ui/inlineActionStatus.js`) or the sheet's own status line. A confirmation of something done in
+  a leaf ("Report sent") belongs here, not over the world.
+- **(c) A word beside the head that opens to the full sentence.** `sayAtHead` / `clearSaying`
+  (`src/ui/headSaying.js`) over `setBudWord` and `openLeaf`. For something true of the whole app that
+  has no control or thing to say it at: "Graphics paused", "Offline", "Orb limit".
+
+Rules for all three. A **success** may fade by itself (a plain word, no door). A **refusal or failure**
+stays until its sentence has been read: `readOnce` clears the word when its leaf is closed, and the
+text is ordinary selectable text, with no Copy button (AGENTS.md, "Any text a user can read, they can
+copy"). A message that limits something says the limit and when it lifts, with the numbers from the
+server's reply, never a copy of them in the client. Two words at once do not stack on the world: the
+latest is worn, and the earlier one shows again when it is read. Remove the old message in the same
+change that moves it ("One model, not a hybrid").
+
+**Still on the old notice modal** (`showNotice`, `src/ui/noticeModal.js`): about two dozen call sites in
+Shop checkout, avatar and animation equipping, nearby chat and voice reports, Build's metadata
+modals and save failures, and the shared picker. They are being moved onto (a) and (b) one mode at a
+time; do not copy the modal for new messages.
+
 ## Never
 
 - A heavy or dark panel, a black or near-black surface, a thick border.

@@ -296,7 +296,7 @@ export async function enterLayoutPreviewMode() {
     setActiveCatalog(catalog);
     layout = loadedLayout;
   } catch (err) {
-    layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
+    layoutPreviewNameEl.textContent = err.message || 'Couldn\'t load this saved layout.';
     return;
   }
   layoutPreviewNameEl.textContent = layout.name;

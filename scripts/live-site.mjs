@@ -367,6 +367,12 @@ async function ensureMenuOpen() {
   // A press that lands while the petals are still folding back after a mode loads can be swallowed,
   // so a second press is made before giving up.
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    // A first press that opened the menu late (a long frame on a slow machine) must not be answered with a
+    // second press, which would close it again: look once more before pressing twice.
+    if (attempt === 2 && await menuIsOpen()) {
+      await page.waitForTimeout(600);
+      return;
+    }
     await press(await controlOrFail('#account-menu-toggle', 'the menu button'));
     const opened = await page.waitForFunction(() => document.getElementById('account-menu-toggle')?.getAttribute('aria-expanded') === 'true', null, { timeout: attempt === 1 ? 4000 : CONTROL_WAIT_MS })
       .then(() => true, () => false);

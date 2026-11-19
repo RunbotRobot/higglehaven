@@ -185,7 +185,7 @@ motion, not the only way to move. Other people see the same.
 
 **If something goes wrong:**
 - "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
-- A message says it could not equip the avatar: read it out; try once more, then offer to pass it to the team.
+- A message says it couldn't equip the avatar: read it out; try once more, then offer to pass it to the team.
 - An animation that does not suit the avatar is marked as not matching: the app says so next to it. Read that note out rather than guessing.
 
 ```controls any
@@ -202,7 +202,7 @@ motion, not the only way to move. Other people see the same.
 **You will see:** the app says "Thanks! Your feedback was submitted." and the window closes by itself.
 
 **If something goes wrong:**
-- It says it could not send: read the words out and ask them to try again in a minute.
+- It says it couldn't send: read the words out and ask them to try again in a minute.
 - They would rather talk it through: they can also leave a message here in the assistant window, and the assistant can pass it to the team.
 
 ```controls any
@@ -481,33 +481,34 @@ the card does not offer it.
 ### What are the glowing orbs, and what if I hit the limit?
 
 1. Glowing orbs float around the world. Walk or fly into one to collect it.
-2. The screen says "You collected a free model-generation credit!". Credits are free
-   and are used when you make a model from a picture or a description in Build.
-3. There is a limit on how many you can collect in a short time. When you reach it,
-   a notice says how many you can collect and in how long you can collect more, for
-   example "You can collect up to 20 orbs every 15 minutes. Try again in about 7
-   minutes." The numbers can change, so go by what your own screen says.
+2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a moment
+   and goes by itself. Credits are free and are used when you make a model from a picture or a
+   description in Build.
+3. There is a limit on how many you can collect in a short time. When you reach it, the word
+   "Orb limit" shows beside the logo. Tap it to read how many you can collect and in how long you
+   can collect more, for example "You can collect up to 20 orbs every 15 minutes. Try again in
+   about 7 minutes." The numbers can change, so go by what your own screen says.
 
-**You will see:** a short note when you collect an orb, and a notice with a cross at
-its corner when you reach the limit.
+**You will see:** a short word beside the round logo when you collect an orb, and, when you reach
+the limit, the word "Orb limit" that stays until you have opened it and closed it again.
 
 **If something goes wrong:**
-- "Someone else collected that orb just before you." Another person got there first.
-  Try the next orb.
-- "Can't collect orbs right now — you appear to be offline." Their connection has
-  dropped. Ask them to check it and try again.
-- Tap the small cross on a notice to dismiss it.
+- "Orb missed" beside the logo: tap it to read why. Usually "Someone else collected that orb just
+  before you." Another person got there first. Try the next orb.
+- "Offline" beside the logo: tap it. "Can't collect orbs right now. You appear to be offline."
+  Their connection has dropped. Ask them to check it and try again.
+- To dismiss one of these, tap its word to open it, then tap the small cross at the top right of
+  what opened.
 
 ```controls any
-#shop-credit-orb-toast | You collected a free model-generation credit!
-#shop-credit-orb-offline-notice .shop-notice-text | Can't collect orbs right now
-#shop-credit-orb-rate-limit-notice .shop-notice-text | limit
-#shop-credit-orb-problem-notice .shop-notice-text | Someone else collected that orb
+#account-menu-toggle | Account menu
 ```
 
 ### How do I chat with people nearby?
 
-1. Tap the round logo at the top left (the bud), then tap "Chat". A small chat box opens.
+1. Tap the round logo at the top left (the bud), then tap the "Shop" petal (it opens Shop's own
+   menu; "Chat" is in it, not in the general menu), then tap "Chat". A small chat box opens
+   with a cross at its top right to close it.
 2. Type in the box that says "Say something nearby…" and tap "Send".
 3. People close to you see it. Their messages show in the same box.
 4. If you have muted someone, "Muted" with a number shows above the box. Tap it to
@@ -533,8 +534,8 @@ appear in the same box. With nobody having spoken yet the box says: Nobody has s
 
 ### How do I talk to people nearby by voice?
 
-1. Tap the round logo at the top left (the bud), tap "Chat", and tap the microphone
-   button in the box that opens. Its label reads "Unmute microphone" while you are
+1. Tap the round logo at the top left (the bud), tap the "Shop" petal, tap "Chat", and tap the
+   microphone button in the box that opens. Its label reads "Unmute microphone" while you are
    muted.
 2. Your phone asks for permission to use the microphone. Allow it.
 3. The button shows what your microphone is doing right now. Tap it again to mute
@@ -1036,6 +1037,10 @@ price and stock. The original maker's listing is not changed.
 4. To change its price, tap "More settings" on the product, then "Edit Price", type the new
    price and tap "Save Price". The other "Edit" lines (size, shipping, returns) are under
    "More settings" too and work the same way: open it, change it, tap its own Save button.
+5. To change how many are in stock, tap the product in your showroom. A small card opens
+   beside it showing its price and its stock ("No limit on stock", "3 in stock" or "Sold out").
+   Tap "Stock" on that card, type how many you have left (a whole number, 0 or more) and
+   tap "Save". Leave the box blank for no limit; 0 marks it sold out.
 
 **You will see:** the new name or price on the product straight away, and the word
 "Saved." beside the button.
@@ -1044,6 +1049,8 @@ price and stock. The original maker's listing is not changed.
 - "You already have another product named ... Rename anyway?" You can keep the
   name or choose another.
 - A price above the limit is refused with a message naming the limit.
+- "Stock must be a whole number of 0 or more, or left blank for no limit." Type digits
+  only, or clear the box.
 - Something changed does not show up: close "My products" and open it again with
   the round logo at the top left, the Sell petal, then "My products"; if it is still wrong, ask
   what they see and offer to pass it on.

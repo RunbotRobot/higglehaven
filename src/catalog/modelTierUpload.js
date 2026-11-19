@@ -42,7 +42,7 @@ const defaultDeps = {
   upload: uploadModelFile,
   fetchBlob: async (url) => {
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`Could not read ${url}`);
+    if (!response.ok) throw new Error(`Couldn't read ${url}`);
     return response.blob();
   },
 };

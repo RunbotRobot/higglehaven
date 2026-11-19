@@ -212,7 +212,7 @@ export async function handleLandletVersions(request, db, route, url) {
   if (request.method === 'POST' && route.length === 3) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // #1721: reusing version_id itself as the dedup key, same idiom as
@@ -284,7 +284,7 @@ export async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (results[0].meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
 
     const version = await getVersion(db, landletId, versionId);
@@ -293,7 +293,7 @@ export async function handleLandletVersions(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 4) {
     const version = await getVersion(db, landletId, route[3]);
-    if (!version) return json({ error: 'Landlet version not found' }, 404);
+    if (!version) return json({ error: 'Lándlet version not found' }, 404);
     const { results } = await db.prepare(`
       SELECT * FROM version_instances WHERE version_id = ? ORDER BY source_instance_id
     `).bind(route[3]).all();
@@ -303,10 +303,10 @@ export async function handleLandletVersions(request, db, route, url) {
   if (request.method === 'POST' && route.length === 5 && route[4] === 'activate') {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const version = await getVersion(db, landletId, route[3]);
-    if (!version) return json({ error: 'Landlet version not found' }, 404);
+    if (!version) return json({ error: 'Lándlet version not found' }, 404);
     // #415: re-pins owner_builder_id, the same way the hardened /landlets/:id
     // PUT/PATCH guard does — without it, an auction resolving (transferring
     // ownership) in the await gap between the ownership check above and
@@ -317,7 +317,7 @@ export async function handleLandletVersions(request, db, route, url) {
       WHERE landlet_id = ? AND owner_builder_id IS ?
     `).bind(route[3], landletId, landlet.owner_builder_id).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #3417: what far view draws for this landlet just changed.
     await invalidateFarPlacementsAt(landlet.center_x_m, landlet.center_y_m);
@@ -385,7 +385,7 @@ export async function handleLandletLevels(request, db, route) {
   if (request.method === 'POST' && route.length === 3) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-level-add:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.direction !== 'up' && input.direction !== 'down') {
@@ -491,7 +491,7 @@ export async function handleLandletLevels(request, db, route) {
       landletId, landlet.owner_builder_id,
     ).run();
     if (inserted.meta.changes === 0) {
-      throw new HttpError('This landlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('This lándlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
@@ -503,14 +503,14 @@ export async function handleLandletLevels(request, db, route) {
     // above) -- a genuine race, not an uncaught levelFromRow(undefined)
     // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
     // to match this branch's own "changed -- please retry" message above.
-    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+    if (!row) throw new HttpError('This lándlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     return json({ level: levelFromRow(row) }, 201);
   }
 
   if (request.method === 'DELETE' && route.length === 4) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     const levelIndex = integerValue(route[3], 'levelIndex');
     if (levelIndex === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
@@ -581,7 +581,7 @@ export async function handleLandletLevels(request, db, route) {
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(landletId, levelIndex, levelIndex, landletId, landletId, landlet.owner_builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #2470: minZ/maxZ above were computed from the pre-DELETE snapshot
     // taken before the rate-limit check and the DELETE's own awaited
@@ -738,17 +738,17 @@ async function activeAuctionConflict(db, landletId) {
 
 async function explainClaimConflict(db, landletId, builderId) {
   const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
+  if (!landlet) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
-    throw new HttpError('Landlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
+    throw new HttpError('Lándlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
   }
   // #1703: a Class 2+ landlet (landlet_class > 1) is never free to claim --
   // only an auction win grants more than the free Class 1 starter size.
   if (landlet.landlet_class !== 1) {
-    throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
+    throw new HttpError('This lándlet is larger than the free starter size -- it can only be acquired via auction', 409);
   }
 
   const owned = await db.prepare(`
@@ -757,9 +757,9 @@ async function explainClaimConflict(db, landletId, builderId) {
       AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
     LIMIT 1
   `).bind(builderId).first();
-  if (owned) throw new HttpError('Builder already owns a claimed landlet', 409);
+  if (owned) throw new HttpError('Builder already owns a claimed lándlet', 409);
 
-  throw new HttpError('Landlet could not be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
+  throw new HttpError('That lándlet couldn\'t be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
 }
 
 function landletParams(landlet) {
@@ -803,7 +803,7 @@ export async function handleLandlets(request, db, route, url) {
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
-      throw new HttpError('Landlet is not currently generating', 409);
+      throw new HttpError('Lándlet is not currently generating', 409);
     }
 
     // #1055: "is this enclosed" used to be decided from a settings.radius_m
@@ -897,7 +897,7 @@ export async function handleLandlets(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    return row ? json({ landlet: landletFromRow(row) }) : json({ error: 'Landlet not found' }, 404);
+    return row ? json({ landlet: landletFromRow(row) }) : json({ error: 'Lándlet not found' }, 404);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'claim') {
@@ -987,13 +987,13 @@ export async function handleLandlets(request, db, route, url) {
     await checkRateLimit(db, `landlet-reassign-owner:${admin.user_id}`, LANDLET_REASSIGN_OWNER_RATE_LIMIT_MAX);
     const existing = await requireLandlet(db, route[1]);
     if (existing.status !== 'claimed' || existing.owner_builder_id === null) {
-      throw new HttpError('Landlet is not currently claimed -- use POST .../claim instead', 409);
+      throw new HttpError('Lándlet is not currently claimed -- use POST .../claim instead', 409);
     }
     const input = await readJson(request);
     const newOwnerBuilderId = stringValue(input.ownerBuilderId, 'ownerBuilderId');
     await requireBuilder(db, newOwnerBuilderId);
     if (newOwnerBuilderId === existing.owner_builder_id) {
-      throw new HttpError('Landlet is already owned by this builder', 409);
+      throw new HttpError('Lándlet is already owned by this builder', 409);
     }
     // #1711 (owner decision, 2026-10-13): "surface the conflict to the
     // admin at reassignment time instead of letting it resolve silently
@@ -1007,7 +1007,7 @@ export async function handleLandlets(request, db, route, url) {
     const auctionConflict = await activeAuctionConflict(db, route[1]);
     if (auctionConflict && !cancelActiveAuction) {
       throw new HttpError(
-        'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+        'Lándlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
         + 'to cancel it and reassign in one step',
         409,
         auctionConflict.extra,
@@ -1085,27 +1085,27 @@ export async function handleLandlets(request, db, route, url) {
     if (result.meta.changes === 0) {
       const current = await requireLandlet(db, route[1]);
       if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+        throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       const oneClaimedConflict = await db.prepare(`
         SELECT 1 FROM landlets AS owned WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
           AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
       `).bind(newOwnerBuilderId).first();
       if (oneClaimedConflict) {
-        throw new HttpError('Target builder already owns a claimed landlet', 409);
+        throw new HttpError('Target builder already owns a claimed lándlet', 409);
       }
       if (!cancelActiveAuction) {
         const raceConflict = await activeAuctionConflict(db, route[1]);
         if (raceConflict) {
           throw new HttpError(
-            'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+            'Lándlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
             + 'to cancel it and reassign in one step',
             409,
             raceConflict.extra,
           );
         }
       }
-      throw new HttpError("Target builder's land cap can't cover this landlet", 409);
+      throw new HttpError("Target builder's land cap can't cover this lándlet", 409);
     }
     // #1711: re-read live, now that the transfer above is confirmed,
     // rather than reusing the pre-check's auctionConflict -- that read is
@@ -1208,7 +1208,7 @@ export async function handleLandlets(request, db, route, url) {
     let sessionBuilder = null;
     if (landlet.ownerBuilderId !== null) {
       sessionBuilder = await requireSessionBuilder(request, db);
-      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a lándlet owned by yourself');
       // #799: an owner with any status other than 'claimed' would dodge
       // recomputeLandCap's own `status = 'claimed'` filter (a few hundred
       // lines up) while still passing every ownership check downstream
@@ -1217,7 +1217,7 @@ export async function handleLandlets(request, db, route, url) {
       // this invariant is enforced below for the unowned branch; this is
       // its "owner implies claimed" other half.
       if (landlet.status !== 'claimed') {
-        throw new HttpError('An owned landlet must have status "claimed"', 400);
+        throw new HttpError('An owned lándlet must have status "claimed"', 400);
       }
       // #825: this is the one path where a landlet's own `area_m2` is
       // fully client-controlled, yet `levelCapConsumedM2` bills vertical
@@ -1236,7 +1236,7 @@ export async function handleLandlets(request, db, route, url) {
       // stopped a caller from setting landClass itself to anything, self-
       // claiming a "larger" landlet class for free with no auction.
       if (landlet.landClass !== 1) {
-        throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
+        throw new HttpError('This lándlet is larger than the free starter size -- it can only be acquired via auction', 409);
       }
       await checkRateLimit(db, `landlet-self-claim-create:${sessionBuilder.builder_id}`, LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX);
     } else if (landlet.status === 'claimed') {
@@ -1249,7 +1249,7 @@ export async function handleLandlets(request, db, route, url) {
       // not eligible for DELETE's owned-land protection either) with no
       // way back. Unlike PUT/PATCH there's no existing row to silently pin
       // this back to, so this rejects outright instead.
-      throw new HttpError('A claimed landlet must have an ownerBuilderId', 400);
+      throw new HttpError('A claimed lándlet must have an ownerBuilderId', 400);
     } else {
       // #964: the self-claim branch above already rate-limits itself
       // (checkRateLimit a few lines up); this is the genuinely-unowned,
@@ -1280,14 +1280,14 @@ export async function handleLandlets(request, db, route, url) {
       sessionBuilder ? 1 : 0, landlet.ownerBuilderId,
     ).run();
     if (sessionBuilder && inserted.meta.changes === 0) {
-      throw new HttpError('You already own a claimed landlet', 409);
+      throw new HttpError('You already own a claimed lándlet', 409);
     }
     return json({ landlet }, 201);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Landlet not found' }, 404);
+    if (!existing) return json({ error: 'Lándlet not found' }, 404);
     // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
@@ -1302,7 +1302,7 @@ export async function handleLandlets(request, db, route, url) {
     // through that dedicated, invariant-checked endpoint now.
     if (existing.owner_builder_id !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
-      assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+      assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
       // #1150: this endpoint had no rate limit at all before "My Lands"
       // gave it a real, repeatable, owner-facing write affordance (rename)
       // — same bucketing convention as BUILDER_RENAME_RATE_LIMIT_MAX/
@@ -1418,14 +1418,14 @@ export async function handleLandlets(request, db, route, url) {
           .bind(landlet.name, route[1]).first();
         if (nameTaken) throw new HttpError('That land name is already taken — names must be unique across all of Higglehaven', 409);
       }
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     return json({ landlet });
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Landlet not found' }, 404);
+    if (!existing) return json({ error: 'Lándlet not found' }, 404);
     // Blocked outright once owned, for anyone — this raw DELETE has no
     // cascade for the owner's placed_instances/landlet_versions the way
     // DELETE /api/builders/:id's own release path does, so it would leave
@@ -1434,7 +1434,7 @@ export async function handleLandlets(request, db, route, url) {
     // inactivity/auction reclaim) — this endpoint stays for admin/test
     // cleanup of unowned (greenbelt/generating) rows only.
     if (existing.owner_builder_id !== null) {
-      throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
+      throw new HttpError('Cannot delete an owned lándlet directly — release it via its builder instead', 409);
     }
     // #1794: same unauthenticated-flood guard as this handler's own
     // create/#964 and unowned-patch/#1476 branches.
@@ -1445,7 +1445,7 @@ export async function handleLandlets(request, db, route, url) {
     // above this now also closes.
     const result = await db.prepare('DELETE FROM landlets WHERE landlet_id = ? AND owner_builder_id IS NULL').bind(route[1]).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
+      throw new HttpError('Cannot delete an owned lándlet directly — release it via its builder instead', 409);
     }
     return json({ deleted: true });
   }
@@ -1461,7 +1461,7 @@ export async function handleLiveLandlet(db, landletId) {
   }
 
   const version = await getVersion(db, landletId, landlet.activeVersionId);
-  if (!version) throw new HttpError('Active landlet version not found', 500, { code: ERROR_CODES.INTERNAL_ERROR });
+  if (!version) throw new HttpError('Active lándlet version not found', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   // #3033: this is the shopper-facing read, and a published version is a
   // frozen copy that #2986's removal of a suspended seller's placed
   // instances never touches (it only deletes the builder's draft rows) --
@@ -1524,7 +1524,7 @@ export async function handleLandletDraft(request, db, landletId) {
     // has to be "does the target landlet's own owner match the session,"
     // there's nothing else to compare against.
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your lándlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
@@ -1735,7 +1735,7 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (batchResults[0].meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #1695: same #1022/#1675 cleanup, the third call site sharing this
     // upsert's own is_community_sign/is_community_calendar flip --

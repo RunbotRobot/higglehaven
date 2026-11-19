@@ -38,6 +38,22 @@ describe('sayAtHead (#3889)', () => {
   });
 });
 
+describe('readOnce (#3889)', () => {
+  it('clears the word when its leaf is closed, and keeps it otherwise', () => {
+    sayAtHead('orb-limit', { word: 'Orb limit', title: 'Orb limit reached', message: 'x', readOnce: true });
+    bud.setBudWord.mock.calls[0][2].open();
+    const leaf = bud.openLeaf.mock.calls[0][0];
+    expect(bud.clearBudWord).not.toHaveBeenCalled();
+    leaf.onClose();
+    expect(bud.clearBudWord).toHaveBeenCalledWith('orb-limit');
+
+    bud.openLeaf.mockClear();
+    sayAtHead('connection', { word: 'Offline', title: 'No connection', message: 'x' });
+    bud.setBudWord.mock.calls[1][2].open();
+    expect(bud.openLeaf.mock.calls[0][0].onClose).toBeNull();
+  });
+});
+
 describe('clearSaying (#3889)', () => {
   it('clears the word, and closes the leaf only if it is the one showing this saying', () => {
     bud.currentLeafId.mockReturnValue('saying-connection');

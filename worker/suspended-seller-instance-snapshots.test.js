@@ -371,10 +371,10 @@ describe('Builders are told when a suspended seller\'s items leave or return (#3
     await suspend(seller.email);
     const afterRemoval = await messagesFor(builderA);
     expect(afterRemoval.filter((m) => m.includes('currently suspended'))).toEqual([
-      '2 items from a seller who is currently suspended were taken off your lándlet. They are saved under Removed Items and will return if the suspension is lifted.',
+      '2 items from a seller who is currently suspended were taken off your lándlet. They are saved under Removed items and will return if the suspension is lifted.',
     ]);
     expect((await messagesFor(builderB)).filter((m) => m.includes('currently suspended'))).toEqual([
-      '1 item from a seller who is currently suspended was taken off your lándlet. It is saved under Removed Items and will return if the suspension is lifted.',
+      '1 item from a seller who is currently suspended was taken off your lándlet. It is saved under Removed items and will return if the suspension is lifted.',
     ]);
 
     await unsuspend(seller.email);

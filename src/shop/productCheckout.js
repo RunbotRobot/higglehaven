@@ -270,7 +270,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         }
       };
     }).catch((err) => {
-      checkoutStatusEl.textContent = err.message || 'Could not load Stripe.';
+      checkoutStatusEl.textContent = err.message || 'Couldn\'t load Stripe.';
       checkoutStatusEl.classList.add('error');
     });
   });
@@ -368,7 +368,7 @@ export async function handleShopProductBuyClick() {
     if (err.message !== 'Checkout cancelled.') {
       await showNotice({
         title: "Purchase didn't go through",
-        message: err.message || 'Could not complete this purchase.',
+        message: err.message || 'Couldn\'t complete this purchase.',
         returnFocusEl: productCardBuyButton(),
       });
     }

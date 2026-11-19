@@ -1312,7 +1312,7 @@ describe('Landlet levels', () => {
 
       const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
       expect(deleted.response.status).toBe(409);
-      expect(deleted.body.error).toMatch(/referenced by a landlet's version history/);
+      expect(deleted.body.error).toMatch(/referenced by a lándlet's version history/);
       expect(deleted.body.error).not.toMatch(/still in use/);
     });
 
@@ -1330,7 +1330,7 @@ describe('Landlet levels', () => {
 
       const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
       expect(deleted.response.status).toBe(409);
-      expect(deleted.body.error).toMatch(/still placed on a landlet/);
+      expect(deleted.body.error).toMatch(/still placed on a lándlet/);
       expect(deleted.body.error).not.toMatch(/still in use/);
       // #3111: names the product, never the raw template id.
       expect(deleted.body.error).toContain('"Test template template-1706-placed"');
@@ -1897,7 +1897,7 @@ describe('Landlet levels', () => {
         }),
       }));
       expect(tooBigForLandlet.response.status).toBe(400);
-      expect(tooBigForLandlet.body.error).toMatch(/extends outside landlet/);
+      expect(tooBigForLandlet.body.error).toMatch(/extends outside lándlet/);
     });
 
     it('rejects an instance scale far outside the legacy Resize gizmo\'s range', async () => {

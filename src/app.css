@@ -593,88 +593,9 @@
         user-select: text;
         -webkit-user-select: text;
       }
-      #shop-credit-orb-toast {
-        position: fixed;
-        z-index: 16;
-        bottom: 280px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: var(--space-sm) var(--space-2xl);
-        border-radius: var(--radius-md);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity var(--motion-fade);
-      }
-      #shop-credit-orb-toast.visible {
-        opacity: 1;
-        /* #3303: readable text is selectable while it is shown; the hidden
-           (opacity 0) state stays click-through so it never blocks a tap. */
-        pointer-events: auto;
-        user-select: text;
-        -webkit-user-select: text;
-      }
-      /* #2447: unlike #shop-credit-orb-toast just above (a one-shot,
-         auto-hiding confirmation), this stays up for as long as collection
-         keeps failing without a real server response -- "offline", not a
-         momentary blip -- and clears the moment a request succeeds again,
-         so it's shown/hidden directly rather than on an auto-hide timer.
-         Stacked one slot above the toast per that comment's own stacking
-         idiom, so a success toast firing right as connectivity returns
-         doesn't collide with this notice fading out. */
-      /* Reported directly by a player ("It won't let me collect more
-         orbs!") -- a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX used to
-         leave the orb in place with no explanation at all. Auto-hides on
-         its own timer (presenceAndContent.js's showCreditOrbRateLimitNotice)
-         rather than the offline-notice's shown/hidden-directly shape, since
-         the cooldown it's timed to is a known, fixed duration rather than
-         "until a request finally succeeds." Stacked one slot above the
-         offline notice per its own stacking idiom. */
-      /* #3392: a collect the server refused after the orb had already popped
-         (someone else got it first, or it could not be confirmed); stays until
-         dismissed, like the other orb notices. One slot above the rate-limit notice. */
-      /* #3441: one bottom-anchored stack for the orb notices (offline, limit,
-         problem). They used to sit in separate fixed slots 50px apart, so a
-         notice taller than one line covered the slot above it and an older
-         message could be hidden by a newer one. In the stack each takes its own
-         height, the one raised last has the highest `order` and sits nearest the
-         controls (set in presenceAndContent.js), and a notice that is not shown
-         takes no room. Text stays selectable (#3303); each dismissible one keeps
-         its x in its upper-right corner (.shop-notice-dismiss-btn). */
-      #shop-notice-stack {
-        position: fixed;
-        z-index: 16;
-        bottom: 330px;
-        left: 50%;
-        transform: translateX(-50%);
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
-        align-items: center;
-        gap: var(--space-sm);
-        max-width: 90vw;
-        pointer-events: none;
-      }
-      #shop-notice-stack .shop-notice {
-        position: relative;
-        width: max-content;
-        max-width: 90vw;
-        box-sizing: border-box;
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: var(--space-sm) var(--space-2xl);
-        border-radius: var(--radius-md);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
-        pointer-events: auto;
-        user-select: text;
-        -webkit-user-select: text;
-      }
-      #shop-notice-stack .shop-notice:not(.visible) {
-        display: none;
-      }
-      /* #3335 / #3377: one layout for every notice (orb notices, the Build
+      /* #3889: the orb messages are words beside the head (src/ui/headSaying.js), so the toast and the
+         stack they used to stand in are gone. */
+      /* #3335 / #3377: one layout for every notice (the Build
          selection-action status). A notice that can be dismissed carries its x
          in the upper-right corner, on the first line of the text, as a dismiss
          control normally sits; the text keeps the width except the room the x
@@ -1146,9 +1067,18 @@
         animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
         transform-origin: 0 0;
       }
+      /* #3876: a closing leaf (src/ui/bud.js foldLeafAway) plays its unfold backwards and is gone; it cannot be
+         tapped and takes no focus. With reduced motion it only fades. */
+      .bud-leaf.bud-leaf-folding {
+        pointer-events: none;
+        animation: bud-unfold var(--motion-fold) var(--ease-fold) reverse both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .bud-leaf.bud-leaf-folding { animation: bud-fade var(--motion-reduced) linear reverse both; }
+      }
       .bud-leaf h2 { margin: 0 40px var(--space-sm) 0; font-size: 18px; font-weight: 600; }
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
-      .bud-leaf-close {
+      .bud-leaf-close, .bud-leaf-close-ghost {
         position: absolute;
         top: 4px;
         right: 6px;
@@ -4889,6 +4819,18 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
+      .settings-gesture-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .settings-gesture-heading {
+        margin-top: 6px;
+        font-weight: 600;
+      }
       .settings-empty-note.error {
         color: var(--danger-text);
       }
@@ -6586,7 +6528,8 @@
       #item-card-actions button,
       #item-card-more button,
       #seller-product-card-actions button,
-      #seller-product-card-price-edit button {
+      #seller-product-card-price-edit button,
+      #seller-product-card-stock-edit button {
         padding: var(--space-xs) var(--space-lg);
         min-height: 32px;
         border: none;
@@ -6600,7 +6543,8 @@
       #item-card-actions button:disabled,
       #item-card-more button:disabled,
       #seller-product-card-actions button:disabled,
-      #seller-product-card-price-edit button:disabled {
+      #seller-product-card-price-edit button:disabled,
+      #seller-product-card-stock-edit button:disabled {
         opacity: 0.5;
       }
       #item-card-actions button.active,
@@ -6756,23 +6700,27 @@
         padding: var(--space-xs) var(--space-md);
         white-space: nowrap;
       }
-      #seller-product-card-price {
+      #seller-product-card-price,
+      #seller-product-card-stock {
         color: var(--pill-text-soft);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #seller-product-card-actions button.danger {
         color: var(--danger);
       }
-      #seller-product-card-price-edit {
+      #seller-product-card-price-edit,
+      #seller-product-card-stock-edit {
         display: flex;
         gap: var(--space-sm);
         align-items: center;
         margin-top: var(--space-sm);
       }
-      #seller-product-card-price-edit[hidden] {
+      #seller-product-card-price-edit[hidden],
+      #seller-product-card-stock-edit[hidden] {
         display: none;
       }
-      #seller-product-card-price-input {
+      #seller-product-card-price-input,
+      #seller-product-card-stock-input {
         flex: 1;
         min-width: 0;
         padding: var(--space-xs) var(--space-lg);
@@ -6781,6 +6729,14 @@
         background: rgb(var(--white-rgb) / 0.7);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      #seller-product-card-stock-hint {
+        margin-top: var(--space-xs);
+        color: var(--pill-text-soft);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+      }
+      #seller-product-card-stock-hint[hidden] {
+        display: none;
       }
       #seller-product-card-status {
         margin-top: var(--space-xs);

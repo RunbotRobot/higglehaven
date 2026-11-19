@@ -18,7 +18,7 @@
 // long as the shopper stood in range. Extended this same repro to also
 // confirm the rate-limit notice shows and the retry storm actually stops
 // for a cooldown.
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budNoteText, budWordText, readSaying, closeSaying } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Rate Limit Tester';
 const LANDLET_ID = `credit-orb-ratelimit-e2e-${Date.now()}`;
@@ -108,11 +108,13 @@ await page.evaluate(([x, y]) => {
 // directly (not a fixed wait then a one-shot check) since the real
 // in-game attempt's own 429 can legitimately take a couple of RAF frames
 // to land, same "poll for the real end state" idiom as waitForText.
-const rateLimitNoticeVisible = await page.waitForSelector('#shop-credit-orb-rate-limit-notice.visible', { timeout: 5000 })
-  .then(() => true).catch(() => false);
+const rateLimitNoticeVisible = await page.waitForFunction(() => {
+  const n = document.getElementById('bud-note');
+  return n && !n.hidden && n.textContent.trim() === 'Orb limit';
+}, null, { timeout: 5000 }).then(() => true).catch(() => false);
 console.log('rate-limit notice shown after the 429 (should be true):', rateLimitNoticeVisible);
 
-const toastVisible = await page.isVisible('#shop-credit-orb-toast.visible');
+const toastVisible = (await budWordText(page)) === 'Credit +1';
 console.log('no collect-confirmation toast shown (should be true, the 429 never succeeded):', !toastVisible);
 
 const activeAfterFailedCollect = await page.evaluate(() => window.__testActiveCreditOrbIds());
@@ -146,23 +148,25 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [orbWorldX + 400, orbWorldY + 400]);
 await page.waitForTimeout(31000);
-const noticeStillVisible = await page.isVisible('#shop-credit-orb-rate-limit-notice.visible');
+const noticeStillVisible = (await budNoteText(page)) === 'Orb limit';
 console.log('rate-limit notice still shown after the old 30s auto-hide (should be true):', noticeStillVisible);
+// #3889: the sentence is read in the leaf the word opens.
+await readSaying(page, 'orb-limit');
 const noticeStyle = await page.evaluate(() => {
-  const style = getComputedStyle(document.getElementById('shop-credit-orb-rate-limit-notice'));
+  const style = getComputedStyle(document.querySelector('#bud-leaf-saying-orb-limit .bud-leaf-body p'));
   return { pointerEvents: style.pointerEvents, userSelect: style.userSelect };
 });
 const noticeSelectable = noticeStyle.pointerEvents !== 'none' && noticeStyle.userSelect !== 'none';
-console.log('rate-limit notice is selectable while shown (should be true):', noticeSelectable, noticeStyle);
-await page.locator('#shop-credit-orb-rate-limit-notice .shop-notice-text').click({ clickCount: 3 });
+console.log('rate-limit sentence is selectable while shown (should be true):', noticeSelectable, noticeStyle);
+await page.locator('#bud-leaf-saying-orb-limit .bud-leaf-body p').click({ clickCount: 3 });
 const selectedNotice = await page.evaluate(() => String(window.getSelection()).trim());
 const selectedOk = /orbs every/.test(selectedNotice) && /Try again/.test(selectedNotice);
 console.log('triple-click selects the notice text (should be true):', selectedOk, selectedNotice);
-const noCopyButton = (await page.locator('#shop-credit-orb-rate-limit-notice .shop-notice-copy-btn').count()) === 0;
+const noCopyButton = (await page.locator('#bud-leaf-saying-orb-limit .shop-notice-copy-btn').count()) === 0;
 console.log('the notice has no Copy button (should be true):', noCopyButton);
-await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-dismiss-btn');
+await closeSaying(page, 'orb-limit');
 await page.waitForTimeout(300);
-const noticeDismissed = !(await page.isVisible('#shop-credit-orb-rate-limit-notice.visible'));
+const noticeDismissed = (await budNoteText(page)) === '';
 console.log('dismissing hides the notice (should be true):', noticeDismissed);
 
 // The deliberate 404s/429s above are real, expected HTTP error responses --

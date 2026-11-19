@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { batchTierCounts } from './shop/batchTiers.js';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
 import { markStartup } from './ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from './ui/loadingStages.js';
@@ -868,14 +869,14 @@ saveBundleBtn.addEventListener('click', async () => {
         // primary, already-expected action, so a grouping failure doesn't
         // roll it back or block the success message, only appends to it.
         console.error('Bundle saved, but could not group its items:', groupErr);
-        statusMessage += ' (could not bundle the items in place)';
+        statusMessage += ' (couldn\'t bundle the items in place)';
       }
     }
     setProductInfo(statusMessage);
     setTimeout(updateSelectionUI, 1200);
   } catch (err) {
     console.error('Could not save bundle:', err);
-    setProductInfo(err.message || 'Could not save bundle.');
+    setProductInfo(err.message || 'Couldn\'t save bundle.');
   } finally {
     saveBundleBtn.disabled = false;
   }
@@ -1341,17 +1342,22 @@ window.__testShopDrawStats = () => {
   let batches = 0;
   let instancedMeshes = 0;
   let batchedPlacements = 0;
+  // #3403: how many batched placements are drawn from each version of their model right now; the
+  // three numbers sum to batchedPlacements.
+  const batchTiers = { full: 0, mid: 0, far: 0 };
   for (const entry of shopLandlets.values()) {
     batches += entry.batches.length;
     for (const batch of entry.batches) {
       instancedMeshes += batch.meshes.length;
       batchedPlacements += batch.handles.length;
+      const counts = batchTierCounts(batch);
+      for (const name of Object.keys(batchTiers)) batchTiers[name] += counts[name];
     }
   }
   const { render, memory } = renderer.info;
   return {
     drawCalls: render.calls, triangles: render.triangles,
-    batches, instancedMeshes, batchedPlacements,
+    batches, instancedMeshes, batchedPlacements, batchTiers,
     geometries: memory.geometries, textures: memory.textures,
   };
 };
@@ -1379,6 +1385,15 @@ window.__testShopCameraView = () => {
   return { x: camera.position.x, y: camera.position.y, z: camera.position.z, dx: direction.x, dy: direction.y, dz: direction.z };
 };
 window.__testShopTappedInstanceId = () => shopTappedProduct?.mesh.userData.instanceId ?? null;
+// #3403: e2e-only. Which version of its model a batched placement is drawn from right now
+// ('full', 'mid' or 'far'); null for a placement that is not in a batch.
+window.__testShopInstanceTier = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (object) return object.userData.batchTier ?? null;
+  }
+  return null;
+};
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;
   for (const entry of shopLandlets.values()) count += entry.objects.length;
@@ -1609,7 +1624,10 @@ renderer.domElement.addEventListener('click', (event) => {
   // as their review mesh; the batch's instanced meshes are what a tap can hit.
   const tapTargets = shopReviews.map((r) => r.mesh);
   for (const entry of shopLandlets.values()) {
-    for (const batch of entry.batches) tapTargets.push(...batch.meshes);
+    // #3403: a batch's placements may be drawn from its mid or far set, whose meshes a tap can hit too.
+    for (const batch of entry.batches) {
+      for (const tier of Object.values(batch.tiers ?? { full: { meshes: batch.meshes } })) tapTargets.push(...tier.meshes);
+    }
   }
   const hits = raycaster.intersectObjects(tapTargets, true);
   // #3447: an assistant standing in front of a product is what was tapped, so
@@ -1853,7 +1871,7 @@ export function loadStripeJs() {
     const script = document.createElement('script');
     script.src = 'https://js.stripe.com/v3/';
     script.onload = () => resolve(window.Stripe);
-    script.onerror = () => { stripeJsPromise = null; reject(new Error('Could not load Stripe.')); };
+    script.onerror = () => { stripeJsPromise = null; reject(new Error('Couldn\'t load Stripe.')); };
     document.head.appendChild(script);
   });
   return stripeJsPromise;
@@ -1869,7 +1887,7 @@ export function loadTurnstileJs() {
     const script = document.createElement('script');
     script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
     script.onload = () => resolve(window.turnstile);
-    script.onerror = () => { turnstileJsPromise = null; reject(new Error('Could not load Turnstile.')); };
+    script.onerror = () => { turnstileJsPromise = null; reject(new Error('Couldn\'t load Turnstile.')); };
     document.head.appendChild(script);
   });
   return turnstileJsPromise;

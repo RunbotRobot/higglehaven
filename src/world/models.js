@@ -862,6 +862,35 @@ export async function loadFarViewSource(template) {
   return { container, parts };
 }
 
+// #3403: the drawable parts of a product's mid and far versions, for the level-of-detail sets of a
+// batch of identical placements (src/shop/batchTiers.js). Resolves to { mid, far }, each
+// { container, parts } or null where the product has no such version (or it cannot be drawn
+// instanced, e.g. skinned): that placement simply stays on the nearest version it has. The scenes
+// are the cached ones loadTierScenes prepares once per product; each gets one clone here that
+// owns the parts' materials for this batch, released with it.
+export async function loadBatchTierSources(template) {
+  const scenes = await loadTierScenes(template);
+  const out = { mid: null, far: null };
+  for (const name of ['mid', 'far']) {
+    const cached = scenes[name];
+    if (!cached) continue;
+    const container = instantiateScene(cached);
+    container.updateMatrixWorld(true);
+    const parts = [];
+    let drawable = true;
+    container.traverse((child) => {
+      if (child.isSkinnedMesh) drawable = false;
+      else if (child.isMesh) parts.push({ geometry: child.geometry, material: child.material, matrix: child.matrixWorld.clone() });
+    });
+    if (!drawable || parts.length === 0) {
+      disposeObject(container);
+      continue;
+    }
+    out[name] = { container, parts };
+  }
+  return out;
+}
+
 // #1359: material.dispose() releases the material's own WebGL program/
 // uniform resources but never the THREE.Texture instances it references
 // (map, normalMap, roughnessMap, ... — any PBR map a real uploaded GLTF/GLB

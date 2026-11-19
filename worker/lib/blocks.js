@@ -69,7 +69,7 @@ export async function handleBlocks(request, db, route) {
     const builderId = optionalId(input.builderId, 'builderId');
     if (!userId && !builderId) throw new HttpError('userId or builderId is required', 400);
     const targetUserId = await resolveTargetUserId(db, { userId, builderId });
-    if (!targetUserId) throw new HttpError('That person could not be found', 404);
+    if (!targetUserId) throw new HttpError('Couldn\'t find that person', 404);
     if (targetUserId === user.user_id) throw new HttpError("You can't block yourself", 400);
     // One atomic batch: the block row, and the silent severing of any
     // friendship or pending request between the two people. Friendships key on

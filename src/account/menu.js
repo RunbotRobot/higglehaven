@@ -232,7 +232,7 @@ async function renderNotifications() {
     page = await fetchNotifications();
   } catch (err) {
     if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
-    notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
+    notificationsEmptyEl.textContent = err.message || 'Couldn\'t load notices.';
     notificationsEmptyEl.hidden = false;
     return;
   }
@@ -304,7 +304,7 @@ notificationsClearReadBtn.addEventListener('click', async () => {
       try {
         await clearReadNotifications();
       } catch (err) {
-        throw new Error(err.message || 'Could not clear read notices.');
+        throw new Error(err.message || 'Couldn\'t clear read notices.');
       }
       await renderNotifications();
       await refreshNotificationsBadge();
@@ -398,7 +398,7 @@ async function refreshAccountMenuTaxNotice() {
     accountMenuTaxNoticeEl.classList.toggle('crossed', summary.noticeLevel === 'crossed');
     accountMenuTaxNoticeEl.hidden = false;
   } catch (err) {
-    console.warn('Could not refresh tax notice:', err);
+    console.warn('Couldn\'t refresh tax notice:', err);
     accountMenuTaxNoticeEl.hidden = true;
   }
 }
@@ -505,7 +505,7 @@ async function renderDmThread() {
     nextCursor = page.nextCursor;
   } catch (err) {
     if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
-    dmStatusEl.textContent = err.message || 'Could not load messages.';
+    dmStatusEl.textContent = err.message || 'Couldn\'t load messages.';
     dmStatusEl.classList.add('error');
     return;
   }
@@ -612,7 +612,7 @@ dmComposeForm.addEventListener('submit', async (event) => {
     dmComposeInput.value = '';
     await renderDmThread();
   } catch (err) {
-    dmStatusEl.textContent = err.message || 'Could not send this message.';
+    dmStatusEl.textContent = err.message || 'Couldn\'t send this message.';
     dmStatusEl.classList.add('error');
   } finally {
     dmSendBtn.disabled = false;
@@ -714,7 +714,7 @@ function renderFriendVoiceChannelStatus(channels, accepted) {
       await leaveFriendVoiceChannel(active.ownerBuilderId);
       await renderFriends();
     } catch (err) {
-      friendsStatusEl.textContent = err.message || 'Could not leave the voice channel.';
+      friendsStatusEl.textContent = err.message || 'Couldn\'t leave the voice channel.';
       friendsStatusEl.classList.add('error');
       leaveBtn.disabled = false;
     }
@@ -745,7 +745,7 @@ async function renderFriends() {
     friendships = await fetchFriendships();
   } catch (err) {
     if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
-    friendsStatusEl.textContent = err.message || 'Could not load friends.';
+    friendsStatusEl.textContent = err.message || 'Couldn\'t load friends.';
     friendsStatusEl.classList.add('error');
     return;
   }
@@ -793,7 +793,7 @@ async function renderFriends() {
         await renderFriends();
         await refreshFriendsBadge();
       } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not accept this friend request.';
+        friendsStatusEl.textContent = err.message || 'Couldn\'t accept this friend request.';
         friendsStatusEl.classList.add('error');
         acceptBtn.disabled = false;
       }
@@ -810,7 +810,7 @@ async function renderFriends() {
         await renderFriends();
         await refreshFriendsBadge();
       } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not decline this friend request.';
+        friendsStatusEl.textContent = err.message || 'Couldn\'t decline this friend request.';
         friendsStatusEl.classList.add('error');
         declineBtn.disabled = false;
       }
@@ -843,7 +843,7 @@ async function renderFriends() {
         await removeFriendship(friendship.friendshipId);
         await renderFriends();
       } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not cancel this friend request.';
+        friendsStatusEl.textContent = err.message || 'Couldn\'t cancel this friend request.';
         friendsStatusEl.classList.add('error');
         cancelBtn.disabled = false;
       }
@@ -905,7 +905,7 @@ async function renderFriends() {
             await leaveFriendVoiceChannel(friendship.otherBuilderId);
             await renderFriends();
           } catch (err) {
-            friendsStatusEl.textContent = err.message || 'Could not leave this voice channel.';
+            friendsStatusEl.textContent = err.message || 'Couldn\'t leave this voice channel.';
             friendsStatusEl.classList.add('error');
             leaveVoiceBtn.disabled = false;
           }
@@ -921,7 +921,7 @@ async function renderFriends() {
             await joinFriendVoiceChannel(friendship.otherBuilderId);
             await renderFriends();
           } catch (err) {
-            friendsStatusEl.textContent = err.message || 'Could not join this voice channel.';
+            friendsStatusEl.textContent = err.message || 'Couldn\'t join this voice channel.';
             friendsStatusEl.classList.add('error');
             joinVoiceBtn.disabled = false;
           }
@@ -947,7 +947,7 @@ async function renderFriends() {
           try {
             await removeFriendship(friendship.friendshipId);
           } catch (err) {
-            throw new Error(err.message || 'Could not remove this friend.');
+            throw new Error(err.message || 'Couldn\'t remove this friend.');
           }
         },
       });
@@ -1006,7 +1006,7 @@ async function renderBlockedPeople(myLoadToken) {
         await unblockPerson(block.userId);
         await renderFriends();
       } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not unblock this person.';
+        friendsStatusEl.textContent = err.message || 'Couldn\'t unblock this person.';
         friendsStatusEl.classList.add('error');
         unblockBtn.disabled = false;
       }
@@ -1047,7 +1047,7 @@ async function drawFriendsMap() {
   } catch (err) {
     if (myLoadToken !== friendsMapLoadToken) return; // superseded while loading — a newer call owns the map now
     console.warn('Could not load the friends map:', err);
-    friendsMapEmptyEl.textContent = err.message || 'Could not load the friends map.';
+    friendsMapEmptyEl.textContent = err.message || 'Couldn\'t load the friends map.';
     friendsMapEmptyEl.hidden = false;
     return;
   }
@@ -1218,7 +1218,7 @@ async function renderMyLands() {
   } catch (err) {
     if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
     myLandsListEl.innerHTML = '';
-    myLandsStatusEl.textContent = err.message || 'Could not load your lándlets.';
+    myLandsStatusEl.textContent = err.message || 'Couldn\'t load your lándlets.';
     myLandsStatusEl.classList.add('error');
     return;
   }
@@ -1274,7 +1274,7 @@ async function renderMyLands() {
         landlet.name = updated.name;
         openLink.textContent = landlet.name;
       } catch (err) {
-        myLandsStatusEl.textContent = err.message || 'Could not rename this lándlet.';
+        myLandsStatusEl.textContent = err.message || 'Couldn\'t rename this lándlet.';
         myLandsStatusEl.classList.add('error');
       } finally {
         renameBtn.disabled = false;
@@ -1336,7 +1336,7 @@ async function renderMyPurchases() {
     page = await fetchMyPurchases();
   } catch (err) {
     if (myLoadToken !== myPurchasesLoadToken) return;
-    showMyPurchasesMessage(err.message || 'Could not load your purchases.');
+    showMyPurchasesMessage(err.message || 'Couldn\'t load your purchases.');
     return;
   }
   if (myLoadToken !== myPurchasesLoadToken) return;
@@ -1425,7 +1425,7 @@ friendsAddBtn.addEventListener('click', async () => {
     friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
     await renderFriends();
   } catch (err) {
-    friendsStatusEl.textContent = err.message || 'Could not send friend request.';
+    friendsStatusEl.textContent = err.message || 'Couldn\'t send friend request.';
     friendsStatusEl.classList.add('error');
   } finally {
     friendsAddBtn.disabled = false;

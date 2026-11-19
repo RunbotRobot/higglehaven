@@ -49,23 +49,6 @@
     <button id="shop-last-location-btn" type="button">Go to last location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an event</button>
-    <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
-    <!-- #3441: the three orb notices share one stack so two shown at once are
-         both readable (each used to sit in its own fixed slot and a taller one
-         covered the slot above); the one raised last sits nearest the controls. -->
-    <div id="shop-notice-stack">
-    <div id="shop-credit-orb-offline-notice" class="shop-notice" role="status" aria-live="polite">
-      <span class="shop-notice-text">Can't collect orbs right now — you appear to be offline.</span>
-    </div>
-    <div id="shop-credit-orb-rate-limit-notice" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite">
-      <span class="shop-notice-text">You've reached the orb limit for now — try again in a bit.</span>
-      <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-    </div>
-    <div id="shop-credit-orb-problem-notice" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite">
-      <span class="shop-notice-text">Someone else collected that orb just before you.</span>
-      <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-    </div>
-    </div>
     <!-- #2779, #3556: the nearby text chat. It waits here, hidden, and the Chat petal of the
          flower (src/shop/nearbyChat.js) borrows it as a leaf while it is open and gives it back
          as it closes, so there is no pill on the world. Sending is gated on id_verified
@@ -932,9 +915,11 @@
     <div id="seller-product-card" class="world-card" role="region" aria-label="Your product" data-state="closed" hidden>
       <div id="seller-product-card-name"></div>
       <div id="seller-product-card-price"></div>
+      <div id="seller-product-card-stock"></div>
       <div id="seller-product-card-actions">
         <button id="seller-product-card-rename-btn" type="button">Rename</button>
         <button id="seller-product-card-price-btn" type="button" aria-expanded="false" aria-controls="seller-product-card-price-edit">Price</button>
+        <button id="seller-product-card-stock-btn" type="button" aria-expanded="false" aria-controls="seller-product-card-stock-edit">Stock</button>
         <button id="seller-product-card-delete-btn" type="button" class="danger">Delete</button>
         <button id="seller-product-card-more-btn" type="button">More</button>
       </div>
@@ -942,6 +927,11 @@
         <input id="seller-product-card-price-input" type="text" inputmode="decimal" autocomplete="off" aria-label="Price in dollars">
         <button id="seller-product-card-price-save-btn" type="button">Save</button>
       </div>
+      <div id="seller-product-card-stock-edit" hidden>
+        <input id="seller-product-card-stock-input" type="text" inputmode="numeric" autocomplete="off" aria-label="How many are in stock (blank for no limit)">
+        <button id="seller-product-card-stock-save-btn" type="button">Save</button>
+      </div>
+      <div id="seller-product-card-stock-hint" hidden>Leave it blank for no limit.</div>
       <div id="seller-product-card-status" role="status"></div>
       <button id="seller-product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>

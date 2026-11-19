@@ -54,13 +54,16 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
+import { setBudWord, clearBudWord } from '../ui/bud.js';
+import { sayAtHead, clearSaying } from '../ui/headSaying.js';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { createTierCrossfades } from './tierCrossfade.js';
-import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
+import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
@@ -102,10 +105,6 @@ import { rateLimitNoticeText } from '../rateLimitNotice.js';
 import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
-const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
-const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
-const shopCreditOrbRateLimitNoticeEl = document.getElementById('shop-credit-orb-rate-limit-notice');
-const shopCreditOrbProblemNoticeEl = document.getElementById('shop-credit-orb-problem-notice');
 export const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 
 // #1630: how many times pickShopSpawnLocation will reroll a candidate that
@@ -462,11 +461,46 @@ function lodApparentPx(entry, object) {
 }
 
 // #3373 / #3416: whether an item has reduced versions to switch between: a
-// placed model (not a box fallback, flooring, or the geometry-free handle of a
-// batched placement, none of which has a loaded model container) that is not
-// cropped to a per-placement shape (the versions are of the whole product).
+// placed model (not a box fallback or flooring, neither of which has a loaded model
+// container) that is not cropped to a per-placement shape (the versions are of
+// the whole product), or (#3403) a placement drawn by a batch, whose batch holds
+// the versions.
 function hasLodTiers(object) {
+  // #3403: a batched placement has no model of its own, but its batch has the versions.
+  if (object.userData.batch) return true;
   return Boolean(object.userData.model) && !extensibleAxes(object.userData.template);
+}
+
+// Where an item's versions are prepared: on the item itself, or (#3403) once for the whole batch of
+// identical placements it is drawn by.
+function lodTiersStateOf(object) {
+  const batch = object.userData.batch;
+  return batch ? batch.tiersState : object.userData.lodTiersState;
+}
+
+// #3403: a batch's mid and far sets are built once, when its first placement first needs a version
+// below full: the cached versions of the product are fetched or built, then one instanced mesh per
+// part of each is added (empty), inside the frame budget. A product with no reduced version leaves
+// the batch on its full set, as an item with none stays on its full model.
+function requestBatchTiers(entry, batch) {
+  batch.tiersState = 'loading';
+  const template = batch.handles[0]?.userData.template;
+  if (!template) { batch.tiersState = 'none'; return; }
+  loadBatchTierSources(template).then((sources) => {
+    const release = () => { for (const source of Object.values(sources)) if (source) disposeObject3D(source.container); };
+    worldWorkQueue.enqueue(() => {
+      if (!entry.batches.includes(batch)) { release(); batch.tiersState = 'none'; return; } // unloaded meanwhile
+      let added = false;
+      batch.tierContainers = [];
+      for (const name of ['mid', 'far']) {
+        if (!sources[name]) continue;
+        addBatchTier(batch, name, sources[name].parts);
+        batch.tierContainers.push(sources[name].container);
+        added = true;
+      }
+      batch.tiersState = added ? 'ready' : 'none';
+    }, { group: entry.loadGroup, priority: -(batch.handles[0]?.userData.lodPx ?? 0) });
+  }).catch(() => { batch.tiersState = 'none'; });
 }
 
 // #3416: an item's mid and far versions are fetched or built only once the
@@ -491,16 +525,17 @@ function requestInstanceTiers(entry, object) {
 // allows, the smallest on screen drop to mid, and past the mid budget to far.
 // Runs on the proximity tick (SHOP_PROXIMITY_INTERVAL_MS), so an item flips
 // within a fraction of a second of crossing a threshold. An item without
-// versions (a box fallback, flooring, a batched placement, a cropped item)
-// has nothing to switch.
+// versions (a box fallback, flooring, a cropped item) has nothing to switch.
+// #3403: a batched placement is decided here like any other, and "changes
+// version" by moving between its batch's instanced sets (src/shop/batchTiers.js).
 const lodItemsScratch = [];
 const lodObjectsScratch = [];
 const lodFlipScratch = []; // positions of the items due to change version this tick
 
 // #3443: the placed bundles of a loaded landlet that have more than one
 // member with versions to switch between, each with its bounding sphere, found once per change in the
-// landlet's object count (Shop items do not move). Members that are drawn by an
-// instanced batch have no versions and are not decided one by one at all.
+// landlet's object count (Shop items do not move). Members drawn by an instanced
+// batch (#3403) are members like any other: a bundle's bricks change detail together.
 function lodSetsFor(entry) {
   if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken) return entry.lodSets;
   const byGroup = new Map();
@@ -583,8 +618,11 @@ function updateInstanceLodTiers() {
     const { entry, object } = lodObjectsScratch[i];
     const tier = tiers[i];
     object.userData.lodTier = tier;
-    if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestInstanceTiers(entry, object);
-    if (object.userData.lodTiersState !== 'ready' || tier === object.userData.lodApplied) continue;
+    if (tier !== TIER_FULL && lodTiersStateOf(object) === undefined) {
+      if (object.userData.batch) requestBatchTiers(entry, object.userData.batch);
+      else requestInstanceTiers(entry, object);
+    }
+    if (lodTiersStateOf(object) !== 'ready' || tier === object.userData.lodApplied) continue;
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -597,7 +635,10 @@ function updateInstanceLodTiers() {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
     object.userData.lodApplied = tier;
-    setInstanceLodState(object, tier, tierCrossfades);
+    // #3403: a batched placement changes version by moving between the batch's instanced sets (an
+    // instant swap: the batch has no per-item children to dissolve between).
+    if (object.userData.batch) moveBatchHandle(object.userData.batch, object, tier);
+    else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
@@ -1509,6 +1550,18 @@ async function loadShopLandletInstances(entry, myToken) {
 // sit/lean search, attention and reviews see it like any placed item; only the
 // drawing is shared. A model that cannot be drawn this way falls back to
 // ordinary per-item meshes for the whole batch.
+// #3403: the version a batched placement should first be drawn from: the real model beside the
+// avatar, otherwise by how big it looks on screen (the same rule as every later tick, with no
+// history yet). The per-tick pass reconciles anything the full-detail budget or a bundle's size
+// changes from here.
+function initialBatchTier(entry, handle) {
+  const nearAvatar = isNearFullDetail(horizontalDistanceM(
+    entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
+    shopAvatarPosition.x, shopAvatarPosition.y,
+  ));
+  return nearAvatar ? TIER_FULL : nextTier(null, lodApparentPx(entry, handle));
+}
+
 async function buildAndAttachBatch(entry, members, myToken, group, run) {
   const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
   if (myToken !== entry.loadToken) { // superseded while queued
@@ -1534,14 +1587,53 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
     return;
   }
   const handles = members.map((instance) => createPlacementHandle(instance, template));
+  // #3403: a batch arrives drawn from the versions its first decision calls for (size on screen, the
+  // protected radius around the avatar), not at full detail for its first frames and then converted:
+  // a wall of a thousand bricks seen from afar was one draw of millions of triangles until its
+  // reduced versions loaded. The versions are fetched before anything is added to the scene.
+  const initialTiers = handles.map((handle) => initialBatchTier(entry, handle));
+  let tierSources = null;
+  if (initialTiers.some((tier) => tier !== TIER_FULL)) {
+    tierSources = await loadBatchTierSources(template).catch(() => null);
+    if (myToken !== entry.loadToken) { // superseded while the versions loaded
+      for (const tierSource of Object.values(tierSources ?? {})) if (tierSource) disposeObject3D(tierSource.container);
+      disposeObject3D(source.container);
+      window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+      settleAll();
+      return;
+    }
+  }
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
+  initBatchTiers(batch, source.parts);
+  for (const handle of handles) {
+    handle.userData.lodTier = TIER_FULL;
+    handle.userData.lodApplied = TIER_FULL;
+  }
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
   // removes the root.
   batch.root = new THREE.Group();
   for (const mesh of batch.meshes) batch.root.add(mesh);
+  if (tierSources) {
+    let added = false;
+    batch.tierContainers = [];
+    for (const name of ['mid', 'far']) {
+      if (!tierSources[name]) continue;
+      addBatchTier(batch, name, tierSources[name].parts);
+      batch.tierContainers.push(tierSources[name].container);
+      added = true;
+    }
+    batch.tiersState = added ? 'ready' : 'none';
+    if (added) {
+      const applied = partitionBatch(batch, initialTiers);
+      handles.forEach((handle, index) => {
+        handle.userData.lodTier = applied[index];
+        handle.userData.lodApplied = applied[index];
+      });
+    }
+  }
   entry.group.add(batch.root);
   entry.batches.push(batch);
   let topZ = -Infinity;
@@ -1939,7 +2031,7 @@ let creditOrbOfflineStreakStartedAt = null;
 
 function markCreditOrbCollectReachedServer() {
   creditOrbOfflineStreakStartedAt = null;
-  shopCreditOrbOfflineNoticeEl.classList.remove('visible');
+  clearSaying(ORB_OFFLINE_KEY);
 }
 
 function markCreditOrbCollectFailedToReachServer() {
@@ -1949,11 +2041,7 @@ function markCreditOrbCollectFailedToReachServer() {
     return;
   }
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
-    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) {
-      recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
-      bringShopNoticeToFront(shopCreditOrbOfflineNoticeEl);
-    }
-    shopCreditOrbOfflineNoticeEl.classList.add('visible');
+    sayCreditOrbOffline();
   }
 }
 
@@ -1978,56 +2066,48 @@ window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.filter((e
 // #3392: same convention, for the reversal puff shown when someone else got the orb.
 window.__testActiveCreditOrbReversalEffectCount = () => creditOrbPopEffects.filter((e) => e.kind === 'reversal').length;
 
-function showCreditOrbToast() {
-  shopCreditOrbToastEl.classList.add('visible');
-  clearTimeout(creditOrbToastHideTimer);
-  creditOrbToastHideTimer = setTimeout(() => {
-    shopCreditOrbToastEl.classList.remove('visible');
-  }, CREDIT_ORB_TOAST_VISIBLE_MS);
-}
+// #3889: the orb messages are said by the flower, not on the world. A success is a short word
+// beside the head that goes by itself (shape (c), a success may fade); a refusal or a failure is a
+// word that stays until its sentence has been opened and read (#3303: an error or refusal stays,
+// and the sentence is selectable text in the leaf). The numbers in the limit sentence come from
+// the server's reply (rateLimitNoticeText), never a second copy here (#3392, "A message that
+// limits or refuses an action states the limit and when it lifts"). Mode switches reload the
+// page, so none of these can linger into Build/Sell.
+const ORB_CREDIT_KEY = 'orb-credit';
+const ORB_LIMIT_KEY = 'orb-limit';
+const ORB_OFFLINE_KEY = 'orb-offline';
+const ORB_PROBLEM_KEY = 'orb-problem';
 let creditOrbToastHideTimer = null;
+function showCreditOrbToast() {
+  setBudWord(ORB_CREDIT_KEY, 'Credit +1', { label: 'You collected a free model-generation credit' });
+  clearTimeout(creditOrbToastHideTimer);
+  creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+}
 function hideCreditOrbToast() {
   clearTimeout(creditOrbToastHideTimer);
-  shopCreditOrbToastEl.classList.remove('visible');
+  clearBudWord(ORB_CREDIT_KEY);
 }
 
-// #3303 (owner decision: an error or refusal stays until the person dismisses
-// it): unlike the toast above, this no longer fades on a timer. It stays until
-// the person dismisses it or a collect succeeds again (the limit has plainly
-// lifted by then), and carries Copy and dismiss controls. Mode switches reload
-// the page, so it cannot linger into Build/Sell.
-const shopCreditOrbRateLimitNoticeTextEl = shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-text');
-const shopCreditOrbOfflineNoticeTextEl = shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-text');
-// #3441: the orb notices share one stack (#shop-notice-stack) so two showing at
-// once are both readable, and the one raised last sits nearest the controls
-// (highest `order`; the stack is bottom-anchored). Nothing here ever hides
-// another notice.
-let shopNoticeOrderCounter = 0;
-function bringShopNoticeToFront(noticeEl) {
-  shopNoticeOrderCounter += 1;
-  noticeEl.style.order = String(shopNoticeOrderCounter);
+function sayCreditOrbOffline() {
+  const message = "Can't collect orbs right now. You appear to be offline.";
+  sayAtHead(ORB_OFFLINE_KEY, { word: 'Offline', title: "Can't collect orbs", message });
+  recordVisibleMessage(message); // #3303
 }
+
 function showCreditOrbRateLimitNotice(rateLimit, { orbCameBack = false } = {}) {
   const text = rateLimitNoticeText('orbs', rateLimit);
-  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = orbCameBack ? `That orb is back where it was. ${text}` : text;
-  else if (orbCameBack) shopCreditOrbRateLimitNoticeTextEl.textContent = "That orb is back where it was. You've reached the orb limit for now. Try again in a bit.";
-  bringShopNoticeToFront(shopCreditOrbRateLimitNoticeEl);
-  shopCreditOrbRateLimitNoticeEl.classList.add('visible');
-  recordVisibleMessage(shopCreditOrbRateLimitNoticeTextEl.textContent);
+  let message = text || "You've reached the orb limit for now. Try again in a bit.";
+  if (orbCameBack) message = `That orb is back where it was. ${message}`;
+  sayAtHead(ORB_LIMIT_KEY, { word: 'Orb limit', title: 'Orb limit reached', message, readOnce: true });
+  recordVisibleMessage(message);
 }
 function hideCreditOrbRateLimitNotice() {
-  shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
+  clearSaying(ORB_LIMIT_KEY);
 }
-shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', hideCreditOrbRateLimitNotice);
-// #3392: a collect the server refused after the orb had popped. Like the other
-// orb notices it stays until dismissed and its text is selectable (#3303).
-const shopCreditOrbProblemNoticeTextEl = shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-text');
+
+// #3392: a collect the server refused after the orb had popped (someone else got it first, or it
+// could not be confirmed). The reversal effect plays where the orb was; the sentence is said here.
 function showCreditOrbProblemNotice(text) {
-  shopCreditOrbProblemNoticeTextEl.textContent = text;
-  bringShopNoticeToFront(shopCreditOrbProblemNoticeEl);
-  shopCreditOrbProblemNoticeEl.classList.add('visible');
+  sayAtHead(ORB_PROBLEM_KEY, { word: 'Orb missed', title: 'That orb did not count', message: text, readOnce: true });
   recordVisibleMessage(text);
 }
-shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', () => {
-  shopCreditOrbProblemNoticeEl.classList.remove('visible');
-});

@@ -2193,7 +2193,7 @@ describe('Worker API', () => {
     // (D1_ERROR: too many SQL variables) happening before this ordinary
     // ownership rejection could run at all.
     expect(moved.response.status).toBe(403);
-    expect(moved.body.error).toMatch(/Not your landlet/);
+    expect(moved.body.error).toMatch(/Not your lándlet/);
   });
 
   it('checks ownership of every distinct landlet in an instance batch, not just one of them', async () => {
@@ -2358,7 +2358,7 @@ describe('Worker API', () => {
 
     const second = await api('/landlets/second-landlet/claim', builder.session({ method: 'POST' }));
     expect(second.response.status).toBe(409);
-    expect(second.body).toEqual({ error: 'Builder already owns a claimed landlet' });
+    expect(second.body).toEqual({ error: 'Builder already owns a claimed lándlet' });
   });
 
   it('rejects unavailable, missing, and malformed claims', async () => {
@@ -2369,11 +2369,11 @@ describe('Worker API', () => {
 
     const unavailable = await api('/landlets/contested-landlet/claim', otherBuilder.session({ method: 'POST' }));
     expect(unavailable.response.status).toBe(409);
-    expect(unavailable.body).toEqual({ error: 'Landlet is not available to claim', code: 'landlet_not_claimable' });
+    expect(unavailable.body).toEqual({ error: 'Lándlet is not available to claim', code: 'landlet_not_claimable' });
 
     const missing = await api('/landlets/does-not-exist/claim', otherBuilder.session({ method: 'POST' }));
     expect(missing.response.status).toBe(404);
-    expect(missing.body).toEqual({ error: 'Landlet not found', code: 'landlet_not_found' });
+    expect(missing.body).toEqual({ error: 'Lándlet not found', code: 'landlet_not_found' });
 
     // builderId is no longer a client-suppliable field at all — claiming
     // always acts as whoever is logged in — so the "malformed claim" case
@@ -3369,7 +3369,7 @@ describe('Worker API', () => {
     }));
     const invalid = await api('/landlets/not-generating-landlet/generation-complete', adminSession({ method: 'POST' }));
     expect(invalid.response.status).toBe(409);
-    expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
+    expect(invalid.body).toEqual({ error: 'Lándlet is not currently generating' });
 
     // Same reasoning as 'inside-candidate's own cleanup further down: #570's
     // circle-aware overlap check now sees this real, greenbelt-status

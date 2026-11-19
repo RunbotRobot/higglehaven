@@ -334,7 +334,7 @@ function loadImageElement(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Could not load the generated concept image.'));
+    img.onerror = () => reject(new Error('Couldn\'t load the generated concept image.'));
     img.src = src;
   });
 }
@@ -491,8 +491,8 @@ export function renderBundlePicker() {
           // #3359: an in-app notice (a browser can suppress alert() and drop
           // the refusal without a trace); stays until dismissed, text selectable.
           await showNotice({
-            title: 'Could not rename this bundle',
-            message: err.message || 'Could not rename this bundle.',
+            title: 'Couldn\'t rename this bundle',
+            message: err.message || 'Couldn\'t rename this bundle.',
             returnFocusEl: renameBtn,
             restoreModalEl: catalogPickerEl,
             restoreCloseFn: closeCatalogPicker,
@@ -532,8 +532,8 @@ export function renderBundlePicker() {
         } catch (err) {
           shareToggleBtn.disabled = false;
           await showNotice({
-            title: 'Could not update sharing',
-            message: err.message || 'Could not update this bundle\'s sharing.',
+            title: 'Couldn\'t update sharing',
+            message: err.message || 'Couldn\'t update this bundle\'s sharing.',
             returnFocusEl: shareToggleBtn,
             restoreModalEl: catalogPickerEl,
             restoreCloseFn: closeCatalogPicker,
@@ -582,7 +582,7 @@ export function renderBundlePicker() {
               myLoadToken = ++bundlePickerLoadToken;
               await deleteBundle(bundle.bundleId);
             } catch (err) {
-              throw new Error(err.message || 'Could not delete this bundle.');
+              throw new Error(err.message || 'Couldn\'t delete this bundle.');
             }
           },
         });

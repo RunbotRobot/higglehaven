@@ -60,7 +60,7 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
           await onChanged();
         } catch (err) {
           // #3249: in the row, not alert() (a suppressed dialog is silent).
-          showInlineActionStatus(shipping, err.message || 'Could not mark this purchase shipped.');
+          showInlineActionStatus(shipping, err.message || 'Couldn\'t mark this purchase shipped.');
           shipBtn.disabled = false;
         }
       });
@@ -96,7 +96,7 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
         await onChanged();
       } catch (err) {
         // #3249: in the row, not alert() (a suppressed dialog is silent).
-        showInlineActionStatus(body, err.message || 'Could not refund this purchase.');
+        showInlineActionStatus(body, err.message || 'Couldn\'t refund this purchase.');
         refundBtn.disabled = false;
       }
     });
