@@ -7186,3 +7186,27 @@
         background: rgb(var(--ink-rgb) / 0.15);
         color: var(--pill-text);
       }
+      /* #3874: on a phone turned on its side (390px tall or less) the map's square box was squeezed by the
+         column to a strip a few pixels high, so a new builder could not choose a lándlet. The sheet
+         becomes two columns: the map square on the left, as tall as the room under the head allows,
+         and the words, legend, selection and Refresh in a column beside it. */
+      @media (max-height: 520px) {
+        #claim-modal { width: min(760px, calc(100vw - 24px)); }
+        #claim-modal-content {
+          --claim-map-size: calc(100dvh - 76px - 12px - 2 * var(--space-lg));
+          display: grid;
+          grid-template-columns: var(--claim-map-size) minmax(0, 1fr);
+          column-gap: var(--space-2xl);
+          row-gap: var(--space-sm);
+          align-content: start;
+          padding: var(--space-lg) var(--space-2xl);
+        }
+        #claim-modal-content > * { grid-column: 2; }
+        #claim-modal-content > #claim-map-wrap {
+          grid-column: 1;
+          grid-row: 1 / span 6;
+          width: var(--claim-map-size);
+          height: var(--claim-map-size);
+          aspect-ratio: auto;
+        }
+      }
