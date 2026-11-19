@@ -1172,7 +1172,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
       // caller's own current landlet.
       const recipientLandletId = await callersCurrentLandletId(db, toUserId);
       if (recipientLandletId === null || recipientLandletId !== landletId) {
-        throw new HttpError('toBuilderId is not currently in your landlet', 400);
+        throw new HttpError('toBuilderId is not currently in your lándlet', 400);
       }
     }
     const messageId = `voice-signal-${crypto.randomUUID()}`;

@@ -923,7 +923,7 @@ export function reviewFromRow(row) {
 // instance handlers still in this file).
 export async function requireLandlet(db, landletId) {
   const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!row) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
+  if (!row) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   return row;
 }
 
@@ -962,7 +962,7 @@ export async function requireOwnedLandlets(db, landletIds, builderId) {
   }
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
-    if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
+    if (!landlet) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
     assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
   }
 }
@@ -4005,17 +4005,17 @@ export async function warnInactiveLandletOwners(db) {
 
 async function explainClaimConflict(db, landletId, builderId) {
   const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
+  if (!landlet) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
-    throw new HttpError('Landlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
+    throw new HttpError('Lándlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
   }
   // #1703: a Class 2+ landlet (landlet_class > 1) is never free to claim --
   // only an auction win grants more than the free Class 1 starter size.
   if (landlet.landlet_class !== 1) {
-    throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
+    throw new HttpError('This lándlet is larger than the free starter size -- it can only be acquired via auction', 409);
   }
 
   const owned = await db.prepare(`
@@ -4024,9 +4024,9 @@ async function explainClaimConflict(db, landletId, builderId) {
       AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
     LIMIT 1
   `).bind(builderId).first();
-  if (owned) throw new HttpError('Builder already owns a claimed landlet', 409);
+  if (owned) throw new HttpError('Builder already owns a claimed lándlet', 409);
 
-  throw new HttpError('Landlet could not be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
+  throw new HttpError('That lándlet couldn\'t be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
 }
 
 

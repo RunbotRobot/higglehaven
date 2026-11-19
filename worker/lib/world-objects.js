@@ -146,7 +146,7 @@ export async function handleInstances(request, env, route, url) {
     // were rejected so the caller can reconcile instead of being lied to.
     const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
     if (rejectedInstanceIds.length === instanceIds.length) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const rejectedSet = new Set(rejectedInstanceIds);
     const deletedInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
@@ -259,7 +259,7 @@ export async function handleInstances(request, env, route, url) {
         }
       }
       await db.batch(restores);
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const stored = await getInstancesById(db, instanceIds);
     const storedInstances = instanceIds.map((instanceId) => stored.get(instanceId));
@@ -300,7 +300,7 @@ export async function handleInstances(request, env, route, url) {
     // a broken state), so only a total failure is a clean, retryable 409.
     const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
     if (rejectedInstanceIds.length === instanceIds.length) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const rejectedSet = new Set(rejectedInstanceIds);
     const ungroupedInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
@@ -510,7 +510,7 @@ export async function handleInstances(request, env, route, url) {
       .filter((_, i) => batchResults[i].meta.changes === 0)
       .map((instance) => instance.instanceId);
     if (rejectedInstanceIds.length === instances.length) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const rejectedSet = new Set(rejectedInstanceIds);
     const succeededInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
@@ -665,7 +665,7 @@ export async function handleInstances(request, env, route, url) {
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id).run();
     if (created.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     // #2392: not found here means a concurrent auction transfer (which
@@ -773,7 +773,7 @@ export async function handleInstances(request, env, route, url) {
         AND (? IS NULL OR updated_at = ?)
     `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1], instance.landletId, sessionBuilder.builder_id, expectedUpdatedAt, expectedUpdatedAt).run();
     if (updated.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #1022: unflagging (true -> false) used to only ever touch this row's
     // own is_community_sign/is_community_calendar columns -- the sign's
@@ -823,7 +823,7 @@ export async function handleInstances(request, env, route, url) {
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(route[1], existing.landlet_id, sessionBuilder.builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     return json({ deleted: true });
   }
@@ -936,7 +936,7 @@ export async function handleInstanceBackups(request, db, route) {
       )
     `).bind(backupId, instanceId, instanceId, templateId, instanceId, sessionBuilder.builder_id).run();
     if (created.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
     // #2428: not found here means a concurrent DELETE of the hosting
@@ -980,7 +980,7 @@ export async function handleInstanceBackups(request, db, route) {
       )
     `).bind(position, backupId, instanceId, instanceId, sessionBuilder.builder_id)));
     if (updateResults.some((result) => result.meta.changes === 0)) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const { results } = await db.prepare(
       'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
@@ -1046,7 +1046,7 @@ export async function handleInstanceBackups(request, db, route) {
       `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id),
     ]);
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     return json({ deleted: true });
   }
@@ -1316,7 +1316,7 @@ export async function handleSignPosts(request, db, route) {
         )
     `).bind(postId, instanceId, sessionBuilder.builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #2388: logged only after the delete is confirmed to have actually
     // happened, same idiom as recordContentEditHistory's own calls
@@ -1476,7 +1476,7 @@ export async function handleCalendarEvents(request, db, route) {
       if (!current?.is_community_calendar) {
         throw new HttpError('This placed instance is not marked as a community calendar', 400);
       }
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
@@ -1600,7 +1600,7 @@ export async function handleCalendarEvents(request, db, route) {
         )
     `).bind(eventId, instanceId, sessionBuilder.builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #2388: logged only after the delete is confirmed.
     await recordModerationRemovalSnapshot(db, 'calendar_events', eventId, category, existing, sessionBuilder.user_id);
