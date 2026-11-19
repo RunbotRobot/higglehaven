@@ -5373,6 +5373,16 @@
       #auth-account-suspension[hidden] {
         display: none;
       }
+      /* The sign-in tabs sat directly on the first field's label (no gap between them); the
+         wrapper lays its children out with the same gap as the card itself. */
+      #auth-logged-out {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+      }
+      #auth-logged-out[hidden] {
+        display: none;
+      }
       #auth-logged-in {
         display: flex;
         flex-direction: column;
