@@ -419,6 +419,24 @@ export async function handleAgeAttest(request, db) {
   return json({ user: userFromRow(updated) });
 }
 
+// #3763: the account's own "Show tips while the app opens" choice, so it
+// follows the person to another device. `off: true` hides the tips.
+const LOADING_TIPS_RATE_LIMIT_MAX = 60;
+
+export async function handleLoadingTips(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `loading-tips:${user.user_id}`, LOADING_TIPS_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  if (typeof input.off !== 'boolean') throw new HttpError('off must be true or false.', 400);
+  await db.prepare(`
+    UPDATE users SET loading_tips_off = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(input.off ? 1 : 0, user.user_id).run();
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
+  return json({ user: userFromRow(updated) });
+}
+
 const EMAIL_VERIFY_RATE_LIMIT_MAX = 20;
 
 export async function handleVerifyEmail(request, db) {

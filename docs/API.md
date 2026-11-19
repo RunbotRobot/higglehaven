@@ -493,6 +493,20 @@ never sees this path.
 
 ### Age/credit-card verification gates builder and seller actions
 
+### `PUT /api/auth/loading-tips`
+
+```json
+{ "off": true }
+```
+
+Session-gated (`401` without one), rate-limited per account. Saves the
+account's "Show tips while the app opens" choice (#3763): `off` must be a
+boolean (`400` otherwise); `true` hides the tips. Returns `{ "user": { ... } }`;
+`user.loadingTipsOff` is `null` until a person has chosen, then `true` or
+`false`. The browser mirrors it into its own storage when it reads
+`GET /api/auth/me` or logs in, so the opening screen (which draws before
+anything is signed in) honours it on the next open.
+
 Every builder-owned or seller-owned mutation (claiming a landlet, placing
 an instance, creating a product, etc. — see "Builders"/"Sellers" sections
 below) requires the session's account to have both `ageAttestedAt` set and

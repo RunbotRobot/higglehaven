@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LOADING_TIPS, TIP_MIN_MS, tipReadingMs } from './loadingTips.js';
-import { loadingTipsEnabled, nextTipIndex, rememberTipShown, setLoadingTipsEnabled } from './loadingTipPrefs.js';
+import { loadingTipsEnabled, nextTipIndex, rememberTipShown, setLoadingTipsEnabled, adoptAccountLoadingTips } from './loadingTipPrefs.js';
 
 // #3763: a tip is held for as long as a slow reader needs.
 describe('how long a tip is held', () => {
@@ -42,6 +42,19 @@ describe('what the opening screen remembers about tips', () => {
     setLoadingTipsEnabled(false, storage);
     expect(loadingTipsEnabled(storage)).toBe(false);
     setLoadingTipsEnabled(true, storage);
+    expect(loadingTipsEnabled(storage)).toBe(true);
+  });
+
+  it('copies the account choice onto the device, and leaves it alone when the account has none', () => {
+    const storage = store();
+    adoptAccountLoadingTips({ loadingTipsOff: true }, storage);
+    expect(loadingTipsEnabled(storage)).toBe(false);
+    adoptAccountLoadingTips({ loadingTipsOff: null }, storage);
+    expect(loadingTipsEnabled(storage)).toBe(false);
+    adoptAccountLoadingTips({}, storage);
+    adoptAccountLoadingTips(null, storage);
+    expect(loadingTipsEnabled(storage)).toBe(false);
+    adoptAccountLoadingTips({ loadingTipsOff: false }, storage);
     expect(loadingTipsEnabled(storage)).toBe(true);
   });
 
