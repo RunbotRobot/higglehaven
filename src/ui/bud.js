@@ -49,7 +49,8 @@ const STATIC_MENU = {
   'settings-btn': 'general',
   'account-menu-tax-notice': 'general',
   'account-menu-landcap': 'build',
-  'account-menu-landlet-info': 'build',
+  // The lándlet name at the top of the open menu (#3770) is a heading, not a tool: it is in no menu, so it
+  // shows above whichever one is open (its own `hidden` decides when there is a lándlet to name).
 };
 let openMenu = 'general';
 let leafEl = null;
