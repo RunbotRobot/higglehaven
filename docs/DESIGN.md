@@ -282,6 +282,12 @@ Soft shapes: a pill or a circle before a rectangle with corners.
 | `--shadow-bud` | 0 2px 10px, ink at 22% | the bud |
 | `--shadow-petal` | 0 4px 14px, ink at 20% | a petal |
 | `--shadow-leaf` | 0 8px 26px, ink at 20% | a leaf and a card that blooms |
+| `--shadow-breath` | 0 6px 18px ink at 18%, and a 5px white ring at 35% | the bud's breath at its fullest |
+| `--filter-petals` | drop shadow 0 4px 8px, ink at 20% | one shadow for the ring's three petals together (a filter, so a clip-path cannot cut it off) |
+| `--glow-teach` | 4px spring-green ring at 35% | the "?" icon while the bud teaches |
+| `--glow-pulse` | 8px spring-green ring at 35% | the bud's pulse until it is first opened |
+| `--ring-badge` | 2px white ring at 90% | the dot on a leaf that holds something waiting |
+| `--ring-focus` | 3px spring-green ring at 60% | a focus ring |
 
 The opacities a surface may use are a short list, not free choice:
 

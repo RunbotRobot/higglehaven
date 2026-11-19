@@ -919,7 +919,7 @@
         animation: bud-pulse 1.6s ease-in-out 3;
       }
       @media (prefers-reduced-motion: reduce) {
-        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: 0 0 0 4px rgb(var(--spring-green-rgb) / 0.35); }
+        body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] { animation: none; box-shadow: var(--glow-teach); }
       }
       /* #3761 (part of #3759, the flower): an open menu is a stem with leaves on both sides. The
          stem is set in from the screen edge (the head is in the upper left, so there is little
@@ -1061,7 +1061,7 @@
         width: 0;
         height: 0;
         /* One shadow for the three shapes together: a clip-path would cut a box-shadow off. */
-        filter: drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.2));
+        filter: var(--filter-petals);
       }
       body[data-bud-corner="bottom-right"] #bud-modes { --ring-flip: 1; }
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes,
@@ -1135,8 +1135,8 @@
       .bud-pair[hidden] { display: none; }
       .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
-      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18), 0 0 0 5px rgb(var(--white-rgb) / 0.35); } }
-      @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: 0 0 0 8px rgb(var(--spring-green-rgb) / 0.35); } }
+      @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--shadow-breath); } }
+      @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--glow-pulse); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
@@ -1447,7 +1447,7 @@
         margin-left: var(--space-xs);
         border-radius: var(--radius-round);
         background: var(--petal-yellow);
-        box-shadow: 0 0 0 2px rgb(var(--white-rgb) / 0.9);
+        box-shadow: var(--ring-badge);
         font-size: 0;
         line-height: 0;
         overflow: hidden;
@@ -1902,7 +1902,7 @@
         background: rgb(var(--spring-green-rgb) / 0.65);
       }
       #shop-voice-btn.speaking {
-        box-shadow: 0 0 0 3px rgb(var(--spring-green-rgb) / 0.6);
+        box-shadow: var(--ring-focus);
       }
       #shop-voice-btn.denied {
         background: rgb(var(--denied-rgb) / 0.55);
