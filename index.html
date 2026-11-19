@@ -915,9 +915,11 @@
     <div id="seller-product-card" class="world-card" role="region" aria-label="Your product" data-state="closed" hidden>
       <div id="seller-product-card-name"></div>
       <div id="seller-product-card-price"></div>
+      <div id="seller-product-card-stock"></div>
       <div id="seller-product-card-actions">
         <button id="seller-product-card-rename-btn" type="button">Rename</button>
         <button id="seller-product-card-price-btn" type="button" aria-expanded="false" aria-controls="seller-product-card-price-edit">Price</button>
+        <button id="seller-product-card-stock-btn" type="button" aria-expanded="false" aria-controls="seller-product-card-stock-edit">Stock</button>
         <button id="seller-product-card-delete-btn" type="button" class="danger">Delete</button>
         <button id="seller-product-card-more-btn" type="button">More</button>
       </div>
@@ -925,6 +927,11 @@
         <input id="seller-product-card-price-input" type="text" inputmode="decimal" autocomplete="off" aria-label="Price in dollars">
         <button id="seller-product-card-price-save-btn" type="button">Save</button>
       </div>
+      <div id="seller-product-card-stock-edit" hidden>
+        <input id="seller-product-card-stock-input" type="text" inputmode="numeric" autocomplete="off" aria-label="How many are in stock (blank for no limit)">
+        <button id="seller-product-card-stock-save-btn" type="button">Save</button>
+      </div>
+      <div id="seller-product-card-stock-hint" hidden>Leave it blank for no limit.</div>
       <div id="seller-product-card-status" role="status"></div>
       <button id="seller-product-card-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
     </div>

@@ -6516,7 +6516,8 @@
       #item-card-actions button,
       #item-card-more button,
       #seller-product-card-actions button,
-      #seller-product-card-price-edit button {
+      #seller-product-card-price-edit button,
+      #seller-product-card-stock-edit button {
         padding: var(--space-xs) var(--space-lg);
         min-height: 32px;
         border: none;
@@ -6530,7 +6531,8 @@
       #item-card-actions button:disabled,
       #item-card-more button:disabled,
       #seller-product-card-actions button:disabled,
-      #seller-product-card-price-edit button:disabled {
+      #seller-product-card-price-edit button:disabled,
+      #seller-product-card-stock-edit button:disabled {
         opacity: 0.5;
       }
       #item-card-actions button.active,
@@ -6686,23 +6688,27 @@
         padding: var(--space-xs) var(--space-md);
         white-space: nowrap;
       }
-      #seller-product-card-price {
+      #seller-product-card-price,
+      #seller-product-card-stock {
         color: var(--pill-text-soft);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #seller-product-card-actions button.danger {
         color: var(--danger);
       }
-      #seller-product-card-price-edit {
+      #seller-product-card-price-edit,
+      #seller-product-card-stock-edit {
         display: flex;
         gap: var(--space-sm);
         align-items: center;
         margin-top: var(--space-sm);
       }
-      #seller-product-card-price-edit[hidden] {
+      #seller-product-card-price-edit[hidden],
+      #seller-product-card-stock-edit[hidden] {
         display: none;
       }
-      #seller-product-card-price-input {
+      #seller-product-card-price-input,
+      #seller-product-card-stock-input {
         flex: 1;
         min-width: 0;
         padding: var(--space-xs) var(--space-lg);
@@ -6711,6 +6717,14 @@
         background: rgb(var(--white-rgb) / 0.7);
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
+      }
+      #seller-product-card-stock-hint {
+        margin-top: var(--space-xs);
+        color: var(--pill-text-soft);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+      }
+      #seller-product-card-stock-hint[hidden] {
+        display: none;
       }
       #seller-product-card-status {
         margin-top: var(--space-xs);

@@ -493,6 +493,33 @@ export async function saveSellerPrice(template, text) {
   }
 }
 
+// #3702: stock from the showroom card. A blank field means unlimited (null on the server), a whole
+// number of 0 or more is what is left to sell. Same busy guard and error wording style as the price.
+export async function saveSellerStock(template, text) {
+  if (metadataSaveBusyByTemplateId.get(template.templateId) === true) return { busy: true };
+  const trimmed = String(text ?? '').trim();
+  let stockQuantity = null;
+  if (trimmed) {
+    stockQuantity = Number(trimmed);
+    if (!Number.isSafeInteger(stockQuantity) || stockQuantity < 0) {
+      return { error: 'Stock must be a whole number of 0 or more, or left blank for no limit.' };
+    }
+  }
+  if (stockQuantity === (template.stockQuantity ?? null)) return { noChange: true };
+  metadataSaveBusyByTemplateId.set(template.templateId, true);
+  syncMetadataSaveButtonsDisabled(template.templateId);
+  try {
+    const updated = await updateCatalogTemplate(template.templateId, { stockQuantity });
+    Object.assign(template, updated);
+    return { saved: true };
+  } catch (err) {
+    return { error: err.message || 'Couldn\'t save.' };
+  } finally {
+    metadataSaveBusyByTemplateId.delete(template.templateId);
+    syncMetadataSaveButtonsDisabled(template.templateId);
+  }
+}
+
 // Deletes after its own in-app confirmation modal (#3249, #3278); the refusal wording (still
 // placed, still in a saved layout) is shown in that modal. Returns true when deleted.
 export async function deleteSellerProduct(template, returnFocusEl) {
