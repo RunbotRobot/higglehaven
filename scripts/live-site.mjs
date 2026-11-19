@@ -710,7 +710,7 @@ try {
   }
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
-    const label = [step.command, ...step.args].join(':');
+    const label = [step.command, ...step.args].join(':').replace(/:+$/, '');
     try {
       const value = await runStep(step, i + 1);
       // #3483: when the step ended, in the page's own clock (ms since
