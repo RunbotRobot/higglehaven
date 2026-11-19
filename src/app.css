@@ -4213,7 +4213,7 @@
         padding: var(--space-sm);
         border-radius: var(--radius-md);
         border: none;
-        background: rgb(var(--ink-rgb) / 0.08);
+        background: var(--fill-row);
         color: var(--pill-text);
         font: var(--text-xs)/var(--leading-tight) var(--font-sans);
         cursor: pointer;
@@ -4247,9 +4247,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
-        background: rgb(var(--ink-rgb) / 0.08);
-        border-radius: var(--radius-md);
-        padding: var(--space-md) var(--space-lg);
         transition: background-color var(--motion-quick) var(--ease-soft);
       }
       .seller-row.expanded {
@@ -5436,7 +5433,7 @@
       /* #3939 (part of #3933): one list row. Every list leaf's row wears this fill, shape, padding and
          text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
       .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
-      .pending-restoration-row, .friend-row, .dm-row {
+      .pending-restoration-row, .friend-row, .dm-row, .seller-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
         background: var(--fill-row);
