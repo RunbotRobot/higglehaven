@@ -378,11 +378,41 @@ export function showMenu(menu) {
   }
 }
 
+// #3876: a leaf folds back into the flower instead of vanishing. What folds is a picture of the leaf
+// (an inert copy with no ids, so nothing that looks an element up by id can find it, a new leaf can take the
+// old one's id at once, and what the leaf lent out has already gone home); it plays the unfold backwards
+// and removes itself. With reduced motion it only fades. A timer removes it if the animation never ends.
+const LEAF_FOLD_FALLBACK_MS = 600;
+function foldLeafAway(leaf) {
+  if (!leaf?.isConnected || typeof leaf.cloneNode !== 'function') return null;
+  const ghost = leaf.cloneNode(true);
+  ghost.removeAttribute('id');
+  ghost.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+  ghost.removeAttribute('aria-labelledby');
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.setAttribute('inert', '');
+  // Its close control is not a close control any more: nothing that looks for one (a test, a script) may find it.
+  ghost.querySelectorAll('.bud-leaf-close').forEach((close) => {
+    close.classList.replace('bud-leaf-close', 'bud-leaf-close-ghost');
+    close.tabIndex = -1;
+  });
+  ghost.classList.add('bud-leaf-folding');
+  return ghost;
+}
+
 export function closeLeaf() {
   const onClose = leafOnClose;
   leafOnClose = null;
+  // The picture is taken before the leaf's lent contents go home, so the fold shows the leaf as it was.
+  const ghost = foldLeafAway(leafEl);
   // Before the leaf goes, so anything it was lent can be handed back while it still exists.
   if (onClose) onClose();
+  if (ghost) {
+    leafEl.after(ghost);
+    const remove = () => ghost.remove();
+    ghost.addEventListener('animationend', remove, { once: true });
+    setTimeout(remove, LEAF_FOLD_FALLBACK_MS);
+  }
   leafEl?.remove();
   leafEl = null;
   leafId = null;
