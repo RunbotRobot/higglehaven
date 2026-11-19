@@ -50,7 +50,7 @@ await page.route('**/api/nearby-chat', async (route) => {
   await route.fulfill({
     status: 429,
     contentType: 'application/json',
-    body: JSON.stringify({ error: 'Too many attempts. Please wait a while and try again.' }),
+    body: JSON.stringify({ error: 'Too many attempts. Wait a while and try again.' }),
   });
 });
 

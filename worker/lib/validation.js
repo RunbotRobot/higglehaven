@@ -57,7 +57,7 @@ export function databaseHttpError(error) {
     return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
+    return new HttpError('That request has an invalid or missing value. Check the details and try again.', 400);
   }
 
   return null;

@@ -226,6 +226,19 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!LEAVES.includes(args[0])) throw new Error(`step "${token}": leaf must be one of ${LEAVES.join(', ')}`);
       return { command, args: [args[0]] };
+    case 'peer': {
+      // peer:join | peer:shot[:name] | peer:pos | peer:say:<text>: the second page's steps (--with, #3930).
+      need(1);
+      const [what, ...rest] = args;
+      if (!PEER_STEPS.includes(what)) throw new Error(`step "${token}": peer must be one of ${PEER_STEPS.join(', ')}`);
+      if (what === 'say') {
+        const text = rest.join(':').trim();
+        if (!text) throw new Error(`step "${token}": peer:say needs the words to say`);
+        if (text.length > 280) throw new Error(`step "${token}": peer:say is at most 280 characters`);
+        return { command, args: [what, text] };
+      }
+      return { command, args: [what, rest[0] || ''] };
+    }
     case 'menu':
     case 'land':
     case 'fly':
@@ -237,7 +250,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
   }
 }
 
@@ -287,6 +300,8 @@ export function gateRefusalMessage(status) {
 // invisible on fast hardware shows up. The standard "slow 4G" mobile profile.
 export const THROTTLE_PROFILE = { cpuSlowdown: 4, latencyMs: 150, downKbps: 1600, upKbps: 750 };
 
+const PEER_STEPS = ['join', 'shot', 'pos', 'say'];
+
 export function parseArgs(argv, env = {}) {
   const options = {
     url: env.LIVE_SITE_URL || 'https://higglehaven.com',
@@ -296,6 +311,7 @@ export function parseArgs(argv, env = {}) {
     login: 'fleet',
     out: env.LIVE_SITE_OUT || null,
     timing: [],
+    with: null,
     coverReport: false,
     throttle: false,
   };
@@ -314,6 +330,7 @@ export function parseArgs(argv, env = {}) {
     else if (arg === '--login') options.login = value();
     else if (arg === '--out') options.out = value();
     else if (arg === '--timing') options.timing.push(value());
+    else if (arg === '--with') options.with = value();
     else if (arg === '--cover-report') options.coverReport = true;
     else if (arg === '--throttle') options.throttle = true;
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
@@ -323,5 +340,13 @@ export function parseArgs(argv, env = {}) {
   if (!['fleet', 'local'].includes(options.login)) throw new Error('--login must be "fleet" (the live site) or "local" (a wrangler dev instance)');
   if (!options.name) throw new Error('--name is required: this session\'s name, e.g. --name higglehaven10');
   if (options.login === 'fleet' && !FLEET_NAME_PATTERN.test(options.name)) throw new Error(`--name "${options.name}" is not a fleet name (higglehaven followed by digits)`);
+  if (options.with !== null) {
+    // #3930: a second signed-in page. On the live site only a fleet account may stand there: it is
+    // never a real person's account, so nothing is ever done as one.
+    if (options.login === 'fleet' && !FLEET_NAME_PATTERN.test(options.with)) throw new Error(`--with "${options.with}" is not a fleet name (higglehaven followed by digits): only fleet accounts may be used as a second page`);
+    if (options.login === 'local' && !/^[a-z0-9][a-z0-9_-]{1,30}$/i.test(options.with)) throw new Error(`--with "${options.with}" is not a plain account name`);
+    if (options.with === options.name) throw new Error('--with must be a different account from --name');
+  }
+  if (steps.some((step) => step.command === 'peer') && options.with === null) throw new Error('peer steps need --with <name>: a second account to stand beside this one');
   return { options, steps };
 }

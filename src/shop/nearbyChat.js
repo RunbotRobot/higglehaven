@@ -159,7 +159,7 @@ async function reportNearbyChatSender(builderId, lineEl) {
     if (lineEl?.isConnected) showInlineActionStatus(lineEl, 'Report sent. Thank you.', { error: false });
   } catch (err) {
     // #3889: a failure is said on the same message, in the leaf, and stays.
-    if (lineEl?.isConnected) showInlineActionStatus(lineEl, `Couldn't submit the report. ${err?.message || 'Please try again.'}`, { error: true });
+    if (lineEl?.isConnected) showInlineActionStatus(lineEl, `Couldn't submit the report. ${err?.message || 'Try again.'}`, { error: true });
   }
 }
 

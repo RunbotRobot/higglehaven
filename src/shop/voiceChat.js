@@ -585,7 +585,7 @@ async function reportVoicePeer(builderId) {
     reportedVoicePeers.set(builderId, { text: 'Report sent. Thank you.', error: false });
     renderVoicePeersList();
   } catch (err) {
-    reportedVoicePeers.set(builderId, { text: `Couldn't submit the report. ${err?.message || 'Please try again.'}`, error: true });
+    reportedVoicePeers.set(builderId, { text: `Couldn't submit the report. ${err?.message || 'Try again.'}`, error: true });
     renderVoicePeersList();
   }
 }

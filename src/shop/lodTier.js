@@ -206,3 +206,15 @@ export function setBoundingSphere(members) {
 export function largestFirst(indices, items) {
   return indices.sort((a, b) => items[b].px - items[a].px);
 }
+
+// #3920 (moved here by #3929 so Build counts the same way): what a model costs to draw, in triangles.
+// `skip` is a set of nodes (the mid and far versions attached to an item) left out of the walk.
+export function trianglesOfGeometry(geometry) {
+  return (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
+}
+export function countModelTriangles(node, skip) {
+  if (skip.has(node)) return 0;
+  let triangles = node.isMesh && node.geometry ? trianglesOfGeometry(node.geometry) : 0;
+  for (const child of node.children) triangles += countModelTriangles(child, skip);
+  return triangles;
+}

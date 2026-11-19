@@ -148,7 +148,7 @@ export async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
     // total storage cap to whoever was uploading. That is the platform's own
     // capacity, not something an uploader needs (or should) see; all they can
     // act on is that uploads are unavailable for now.
-    throw new HttpError('Uploads are temporarily unavailable. Please try again later.', 507);
+    throw new HttpError('Uploads are temporarily unavailable. Try again later.', 507);
   }
   return reservationId;
 }

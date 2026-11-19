@@ -9,12 +9,12 @@ export function disputeSuccessText(result) {
   if (result?.autoResolved) return 'Your refund has been issued.';
   // The endpoint leaves the order untouched in this case and nothing else in
   // the app acts on it yet, so do not promise a review that does not exist.
-  return "This order can't be refunded automatically. Please contact the seller or support about it.";
+  return "This order can't be refunded automatically. Contact the seller or support about it.";
 }
 
 export function disputeErrorText(err) {
-  if (err?.status === 409) return 'This order has already been paid out to the seller, so please contact support.';
-  return err?.message || "Couldn't report this problem. Please try again in a moment.";
+  if (err?.status === 409) return 'This order has already been paid out to the seller, so contact support.';
+  return err?.message || "Couldn't report this problem. Try again in a moment.";
 }
 
 // The row visibly becomes "Refunded" afterwards (No silent loss: money coming

@@ -954,7 +954,7 @@ function renderMyAvatarsField(onEquipped) {
           onEquipped?.();
         } catch (err) {
           // #3889: said in the row that was tapped, not in a modal over the world.
-          showInlineActionStatus(row, `Couldn't equip this avatar. ${err.message || 'Please try again.'}`);
+          showInlineActionStatus(row, `Couldn't equip this avatar. ${err.message || 'Try again.'}`);
           equipBtn.disabled = false;
         }
       });
@@ -976,7 +976,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showInlineActionStatus(list, `Couldn't load more avatars. ${err.message || 'Please try again.'}`);
+          showInlineActionStatus(list, `Couldn't load more avatars. ${err.message || 'Try again.'}`);
           moreBtn.disabled = false;
         }
       });
@@ -1093,7 +1093,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          showInlineActionStatus(row, `Couldn't apply this animation. ${err.message || 'Please try again.'}`);
+          showInlineActionStatus(row, `Couldn't apply this animation. ${err.message || 'Try again.'}`);
           equipBtn.disabled = false;
         }
       });
@@ -1115,7 +1115,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showInlineActionStatus(list, `Couldn't load more animations. ${err.message || 'Please try again.'}`);
+          showInlineActionStatus(list, `Couldn't load more animations. ${err.message || 'Try again.'}`);
           moreBtn.disabled = false;
         }
       });
