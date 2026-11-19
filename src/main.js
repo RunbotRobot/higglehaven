@@ -287,6 +287,7 @@ import {
 import { confirmAndOfferFriendship } from './friends.js';
 // #3447: tapping an assistant in the Shop world opens its chat panel.
 import { openAssistantChat, closeAssistantChat, setAssistantStandingHooks } from './shop/assistantChat.js';
+import { showAssistantTapRing } from './shop/assistantTapRing.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
 // rendering now lives in src/shop/worldSprites.js -- see that module's own
@@ -1620,7 +1621,15 @@ renderer.domElement.addEventListener('click', (event) => {
   if (tappedAssistant) {
     setShopTappedProduct(null);
     closeProductCard();
-    openAssistantChat(tappedAssistant);
+    // #3773: the tap is answered on the assistant herself, a ring around her feet until the window is up.
+    const tappedGroup = assistantGroups().find((group) => {
+      for (let o = assistantHit.object; o; o = o.parent) if (o === group) return true;
+      return false;
+    });
+    const releaseRing = tappedGroup
+      ? showAssistantTapRing(THREE, tappedGroup, { reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true })
+      : () => {};
+    Promise.resolve(openAssistantChat(tappedAssistant)).finally(releaseRing);
     return;
   }
   // #3555: a person standing in front of a product is what was tapped, so they
