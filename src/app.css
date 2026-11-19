@@ -6628,6 +6628,27 @@
       #item-card.pass-through #item-card-name {
         padding-right: 0;
       }
+      /* #3691: the Selecting brush's size slider blooms beside the selection, in the card, while
+         Selecting is on (src/build/itemCard.js moves it in and back out). The card passes taps
+         through while painting, but the slider takes them. Nothing is drawn when the slot is empty. */
+      #item-card-brush {
+        margin-top: var(--space-xs);
+      }
+      #item-card-brush:empty {
+        display: none;
+      }
+      #item-card.pass-through #item-card-brush {
+        pointer-events: auto;
+      }
+      #item-card-brush #multiselect-brush-control.visible {
+        display: flex;
+        padding: var(--space-xs) var(--space-md);
+      }
+      #item-card-brush #multiselect-brush-control input[type="range"] {
+        flex: 1;
+        width: auto;
+        min-width: 0;
+      }
       #item-card-close-btn,
       #seller-product-card-close-btn {
         position: absolute;

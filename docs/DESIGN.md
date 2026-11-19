@@ -356,8 +356,11 @@ by touching the world. The module is `src/ui/bud.js`:
   Paste, parked in `#tool-controls`. Choosing Multi-Select, Measure or Paste puts the
   leaf away so the world is clear; while Multi-Select or Measure is on the bud wears
   "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
-  Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
-  plan blooms it beside the selection; that is a later slice).
+  Paste is listed only after a Copy. The Brush slider blooms beside the selection: while
+  Selecting is on and the item card shows the painted selection, `src/build/itemCard.js`
+  moves `#multiselect-brush-control` into the card (`#item-card-brush`) and back out when
+  the card closes or Selecting ends; the card passes taps through while painting, but the
+  slider takes them. With nothing selected yet it is still in the Tools leaf.
 - Bundles (#3692): Bundle, Unbundle, Edit and Save Bundle are buttons of the item card (the card that
   blooms beside the selection), with the same ids and handlers; Edit's reason line shows under them.
   While Multi-Select paints, the card keeps the bundle actions (Copy, Delete and More wait for
