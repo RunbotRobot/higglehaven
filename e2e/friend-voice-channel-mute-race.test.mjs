@@ -263,6 +263,7 @@ console.log('A connected to B via the friend channel, before either side has unm
 // window the bug lives in: muting here, before B ever grants their own
 // mic, is something a real user can do (and would want to do, for a
 // friend who joins muted-by-default per #2778).
+await budClick(pageA, '#bud-petal-shop-chat'); // #3556: who is connected is listed in the Chat leaf
 await pageA.waitForSelector('#shop-voice-peers-panel.open', { timeout: 10000 });
 await pageA.click('#shop-voice-peers-list button[data-action="mute"]');
 await pageA.waitForSelector('#shop-voice-peers-list button.shop-voice-peer-muted', { timeout: 5000 });
