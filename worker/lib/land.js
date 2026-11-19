@@ -491,7 +491,7 @@ export async function handleLandletLevels(request, db, route) {
       landletId, landlet.owner_builder_id,
     ).run();
     if (inserted.meta.changes === 0) {
-      throw new HttpError('This lándlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('This lándlet\'s levels changed. Retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
@@ -502,8 +502,8 @@ export async function handleLandletLevels(request, db, route) {
     // this row in the await gap since the INSERT (or recomputeLandCap just
     // above) -- a genuine race, not an uncaught levelFromRow(undefined)
     // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
-    // to match this branch's own "changed -- please retry" message above.
-    if (!row) throw new HttpError('This lándlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+    // to match this branch's own "changed. Retry" message above.
+    if (!row) throw new HttpError('This lándlet\'s levels changed. Retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     return json({ level: levelFromRow(row) }, 201);
   }
 

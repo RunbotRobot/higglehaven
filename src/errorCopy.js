@@ -9,15 +9,15 @@
 // already written for players. These strings are customer-facing, so they use
 // the accented spelling; a test requires an entry here for every server code.
 export const PLAYER_ERROR_COPY = Object.freeze({
-  internal_error: 'Something went wrong on our end. Please try again in a moment.',
-  changed_concurrently: 'That changed while you were working on it. Please try again.',
+  internal_error: 'Something went wrong on our end. Try again in a moment.',
+  changed_concurrently: 'That changed while you were working on it. Try again.',
   landlet_not_found: "That lándlet couldn't be found. It may have been removed.",
-  landlet_not_claimable: "That lándlet isn't available to claim any more. Please pick another one.",
+  landlet_not_claimable: "That lándlet isn't available to claim any more. Pick another one.",
   landlet_ownership_lost: "You don't own this lándlet any more. Reload to see its current state.",
   auction_already_active: 'This lándlet already has an auction running.',
   auction_not_owner: 'Only the current owner of a claimed lándlet can start an auction on it.',
-  service_unavailable: "That isn't available right now. Please try again later.",
-  upstream_failed: "That didn't go through on our side. Please try again in a moment.",
+  service_unavailable: "That isn't available right now. Try again later.",
+  upstream_failed: "That didn't go through on our side. Try again in a moment.",
   stale_reference: 'Something you were working with was removed or changed. Reload and try again.',
   seller_suspended: "That product isn't available right now.",
   // #3372: the Build client stops a move at the top and bottom level, so this

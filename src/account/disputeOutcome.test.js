@@ -11,7 +11,7 @@ describe('dispute outcomes (#3199)', () => {
 
   it('does not promise a review when it was not auto-resolved, and never states the rule', () => {
     const text = disputeSuccessText({ autoResolved: false });
-    expect(text).toContain('contact the seller or support');
+    expect(text).toContain('Contact the seller or support');
     expect(text.toLowerCase()).not.toMatch(/established|threshold|\$|new account|policy/);
   });
 
@@ -19,7 +19,7 @@ describe('dispute outcomes (#3199)', () => {
     expect(disputeErrorText({ status: 409, message: 'raw' })).toContain('contact support');
     expect(disputeErrorText({ status: 400, message: 'This purchase has already been refunded' }))
       .toBe('This purchase has already been refunded');
-    expect(disputeErrorText({})).toMatch(/try again/);
+    expect(disputeErrorText({})).toMatch(/try again/i);
   });
 
   it('turns the row into a refunded one after an auto-resolved dispute, using the server timestamps', () => {

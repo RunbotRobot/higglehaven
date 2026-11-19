@@ -74,7 +74,7 @@ check((await row('auto').locator('.my-purchase-dispute-btn').count()) === 0, 'co
 // Not auto-resolved: plain wording, order unchanged, no refund claimed.
 await row('manual').locator('.my-purchase-dispute-btn').click();
 await row('manual').locator('.my-purchase-dispute-confirm-btn').click();
-await page.waitForFunction(() => document.querySelector('#my-purchases-list [data-purchase-id="manual"]')?.innerText.includes('contact the seller or support'), null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('#my-purchases-list [data-purchase-id="manual"]')?.innerText.toLowerCase().includes('contact the seller or support'), null, { timeout: 5000 });
 check(!(await row('manual').innerText()).includes('Refunded'), 'not-auto-resolved order is not shown as refunded');
 
 // Already paid out (409): contact-support message, control stays so the buyer is not stuck.

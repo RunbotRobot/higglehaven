@@ -1017,7 +1017,7 @@ async function generateConceptImageBytes(env, prompt) {
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
   if (!response.ok || !data?.data?.[0]?.b64_json) {
     console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
-    throw new HttpError('Concept-image generation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
+    throw new HttpError('Concept-image generation failed. Try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
   }
   return Uint8Array.from(atob(data.data[0].b64_json), (character) => character.charCodeAt(0));
 }

@@ -483,7 +483,7 @@ describe('server error codes reach the player as copy, not raw server text (#195
   it('replaces the message for a known code but keeps the server text, code and status for diagnostics', async () => {
     failWith(409, { error: 'Landlet changed concurrently — refetch and retry', code: 'changed_concurrently' });
     const error = await fetchCurrentUser().catch((e) => e);
-    expect(error.message).toBe('That changed while you were working on it. Please try again.');
+    expect(error.message).toBe('That changed while you were working on it. Try again.');
     expect(error.serverMessage).toBe('Landlet changed concurrently — refetch and retry');
     expect(error.code).toBe('changed_concurrently');
     expect(error.status).toBe(409);
@@ -523,7 +523,7 @@ describe('server error codes reach the player as copy, not raw server text (#195
   ])('%s shows player copy and keeps the server text, code and status', async (_name, call) => {
     failWith(503, { error: 'Video-to-3D generation is not configured on this server yet.', code: 'service_unavailable' });
     const error = await call().catch((e) => e);
-    expect(error.message).toBe("That isn't available right now. Please try again later.");
+    expect(error.message).toBe("That isn't available right now. Try again later.");
     expect(error.serverMessage).toBe('Video-to-3D generation is not configured on this server yet.');
     expect(error.code).toBe('service_unavailable');
     expect(error.status).toBe(503);
@@ -532,7 +532,7 @@ describe('server error codes reach the player as copy, not raw server text (#195
   it('maps the server catch-all 500 to a calm line instead of "Internal server error"', async () => {
     failWith(500, { error: 'Internal server error', code: 'internal_error' });
     const error = await fetchCurrentUser().catch((e) => e);
-    expect(error.message).toBe('Something went wrong on our end. Please try again in a moment.');
+    expect(error.message).toBe('Something went wrong on our end. Try again in a moment.');
     expect(error.status).toBe(500);
   });
 });
@@ -543,11 +543,11 @@ describe('a rate-limit 429 (#3275)', () => {
   }
 
   it('words the error with the limit and when it lifts, keeping the server text', async () => {
-    failWith(429, { error: 'Too many attempts. Please wait a while and try again.', limit: 20, windowSeconds: 900, retryAfterSeconds: 400 });
+    failWith(429, { error: 'Too many attempts. Wait a while and try again.', limit: 20, windowSeconds: 900, retryAfterSeconds: 400 });
     const error = await fetchBundles().catch((err) => err);
     expect(error.status).toBe(429);
     expect(error.message).toBe("You've reached the limit for this (20 every 15 minutes). Try again in about 7 minutes.");
-    expect(error.serverMessage).toBe('Too many attempts. Please wait a while and try again.');
+    expect(error.serverMessage).toBe('Too many attempts. Wait a while and try again.');
     expect(error.rateLimit).toEqual({ limit: 20, windowSeconds: 900, retryAfterSeconds: 400 });
   });
 

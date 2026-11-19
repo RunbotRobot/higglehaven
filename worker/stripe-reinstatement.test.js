@@ -229,6 +229,26 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(resubmit.response.status).toBe(503);
   });
 
+  // #2994: with stripe_account_id already null there is no reset to arbitrate, so two requests
+  // for the same flag history (a double-click, a second tab) both evaluate 'approved'. One real
+  // decision is one audit row.
+  it('logs one approved decision, not two, for repeated requests on an account that is already disconnected', async () => {
+    const seller = await signupSeller('stripe-reinstate-dup');
+    const userId = await userIdFor(seller.email);
+    await insertFlag('seller', seller.sellerId, { disposition: 'suspected', flaggedAt: NINETY_ONE_DAYS_AGO });
+    await insertApprovedDiditSession(userId, THIRTY_DAYS_AGO);
+
+    const first = await api('/sellers/me/stripe-reinstatement-request', seller.session({ method: 'POST' }));
+    const second = await api('/sellers/me/stripe-reinstatement-request', seller.session({ method: 'POST' }));
+    expect(first.body.outcome).toBe('approved');
+    expect(second.body.outcome).toBe('approved');
+
+    const rows = await env.DB.prepare(
+      "SELECT decision_id FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ? AND outcome = 'approved'",
+    ).bind(`seller:${seller.sellerId}`).all();
+    expect(rows.results).toHaveLength(1);
+  });
+
   // #2740: performReinstatementReset's own WHERE re-asserts stripe_account_id
   // at UPDATE time, same concurrency guard as the sibling admin
   // stripe-account-reset endpoint's own #1414 fix -- this used to never

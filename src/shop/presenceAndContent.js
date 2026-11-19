@@ -65,7 +65,7 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES } from './lodTier.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -563,15 +563,6 @@ function lodSetsFor(entry) {
 // #3920: what the full model of an item costs to draw, in triangles, counted once and kept. A
 // batched placement reads its batch's full parts; any other placed model is walked once, leaving out
 // the mid and far versions attached to it.
-function trianglesOfGeometry(geometry) {
-  return (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
-}
-function countModelTriangles(node, skip) {
-  if (skip.has(node)) return 0;
-  let triangles = node.isMesh && node.geometry ? trianglesOfGeometry(node.geometry) : 0;
-  for (const child of node.children) triangles += countModelTriangles(child, skip);
-  return triangles;
-}
 function fullTrianglesOf(object) {
   let triangles = object.userData.lodFullTris;
   if (triangles !== undefined) return triangles;

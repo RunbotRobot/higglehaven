@@ -24,9 +24,9 @@ const stars = (rating) => '★'.repeat(rating) + '☆'.repeat(5 - rating);
 // the server's own message. A rate-limit 429 needs no case here: apiError
 // already words it with the limit and when it lifts (#3275).
 function feedbackErrorText(err) {
-  if (err.status === 409) return 'That changed while you were editing, so we reloaded it. Please check and try again.';
+  if (err.status === 409) return 'That changed while you were editing, so we reloaded it. Check and try again.';
   if (err.status === 403) return "That feedback isn't yours to change.";
-  return err.message || 'Couldn\'t save your feedback. Please try again.';
+  return err.message || 'Couldn\'t save your feedback. Try again.';
 }
 
 function button(label, onClick) {

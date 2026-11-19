@@ -23,7 +23,7 @@ export async function confirmAndBlockPerson(builderId, { restoreModalEl = null, 
       try {
         await blockPerson({ builderId });
       } catch {
-        throw new Error('Couldn\'t block this person -- please try again.');
+        throw new Error('Couldn\'t block this person. Try again.');
       }
     },
   });
