@@ -17,6 +17,7 @@
 //                                         the camera, up and down are the pitch
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
+//   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower's general menu (does nothing if it is open)
@@ -568,6 +569,18 @@ async function runStepAction(step, index) {
       if (typeof a === 'number') await (device.hasTouch ? page.touchscreen.tap(a, b) : page.mouse.click(a, b));
       else await press(await controlOrFail(a, `"${a}"`));
       return null;
+    case 'item': {
+      // #3930: a real tap on the a-th placed item that is on screen in Build, left to right.
+      const spots = await page.evaluate(() => (window.__testProductScreenPositions?.() ?? [])
+        .filter((p) => p && p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)
+        .map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })));
+      spots.sort((l, r) => l.x - r.x);
+      const spot = spots[a - 1];
+      if (!spot) throw new Error(`step "item:${a}": ${spots.length} placed item(s) on screen in Build (is this Build with a lándlet that has items?)`);
+      await (device.hasTouch ? page.touchscreen.tap(spot.x, spot.y) : page.mouse.click(spot.x, spot.y));
+      await page.waitForTimeout(400);
+      return spot;
+    }
     case 'mode':
       await clickModeButton(page, a);
       await settle();

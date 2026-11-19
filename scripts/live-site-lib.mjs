@@ -191,6 +191,13 @@ function parseStepWithoutBurst(token, command, args) {
       // selector may contain ":" (pseudo-classes), so rejoin everything.
       if (args.length === 2 && args.every((a) => a !== '' && Number.isFinite(Number(a)))) return { command, args: [Number(args[0]), Number(args[1])] };
       return { command, args: [args.join(':')] };
+    case 'item': {
+      // #3930: item[:n] taps the n-th placed item that is on screen in Build (counted left to right,
+      // 1 by default), so the item's card and selection tools can be looked at without aiming at a pixel.
+      const n = args[0] === undefined || args[0] === '' ? 1 : Number(args[0]);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": item needs a whole number from 1 (which placed item, left to right)`);
+      return { command, args: [n] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -250,7 +257,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, cover, pos, marks)`);
   }
 }
 
