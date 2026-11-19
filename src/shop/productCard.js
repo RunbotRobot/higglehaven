@@ -148,6 +148,14 @@ function fillCard(review) {
 // Which petals show, and what the card says when it offers nothing. Called by
 // updateReviewFade (worldSprites.js) whenever the tapped product or whether the
 // shopper stands next to it changes. The decision itself is productCardState.
+// #3945 (part of #3934): the card's own line after a purchase, in place of a "Thank you!" sheet.
+// It lasts while this card stays open on this product.
+let justBoughtReview = null;
+export function markProductJustBought(review) {
+  justBoughtReview = review;
+  if (review && review === openReview) syncProductCardActions(review, lastInRange);
+}
+
 export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
   lastInRange = inRange;
@@ -162,7 +170,7 @@ export function syncProductCardActions(review, inRange) {
     moreEl.hidden = true;
     moreBtn.setAttribute('aria-expanded', 'false');
   }
-  stateEl.textContent = state.stateText;
+  stateEl.textContent = state.stateText || (review === justBoughtReview ? 'Yours now.' : '');
   card.markDirty();
 }
 
@@ -183,6 +191,7 @@ export function openProductCard(review) {
 export function closeProductCard() {
   if (openReview === null && cardEl.hidden) return;
   openReview = null;
+  justBoughtReview = null;
   card.close();
 }
 
