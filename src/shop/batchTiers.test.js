@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildInstancedBatch } from './instancedBatches.js';
 import {
-  initBatchTiers, addBatchTier, moveBatchHandle, resolveBatchTier, batchTierCounts, disposeBatchTiers,
+  initBatchTiers, addBatchTier, moveBatchHandle, resolveBatchTier, batchTierCounts, disposeBatchTiers, partitionBatch,
   BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR,
 } from './batchTiers.js';
 
@@ -161,5 +161,26 @@ describe('batch tiers', () => {
     for (const tier of Object.values(batch.tiers)) for (const mesh of tier.meshes) mesh.addEventListener('dispose', () => { disposed += 1; });
     disposeBatchTiers(batch);
     expect(disposed).toBe(batch.tiers.mid.meshes.length + batch.tiers.far.meshes.length);
+  });
+
+  it('partitions a fresh batch straight into the sets it is asked for, in one pass', () => {
+    const { batch, handles } = makeBatch(30);
+    const wanted = handles.map((_, i) => (i % 3 === 0 ? BATCH_TIER_FULL : i % 3 === 1 ? BATCH_TIER_MID : BATCH_TIER_FAR));
+    const resolved = partitionBatch(batch, wanted);
+    expect(resolved).toEqual(wanted);
+    expect(batchTierCounts(batch)).toEqual({ full: 10, mid: 10, far: 10 });
+    expect(batch.tiers.full.live).toBe(batch.tiers.full.meshes[0].userData.instanceHandles); // same array the meshes read
+    expectConsistent(batch, handles);
+    // and it keeps working as a normal batch afterwards
+    moveBatchHandle(batch, handles[0], BATCH_TIER_FAR);
+    expectConsistent(batch, handles);
+  });
+
+  it('partition applies the fallback and puts everything on the full set when there are no other versions', () => {
+    const { batch, handles } = makeBatch(5, { withMid: false, withFar: false });
+    const resolved = partitionBatch(batch, handles.map(() => BATCH_TIER_FAR));
+    expect(resolved.every((name) => name === BATCH_TIER_FULL)).toBe(true);
+    expect(batchTierCounts(batch)).toEqual({ full: 5, mid: 0, far: 0 });
+    expectConsistent(batch, handles);
   });
 });

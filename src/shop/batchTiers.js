@@ -120,6 +120,33 @@ export function moveBatchHandle(batch, handle, wanted) {
   return toName;
 }
 
+// Puts every placement of a freshly built batch straight into the set its first decision calls for,
+// in one pass, so a batch arrives drawn from the right versions instead of being drawn at full
+// detail for its first frames and then converted placement by placement. `wanted[i]` is the tier
+// asked for the i-th placement (batch.handles order); each goes through the same fallback as
+// moveBatchHandle. Returns the tier each placement ended in.
+export function partitionBatch(batch, wanted) {
+  const resolved = batch.handles.map((handle, index) => resolveBatchTier(batch, wanted[index] ?? BATCH_TIER_FULL));
+  for (const tier of Object.values(batch.tiers)) tier.live.length = 0; // the full set's array is the one its meshes read: keep it
+  batch.handles.forEach((handle, index) => {
+    const name = resolved[index];
+    const tier = batch.tiers[name];
+    handle.updateMatrix();
+    const slot = tier.live.length;
+    tier.meshes.forEach((mesh, partIndex) => {
+      const partMatrix = tier.parts ? tier.parts[partIndex].matrix : null;
+      if (partMatrix) scratch.multiplyMatrices(handle.matrix, partMatrix);
+      else scratch.copy(handle.matrix);
+      mesh.setMatrixAt(slot, scratch);
+    });
+    tier.live.push(handle);
+    handle.userData.batchTier = name;
+    handle.userData.batchSlot = slot;
+  });
+  for (const tier of Object.values(batch.tiers)) markChanged(tier);
+  return resolved;
+}
+
 // How many placements are drawn in each set right now: the numbers sum to the batch's placements.
 export function batchTierCounts(batch) {
   const counts = { [BATCH_TIER_FULL]: 0, [BATCH_TIER_MID]: 0, [BATCH_TIER_FAR]: 0 };
