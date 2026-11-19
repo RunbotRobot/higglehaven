@@ -172,7 +172,7 @@ function closeVerifyModal() {
 verifyContinueBtn.addEventListener('click', async () => {
   if (!verifyAgeStepEl.hidden) {
     if (!verifyAgeAttestInput.checked) {
-      setVerifyStatus('Please confirm you meet the age requirement.', 'error');
+      setVerifyStatus('Confirm you meet the age requirement.', 'error');
       return;
     }
     verifyContinueBtn.disabled = true;
@@ -701,7 +701,7 @@ authResendVerifyBtn.addEventListener('click', async () => {
       setAuthStatus(`Verification email sent. (dev mode: ${result.devVerifyUrl})`, 'success');
     } else if (!result.verificationEmailSent) {
       // #1451: same real-Resend-failure gap as the signup handler above.
-      setAuthStatus('Couldn\'t send the verification email — please try again in a moment.', 'error');
+      setAuthStatus('Couldn\'t send the verification email. Try again in a moment.', 'error');
     } else {
       setAuthStatus('Verification email sent.', 'success');
     }

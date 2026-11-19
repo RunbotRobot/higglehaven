@@ -42,11 +42,13 @@
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
 //   pos                                   where the avatar stands now, and which mode and flags the page is in
+//   peer:join                             (with --with) the second page's avatar walks up beside this one
+//   peer:say:<text> / peer:shot[:name] / peer:pos   the second page speaks in nearby chat / is photographed / reports where it stands
 //   cover                                 how much of the screen the interface covers right now
 //                                         (share of the viewport, number of separate elements, the
 //                                         largest one); how it is counted is in live-site-lib.mjs
 //
-// Flags: --url (default https://higglehaven.com), --name (required; this
+// Flags: --with <name> (a second signed-in page: a fleet account on the live site, see the peer steps), --url (default https://higglehaven.com), --name (required; this
 // session's name), --desktop (1280x800 instead of phone), --size WxH (a touch screen of that size,
 // e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
@@ -101,6 +103,7 @@ const context = await browser.newContext({
   hasTouch: device.hasTouch,
 });
 const page = await context.newPage();
+const mainPage = page;
 
 const result = { url: baseUrl, name: options.name, device: options.size ? `touch ${options.size.width}x${options.size.height}` : options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
 if (options.throttle) {
@@ -130,19 +133,19 @@ page.on('requestfinished', async (request) => {
   timingSamples.get(key).push(duration);
 });
 
-async function signIn() {
-  const request = context.request; // shares the browser context's cookie jar; the cookie is never read here
+async function signIn(ctx = context, name = options.name) {
+  const request = ctx.request; // shares the browser context's cookie jar; the cookie is never read here
   if (options.login === 'fleet') {
-    const response = await request.post(`${baseUrl}/api/auth/fleet-login`, { data: { name: options.name } });
+    const response = await request.post(`${baseUrl}/api/auth/fleet-login`, { data: { name } });
     if (response.status() === 401) fail(`live-site: ${gateRefusalMessage(401)}`);
     if (response.status() === 404) fail('live-site: fleet login answered 404: the fleet key is not accepted here, or fleet login is not deployed yet (#3429).');
     if (!response.ok()) fail(`live-site: fleet login failed with HTTP ${response.status()}.`);
     return;
   }
   // A local wrangler dev instance: an ordinary throwaway account, no mailbox needed.
-  const email = `${options.name}@e2e.test`;
+  const email = `${name}@e2e.test`;
   const password = 'live-site-local-password-123';
-  const signup = await request.post(`${baseUrl}/api/auth/signup`, { data: { email, password, username: options.name, ageAttested: true } });
+  const signup = await request.post(`${baseUrl}/api/auth/signup`, { data: { email, password, username: name, ageAttested: true } });
   if (signup.ok()) return;
   const login = await request.post(`${baseUrl}/api/auth/login`, { data: { email, password } });
   if (!login.ok()) fail(`live-site: could not sign in locally (signup ${signup.status()}, login ${login.status()}).`);
@@ -150,7 +153,7 @@ async function signIn() {
 
 // A throwaway local account has not passed the age and card check; the dev-mode
 // verify step clears it. (A fleet account counts as verified, #3429.)
-async function clearLocalVerifyModal() {
+async function clearLocalVerifyModal(page = mainPage) {
   const shown = await page.waitForSelector('#verify-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
   if (!shown) return;
   const ready = () => page.waitForFunction(() => {
@@ -167,9 +170,102 @@ async function clearLocalVerifyModal() {
     await page.click('#verify-continue-btn');
   }
   await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 15000 });
-  await settle();
+  await settle(page);
 }
 
+
+// #3930 (--with <name>): a second signed-in page, in its own browser context, that stands beside
+// the first, so one run can show a tap on a person, a nearby-chat line arriving, or a voice peer in
+// the list. Fleet accounts only on the live site (parseArgs). Its console errors are reported
+// apart from the first page's.
+let peerPage = null;
+let peerContext = null;
+async function openPeer() {
+  peerContext = await browser.newContext({
+    ...(localFleetKey && isLocal ? { extraHTTPHeaders: { 'x-fleet-key': localFleetKey } } : {}),
+    viewport: { width: device.width, height: device.height },
+    deviceScaleFactor: device.deviceScaleFactor,
+    isMobile: device.isMobile,
+    hasTouch: device.hasTouch,
+  });
+  peerPage = await peerContext.newPage();
+  result.peer = { name: options.with, consoleErrors: [], failedRequests: [] };
+  peerPage.on('pageerror', (error) => result.peer.consoleErrors.push(error.message));
+  peerPage.on('console', (message) => {
+    if (message.type() === 'error') result.peer.consoleErrors.push(message.text());
+  });
+  peerPage.on('response', (response) => {
+    if (response.status() >= 400) result.peer.failedRequests.push({ url: routeOf(response.url()), method: response.request().method(), status: response.status() });
+  });
+  await signIn(peerContext, options.with);
+  await peerPage.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await settle(peerPage);
+  if (options.login === 'local') await clearLocalVerifyModal(peerPage);
+  await peerPage.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
+}
+
+// peer:join puts the second avatar a few metres beside the first (the page's own test hooks, the
+// same ones the e2e suite uses), ends its spawn orbit with a short walk, and asks both pages to
+// look for who is nearby; peer:pos / peer:shot read it; peer:say speaks in its nearby chat.
+async function runPeerStep(sub, arg, index) {
+  if (!peerPage) throw new Error('the second page is not open');
+  switch (sub) {
+    case 'join': {
+      const at = await page.evaluate(() => window.__testShopAvatarPosition?.() ?? null);
+      if (!at) throw new Error('the first page has no avatar position yet');
+      // A short touch walk ends the spawn orbit, which would otherwise overwrite a teleport.
+      const size = peerPage.viewportSize();
+      const session = await peerContext.newCDPSession(peerPage);
+      const x = Math.round(size.width * 0.25);
+      const y = Math.round(size.height * 0.7);
+      const send = (type, pts) => session.send('Input.dispatchTouchEvent', { type, touchPoints: pts });
+      await send('touchStart', [{ x, y }]);
+      await send('touchMove', [{ x, y: y - 60 }]);
+      await peerPage.waitForTimeout(400);
+      await send('touchEnd', []);
+      await peerPage.evaluate(({ x: ax, y: ay, z: az }) => {
+        window.__testTeleportShopAvatar?.(ax + 2, ay, az + 2);
+        window.__testForceShopProximityCheck?.();
+      }, at);
+      await page.evaluate(() => window.__testForceShopProximityCheck?.());
+      await peerPage.waitForTimeout(1200);
+      return runPeerStep('pos', '', index);
+    }
+    case 'pos':
+      return peerPage.evaluate(() => ({ avatar: window.__testShopAvatarPosition?.() ?? null, mode: document.body.dataset.mode, shopReady: document.body.classList.contains('shop-ready') }));
+    case 'shot': {
+      const file = path.join(outDir, safeShotName(`peer-${arg}`, index));
+      await peerPage.screenshot({ path: file, scale: 'css' });
+      result.screenshots.push(file);
+      return file;
+    }
+    case 'say': {
+      // The Chat petal's leaf holds the nearby-chat form (#3855).
+      const tap = async (selector, what) => {
+        const control = peerPage.locator(selector).first();
+        await control.waitFor({ state: 'visible', timeout: 15000 }).catch(() => { throw new Error(`${what} is not on the second page's screen`); });
+        await control.click({ timeout: 10000 });
+      };
+      if ((await peerPage.locator('#account-menu-toggle').getAttribute('aria-expanded')) !== 'true') {
+        await tap('#account-menu-toggle', 'the menu button');
+        await peerPage.waitForTimeout(700);
+      }
+      // Chat is a leaf of the Shop stem: the petal of the mode you are in opens that stem.
+      if (!(await peerPage.locator('#bud-petal-shop-chat').first().isVisible())) {
+        await tap('#bud-modes .mode-nav-btn[data-mode="shop"]', 'the Shop petal');
+        await peerPage.waitForTimeout(500);
+      }
+      await tap('#bud-petal-shop-chat', 'the Chat petal');
+      if (await peerPage.locator('.bud-chat-note').count()) throw new Error('the second account is not ID-verified, so it cannot chat (a fleet account is; a local throwaway one is not)');
+      await peerPage.fill('#shop-nearby-chat-input', arg, { timeout: 15000 });
+      await peerPage.press('#shop-nearby-chat-input', 'Enter');
+      await peerPage.waitForTimeout(800);
+      return null;
+    }
+    default:
+      throw new Error(`unknown peer step ${sub}`);
+  }
+}
 
 // #3649: in Shop the Build and Sell buttons are petals of the bud, hidden until it is open;
 // in Build and Sell they are still the top row. Click the mode's button wherever it is.
@@ -250,7 +346,7 @@ const frameStats = () => page.evaluate(() => {
   const monitor = window.__frameMonitor;
   return monitor ? { longestFrameMs: Math.round(monitor.longestFrameGapMs()), longTasks: monitor.longTasks() } : null;
 });
-const settle = async () => {
+const settle = async (page = mainPage) => {
   await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
   // The opening screen can still be up when the network goes quiet (a mode switch returns while
   // "Loading the world" is half way), and a shot taken then shows the loading screen, not the
@@ -413,6 +509,8 @@ async function runStep(step, index) {
 async function runStepAction(step, index) {
   const [a, b] = step.args;
   switch (step.command) {
+    case 'peer':
+      return runPeerStep(a, b, index);
     case 'menu':
       await ensureMenuOpen();
       return null;
@@ -614,6 +712,7 @@ try {
   if (landing && landing.status() === 401) fail(`live-site: ${gateRefusalMessage(401)}`);
   await settle();
   if (options.login === 'local') await clearLocalVerifyModal();
+  if (options.with) await openPeer();
   // #3483: what happened before the first step (the title screen and first
   // load), kept apart from the steps' own figures, which start from a reset.
   result.startup = await frameStats().catch(() => null);
@@ -625,14 +724,14 @@ try {
   }
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
-    const label = [step.command, ...step.args].join(':');
+    const label = [step.command, ...step.args].join(':').replace(/:+$/, '');
     try {
       const value = await runStep(step, i + 1);
       // #3483: when the step ended, in the page's own clock (ms since
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

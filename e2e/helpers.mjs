@@ -423,6 +423,12 @@ export function budAware(page) {
       async (toggle) => { await toggle.click(); },
       { noWaitAfter: true },
     ).catch(() => {});
+    // #3652: the General tab keeps its tax and account fields in a closed disclosure.
+    page.addLocatorHandler(
+      page.locator('.settings-account-fold:not([open]) > summary:visible').first(),
+      async (summary) => { await summary.click(); },
+      { noWaitAfter: true },
+    ).catch(() => {});
   }
   const click = page.click.bind(page);
   page.click = async (selector, options) => {

@@ -99,7 +99,7 @@ export async function rateLimitRefusal(db, result, bucketKey, maxAttempts) {
   ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
   const oldestMs = oldest?.oldest ?? now;
   const retryAfterSeconds = Math.max(1, Math.ceil((oldestMs + RATE_LIMIT_WINDOW_MS - now) / 1000));
-  throw new HttpError('Too many attempts. Please wait a while and try again.', 429, {
+  throw new HttpError('Too many attempts. Wait a while and try again.', 429, {
     limit: maxAttempts,
     windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
     retryAfterSeconds,

@@ -3410,7 +3410,7 @@ export async function cascadeDeleteAccount(db, userId) {
     // -- a narrow concurrent-delete race (e.g. this same account already
     // deleted by another in-flight request). Retry-safe, same posture as
     // the builder/seller endpoints' own "concurrent delete" case.
-    throw new HttpError('Account deletion did not complete -- please retry', 409);
+    throw new HttpError('Account deletion did not complete. Retry', 409);
   }
   // #3065: the seller (if any) is really gone now -- take their products off
   // builders' land and tell the builders. Best-effort: the account is

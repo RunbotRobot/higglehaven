@@ -15,6 +15,7 @@ export const BANNED = [
   { word: 'lánd', pattern: /\blánd(s)?\b/i, why: 'say "lándlet"; "lánd" is retired' },
   { word: 'bud / flower', pattern: /\b(bud|flower)\b/i, why: 'design vocabulary; say "the menu" or "the round logo"' },
   { word: 'petal / leaf / stem', pattern: /\b(petal|leaf|stem)s?\b/i, why: 'design vocabulary; name the thing by what it opens' },
+  { word: 'please', pattern: /\bplease\b/i, why: 'the voice note drops "please"; say "Try again"' },
   { word: 'modal', pattern: /\bmodals?\b/i, why: 'internal word; say "window" or name the thing' },
 ];
 

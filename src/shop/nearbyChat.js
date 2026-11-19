@@ -159,7 +159,7 @@ async function reportNearbyChatSender(builderId, lineEl) {
     // pill over the world.
     if (lineEl?.isConnected) showInlineActionStatus(lineEl, 'Report sent. Thank you.', { error: false });
   } catch (err) {
-    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Please try again.' });
+    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Try again.' });
   }
 }
 

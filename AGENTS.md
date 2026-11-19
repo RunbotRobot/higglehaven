@@ -79,7 +79,22 @@ to the end of any step to take them while it runs, as in
 `NN-name-1.png`, `NN-name-2.png`, ...). A step whose control cannot be found fails within
 40 s with one line naming the step. Read screenshots back
 with the Read tool. Against a local `wrangler dev`, add
-`--url http://127.0.0.1:8787 --login local`.
+`--url http://127.0.0.1:8787 --login local`. `--with <name>` opens a second signed-in
+page beside the first (#3930), for what needs two people: a tap on a person, a nearby-chat
+line arriving, a voice peer in the list. On the live site `<name>` must be a fleet account
+(`higglehaven` plus digits) other than your own, never a real person's; its steps are
+`peer:join` (its avatar walks up beside yours), `peer:say:<text>` (it speaks in nearby chat),
+`peer:shot[:name]` and `peer:pos`, and its console errors are reported apart under `peer`.
+
+**A seeded local world (#3930).** `npm run seed:local-world` fills a local `wrangler dev` (with
+`.dev.vars` holding `ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret`, the e2e fixture) so looks that
+need a lándlet, a purchase or another person can be taken locally: `--name looker` is a builder and
+seller with a claimed lándlet (twelve items, a bundle, a published version), three products (one
+sold out), an order not yet rated, a notice and a friend request waiting; `--name neighbor` is the
+other account. It refuses any address but this machine, is safe to run again (it adds nothing the
+second time; sign-in is limited to ten tries per fifteen minutes), makes `looker` an admin locally
+(the no-card purchase path needs it), and seeds no assistant thread (that needs an ID-verified
+account). `e2e/seed-local-world.test.mjs` runs it so it cannot rot.
 
 **After a change of yours deploys, look at it on the live site at phone size
 before calling it done, and say in the PR or issue what you saw.**
