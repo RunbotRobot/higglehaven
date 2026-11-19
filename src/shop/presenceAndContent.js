@@ -65,7 +65,7 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst } from './lodTier.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -560,6 +560,36 @@ function lodSetsFor(entry) {
   return sets;
 }
 
+// #3920: what the full model of an item costs to draw, in triangles, counted once and kept. A
+// batched placement reads its batch's full parts; any other placed model is walked once, leaving out
+// the mid and far versions attached to it.
+function trianglesOfGeometry(geometry) {
+  return (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
+}
+function countModelTriangles(node, skip) {
+  if (skip.has(node)) return 0;
+  let triangles = node.isMesh && node.geometry ? trianglesOfGeometry(node.geometry) : 0;
+  for (const child of node.children) triangles += countModelTriangles(child, skip);
+  return triangles;
+}
+function fullTrianglesOf(object) {
+  let triangles = object.userData.lodFullTris;
+  if (triangles !== undefined) return triangles;
+  const batch = object.userData.batch;
+  if (batch) {
+    if (batch.fullTriangles === undefined) batch.fullTriangles = batch.tiers.full.parts.reduce((sum, part) => sum + trianglesOfGeometry(part.geometry), 0);
+    triangles = batch.fullTriangles;
+  } else {
+    triangles = countModelTriangles(object, new Set(Object.values(object.userData.lodTiers ?? {})));
+  }
+  object.userData.lodFullTris = triangles;
+  return triangles;
+}
+
+// #3920: the full-detail triangle budget; e2e-only hook to lower it so a small test scene can exceed it.
+let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
+window.__testSetShopFullTriangleCap = (triangles) => { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; };
+
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
@@ -591,10 +621,11 @@ function updateInstanceLodTiers() {
       const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
       // #3443: beside the avatar is always the real model, outside the budget too.
-      const nearAvatar = set ? set.near : isNearFullDetail(horizontalDistanceM(
+      const ownDistanceM = horizontalDistanceM(
         entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
         shopAvatarPosition.x, shopAvatarPosition.y,
-      ), object.userData.lodNear === true);
+      );
+      const nearAvatar = set ? set.near : isNearFullDetail(ownDistanceM, object.userData.lodNear === true);
       if (!set) object.userData.lodNear = nearAvatar;
       // A set's current tier is its first member's, so the hysteresis band
       // applies to the set as a whole rather than to each member's own state;
@@ -605,11 +636,14 @@ function updateInstanceLodTiers() {
         px,
         protected: nearAvatar,
         wanted: nearAvatar ? TIER_FULL : nextTier(currentTier, px),
+        tris: fullTrianglesOf(object), // #3920: the triangle budget counts protected items too
+        dist: ownDistanceM,
+        current: object.userData.lodApplied,
       });
       lodObjectsScratch.push({ entry, object });
     }
   }
-  const tiers = budgetedTiers(lodItemsScratch);
+  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap);
   // First note every item's wanted version (and ask for the reduced versions of
   // any that will need them); the ones due to change are collected to be applied
   // largest first.
@@ -1554,12 +1588,19 @@ async function loadShopLandletInstances(entry, myToken) {
 // avatar, otherwise by how big it looks on screen (the same rule as every later tick, with no
 // history yet). The per-tick pass reconciles anything the full-detail budget or a bundle's size
 // changes from here.
-function initialBatchTier(entry, handle) {
-  const nearAvatar = isNearFullDetail(horizontalDistanceM(
-    entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
-    shopAvatarPosition.x, shopAvatarPosition.y,
-  ));
-  return nearAvatar ? TIER_FULL : nextTier(null, lodApparentPx(entry, handle));
+function initialBatchTiers(entry, handles, fullTriangles) {
+  const items = handles.map((handle) => {
+    const dist = horizontalDistanceM(
+      entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
+      shopAvatarPosition.x, shopAvatarPosition.y,
+    );
+    const nearAvatar = isNearFullDetail(dist);
+    const px = lodApparentPx(entry, handle);
+    return { px, protected: nearAvatar, wanted: nearAvatar ? TIER_FULL : nextTier(null, px), tris: fullTriangles, dist };
+  });
+  // #3920: the same budget as every later tick (only this batch's own placements are known here; the
+  // next tick reconciles with the rest of the world).
+  return budgetedTiers(items, undefined, undefined, fullTriangleCap);
 }
 
 async function buildAndAttachBatch(entry, members, myToken, group, run) {
@@ -1591,7 +1632,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   // protected radius around the avatar), not at full detail for its first frames and then converted:
   // a wall of a thousand bricks seen from afar was one draw of millions of triangles until its
   // reduced versions loaded. The versions are fetched before anything is added to the scene.
-  const initialTiers = handles.map((handle) => initialBatchTier(entry, handle));
+  const initialTiers = initialBatchTiers(entry, handles, source.parts.reduce((sum, part) => sum + trianglesOfGeometry(part.geometry), 0));
   let tierSources = null;
   if (initialTiers.some((tier) => tier !== TIER_FULL)) {
     tierSources = await loadBatchTierSources(template).catch(() => null);

@@ -108,6 +108,48 @@ describe('budgetedTiers', () => {
   });
 });
 
+describe('the full-detail triangle budget (#3920)', () => {
+  const brick = (dist, extra = {}) => ({ px: 200, wanted: TIER_FULL, protected: false, tris: 5000, dist, current: TIER_FULL, ...extra });
+
+  it('changes nothing while the triangles fit the budget', () => {
+    const items = [brick(1), brick(2), brick(3)];
+    expect(budgetedTiers(items, 600, 1500, 15_000)).toEqual([TIER_FULL, TIER_FULL, TIER_FULL]);
+  });
+
+  it('keeps the nearest items full and drops the farthest to mid when over budget', () => {
+    const items = [brick(30), brick(1), brick(20), brick(5), brick(10)];
+    // budget for three bricks: the three nearest (1, 5, 10 m) stay full, the 20 and 30 m ones go to mid
+    expect(budgetedTiers(items, 600, 1500, 15_000)).toEqual([TIER_MID, TIER_FULL, TIER_MID, TIER_FULL, TIER_FULL]);
+  });
+
+  it('counts protected items too: a protected wall over the budget still steps down from its far end', () => {
+    const wall = Array.from({ length: 10 }, (_, i) => brick(2 + i * 2, { protected: true }));
+    const tiers = budgetedTiers(wall, 600, 1500, 20_000); // four bricks of budget
+    expect(tiers.slice(0, 4)).toEqual([TIER_FULL, TIER_FULL, TIER_FULL, TIER_FULL]);
+    expect(tiers.slice(4)).toEqual(Array(6).fill(TIER_MID));
+  });
+
+  it('gives an item that is already full a few metres of credit, so the boundary does not flicker', () => {
+    const items = [brick(10, { current: TIER_MID }), brick(11, { current: TIER_FULL }), brick(30)];
+    // budget for one brick: the 10 m one is mid now, the 11 m one is full now: the full one keeps its place
+    expect(budgetedTiers(items, 600, 1500, 5_000)).toEqual([TIER_MID, TIER_FULL, TIER_MID]);
+  });
+
+  it('does not count or drop items with no triangle count, nor items already below full', () => {
+    const items = [brick(1, { tris: 0 }), brick(2, { tris: undefined }), brick(3, { wanted: TIER_MID }), brick(4)];
+    expect(budgetedTiers(items, 600, 1500, 1)).toEqual([TIER_FULL, TIER_FULL, TIER_MID, TIER_MID]);
+  });
+
+  it('is the cost bound: a thousand big bricks around an avatar cost at most the budget plus one brick', () => {
+    const items = Array.from({ length: 1000 }, (_, i) => brick(i * 0.05, { protected: true, tris: 5320 }));
+    const tiers = budgetedTiers(items, 600, 1500, 1_200_000);
+    const full = tiers.filter((tier) => tier === TIER_FULL).length;
+    expect(full * 5320).toBeLessThanOrEqual(1_200_000);
+    expect(full).toBeGreaterThan(200);
+    expect(tiers.slice(0, full).every((tier) => tier === TIER_FULL)).toBe(true); // the nearest ones
+  });
+});
+
 describe('fullDetailFloorPx (the cap)', () => {
   it('is 0 when everything fits', () => {
     expect(fullDetailFloorPx([10, 20, 30], 5)).toBe(0);

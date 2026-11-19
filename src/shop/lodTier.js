@@ -41,6 +41,16 @@ export const LOD_FAR_EXIT_PX = 36;
 export const MAX_FULL_DETAIL_ITEMS = 600;
 export const MAX_MID_DETAIL_ITEMS = 1500;
 
+// #3920: the same bound in triangles, because an item count is no bound on cost: 600 bricks of 5,320
+// triangles is 3.2 million, and a bundled wall beside the avatar is protected whole and was outside
+// every cap (4.4 to 8.8 million triangles in one frame, seconds in software GL). Protected items
+// count against it. Over budget, the items nearest the avatar keep full detail and the farthest drop
+// to mid, so a wall steps down from its far end; an item that is already full gets a few metres'
+// credit (FULL_TRIANGLE_HYSTERESIS_M) so the boundary does not flicker as the avatar moves a step.
+// What a phone draws comfortably in one frame, with the rest of the world's few hundred thousand.
+export const MAX_FULL_DETAIL_TRIANGLES = 1_200_000;
+export const FULL_TRIANGLE_HYSTERESIS_M = 3;
+
 // #3443: what is right beside the person is always the real model. An item
 // within this many metres (along the ground) of the avatar never takes a cheaper version,
 // neither from the per-item size rule (a single brick is small, so it sits near
@@ -99,7 +109,7 @@ export function nextTier(currentTier, apparentPx) {
 // budget). Returns an array of the final tiers in the same order. The smallest
 // on screen drop first: full overflow goes to mid, and mid overflow (the items
 // that wanted mid plus those just dropped) goes to far.
-export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = MAX_MID_DETAIL_ITEMS) {
+export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = MAX_MID_DETAIL_ITEMS, fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES) {
   let protectedCount = 0;
   const fullPxs = [];
   for (const item of items) {
@@ -112,6 +122,7 @@ export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = M
     if (item.wanted === TIER_FULL && item.px < fullFloorPx) return TIER_MID;
     return item.wanted;
   });
+  applyFullTriangleBudget(items, afterFull, fullTriangleCap);
   const midPxs = [];
   items.forEach((item, index) => {
     if (!item.protected && afterFull[index] === TIER_MID) midPxs.push(item.px);
@@ -121,6 +132,29 @@ export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = M
     if (afterFull[index] === TIER_MID && item.px < midFloorPx) return TIER_FAR;
     return afterFull[index];
   });
+}
+
+// #3920: items may also carry `tris` (the triangle count of the item's full model; 0 or absent when
+// unknown, which are not counted), `dist` (its own ground distance to the avatar in metres) and
+// `current` (the tier it is drawn in now). Of the items ending up full, the nearest keep full detail
+// until `cap` triangles are used; the rest go to mid. Edits `tiers` in place.
+function applyFullTriangleBudget(items, tiers, cap) {
+  let total = 0;
+  const candidates = [];
+  items.forEach((item, index) => {
+    if (tiers[index] === TIER_FULL && item.tris > 0) {
+      total += item.tris;
+      candidates.push(index);
+    }
+  });
+  if (total <= cap) return;
+  const priority = (index) => (items[index].dist ?? Infinity) - (items[index].current === TIER_FULL ? FULL_TRIANGLE_HYSTERESIS_M : 0);
+  candidates.sort((a, b) => priority(a) - priority(b));
+  let used = 0;
+  for (const index of candidates) {
+    used += items[index].tris;
+    if (used > cap) tiers[index] = TIER_MID;
+  }
 }
 
 // Given the apparent sizes (px) of every item that wants a detail level, the
