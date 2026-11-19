@@ -34,13 +34,14 @@ import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension, suspende
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { stripeIsLive } from './fleet.js';
 import { fireNotification } from './notifications.js';
+import { soldOutMessage } from './email-layout.js'; // #3877
 import { isUserSuspended } from './account-moderation.js';
 import {
   counterpartyKeyFor, commissionCapPlanFor, commissionCreditClaimStatement, commissionHoldInsertStatement,
   COMMISSION_HOLD_DURATION_DAYS,
 } from './commission-caps.js';
 import {
-  stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
+  stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, formatCents,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry
@@ -1279,16 +1280,11 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`);
     const preference = preferenceByBuilder.get(builderId);
     if (preference?.notifySoldOutEmail && preference.builderEmail) {
-      // #2212: template.name is free-text/seller-supplied -- escape it
-      // before it lands in the html body (the plain-text body and the
-      // subject line, neither of which render as markup, are unaffected).
-      const safeName = escapeHtml(template.name);
-      await sendEmail(env, {
-        to: preference.builderEmail,
-        subject: `"${template.name}" just sold out`,
-        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your lándlet.</p>`,
-        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`,
-      });
+      // #2212: template.name is free-text/seller-supplied; renderEmail escapes every
+      // string it puts in the html body (#3877), the plain-text body and the subject
+      // line, neither of which render as markup, are unaffected.
+      const { line: _line, ...message } = soldOutMessage(template.name, count);
+      await sendEmail(env, { to: preference.builderEmail, ...message });
     }
   }
 }
