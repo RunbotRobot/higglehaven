@@ -303,6 +303,29 @@ Today HUD chrome is a pale-green pill at 0.65 to 0.95 opacity, and dialogs are
 a pale-yellow panel at 0.97. No surface blurs what is behind it. Borders are
 one pixel at ink 25% where they exist at all.
 
+## Inside a leaf
+
+A leaf is a sheet; what is inside it is made from five parts, and only these
+(#3933). Each is written in tokens, so a change to a token moves every leaf. The
+numbers are the "before" the inventory on #3933 counted from `index.html` and
+`src/app.css`: 18 list-row classes in 6 paddings, 64 button classes in about 30
+looks, 22 field rules in 12 looks. The target is one of each.
+
+| part | what it is | made of |
+|---|---|---|
+| **a row** | one thing in a list: a friend, a notice, an order, a sign post, a product | an optional picture or icon at the start; the name in `--weight-semibold`; at most one secondary line in `--text-xs` at `--alpha-soft` (a time, an author or a status goes here, not in a class of its own); at most one trailing action, a quiet button. Fill ink at `--alpha-faint`, `--radius-md`, padding `--space-md` by `--space-lg`, `--space-sm` between its parts, `--text-sm` |
+| **a field** | one thing to type or choose | the label above in `--text-sm`; a helper line under it in `--text-xs`; the control with ink at `--alpha-faint` as its fill, a 1px border at `--alpha-line`, `--radius-md`, padding `--space-sm` by `--space-md`, text `--text-lg` (16px, so a phone does not zoom on focus). A required field starts empty and its helper line says what to enter; its error appears on the step that holds it, in `--danger-text` |
+| **a primary button** | the one thing a leaf is for ("Save", "Send", "Buy") | `--brand-green` fill, `--ink` text, `--radius-pill`, padding `--space-sm` by `--space-2xl`, at least 44px tall; one per leaf, at the bottom or beside the field it acts on |
+| **a quiet button** | every other action | no fill, a 1px border at `--alpha-line`, `--ink` text, `--radius-pill`, padding `--space-xs` by `--space-lg`, at least 44px to hit; a destructive one reads in `--danger-text` and is confirmed in its own modal |
+| **a heading and a line** | the leaf's name and what it says about itself | the leaf's title once, `--text-xl` in `--weight-semibold`, close in the upper right; a section heading `--text-md` in `--weight-semibold`, no rule under it; a status or empty line `--text-sm` at `--alpha-soft` (`.empty-state`); a refusal or error in `--danger-text`, selectable and kept until dismissed; a success may fade |
+
+Rules that already apply and are not repeated per part: the control that closes
+is in the upper right; the actions on a thing sit under its name; any text can
+be selected and there is no Copy button; an icon is a picture of the thing with
+its word beside it; a leaf does not change what it does when it changes how it
+looks. A row, field or button that is not one of these five is either an
+exception named on #3933 or the next thing to bring onto them.
+
 ## Motion
 
 | token | value | use |

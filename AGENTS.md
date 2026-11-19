@@ -79,7 +79,12 @@ to the end of any step to take them while it runs, as in
 `NN-name-1.png`, `NN-name-2.png`, ...). A step whose control cannot be found fails within
 40 s with one line naming the step. Read screenshots back
 with the Read tool. Against a local `wrangler dev`, add
-`--url http://127.0.0.1:8787 --login local`.
+`--url http://127.0.0.1:8787 --login local`. `--with <name>` opens a second signed-in
+page beside the first (#3930), for what needs two people: a tap on a person, a nearby-chat
+line arriving, a voice peer in the list. On the live site `<name>` must be a fleet account
+(`higglehaven` plus digits) other than your own, never a real person's; its steps are
+`peer:join` (its avatar walks up beside yours), `peer:say:<text>` (it speaks in nearby chat),
+`peer:shot[:name]` and `peer:pos`, and its console errors are reported apart under `peer`.
 
 **A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
 and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;

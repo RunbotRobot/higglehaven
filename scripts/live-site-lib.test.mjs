@@ -246,3 +246,35 @@ describe('the phone profile (#3935)', () => {
     expect(sent[2][1]).toEqual({ offline: false, latency: 40, downloadThroughput: 20000 * 1024 / 8, uploadThroughput: 5000 * 1024 / 8 });
   });
 });
+
+describe('the second page: --with and the peer steps (#3930)', () => {
+  const base = ['--name', 'higglehaven3'];
+  it('is off unless asked for', () => {
+    expect(parseArgs(base, {}).options.with).toBeNull();
+  });
+  it('takes a different fleet name', () => {
+    expect(parseArgs([...base, '--with', 'higglehaven10', 'peer:join'], {}).options.with).toBe('higglehaven10');
+  });
+  it('refuses, on the live site, a name that is not a fleet account', () => {
+    expect(() => parseArgs([...base, '--with', 'someone'], {})).toThrow(/only fleet accounts/);
+    expect(() => parseArgs([...base, '--with', 'higglehaven10x'], {})).toThrow(/only fleet accounts/);
+  });
+  it('refuses the same account twice', () => {
+    expect(() => parseArgs([...base, '--with', 'higglehaven3'], {})).toThrow(/different account/);
+  });
+  it('allows any plain name against a local server', () => {
+    expect(parseArgs([...base, '--login', 'local', '--with', 'friend-two'], {}).options.with).toBe('friend-two');
+    expect(() => parseArgs([...base, '--login', 'local', '--with', 'a b'], {})).toThrow(/plain account name/);
+  });
+  it('needs --with for any peer step', () => {
+    expect(() => parseArgs([...base, 'peer:join'], {})).toThrow(/need --with/);
+  });
+  it('parses the peer steps', () => {
+    expect(parseStep('peer:join')).toEqual({ command: 'peer', args: ['join', ''] });
+    expect(parseStep('peer:shot:near')).toEqual({ command: 'peer', args: ['shot', 'near'] });
+    expect(parseStep('peer:say:hello: there')).toEqual({ command: 'peer', args: ['say', 'hello: there'] });
+    expect(() => parseStep('peer:say')).toThrow(/words to say/);
+    expect(() => parseStep('peer:dance')).toThrow(/peer must be one of/);
+    expect(() => parseStep('peer')).toThrow();
+  });
+});
