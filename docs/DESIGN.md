@@ -293,6 +293,7 @@ The opacities a surface may use are a short list, not free choice:
 
 | token | value | use |
 |---|---|---|
+| `--fill-row` | ink at 8% | a list row's fill, one step quieter than `--alpha-faint` |
 | `--alpha-faint` | 0.12 | a quiet fill or a track |
 | `--alpha-line` | 0.25 | a hairline border |
 | `--alpha-half` | 0.5 | a tinted well; disabled |
@@ -313,7 +314,7 @@ looks, 22 field rules in 12 looks. The target is one of each.
 
 | part | what it is | made of |
 |---|---|---|
-| **a row** | one thing in a list: a friend, a notice, an order, a sign post, a product | an optional picture or icon at the start; the name in `--weight-semibold`; at most one secondary line in `--text-xs` at `--alpha-soft` (a time, an author or a status goes here, not in a class of its own); at most one trailing action, a quiet button. Fill ink at `--alpha-faint`, `--radius-md`, padding `--space-md` by `--space-lg`, `--space-sm` between its parts, `--text-sm` |
+| **a row** | one thing in a list: a friend, a notice, an order, a sign post, a product | an optional picture or icon at the start; the name in `--weight-semibold`; at most one secondary line in `--text-xs` at `--alpha-soft` (a time, an author or a status goes here, not in a class of its own); at most one trailing action, a quiet button. Fill `--fill-row` (ink at 8%), `--radius-md`, padding `--space-md` by `--space-lg`, `--space-sm` between its parts, `--text-sm` |
 | **a field** | one thing to type or choose | the label above in `--text-sm`; a helper line under it in `--text-xs`; the control with ink at `--alpha-faint` as its fill, a 1px border at `--alpha-line`, `--radius-md`, padding `--space-sm` by `--space-md`, text `--text-lg` (16px, so a phone does not zoom on focus). A required field starts empty and its helper line says what to enter; its error appears on the step that holds it, in `--danger-text` |
 | **a primary button** | the one thing a leaf is for ("Save", "Send", "Buy") | `--brand-green` fill, `--ink` text, `--radius-pill`, padding `--space-sm` by `--space-2xl`, at least 44px tall; one per leaf, at the bottom or beside the field it acts on |
 | **a quiet button** | every other action | no fill, a 1px border at `--alpha-line`, `--ink` text, `--radius-pill`, padding `--space-xs` by `--space-lg`, at least 44px to hit; a destructive one reads in `--danger-text` and is confirmed in its own modal |
