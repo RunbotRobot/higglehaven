@@ -896,6 +896,25 @@
       <span id="edit-bundle-reason" hidden></span>
       <div id="item-card-more" hidden>
         <button id="toggle-snap" type="button">Snap</button>
+        <!-- #3689: precise placement and exact angles, for one item. Both go through the same path as a
+             drag on the item (limits, collision, undo, saving); text is selectable like any other. -->
+        <div id="item-card-nudge" hidden>
+          <div class="item-card-block-title">Nudge <span id="nudge-height-readout" role="status" aria-live="polite"></span></div>
+          <div class="item-card-nudge-pad">
+            <button type="button" data-nudge="left">&#9664; Left</button>
+            <button type="button" data-nudge="right">Right &#9654;</button>
+            <button type="button" data-nudge="up">&#8679; Up</button>
+            <button type="button" data-nudge="forward">&#9650; Forward</button>
+            <button type="button" data-nudge="back">&#9660; Back</button>
+            <button type="button" data-nudge="down">&#8681; Down</button>
+          </div>
+        </div>
+        <div id="item-card-angles" hidden>
+          <div class="item-card-block-title">Angles</div>
+          <label class="item-card-angle-field">Turn<input id="angle-turn" aria-label="Turn, in degrees" data-angle="turn" type="number" step="1" inputmode="decimal" /></label>
+          <label class="item-card-angle-field">Tilt red<input id="angle-tilt-red" aria-label="Tilt (red ring), in degrees" data-angle="tiltRed" type="number" step="1" inputmode="decimal" /></label>
+          <label class="item-card-angle-field">Tilt green<input id="angle-tilt-green" aria-label="Tilt (green ring), in degrees" data-angle="tiltGreen" type="number" step="1" inputmode="decimal" /></label>
+        </div>
         <!-- #3693 (Build in the bud 6/6): rare, and about one item, so they live in the card's More; ids and handlers unchanged. -->
         <button id="toggle-community-sign" type="button" data-width-sizer="Community Sign">Community Sign</button>
         <button id="toggle-community-calendar" type="button" data-width-sizer="Community Calendar">Community Calendar</button>

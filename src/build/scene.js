@@ -80,10 +80,11 @@ import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
-import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
+import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
-import { anglesFromQuaternion, formatRotationReadout, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
+import { anglesFromQuaternion, formatRotationReadout, quaternionFromAngles, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
+import { nudgeVector, nudgeStepMeters, heightAboveFloor, NUDGE_DIRECTIONS } from './nudge.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -187,10 +188,12 @@ function itemCentreZRange() {
 // was free). The gesture handlers read and clear it so the limit is said
 // once per hit, not once per frame.
 let levelLimitHit = null;
+let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
 function announceLevelLimit() {
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
+  levelLimitAnnounced = true;
   showSelectionActionStatus(hit === 'top'
     ? "That's as high as this lándlet goes. Use Build Level Above to build higher."
     : "That's as deep as this lándlet goes. Use Dig Level Below to go deeper.");
@@ -2764,6 +2767,91 @@ function setGizmoMode(mode) {
   }
 }
 
+// #3689: precise placement and exact angles for ONE item, in the item card's More (the plan's "nudging
+// stays inside the card's More"). Both run the same way a gizmo drag does (dragging-changed, objectChange,
+// dragging-changed), so the landlet limits, collision, the undo snapshot, saving and syncing are exactly
+// the ones a drag gets; nothing here has a second set of rules.
+const nudgeBlockEl = document.getElementById('item-card-nudge');
+const nudgeHeightEl = document.getElementById('nudge-height-readout');
+const anglesBlockEl = document.getElementById('item-card-angles');
+const angleInputEls = [...document.querySelectorAll('#item-card-angles input[data-angle]')];
+
+function runSyntheticDrag(controls, mesh, change) {
+  const wasAttached = controls.object === mesh;
+  if (!wasAttached) controls.attach(mesh);
+  controls.dispatchEvent({ type: 'dragging-changed', value: true });
+  change();
+  controls.dispatchEvent({ type: 'objectChange' });
+  controls.dispatchEvent({ type: 'dragging-changed', value: false });
+  if (!wasAttached) controls.detach();
+}
+
+// Shows the height and the angles of the single selected item in the card; blocks are left out otherwise.
+function refreshCardNumbers(singleMesh = selectedMeshes.size === 1 ? [...selectedMeshes][0] : null) {
+  nudgeBlockEl.hidden = !singleMesh;
+  anglesBlockEl.hidden = !singleMesh;
+  if (!singleMesh) {
+    nudgeHeightEl.textContent = '';
+    return;
+  }
+  const { height } = meshDimensions(singleMesh);
+  const above = heightAboveFloor(singleMesh.position.z, height, levelFloorZ(currentLevelIndex));
+  const text = `Height ${formatLength(above)}`;
+  if (nudgeHeightEl.textContent !== text) nudgeHeightEl.textContent = text;
+  const angles = anglesFromQuaternion(singleMesh.quaternion);
+  for (const input of angleInputEls) {
+    if (document.activeElement === input) continue; // never overwrite what is being typed
+    const value = String(angles[input.dataset.angle]);
+    if (input.value !== value) input.value = value;
+  }
+}
+setInterval(() => { if (selectedMeshes.size === 1) refreshCardNumbers(); }, 250);
+
+export function nudgeSelectedItem(direction) {
+  if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy || !NUDGE_DIRECTIONS.includes(direction)) return false;
+  const [mesh] = selectedMeshes;
+  const before = mesh.position.clone();
+  const step = nudgeStepMeters(getUnits());
+  const wanted = nudgeVector(mesh.quaternion, direction).multiplyScalar(step);
+  levelLimitAnnounced = false;
+  runSyntheticDrag(translateControls, mesh, () => mesh.position.add(wanted));
+  if (mesh.position.distanceTo(before) < step * 0.5 && !levelLimitAnnounced) {
+    // A press that does nothing must not do it silently, and says why: the lándlet's edge, the floor, or
+    // something solid in the way. (The level limits say their own piece, in announceLevelLimit.)
+    const target = before.clone().add(wanted);
+    const clamped = clampToLandlet(mesh, target.x, target.y, target.z);
+    levelLimitHit = null;
+    const { height } = meshDimensions(mesh);
+    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) showSelectionActionStatus("That's the edge of this lándlet.");
+    else if (direction === 'down' && heightAboveFloor(before.z, height, levelFloorZ(currentLevelIndex)) === 0) showSelectionActionStatus("It's already on the floor.");
+    else showSelectionActionStatus('Something is in the way.');
+  }
+  refreshCardNumbers();
+  return true;
+}
+
+function applyTypedAngles() {
+  if (selectedMeshes.size !== 1 || sceneMutationBusy) return;
+  const [mesh] = selectedMeshes;
+  const typed = {};
+  for (const input of angleInputEls) typed[input.dataset.angle] = input.value.trim() === '' ? NaN : Number(input.value);
+  if (!Object.values(typed).every(Number.isFinite)) {
+    refreshCardNumbers();
+    return;
+  }
+  const next = quaternionFromAngles(typed);
+  if (next.angleTo(mesh.quaternion) < 1e-6) return;
+  runSyntheticDrag(rotateControls, mesh, () => mesh.quaternion.copy(next));
+  refreshCardNumbers();
+}
+document.querySelectorAll('#item-card-nudge [data-nudge]').forEach((button) => {
+  button.addEventListener('click', () => nudgeSelectedItem(button.dataset.nudge));
+});
+for (const input of angleInputEls) {
+  input.addEventListener('change', applyTypedAngles);
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') input.blur(); });
+}
+
 // Measure: a lightweight ruler for questions none of the placement tools
 // answer on their own — "are these two courses of Wall - White stacked
 // exactly 10 feet high?" is easy to eyeball wrong and tedious to work out
@@ -3520,6 +3608,7 @@ export function updateSelectionUI() {
   // both a multi-item selection and a single non-extensible one.
   modeRotateBtn.disabled = count !== 1 && !isSingleBundleSelection();
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
+  refreshCardNumbers(singleMesh);
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   // #3574 -- a mode this item cannot use is left out, not greyed (the "gone when not needed" rule).
   modeTrimBtn.hidden = modeTrimBtn.disabled;
@@ -4451,6 +4540,12 @@ window.__testSelectAllProducts = () => {
 // #3329: test-only (the window.__test* convention): moves whatever is selected
 // along x by `dx` metres, the way a member drag in edit mode would, so a test
 // can change a bundle's members without simulating a gizmo drag.
+// #3689: test-only: where the single selected item is and how it is turned.
+window.__testSelectedItemState = () => {
+  if (selectedMeshes.size !== 1) return null;
+  const [mesh] = selectedMeshes;
+  return { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z, ...anglesFromQuaternion(mesh.quaternion) };
+};
 window.__testNudgeSelected = (dx) => {
   for (const mesh of selectedMeshes) mesh.position.x += dx;
 };

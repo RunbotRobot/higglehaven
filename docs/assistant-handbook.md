@@ -227,7 +227,7 @@ motion, not the only way to move. Other people see the same.
 3. In "Build" you claim a lándlet of your own and fill it with items.
 4. In "Sell" you put your own products up for sale.
 5. The round logo at the top left (the bud) is the menu. It opens "Shop", "Build"
-   and "Sell", your account, and "?", which holds these pages and a way to ask an
+   and "Sell", your account, and "Help", which holds these pages and a way to ask an
    assistant.
 
 **You will see:** the world, with only the bud on top of it. Tap the bud to see
@@ -241,7 +241,7 @@ everything else.
 .mode-nav-btn[data-mode="shop"] | Shop
 .mode-nav-btn[data-mode="build"] | Build
 .mode-nav-btn[data-mode="sell"] | Sell
-#bud-petal-general-help | ?
+#bud-petal-general-help | Help
 ```
 
 ### How do I go between Shop, Build and Sell?
@@ -579,7 +579,7 @@ your messages when you tap "Message". Until then the panel says "No friends yet"
 
 ### How do I talk to an assistant?
 
-1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "?",
+1. Tap an assistant's bird in the world, or tap the round logo (the bud), then "Help",
    then "Ask an assistant".
 2. A small window opens once your earlier messages are in it (a moment after the tap, while the
    "Ask an assistant" row or the bud shows it is working). Type in the box that says "Ask a question…" and tap "Send".
@@ -607,7 +607,7 @@ The message box starts one line tall and grows as you type, up to about five lin
   to the team.
 
 ```controls any
-#bud-petal-general-help | ?
+#bud-petal-general-help | Help
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise
@@ -700,6 +700,11 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
 - Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
+- You want to place it exactly: tap "More" on the card beside the item. "Nudge" has "Left", "Right",
+  "Forward" and "Back", which slide it a small step along the item's own direction (a tenth of a metre,
+  or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
+  or lower it, with its height shown beside the word "Nudge". If a press does nothing, a line says why:
+  the edge of the lándlet, the floor, or something in the way.
 
 ```controls build
 #mode-move | Move
@@ -719,6 +724,9 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 **If something goes wrong:**
 - It turned the wrong way or too far: the round logo button at the top left, the Build petal, then "Undo".
+- You want an exact angle: tap "More" on the card beside the item, and type the angle in degrees under
+  "Angles": "Turn", "Tilt red" or "Tilt green" (the same three the line reads). An empty or invalid
+  number is put back as it was.
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 

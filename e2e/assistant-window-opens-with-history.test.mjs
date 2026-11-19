@@ -51,7 +51,7 @@ await page.evaluate(() => {
 
 const openHelp = async () => {
   await openAccountMenu(page);
-  await page.locator('#account-menu-panel button:visible', { hasText: /^\?$/ }).first().click();
+  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#help-ask-assistant-btn', { state: 'visible', timeout: 5000 });
 };
 const closeWindow = async () => {

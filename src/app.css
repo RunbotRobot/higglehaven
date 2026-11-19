@@ -569,7 +569,10 @@
          showed through the menu's edge. Two surfaces never overlap: the
          button steps aside (same fade) while the menu is open and returns
          when it closes, with its own countdown untouched. */
-      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible {
+      /* #3762: and a leaf (Settings, Help, Friends) opens after the menu has folded, so the button
+         steps aside for it too instead of showing through the top of it. */
+      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible,
+      body:has(.bud-leaf) #shop-last-location-btn.visible {
         opacity: 0;
         pointer-events: none;
       }
@@ -1016,6 +1019,9 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        /* #3762: the name keeps a little air on both sides of the leaf, so a long one is cut short of
+           the edge instead of running to it. */
+        padding-inline: var(--space-xs);
       }
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
       body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
@@ -6628,6 +6634,69 @@
       }
       #item-card-more[hidden] {
         display: none;
+      }
+      /* #3689: the nudge pad and the angle fields under More. Small pills like the card's other buttons; the
+         numbers are plain selectable text. */
+      #item-card-nudge,
+      #item-card-angles {
+        flex-basis: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        align-items: center;
+      }
+      #item-card-nudge[hidden],
+      #item-card-angles[hidden] {
+        display: none;
+      }
+      .item-card-block-title {
+        flex-basis: 100%;
+        font-weight: var(--weight-semibold);
+        font-size: var(--text-sm);
+      }
+      #nudge-height-readout {
+        font-weight: normal;
+        margin-left: var(--space-sm);
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      .item-card-nudge-pad {
+        flex-basis: 100%;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--space-xs);
+      }
+      #item-card-more .item-card-nudge-pad button {
+        padding: var(--space-xs) var(--space-2xs);
+        min-width: 0;
+        white-space: nowrap;
+        font-size: var(--text-xs);
+      }
+      #item-card-angles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--space-xs);
+      }
+      #item-card-angles .item-card-block-title {
+        grid-column: 1 / -1;
+      }
+      .item-card-angle-field {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3xs);
+        font-size: var(--text-xs);
+        min-width: 0;
+      }
+      .item-card-angle-field input {
+        width: 100%;
+        box-sizing: border-box;
+        border: none;
+        border-radius: var(--radius-sm);
+        padding: var(--space-3xs) var(--space-2xs);
+        font: inherit;
+        background: rgb(0 0 0 / 0.1);
+        color: var(--pill-text);
       }
       /* Multi-select: the next taps add items, so the card shrinks to its title
          (what is selected) and every tap goes through it to the world. Copy,

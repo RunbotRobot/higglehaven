@@ -121,6 +121,25 @@ await page.waitForFunction(
 const buttonBackAfterMenuClosed = await lastLocationVisible()
   && Number(await page.evaluate(() => getComputedStyle(document.getElementById('shop-last-location-btn')).opacity)) > 0.99;
 
+// #3762: a leaf (here Help) opens after the menu has folded; the button steps aside for it too
+// rather than showing through its top edge, and comes back when the leaf closes.
+await page.click('#account-menu-toggle');
+await page.click('#bud-petal-general-help');
+await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
+await page.waitForFunction(
+  () => Number(getComputedStyle(document.getElementById('shop-last-location-btn')).opacity) < 0.05,
+  null,
+  { timeout: 5000 },
+).catch(() => {});
+const buttonHiddenWhileLeafOpen = Number(await page.evaluate(() => getComputedStyle(document.getElementById('shop-last-location-btn')).opacity)) < 0.05;
+await page.click('#bud-leaf-help .bud-leaf-close');
+await page.waitForFunction(
+  () => Number(getComputedStyle(document.getElementById('shop-last-location-btn')).opacity) > 0.99,
+  null,
+  { timeout: 5000 },
+).catch(() => {});
+const buttonBackAfterLeafClosed = Number(await page.evaluate(() => getComputedStyle(document.getElementById('shop-last-location-btn')).opacity)) > 0.99;
+
 await page.click('#shop-last-location-btn');
 const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 
@@ -167,6 +186,7 @@ console.log('seed presence B status (should be 200):', seedStatusB);
 console.log('button visible after seeding + reentering (phase 3, should be true):', visibleAfterSeedB);
 console.log('button steps aside while the account menu is open (should be opacity 0, pointer-events none):', buttonStyleWithMenuOpen);
 console.log('button returns once the account menu closes (should be true):', buttonBackAfterMenuClosed);
+console.log('button steps aside while a leaf is open, and returns when it closes (should be true, true):', buttonHiddenWhileLeafOpen, buttonBackAfterLeafClosed);
 console.log('button hidden immediately on click, no countdown (should be true):', hiddenImmediatelyAfterClick);
 console.log('grounded again once the fade/teleport/fade/land sequence finishes (should be true):', groundedAfterSequence);
 console.log('a material is still stuck transparent after the sequence completes (should be false, i.e. NOT stuck):', transparentStuckAfterSequence);
@@ -181,6 +201,8 @@ const pass =
   visibleAfterSeedB &&
   buttonStyleWithMenuOpen.opacity < 0.05 && buttonStyleWithMenuOpen.pointerEvents === 'none' &&
   buttonBackAfterMenuClosed &&
+  buttonHiddenWhileLeafOpen &&
+  buttonBackAfterLeafClosed &&
   hiddenImmediatelyAfterClick &&
   groundedAfterSequence &&
   !transparentStuckAfterSequence &&
