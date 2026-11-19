@@ -241,8 +241,16 @@ async function runPeerStep(sub, arg, index) {
     }
     case 'say': {
       // The Chat petal's leaf holds the nearby-chat form (#3855).
-      await peerPage.locator('#account-menu-toggle').click({ timeout: 15000 });
-      await peerPage.locator('#bud-petal-shop-chat').click({ timeout: 15000 });
+      const tap = async (selector, what) => {
+        const control = peerPage.locator(selector).first();
+        await control.waitFor({ state: 'visible', timeout: 15000 }).catch(() => { throw new Error(`${what} is not on the second page's screen`); });
+        await control.click({ timeout: 10000 });
+      };
+      if ((await peerPage.locator('#account-menu-toggle').getAttribute('aria-expanded')) !== 'true') {
+        await tap('#account-menu-toggle', 'the menu button');
+        await peerPage.waitForTimeout(700);
+      }
+      await tap('#bud-petal-shop-chat', 'the Chat petal');
       await peerPage.fill('#shop-nearby-chat-input', arg, { timeout: 15000 });
       await peerPage.press('#shop-nearby-chat-input', 'Enter');
       await peerPage.waitForTimeout(800);
