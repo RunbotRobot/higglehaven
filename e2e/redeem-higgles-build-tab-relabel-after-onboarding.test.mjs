@@ -77,6 +77,8 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 
+// #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+await page.locator('.settings-account-fold > summary').click();
 // "Redeem Higgles" label and the actual form live in separate sibling
 // .settings-field divs (per e2e/redeem-higgles-settings.test.mjs's own
 // comment) -- the submit button is found by its own exact text rather
