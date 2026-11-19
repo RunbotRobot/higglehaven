@@ -163,7 +163,7 @@ export async function handleCreditOrbs(request, db, route, url) {
       INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
       SELECT ?, landlet_id, ?, ?, 0 FROM landlets WHERE landlet_id = ?
     `).bind(orbId, x, y, landletId).run();
-    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
+    if (inserted.meta.changes === 0) throw new HttpError('Lándlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
     await adminActionLogStatement(db, admin.user_id, 'credit_orb_seed', 'landlet', landletId, { orbId }).run();
     return json({ orbId }, 201);
   }

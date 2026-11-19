@@ -100,8 +100,8 @@ describe('Nearby chat conduct reports (#2956)', () => {
     expect(Object.keys(created.body)).toEqual(['reportId']);
     const taskId = `nearby-chat-report-${created.body.reportId.slice('nearby-chat-report-'.length)}`;
     const { note } = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
-    expect(note).toContain("Reported builder has a chat message still on record in the reporter's landlet: no");
-    expect(note).toContain('Both in the same landlet right now: no');
+    expect(note).toContain("Reported builder has a chat message still on record in the reporter's lándlet: no");
+    expect(note).toContain('Both in the same lándlet right now: no');
   });
 
   it('records a chat message in the reporter\'s landlet and co-presence when both exist', async () => {
@@ -124,8 +124,8 @@ describe('Nearby chat conduct reports (#2956)', () => {
     expect(created.response.status).toBe(201);
     const taskId = `nearby-chat-report-${created.body.reportId.slice('nearby-chat-report-'.length)}`;
     const { note } = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
-    expect(note).toContain("Reported builder has a chat message still on record in the reporter's landlet: yes");
-    expect(note).toContain('Both in the same landlet right now: yes');
+    expect(note).toContain("Reported builder has a chat message still on record in the reporter's lándlet: yes");
+    expect(note).toContain('Both in the same lándlet right now: yes');
   });
 
   it('creates a report with no reason', async () => {

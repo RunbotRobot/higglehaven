@@ -635,7 +635,7 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
   for (const templateId of uniqueValues) {
     if (blockedByPlacedInstance.has(templateId)) {
       throw new HttpError(
-        `${await productLabel(templateId)} cannot be deleted: it is still placed on a landlet `
+        `${await productLabel(templateId)} cannot be deleted: it is still placed on a lándlet `
         + '(remove every placed instance of it first)',
         409,
       );
@@ -649,7 +649,7 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
     }
     if (blockedByVersion.has(templateId)) {
       throw new HttpError(
-        `${await productLabel(templateId)} cannot be deleted: it is still referenced by a landlet's version history `
+        `${await productLabel(templateId)} cannot be deleted: it is still referenced by a lándlet's version history `
         + '(a past published version snapshot used it, even if the current layout does not)',
         409,
       );
@@ -664,7 +664,7 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
     if (blockedByArchivedVersion.has(templateId)) {
       throw new HttpError(
         `${await productLabel(templateId)} cannot be deleted: it is still referenced by an archived version snapshot `
-        + '(a reclaimed landlet\'s preserved version history used it)',
+        + '(a reclaimed lándlet\'s preserved version history used it)',
         409,
       );
     }

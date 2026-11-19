@@ -769,7 +769,7 @@ describe('Community calendar', () => {
       env.DB.prepare = originalPrepare;
     }
     expect(rejected.response.status).toBe(409);
-    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+    expect(rejected.body.error).toMatch(/Lándlet changed concurrently/);
 
     const stored = await env.DB.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?')
       .bind('calendar-post-ownership-race-instance').first();

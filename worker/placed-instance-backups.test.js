@@ -256,7 +256,7 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
       env.DB.prepare = originalPrepare;
     }
     expect(rejected.response.status).toBe(409);
-    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+    expect(rejected.body.error).toMatch(/Lándlet changed concurrently/);
 
     const stillOriginalOrder = await env.DB.prepare(
       'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
@@ -293,7 +293,7 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
       env.DB.prepare = originalPrepare;
     }
     expect(rejected.response.status).toBe(409);
-    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+    expect(rejected.body.error).toMatch(/Lándlet changed concurrently/);
 
     const stillThere = await env.DB.prepare(
       'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE backup_id = ?',
@@ -612,7 +612,7 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
       env.DB.batch = originalBatch;
     }
     expect(rejected.response.status).toBe(409);
-    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+    expect(rejected.body.error).toMatch(/Lándlet changed concurrently/);
     // The DELETE went out as exactly one batched call carrying both
     // statements (the delete itself and the position-shift), not two
     // separate sequential writes.
