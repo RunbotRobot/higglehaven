@@ -43,7 +43,7 @@ for (const mode of ['shop', 'build', 'sell']) {
   check(/button "Help"/.test(menuTree), `${mode}: the "?" leaf is named Help (got ${JSON.stringify(menuTree)})`);
   check(!/\bN E S W\b|compass/i.test(menuTree), `${mode}: the compass is not read out`);
   check(new RegExp(`button "${mode[0].toUpperCase()}${mode.slice(1)}" \\[pressed\\]`).test(ringTree), `${mode}: the current mode's petal is announced as current (got ${JSON.stringify(ringTree)})`);
-  check(/group "Places"/.test(ringTree), `${mode}: the three modes are a named group`);
+  check(/group "Places and menu"/.test(ringTree), `${mode}: the places and the menu are a named group`); // #3760: Menu joined the three places
 
   // Sizes: no text under 12px; every control to tap is at least 44px in both directions.
   const small = await smallText();
@@ -64,7 +64,7 @@ await goToMode(page, 'shop');
 await page.waitForSelector('body[data-mode="shop"][data-bud="on"]', { timeout: 30000 });
 await page.click('#account-menu-toggle');
 await page.waitForTimeout(600);
-await page.click('#bud-petal-shop-help');
+await page.click('#bud-petal-general-help');
 await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 await page.waitForTimeout(500);
 check((await page.getAttribute('#bud-leaf-help', 'aria-modal')) === 'true', 'a leaf is modal');

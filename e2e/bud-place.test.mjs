@@ -31,7 +31,7 @@ const build = await page.evaluate(() => {
     selectable: getComputedStyle(el).userSelect !== 'none',
     nameFont: getComputedStyle(el.querySelector('.bud-place-name')).fontSize,
     byFont: getComputedStyle(el.querySelector('.bud-place-by')).fontSize,
-    aboveColumn: box.bottom <= document.querySelector('#account-menu-panel button:not([hidden])').getBoundingClientRect().top + 1,
+    aboveColumn: box.bottom <= [...document.querySelectorAll('#account-menu-panel button:not([hidden])')].find((b) => b.offsetParent !== null).getBoundingClientRect().top + 1,
   };
 });
 console.log('Build header:', JSON.stringify(build));
@@ -54,7 +54,7 @@ const readSign = (name) => page.evaluate(async (n) => {
   const nameEl = el.querySelector('.bud-place-name');
   const box = el.getBoundingClientRect();
   const compass = document.getElementById('compass-panel').getBoundingClientRect();
-  const firstLeaf = document.querySelector('#account-menu-panel button:not([hidden])').getBoundingClientRect();
+  const firstLeaf = [...document.querySelectorAll('#account-menu-panel button:not([hidden])')].find((b) => b.offsetParent !== null).getBoundingClientRect();
   // Which words are broken across lines? Wrap the text in a range per word and count rows each word spans.
   const text = nameEl.firstChild;
   const words = n.split(' ');

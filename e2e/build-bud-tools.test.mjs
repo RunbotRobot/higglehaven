@@ -1,7 +1,7 @@
 // #3691 (Build in the bud, 4/6): Measure, Multi-Select (with its Brush slider) and Paste are the
 // Tools petal's leaf, not buttons over the world. Choosing a tool puts the leaf away and the bud
 // wears the tool's name until it is off; Paste is listed only after a Copy. 390x844.
-import { launchPage, chooseIdentity, claimLandlet, finish, budClick } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, budClick, openBudMenuOf } from './helpers.mjs';
 
 const LABEL = 'Bud Tools Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
@@ -33,6 +33,7 @@ check((await page.locator('#add-item-panel #toggle-multiselect').count()) === 0,
 // ---- The petal and its leaf ----
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+await openBudMenuOf(page, 'build'); // #3760: Tools is in Build's own menu
 check(await drawn('#bud-petal-build-tools'), 'the bud has a Tools petal');
 await page.click('#bud-petal-build-tools');
 await page.waitForSelector('#bud-leaf-tools', { timeout: 5000 });

@@ -5,8 +5,10 @@
 //
 // The switch is "Show tips while the app opens" in Settings, on by default. The
 // owner assumes almost nobody touches it, so the default behaviour is right
-// without it (one tip per load, held long enough to read). Per-account sync is a
-// follow-up that needs a column on the account; until then it is per device.
+// without it (one tip per load, held long enough to read). The account keeps the
+// choice too (users.loading_tips_off, null until chosen): signing in or reading
+// the account copies it onto this device, because the opening screen draws
+// before anyone is signed in and so can only read this device's storage.
 export const TIPS_OFF_KEY = 'higglehaven.loadingTips.off';
 export const TIPS_NEXT_KEY = 'higglehaven.loadingTips.next';
 
@@ -38,4 +40,12 @@ export function nextTipIndex(count, storage = defaultStorage()) {
 
 export function rememberTipShown(index, count, storage = defaultStorage()) {
   try { if (storage) storage.setItem(TIPS_NEXT_KEY, String((index + 1) % count)); } catch { /* it starts from the first again */ }
+}
+
+// Copies an account's saved choice onto this device. null (never chosen) leaves
+// the device as it is, so a person who switched tips off here is not turned back
+// on by an account that has no opinion yet.
+export function adoptAccountLoadingTips(user, storage = defaultStorage()) {
+  if (!user || typeof user.loadingTipsOff !== 'boolean') return;
+  setLoadingTipsEnabled(!user.loadingTipsOff, storage);
 }
