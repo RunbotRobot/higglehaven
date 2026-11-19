@@ -1180,7 +1180,7 @@
       }
       .bud-leaf h2 { margin: 0 40px var(--space-sm) 0; font-size: 18px; font-weight: 600; }
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
-      .bud-leaf-close {
+      .bud-leaf-close, .bud-leaf-close-ghost {
         position: absolute;
         top: 4px;
         right: 6px;

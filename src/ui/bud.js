@@ -391,6 +391,11 @@ function foldLeafAway(leaf) {
   ghost.removeAttribute('aria-labelledby');
   ghost.setAttribute('aria-hidden', 'true');
   ghost.setAttribute('inert', '');
+  // Its close control is not a close control any more: nothing that looks for one (a test, a script) may find it.
+  ghost.querySelectorAll('.bud-leaf-close').forEach((close) => {
+    close.classList.replace('bud-leaf-close', 'bud-leaf-close-ghost');
+    close.tabIndex = -1;
+  });
   ghost.classList.add('bud-leaf-folding');
   return ghost;
 }

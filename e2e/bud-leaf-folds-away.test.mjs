@@ -25,6 +25,7 @@ const atClose = await page.evaluate(() => {
     ghostThere: Boolean(ghost),
     ghostInert: ghost?.hasAttribute('inert') === true && ghost?.getAttribute('aria-hidden') === 'true',
     ghostIdsLeft: ghost ? ghost.querySelectorAll('[id]').length + (ghost.id ? 1 : 0) : -1,
+    ghostCloseFindable: document.querySelectorAll('.bud-leaf-close').length, // only a real leaf's close control carries the class
     ghostCanBeTapped: ghost ? getComputedStyle(ghost).pointerEvents !== 'none' : null,
   };
 });
@@ -40,5 +41,5 @@ const afterwards = await page.evaluate(() => document.querySelectorAll('.bud-lea
 console.log('leaves on screen once the fold is done (should be 1, the open one):', afterwards);
 
 const pass = atClose.realLeafGone && atClose.ghostThere && atClose.ghostInert && atClose.ghostIdsLeft === 0
-  && atClose.ghostCanBeTapped === false && duringFold === 1 && afterwards === 1;
+  && atClose.ghostCloseFindable === 0 && atClose.ghostCanBeTapped === false && duringFold === 1 && afterwards === 1;
 await finish(browser, { pass, label: '#3876: a closing leaf folds back (an inert copy) and is removed, never a clash on its id', errors });
