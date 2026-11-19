@@ -419,7 +419,7 @@ export function budAware(page) {
   // (page.click, locator clicks, fills), not only the ones that go through this wrapper.
   if (typeof page.addLocatorHandler === 'function') {
     page.addLocatorHandler(
-      page.locator('.seller-more-settings-toggle[aria-expanded="false"]').first(),
+      page.locator('.seller-more-settings-toggle[aria-expanded="false"]:visible').first(),
       async (toggle) => { await toggle.click(); },
       { noWaitAfter: true },
     ).catch(() => {});
