@@ -11,6 +11,9 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('aim:up:1500')).toEqual({ command: 'aim', args: ['up', 1500] });
     expect(parseStep('aim:left')).toEqual({ command: 'aim', args: ['left', 1000] });
     expect(parseStep('look:40:-20')).toEqual({ command: 'look', args: [40, -20] });
+    expect(parseStep('item')).toEqual({ command: 'item', args: [1] });
+    expect(parseStep('item:3')).toEqual({ command: 'item', args: [3] });
+    expect(() => parseStep('item:0')).toThrow(/whole number/);
     expect(parseStep('tap:120:300')).toEqual({ command: 'tap', args: [120, 300] });
     expect(parseStep('tap:#account-menu-toggle')).toEqual({ command: 'tap', args: ['#account-menu-toggle'] });
     expect(parseStep('tap:button:has-text("Settings")')).toEqual({ command: 'tap', args: ['button:has-text("Settings")'] });

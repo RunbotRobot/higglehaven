@@ -65,7 +65,7 @@ Steps: `walk:<forward|back|left|right>[:ms]`,
 `aim:<up|down|left|right>[:ms]` (holds the look joystick, which is what steers
 the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
 looks at the sky; `look` drags the page and does not turn the camera in Shop),
-`look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
+`look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `mode:<shop|build|sell>`, `fly`,
 `land` (every Shop arrival starts in flight 80 m up looking down, by design, and walking
 forward there descends; put `land` first to walk on the ground),
 `menu` (open the flower's general menu if it is closed),
@@ -1549,6 +1549,26 @@ this order:
 These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
+
+**Pace for the week of 2026-11-16: a normal usage week, so half the fleet rests
+(owner, 2026-11-19).** The doubled-usage week did not reach its pace. The owner:
+"Usage is still only at 54% for the week, even though it's now Thursday morning...
+Let's make this be a normal usage week and try again next week." At the fleet's
+speed the weekly allowance would run out on Saturday, two days before it resets,
+and that stops every session on the account, the assistants in the world included.
+Waking sessions less often did not slow them (a session with work goes from one
+merge straight to the next), so until 2026-11-23 21:00Z:
+
+- A session whose number is odd (higglehaven3, 5, 7, 9, 11, 13, 15) finishes and
+  merges what it already holds, releases anything it will not finish (card
+  `queued`, session empty, one line saying what is left), and then claims nothing
+  new. Its check-ins end at once: no queries, no notes.
+- Even-numbered sessions carry on as usual, one task at a time, and they are the
+  ones who take owner feedback and bug-report cards.
+- The two queries above apply only to the sessions that are working.
+
+higglehaven1 removes this paragraph when the week resets or if the owner asks for
+full speed. If it is still here after 2026-11-23 21:00Z, ignore it.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
