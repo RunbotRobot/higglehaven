@@ -1440,6 +1440,19 @@
         user-select: text;
       }
       body[data-bud="on"] #account-menu-landlet-info[hidden] { display: none; }
+      /* #3874: a phone on its side is 390px or less tall. The stem hangs 164px below the head so its first
+         leaf clears the ring of petals (which end about 152px down); that left Settings and Help below
+         the bottom of the screen. Short screens start the stem just under the ring (84px: the first
+         leaf at about 158px, four pixels of stalk below the lowest petal), and the sign and compass,
+         which hang from the stem's top, move up by the same 80px so they stay where they were. The
+         leaves also sit 4px closer (a pitch of 30 instead of 34; leaves on the same side are still 60
+         apart, a leaf is 56), which brings Help up from 396 to about 376 on a 390px screen. */
+      @media (max-height: 520px) {
+        body[data-bud="on"] #account-menu-panel { margin-top: 84px; }
+        body[data-bud="on"] #account-menu-panel > button,
+        body[data-bud="on"] #account-menu-panel > .bud-pair { margin-bottom: -26px; }
+        body[data-bud="on"] #bud-head-row { top: calc(-1 * (var(--bud-size) + 8px + 92px) + 80px); }
+      }
       body[data-bud="on"] #account-menu-landlet-info::-webkit-scrollbar { display: none; }
       body[data-bud="on"] #account-menu-landlet-info[data-clipped] {
         -webkit-mask-image: linear-gradient(to bottom, rgb(var(--black-rgb)) calc(100% - 18px), transparent);

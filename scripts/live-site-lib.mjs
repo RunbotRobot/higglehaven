@@ -6,6 +6,17 @@
 export const PHONE = { width: 390, height: 844, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true };
 export const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, isMobile: false, hasTouch: false };
 
+// #3874: a touch screen of any size (a phone on its side, a tablet), for looking at the flower
+// where it has not been looked at: --size 844x390, --size 768x1024.
+export function touchDeviceForSize(text) {
+  const match = /^(\d{3,4})x(\d{3,4})$/.exec(String(text));
+  if (!match) throw new Error('--size must look like 844x390 (width x height in CSS pixels)');
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width < 200 || height < 200 || width > 4000 || height > 4000) throw new Error('--size must be between 200 and 4000 pixels each way');
+  return { width, height, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
+}
+
 export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
@@ -272,6 +283,7 @@ export function parseArgs(argv, env = {}) {
     url: env.LIVE_SITE_URL || 'https://higglehaven.com',
     name: env.LIVE_SITE_NAME || null,
     desktop: false,
+    size: null,
     login: 'fleet',
     out: env.LIVE_SITE_OUT || null,
     timing: [],
@@ -289,6 +301,7 @@ export function parseArgs(argv, env = {}) {
     if (arg === '--url') options.url = value();
     else if (arg === '--name') options.name = value();
     else if (arg === '--desktop') options.desktop = true;
+    else if (arg === '--size') options.size = touchDeviceForSize(value());
     else if (arg === '--login') options.login = value();
     else if (arg === '--out') options.out = value();
     else if (arg === '--timing') options.timing.push(value());
@@ -297,6 +310,7 @@ export function parseArgs(argv, env = {}) {
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
     else steps.push(parseStep(arg));
   }
+  if (options.size && options.desktop) throw new Error('--size and --desktop do not go together: --size is a touch screen of that size');
   if (!['fleet', 'local'].includes(options.login)) throw new Error('--login must be "fleet" (the live site) or "local" (a wrangler dev instance)');
   if (!options.name) throw new Error('--name is required: this session\'s name, e.g. --name higglehaven10');
   if (options.login === 'fleet' && !FLEET_NAME_PATTERN.test(options.name)) throw new Error(`--name "${options.name}" is not a fleet name (higglehaven followed by digits)`);

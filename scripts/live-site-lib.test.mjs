@@ -65,6 +65,15 @@ describe('live-site arguments (#3430)', () => {
     expect(steps.map((s) => s.command)).toEqual(['idle', 'shot']);
   });
 
+  it('--size gives a touch screen of that size (#3874) and refuses nonsense', () => {
+    const { options } = parseArgs(['--name', 'higglehaven10', '--size', '844x390', 'idle'], {});
+    expect(options.size).toEqual({ width: 844, height: 390, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    expect(parseArgs(['--name', 'higglehaven10', 'idle'], {}).options.size).toBeNull();
+    expect(() => parseArgs(['--name', 'higglehaven10', '--size', 'wide'], {})).toThrow(/--size must look like/);
+    expect(() => parseArgs(['--name', 'higglehaven10', '--size', '100x900'], {})).toThrow(/between 200 and 4000/);
+    expect(() => parseArgs(['--name', 'higglehaven10', '--size', '844x390', '--desktop'], {})).toThrow(/do not go together/);
+  });
+
   it('requires a fleet-shaped name for the live login, and any name locally', () => {
     expect(() => parseArgs(['idle'], {})).toThrow(/--name is required/);
     expect(() => parseArgs(['--name', 'someone', 'idle'], {})).toThrow(/not a fleet name/);

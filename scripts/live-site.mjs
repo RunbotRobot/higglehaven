@@ -44,7 +44,8 @@
 //                                         largest one); how it is counted is in live-site-lib.mjs
 //
 // Flags: --url (default https://higglehaven.com), --name (required; this
-// session's name), --desktop (1280x800 instead of phone), --login fleet|local,
+// session's name), --desktop (1280x800 instead of phone), --size WxH (a touch screen of that size,
+// e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
 // --throttle (CPU 4x slower, 150 ms round trip, 1.6/0.75 Mbps: a slow phone, #3736),
 // --cover-report (instead of steps: walk a fixed list of states and print one table of how
@@ -83,7 +84,7 @@ if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launchOptions.executablePath = process
 // The session's proxy is what adds the fleet key; a local server is reached directly.
 if (!isLocal && process.env.HTTPS_PROXY) launchOptions.proxy = { server: process.env.HTTPS_PROXY };
 
-const device = options.desktop ? DESKTOP : PHONE;
+const device = options.size || (options.desktop ? DESKTOP : PHONE);
 const browser = await chromium.launch(launchOptions);
 // Only for a local run against a wrangler dev started with its own throwaway
 // FLEET_ACCESS_KEY (the e2e): there is no proxy to add the header. On the live
@@ -98,7 +99,7 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
-const result = { url: baseUrl, name: options.name, device: options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
+const result = { url: baseUrl, name: options.name, device: options.size ? `touch ${options.size.width}x${options.size.height}` : options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
 if (options.throttle) {
   // Applied after sign-in would miss the sign-in, which is fine; applied here it covers every step.
   const cdp = await context.newCDPSession(page);
@@ -546,7 +547,7 @@ async function runCoverReport() {
   rows.push({ state: 'Build, an item selected', note: 'needs a placed item; not automated' });
   rows.push({ state: 'Assistant panel', note: 'needs an assistant on shift; not automated' });
   const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
-  console.log(`Interface cover at ${viewport.width}x${viewport.height} (${options.desktop ? 'desktop' : 'phone'}), ${new Date().toISOString().slice(0, 10)}, ${baseUrl}.`);
+  console.log(`Interface cover at ${viewport.width}x${viewport.height} (${options.size ? 'touch' : options.desktop ? 'desktop' : 'phone'}), ${new Date().toISOString().slice(0, 10)}, ${baseUrl}.`);
   console.log('Share of the screen covered by anything that paints over the 3D view, overlap counted once, translucent surfaces counted by full area.');
   console.log('');
   console.log(coverTable(rows));
