@@ -119,10 +119,20 @@ const inside = (rect, p) => p.x >= rect.left && p.x <= rect.right && p.y >= rect
 await moveTo([cx, cy]);
 
 
-// Open the nearest product's card from the keyboard; it takes focus.
+// Open a product's card from the keyboard; it takes focus. N opens the nearest to the camera, and which
+// of two products 1.6 m apart that is depends on which lándlet this run claimed and where the camera sits
+// (#3892), so when the sold-out one comes up first N steps on to the other: the checks below are about the
+// for-sale card, and stepping with N is part of what this file is for.
 await page.keyboard.press('KeyN');
 await page.waitForFunction(() => !document.getElementById('product-card').hidden, null, { timeout: 10000 });
 await page.waitForTimeout(1200);
+const openName = () => page.evaluate(() => document.getElementById('product-card-name').textContent.trim());
+if ((await openName()) !== 'Card Crate') {
+  await page.keyboard.press('KeyN');
+  await page.waitForFunction(() => document.getElementById('product-card-name').textContent.trim() === 'Card Crate', null, { timeout: 10000 });
+  await page.waitForTimeout(1200);
+}
+check((await openName()) === 'Card Crate', 'N (and N again if the sold-out product came first) opens the for-sale product');
 
 const tree = await page.locator('#product-card').ariaSnapshot();
 check(/region "Card Crate"/.test(tree), `the card is a region named by its product (got ${JSON.stringify(tree)})`);

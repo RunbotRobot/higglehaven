@@ -2072,13 +2072,18 @@ async function enterSellMode() {
   // profile the same way visiting Build mode for the first time would —
   // the natural cost of this app's "every account can hold both roles"
   // model, not a new one Sell mode introduces on its own.
+  // #3873: the catalog needs no builder id (Build overlaps the same two, #1831), so
+  // both requests go out together instead of one after the other. A mode switch is a
+  // full reload, so each round trip saved here is time the opening screen is up.
+  const catalogPromise = fetchCatalog();
+  catalogPromise.catch(() => {}); // handled below; keeps a failure while the identity is awaited from going unhandled
   setBuilderId(await ensureBuilderIdentity());
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
 
   try {
-    setActiveCatalog(await fetchCatalog());
+    setActiveCatalog(await catalogPromise);
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
   }
