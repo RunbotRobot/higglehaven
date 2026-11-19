@@ -3139,15 +3139,20 @@
       #upload-modal-actions[hidden] {
         display: none;
       }
+      /* #3940: Add a product's two buttons are the quiet button (Cancel) and the primary button (the
+         submit), DESIGN.md "Inside a leaf". */
       #upload-modal-actions button {
+        min-height: 44px;
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
-      #upload-cancel-btn {
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
+      #upload-modal-actions #upload-cancel-btn {
+        padding: var(--space-xs) var(--space-lg);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
       }
       #upload-submit-btn {
         background: var(--brand-green);
@@ -4210,12 +4215,14 @@
         display: flex;
         gap: var(--space-xs);
       }
+      /* #3940: a quiet button (DESIGN.md, "Inside a leaf"): 44px to hit, the line at --alpha-line, ink text. */
       .seller-view-btn {
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .seller-view-btn.active {
@@ -4324,11 +4331,12 @@
       }
       .seller-row-action-btn {
         flex-shrink: 0;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       .seller-row-action-btn.active {
@@ -4446,7 +4454,8 @@
         width: 5.5em;
       }
       .seller-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4487,8 +4496,11 @@
       .seller-row-status.error {
         color: var(--danger-text);
       }
+      /* #3940: the Sell leaves' save buttons are the primary button (DESIGN.md, "Inside a leaf"):
+         44px to hit, --brand-green, --radius-pill. */
       .seller-size-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4531,7 +4543,8 @@
         width: 8em;
       }
       .seller-price-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4582,7 +4595,8 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .seller-digital-good-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4623,7 +4637,8 @@
         color: var(--pill-text);
       }
       .seller-no-returns-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -4664,7 +4679,8 @@
         color: var(--pill-text);
       }
       .seller-domestic-only-save-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
         background: var(--brand-green);
@@ -6962,11 +6978,12 @@
         color: rgb(var(--ink-rgb) / 0.6);
       }
       .product-sale-row-ship-btn {
-        padding: var(--space-2xs) var(--space-md);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: rgb(var(--ink-rgb) / 0.85);
+        color: var(--ink);
         font: var(--text-2xs)/var(--leading-normal) var(--font-sans);
       }
       .product-sale-row-ship-btn:disabled {
