@@ -585,6 +585,10 @@ async function runStepAction(step, index) {
     case 'mode': {
       const before = await page.evaluate(() => document.body.dataset.mode);
       await clickModeButton(page, a);
+      // A switch reloads the page. Wait for the new document to say which mode it is in (up to 20 s;
+      // a press that landed on something else never will, and is reported below) before settling,
+      // or `settle` resolves on the old page and the check reads a page that is still loading.
+      if (a !== before) await page.waitForFunction((m) => document.body?.dataset.mode === m, a, { timeout: 20000 }).catch(() => {});
       await settle();
       // #3935: a press that lands on something else (Build's claim sheet covers the petals of an account with
       // no lándlet) used to report success while the page stayed where it was, and every figure after it was
