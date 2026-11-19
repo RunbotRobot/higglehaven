@@ -586,7 +586,8 @@
       /* The assistant window sits above the hint (z 32) and is translucent, so the hint read
          through it; the hint waits while the window is open. */
       body:has(#assistant-chat-panel:not([hidden])) #world-hint,
-      body:has(.bud-leaf) #world-hint { visibility: hidden; } /* #3913: a leaf has the person's attention */
+      body:has(.bud-leaf) #world-hint,
+      body:has(.world-card:not([hidden])) #world-hint { visibility: hidden; } /* #3913: a leaf, or a card blooming beside a product (#3702: the hint was drawn over the card's buttons), has the person's attention */
       #world-hint.visible {
         opacity: 1;
         pointer-events: auto;
@@ -6687,10 +6688,12 @@
       /* #3702: the showroom product card's own parts: the price line, the inline price field
          with its Save, and the status line. The shell, pointer and bloom are the shared
          .world-card rules; its text is selectable like every text surface. */
-      /* Four actions on one row: a little wider than the 240px shared width, and snug buttons, so
-         they never wrap (the audit's finding on the old row of buttons, #3589). */
+      /* Five actions on one row (Rename, Price, Stock, Delete, More): wider than the 240px shared
+         width, and snug buttons, so they never wrap (the audit's finding on the old row of buttons,
+         #3589) and "More" is not cut off at the card's edge (seen live at 390px after Stock was
+         added, #3702). */
       #seller-product-card {
-        width: min(288px, calc(100vw - 24px));
+        width: min(356px, calc(100vw - 24px));
       }
       #seller-product-card-actions {
         gap: var(--space-xs);
