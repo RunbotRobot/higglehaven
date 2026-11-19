@@ -1,5 +1,5 @@
 // #2330: four client-side dollar-amount checks (upload wizard price, seller
-// "Edit Price" panel, auction "Start Auction" starting bid, auction "Place
+// "Edit Price" panel, auction "Start auction" starting bid, auction "Place
 // Bid") validated only `dollars < 0`, with no upper bound -- unlike the
 // Start Auction form's own duration field, which already mirrors the
 // server's cap client-side (#1922). The server's real ceiling is
@@ -66,7 +66,7 @@ await row().locator('.seller-row-toggle').click();
 await sellerPage.waitForTimeout(300);
 await row().locator('button', { hasText: 'Edit Price' }).click();
 await row().locator('.seller-price-input').fill(OVER_CAP_DOLLARS);
-await row().locator('button', { hasText: 'Save Price' }).click();
+await row().locator('button', { hasText: 'Save price' }).click();
 await sellerPage.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-price-status')).some((el) => el.textContent.includes('$1,000,000')),
   null,
@@ -75,7 +75,7 @@ await sellerPage.waitForFunction(
 const editPriceOverCapStatus = await row().locator('.seller-price-status').textContent();
 console.log('Edit Price over the cap rejected client-side (should mention $1,000,000):', editPriceOverCapStatus);
 
-// --- 3. Auction "Start Auction" starting-bid field ---
+// --- 3. Auction "Start auction" starting-bid field ---
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
@@ -108,7 +108,7 @@ await sellerPage.waitForFunction(
 await sellerPage.click('#settings-close-btn');
 await sellerPage.waitForTimeout(300);
 
-// --- 4. Auction "Place Bid" field ---
+// --- 4. Auction "Place bid" field ---
 await chooseIdentity(bidderPage, { mode: 'build', label: BIDDER, isNew: true });
 await claimLandlet(bidderPage);
 await openAccountMenu(bidderPage);

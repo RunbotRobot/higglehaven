@@ -89,9 +89,9 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="shop"]');
-const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
+const myAvatarsField = page.locator('.settings-field', { hasText: 'My avatars' });
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My avatars') && f.querySelectorAll('.version-row').length >= 2),
   null,
   { timeout: 30000 },
 );

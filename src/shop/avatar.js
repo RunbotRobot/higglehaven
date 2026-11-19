@@ -405,7 +405,7 @@ export function shopCameraAnchorHeightM() {
 }
 
 // #713 (sub-issue of #710): swaps the live Shop-mode avatar the instant the
-// "My Avatars" settings picker equips a different one, so a builder standing
+// "My avatars" settings picker equips a different one, so a builder standing
 // in the world sees the change immediately rather than needing to leave and
 // re-enter Shop mode. enterShopMode's own equipped-avatar fetch already
 // covers every other entry path (a fresh Shop-mode entry always asks the
@@ -423,9 +423,9 @@ export function shopCameraAnchorHeightM() {
 // already resolved and swapped shopAvatar. Without this guard, the earlier
 // call would resume and silently overwrite the newer, correct equip.
 let shopAvatarEquipToken = 0;
-// #1165: called both when the "My Avatars" picker equips a different
+// #1165: called both when the "My avatars" picker equips a different
 // avatar (modelUrl changes, the applied animation doesn't) and when the
-// new "My Animations" picker applies/clears an animation (modelUrl stays
+// new "My animations" picker applies/clears an animation (modelUrl stays
 // the same, re-fetched fresh here either way) — either trigger needs the
 // exact same rebuild, since compatibility depends on both together.
 export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {

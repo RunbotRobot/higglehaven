@@ -1,4 +1,4 @@
-// #1950 (sub-issue of #1947): when the Settings > Build "Low Stock" panel's
+// #1950 (sub-issue of #1947): when the Settings > Build "Low stock" panel's
 // filter (#1949) is actually active, the matching placed items should be
 // visually highlighted directly in the builder's own 3D Build-mode view --
 // not just listed in the panel -- so they can find a soon-to-be-empty slot

@@ -220,7 +220,7 @@ async function renderTaxEducationField() {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
-  fieldLabel.textContent = 'Tax Education';
+  fieldLabel.textContent = 'Tax education';
   field.appendChild(fieldLabel);
   const status = document.createElement('div');
   status.className = 'settings-empty-note';
@@ -352,7 +352,7 @@ async function renderTaxPaperworkField() {
   const statusField = document.createElement('div');
   statusField.className = 'settings-field';
   const statusLabel = document.createElement('span');
-  statusLabel.textContent = 'Tax Paperwork';
+  statusLabel.textContent = 'Tax paperwork';
   statusField.appendChild(statusLabel);
   const statusNote = document.createElement('div');
   statusNote.className = 'settings-empty-note';
@@ -593,7 +593,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
     // working the whole time. Real account deletion now lives in the
     // Account panel (see auth-delete-account-btn); this stays what it
     // always actually was, just honestly labeled.
-    deleteBtn.textContent = 'Reset Profile';
+    deleteBtn.textContent = 'Reset profile';
     actions.appendChild(deleteBtn);
   }
 
@@ -652,7 +652,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
       const confirmed = await confirmDestructive({
         title: 'Reset this profile?',
         message: warningText,
-        confirmLabel: 'Reset Profile',
+        confirmLabel: 'Reset profile',
         returnFocusEl: deleteBtn,
         restoreModalEl: container ? null : settingsModalEl,
         restoreCloseFn: container ? null : closeSettingsModal,

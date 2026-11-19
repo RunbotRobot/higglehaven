@@ -1,4 +1,4 @@
-// #3251: the Upload wizard's "Confirm Dimensions" step showed a large blank
+// #3251: the Upload wizard's "Confirm dimensions" step showed a large blank
 // box above the size fields. showUploadDimensionPreview measured its canvas
 // (getBoundingClientRect) and created the WebGL renderer while that step was
 // still `hidden` (display: none), so the rect was 0x0 and the drawing buffer

@@ -351,7 +351,7 @@ function resetUploadModalToFileStep(mode = 'file') {
   uploadAvatarCategoryCheckbox.checked = false;
   uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
-  uploadModalTitleEl.textContent = 'Upload Model';
+  uploadModalTitleEl.textContent = 'Upload model';
   uploadStepChooseEl.hidden = true;
   uploadModalActionsEl.hidden = false;
   uploadStepFileEl.hidden = false;
@@ -818,10 +818,10 @@ async function handleUploadFileStep() {
     // measured, rather than after (see showUploadDimensionPreview).
     await showUploadDimensionPreview(modelUrl, () => {
       uploadStep = 'dimensions';
-      uploadModalTitleEl.textContent = 'Confirm Dimensions';
+      uploadModalTitleEl.textContent = 'Confirm dimensions';
       uploadStepFileEl.hidden = true;
       uploadStepDimensionsEl.hidden = false;
-      uploadSubmitBtn.textContent = 'Create Product';
+      uploadSubmitBtn.textContent = 'Create product';
       uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
       // Set here, not earlier: showUploadDimensionPreview resets the notice first.
       uploadConversionNoticeCount = skippedTextureCount;
@@ -1014,7 +1014,7 @@ async function handleUploadVideoStep() {
 // A seller-edited dimension only counts as a real change worth re-encoding
 // the model over — not just float noise from round-tripping through
 // display units and a fixed 2-decimal display precision.
-// Exported: main.js's own Sell-mode "Save Size" handler (Seller modal's
+// Exported: main.js's own Sell-mode "Save size" handler (Seller modal's
 // extensibility axis panel) uses this exact same check on an
 // already-created product's resize, not just this modal's own
 // handleUploadDimensionsStep.

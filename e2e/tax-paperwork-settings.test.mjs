@@ -5,7 +5,7 @@
 // endpoint. A real account that crossed the threshold had no in-app way to
 // unblock itself; worker/index.js's own taxThresholdPayoutBlockedError
 // literally told the user to call the raw API. This test exercises the
-// real "Tax Paperwork" field (Settings > General) end to end: the
+// real "Tax paperwork" field (Settings > General) end to end: the
 // no-paperwork-on-file status note, switching between the W-9/W-8BEN field
 // sets (and that the non-selected set is actually hidden, not just
 // present-but-unstyled — see index.html's own [hidden]-vs-equal-
@@ -45,12 +45,12 @@ await page.click('.settings-tab-btn[data-section="general"]');
 // headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
 // wait.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Tax Paperwork')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Tax paperwork')),
   null,
   { timeout: 60000 },
 );
 
-const taxField = page.locator('.settings-field', { hasText: 'Tax Paperwork' });
+const taxField = page.locator('.settings-field', { hasText: 'Tax paperwork' });
 const beforeStatus = await taxField.locator('.settings-empty-note').first().textContent();
 console.log('Status before any submission (should say no paperwork on file):', beforeStatus);
 
@@ -136,4 +136,4 @@ const pass = beforeStatus.includes('Not needed yet') && beforeStatus.includes('N
   formStatusText.includes('available right now') && !formStatusText.includes('not configured') &&
   afterStatus.includes('No tax paperwork on file') &&
   unexpectedErrors.length === 0;
-await finish(browser, { pass, label: 'Settings > General "Tax Paperwork" field submits a real W-9/W-8BEN form (#614)', errors });
+await finish(browser, { pass, label: 'Settings > General "Tax paperwork" field submits a real W-9/W-8BEN form (#614)', errors });

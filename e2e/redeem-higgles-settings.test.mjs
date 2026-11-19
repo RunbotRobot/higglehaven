@@ -1,7 +1,7 @@
 // #723: #624/#625 shipped GET/POST /api/builders/me/stripe-account and
 // .../redeem — a builder's own exit from higgles to real cash — but
 // nothing in src/main.js ever called either. This test exercises the real
-// "Redeem Higgles" field (Settings > Build, alongside Land Cap) end to
+// "Redeem higgles" field (Settings > Build, alongside Land Cap) end to
 // end: the available balance reflects the account's real higgles_balance_
 // cents (granted via the same admin-only escape hatch grantHigglesAsAdmin
 // already uses elsewhere), the account-status note reflects Stripe not
@@ -45,7 +45,7 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
 
-// The "Redeem Higgles" label/balance and the actual form + Redeem button
+// The "Redeem higgles" label/balance and the actual form + Redeem button
 // live in separate sibling .settings-field divs (same multi-field split
 // renderSellSettingsSection's own Payout Account/Payouts sections already
 // use), so the button is found by its own exact text page-wide rather
@@ -65,14 +65,14 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // and the timeout itself is widened to 60000ms for real headroom under CI
 // load, same as e2e/helpers.mjs's own account-menu-modal wait.
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem higgles') && f.textContent.includes('Available to redeem')),
   null,
   { timeout: 60000 },
 );
 
-// #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+// #3652: Redeem higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
 await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
-const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
+const statusText = await page.locator('.settings-field', { hasText: 'Redeem higgles' }).locator('.settings-empty-note').first().textContent();
 console.log('Redeem Higgles status note (should show the granted balance and that Stripe isn\'t configured here):', statusText);
 
 const redeemBtn = page.getByRole('button', { name: 'Redeem', exact: true });
@@ -105,4 +105,4 @@ const pass = statusText.includes(`$${(GRANT_CENTS / 100).toFixed(2)}`) &&
   redeemBtnVisible &&
   afterClickText.includes('available right now') && !afterClickText.includes('not configured') &&
   unexpectedErrors.length === 0;
-await finish(browser, { pass, label: 'Settings > Build "Redeem Higgles" field shows real balance and surfaces the real Stripe-not-configured 503 (#723, #653)', errors });
+await finish(browser, { pass, label: 'Settings > Build "Redeem higgles" field shows real balance and surfaces the real Stripe-not-configured 503 (#723, #653)', errors });

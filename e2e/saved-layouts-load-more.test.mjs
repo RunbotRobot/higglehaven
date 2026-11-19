@@ -76,7 +76,7 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // CI load.
 await page.waitForFunction(() => document.getElementById('saved-layouts-load-more-btn') != null, null, { timeout: 60000 });
 
-const savedLayoutsField = page.locator('.settings-field', { hasText: 'Saved Layouts' });
+const savedLayoutsField = page.locator('.settings-field', { hasText: 'Saved layouts' });
 const loadMoreBtn = page.locator('#saved-layouts-load-more-btn');
 
 // First (mocked) page: exactly 20 rows, Load More visible since the mock
@@ -84,7 +84,7 @@ const loadMoreBtn = page.locator('#saved-layouts-load-more-btn');
 // #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
 // -- null arg, timeout widened to 60000ms.
 await page.waitForFunction(
-  () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved Layouts'))
+  () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved layouts'))
     ?.querySelectorAll('.version-row').length === 20,
   null,
   { timeout: 60000 },
@@ -110,7 +110,7 @@ await loadMoreBtn.click();
 // #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
 // -- null arg, timeout widened to 60000ms.
 await page.waitForFunction(
-  () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved Layouts'))
+  () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved layouts'))
     ?.querySelectorAll('.version-row').length === 21,
   null,
   { timeout: 60000 },

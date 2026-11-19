@@ -61,7 +61,7 @@ await productRow().locator('button', { hasText: 'Edit Digital Good' }).click();
 await page.waitForTimeout(200);
 await productRow().locator('.seller-digital-good-checkbox-label input').check();
 await productRow().locator('.seller-digital-good-select').selectOption('gift-card');
-await productRow().locator('button', { hasText: 'Save Digital Good' }).click();
+await productRow().locator('button', { hasText: 'Save digital good' }).click();
 
 // Close the modal (real user behavior — nothing in-flight is canceled by
 // this, see closeSellerModal's own comment on why: it only toggles a CSS
@@ -81,23 +81,23 @@ await page.waitForTimeout(300);
 await productRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
 
-// Deliberately targets the "Save Returns Policy" button, not the "Save
+// Deliberately targets the "Save returns policy" button, not the "Save
 // Digital Good" one the pre-close save was for — proving the busy state is
 // serializing across EVERY metadata panel on this row, the same cross-panel
 // guard #424 added, not just re-disabling the one button that happened to
 // be clicked.
 await productRow().locator('button', { hasText: 'Edit Returns Policy' }).click();
 await page.waitForTimeout(200);
-const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isDisabled();
+const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('button', { hasText: 'Save returns policy' }).isDisabled();
 console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
 
 // Release the held PATCH and wait for its `finally` block to run: the button
 // comes back (polled, not a fixed wait, so a slow runner cannot cut it short).
 releaseSave();
-const saveReturnsButton = productRow().locator('button', { hasText: 'Save Returns Policy' });
+const saveReturnsButton = productRow().locator('button', { hasText: 'Save returns policy' });
 for (let i = 0; i < 60 && !(await saveReturnsButton.isEnabled()); i++) await page.waitForTimeout(500);
 
-const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isEnabled();
+const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save returns policy' }).isEnabled();
 console.log('that same button is enabled again once the pre-close save actually resolves (should be true — not stuck disabled forever):', reopenedSaveReenabledAfterSettling);
 
 await page.unroute('**/api/catalog/*');
@@ -114,7 +114,7 @@ console.log('server-side metadata.digitalGoodDisclaimer after the pre-close save
 // instead, so the panel is used directly, same reasoning as
 // digital-goods.test.mjs's own analogous comment.
 await productRow().locator('.seller-no-returns-checkbox-label input').check();
-await productRow().locator('button', { hasText: 'Save Returns Policy' }).click();
+await productRow().locator('button', { hasText: 'Save returns policy' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
   null,

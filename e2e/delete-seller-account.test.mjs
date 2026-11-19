@@ -23,20 +23,20 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 // #3704: the shop name and Reset Profile are the bud's Storefront leaf (Settings has no Sell tab).
 await openStorefrontLeaf(page);
-await page.waitForSelector('#bud-leaf-storefront button:has-text("Reset Profile")', { timeout: 15000 });
+await page.waitForSelector('#bud-leaf-storefront button:has-text("Reset profile")', { timeout: 15000 });
 
 const originalSellerId = await page.evaluate(() =>
   fetch('/api/sellers/me').then((r) => r.json()).then((d) => d.seller.sellerId));
 console.log('sellerId before delete:', originalSellerId);
 
 // #1149 renamed this button from "Delete account" (never true -- it only
-// ever reset this profile, not the login) to "Reset Profile"; the
+// ever reset this profile, not the login) to "Reset profile"; the
 // underlying deleteSeller behavior this test exercises is unchanged.
-const deleteBtnVisible = await page.locator('#bud-leaf-storefront button:has-text("Reset Profile")').isVisible();
+const deleteBtnVisible = await page.locator('#bud-leaf-storefront button:has-text("Reset profile")').isVisible();
 console.log('Reset Profile button present in the Storefront leaf (should be true -- this is the bug #744 fixes):', deleteBtnVisible);
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
-await page.click('#bud-leaf-storefront button:has-text("Reset Profile")');
+await page.click('#bud-leaf-storefront button:has-text("Reset profile")');
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 const deleteStatus = await waitForText(page, '#bud-leaf-storefront', 'Reset', { timeout: 8000 });
 console.log('Settings section text right after delete (should mention "Reset"):', deleteStatus);

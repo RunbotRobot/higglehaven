@@ -2445,8 +2445,8 @@
         margin-bottom: var(--space-sm);
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -2567,8 +2567,8 @@
         margin-bottom: var(--space-sm);
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -2973,8 +2973,8 @@
       #upload-modal-content input[type='text'] {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3041,8 +3041,8 @@
       #upload-digital-good-disclaimer-select {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3124,8 +3124,8 @@
         width: 5.5em;
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3207,8 +3207,8 @@
       #bundle-name-input {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3285,8 +3285,8 @@
       #report-reason-input {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -3367,8 +3367,8 @@
       #product-review-text {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -3475,8 +3475,8 @@
       #note-modal-schedule {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3580,8 +3580,8 @@
         min-width: 0;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -3815,8 +3815,28 @@
       #checkout-card-element {
         padding: var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+      }
+      /* #3947: follows the two real steps of paying (src/shop/checkoutPayAttempt.js), never a timer. */
+      #checkout-progress {
+        --checkout-progress: 0;
+        height: var(--space-sm);
+        border-radius: var(--radius-pill);
+        background: rgb(var(--ink-rgb) / 0.12);
+        overflow: hidden;
+      }
+      #checkout-progress[hidden] { display: none; }
+      #checkout-progress > span {
+        display: block;
+        height: 100%;
+        width: calc(var(--checkout-progress) * 100%);
+        border-radius: inherit;
+        background: var(--brand-green);
+        transition: width var(--motion-grow) var(--ease-soft);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #checkout-progress > span { transition-duration: var(--motion-reduced); }
       }
       #checkout-status {
         font-size: var(--text-sm);
@@ -3890,8 +3910,8 @@
         object-fit: contain;
         align-self: center;
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
       }
       /* #3941: the one field look; 16px text so a phone does not zoom on focus. */
       #feedback-description {
@@ -3989,8 +4009,8 @@
       #verify-card-element {
         padding: var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
       }
       #verify-status {
         font-size: var(--text-sm);
@@ -4151,8 +4171,8 @@
       .seller-filter-control {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -4388,8 +4408,8 @@
       .seller-min-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 5.5em;
@@ -4419,8 +4439,8 @@
       .seller-size-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 5.5em;
@@ -4504,8 +4524,8 @@
       .seller-price-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 8em;
@@ -4556,8 +4576,8 @@
       .seller-digital-good-select {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -5073,9 +5093,6 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-sm);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .sold-out-marker-row-info {
         font-size: var(--text-xs);
@@ -5245,10 +5262,10 @@
       #auth-modal-content input[type='text'] {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       /* Wraps a password field so a show/hide toggle can sit right next to
          it — lets someone check what they actually typed before submitting,
@@ -5268,12 +5285,12 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 34px;
-        height: 34px;
+        width: 44px;
+        height: 44px;
         padding: 0;
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text-soft);
       }
       .auth-password-toggle-btn svg {
@@ -5373,12 +5390,13 @@
       #auth-logout-btn,
       #auth-change-password-btn,
       #auth-export-data-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
       #auth-change-password-form {
@@ -5390,12 +5408,13 @@
          rather than filled, so the account panel doesn't read as alarming
          until someone actually opens this flow. */
       #auth-delete-account-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
         border: 1px solid rgb(var(--danger-rgb) / 0.5);
         background: none;
-        color: var(--danger);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        color: var(--danger-text);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
       #auth-delete-account-form {
@@ -5449,7 +5468,8 @@
       /* #3939 (part of #3933): one list row. Every list leaf's row wears this fill, shape, padding and
          text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
       .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
-      .pending-restoration-row, .friend-row, .dm-row, .seller-row {
+      .pending-restoration-row, .friend-row, .dm-row, .seller-row, .product-review-row, .seller-feedback-row,
+      .product-sale-row, .sold-out-marker-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
         background: var(--fill-row);
@@ -6839,11 +6859,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-review-row-body,
       .seller-feedback-row-body {
@@ -6906,11 +6921,6 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: var(--space-md);
-        padding: var(--space-md) var(--space-lg);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        font-size: var(--text-sm);
-        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-sale-row-body {
         min-width: 0;

@@ -1,4 +1,4 @@
-// #3568: Settings > Shop does not draw "My Avatars" or "My Animations" for a
+// #3568: Settings > Shop does not draw "My avatars" or "My animations" for a
 // shopper who owns neither. A new account has nothing to pick, so both
 // sections (and the disabled Equip button) stay out of sight.
 import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
@@ -28,8 +28,8 @@ const state = await page.evaluate(() => {
   const visible = (text) => [...document.querySelectorAll('.settings-field')]
     .some((f) => f.textContent.includes(text) && getComputedStyle(f).display !== 'none');
   return {
-    avatars: visible('My Avatars'),
-    animations: visible('My Animations'),
+    avatars: visible('My avatars'),
+    animations: visible('My animations'),
     equipButtons: [...document.querySelectorAll('#settings-modal .version-action-btn')].filter((b) => b.offsetParent !== null).length,
     emptyLine: document.body.innerText.includes("don't own any standalone animations"),
   };
