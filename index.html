@@ -854,6 +854,9 @@
          selected. -->
     <div id="item-card" class="world-card" role="region" aria-label="Selected item" data-state="closed" hidden>
       <div id="item-card-name"></div>
+      <!-- #3691: while Selecting is on, the brush's size slider blooms here beside the selection
+           (src/build/itemCard.js moves #multiselect-brush-control in and back out). Empty otherwise. -->
+      <div id="item-card-brush"></div>
       <!-- #3575: Move, Rotate and Trim are on the item's own card, under its name, not a row standing on
            the world. Same ids and handlers; the readout and the refusal notice come with them. -->
       <div id="gizmo-mode-controls">
