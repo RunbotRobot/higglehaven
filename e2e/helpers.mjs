@@ -415,6 +415,13 @@ const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community
 export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
+    // #3702: a product's per-row settings are folded under "More settings"; a test that clicks one opens that
+    // first. Cheap when no row is folded: one count of the hidden boxes.
+    if (typeof selector === 'string' && (await page.locator('.seller-more-settings[hidden]').count())) {
+      const target = page.locator(selector).first();
+      const folded = await target.evaluate((el) => !!el.closest('.seller-more-settings[hidden]'), null, { timeout: 300 }).catch(() => false);
+      if (folded) await target.evaluate((el) => el.closest('.seller-row').querySelector('.seller-more-settings-toggle').click());
+    }
     const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
     if ((BUD_PETALS.has(selector) || menuOf) && !(await page.locator(selector).isVisible())) {
       // #3690: an open leaf (Levels) sits over the bud and swallows the tap on it; put it away first.

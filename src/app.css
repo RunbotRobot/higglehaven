@@ -4440,6 +4440,14 @@
         text-decoration: underline;
         text-underline-offset: 2px;
       }
+      /* #3702: the per-product settings sit together under one "More settings" control. */
+      .seller-more-settings {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-xs);
+      }
+      .seller-more-settings[hidden] { display: none; }
       .seller-extensibility-panel {
         display: flex;
         flex-direction: column;

@@ -1831,6 +1831,34 @@ function renderSellerList() {
     if (isMetadataSaveBusy()) {
       for (const btn of metadataSaveButtons) btn.disabled = true;
     }
+    // #3702 (Sell in the bud, 4/6, slice B): the per-product settings (digital good, returns, shipping,
+    // size, price, extensibility, sit/lean) were seven "Edit ..." links stacked down the row. They are
+    // kept, with their panels and save handlers untouched, but folded under one "More settings" control
+    // so the row opened from a product's card reads as the product and its few actions, not as a form.
+    const settingsEls = [
+      digitalGoodText, digitalGoodToggle, digitalGoodPanel,
+      noReturnsText, noReturnsToggle, noReturnsPanel,
+      domesticOnlyText, domesticOnlyToggle, domesticOnlyPanel,
+      sizeToggle, sizePanel, priceToggle, pricePanel,
+      extensibilityToggle, extensibilityPanel, sitLeanToggle, sitLeanPanel,
+    ];
+    const moreToggle = document.createElement('button');
+    moreToggle.type = 'button';
+    moreToggle.className = 'seller-extensibility-toggle seller-more-settings-toggle';
+    moreToggle.textContent = 'More settings ▾';
+    moreToggle.setAttribute('aria-expanded', 'false');
+    const moreBox = document.createElement('div');
+    moreBox.className = 'seller-more-settings';
+    moreBox.hidden = true;
+    // Where the first setting stood: after the product's own facts, before reviews and sales.
+    details.insertBefore(moreToggle, settingsEls[0]);
+    details.insertBefore(moreBox, settingsEls[0]);
+    for (const el of settingsEls) moreBox.appendChild(el);
+    moreToggle.addEventListener('click', () => {
+      moreBox.hidden = !moreBox.hidden;
+      moreToggle.setAttribute('aria-expanded', String(!moreBox.hidden));
+      moreToggle.textContent = `More settings ${moreBox.hidden ? '▾' : '▴'}`;
+    });
     sellerListEl.appendChild(row);
   }
 }
