@@ -5495,7 +5495,12 @@ badged with the pending-incoming count exactly like `#notifications-btn`.
 `#friends-modal` has three sections — Requests (incoming pending, Accept/
 Decline), Sent (outgoing pending, Cancel), and Friends (accepted, with the
 exact-location text and a Remove button) — all sharing one
-`.friend-row` look with different actions per section. "+ Add Friend"
+`.friend-row` look with different actions per section. (#3555: in Shop, a tap on
+another person's avatar offers friendship through the shared in-app confirmation
+in `src/friends.js`, which posts the same `POST /api/friendships` with that
+avatar's `builderId` and answers a refusal in the server's own words; the typed
+name below stays as the fallback for someone not nearby. An assistant's avatar
+answers a tap with its chat instead.) "+ Add Friend"
 `prompt()`s for the other builder's exact label, resolves it against the
 full builder roster (`fetchBuilders()`, case-insensitive exact match), and
 sends the request — an unmatched or ambiguous label surfaces as a status
