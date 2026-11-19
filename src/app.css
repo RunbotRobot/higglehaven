@@ -1169,6 +1169,15 @@
         animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
         transform-origin: 0 0;
       }
+      /* #3876: a closing leaf (src/ui/bud.js foldLeafAway) plays its unfold backwards and is gone; it cannot be
+         tapped and takes no focus. With reduced motion it only fades. */
+      .bud-leaf.bud-leaf-folding {
+        pointer-events: none;
+        animation: bud-unfold var(--motion-fold) var(--ease-fold) reverse both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .bud-leaf.bud-leaf-folding { animation: bud-fade var(--motion-reduced) linear reverse both; }
+      }
       .bud-leaf h2 { margin: 0 40px var(--space-sm) 0; font-size: 18px; font-weight: 600; }
       .bud-leaf p { margin: 0 0 var(--space-sm); user-select: text; }
       .bud-leaf-close {
