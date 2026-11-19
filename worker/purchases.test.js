@@ -945,6 +945,46 @@ describe('Simulated purchases', () => {
     );
   });
 
+  // #3704 (Sell in the bud, slice 3): the Orders leaf lists every sale of the signed-in seller's own
+  // products in one read, scoped to the session, with the product named from the order's own record.
+  it('lists the signed-in seller\'s own sales via GET /purchases?mine=seller and nobody else\'s', async () => {
+    const owningSeller = await signupSeller('purchase-mine-owner-seller');
+    const otherSeller = await signupSeller('purchase-mine-other-seller');
+    const builder = await signupAdmin('purchase-mine-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-mine-owner-landlet', 1000);
+    await claim('purchase-mine-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-mine-owner-template',
+        name: 'Orders leaf product',
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 1500,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-mine-owner-instance', 'purchase-mine-owner-landlet', 'purchase-mine-owner-template', builder);
+    const purchased = await api('/instances/purchase-mine-owner-instance/purchase', builder.session({ method: 'POST' }));
+
+    const noSession = await api('/purchases?mine=seller');
+    expect(noSession.response.status).toBe(401);
+
+    const mine = await api('/purchases?mine=seller', owningSeller.session());
+    expect(mine.response.status).toBe(200);
+    expect(mine.body.totalCount).toBe(1);
+    expect(mine.body.purchases[0]).toEqual(expect.objectContaining({
+      purchaseId: purchased.body.purchase.purchaseId,
+      productName: 'Orders leaf product',
+    }));
+
+    const theirs = await api('/purchases?mine=seller', otherSeller.session());
+    expect(theirs.response.status).toBe(200);
+    expect(theirs.body.totalCount).toBe(0);
+    expect(theirs.body.purchases).toEqual([]);
+  });
+
   // #940: same dangling-seller_id class as the refund fix above -- this
   // endpoint's plain `if (template.seller_id)` truthiness check treated a
   // dangling id as still-owned, so no session (not even admin) could ever

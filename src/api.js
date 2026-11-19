@@ -1925,6 +1925,12 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
   return { purchases, totalCount };
 }
 
+// #3704: every sale of the signed-in seller's own products (newest 100), for the Orders leaf.
+export async function fetchSellerOrders() {
+  const { purchases, totalCount } = await requestJson('/purchases?mine=seller');
+  return { purchases, totalCount };
+}
+
 // #1949: every finite-stock template the session builder currently has
 // placed, each annotated with an estimated days-remaining figure -- see
 // handleBuilderLowStock's own comment in worker/index.js for how that's

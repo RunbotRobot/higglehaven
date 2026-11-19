@@ -1077,6 +1077,23 @@ nobody owns and nothing uses is removed completely.
 #bud-petal-sell-payouts | Payouts
 ```
 
+### Where do I see what I have sold, and mark something shipped?
+
+1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again to open the menu.
+2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when.
+3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. A sale that has been refunded says "Refunded".
+
+**You will see:** "No orders yet." until something sells.
+
+**If something goes wrong:**
+- A refund, a missing payment or an amount that looks wrong is not for the assistant to answer: say so plainly and use the runbook's hand-off.
+- The list looks different from what is described here: ask what they see, and offer to pass it to the team.
+
+```controls sell
+.mode-nav-btn[data-mode="sell"] | Sell
+#bud-petal-sell-orders | Orders
+```
+
 ### How do I rename my shop, or start my seller profile over?
 
 1. Switch to Sell, open the menu, and tap "Storefront".

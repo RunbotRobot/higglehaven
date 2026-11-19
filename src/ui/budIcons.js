@@ -35,6 +35,7 @@ const PATHS = {
   // Sell
   crate: 'M3.5 4h17v4.5h-17z M5 8.5V20h14V8.5 M10 12.5h4',
   storefront: 'M3 9l1.5-5h15L21 9 M3 9v0a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0 M5 12v8h14v-8 M10 20v-5h4v5',
+  orders: 'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6',
   coins: 'M3 7h18v10H3z M12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z M6.5 10v.01 M17.5 14v.01',
   tagPlus: 'M3 3h8l10 10-8 8L3 11z M7 4.8v4.4 M4.8 7h4.4',
   // Fallback: a leaf, so an unknown one still looks like part of the plant
@@ -59,6 +60,7 @@ const BY_ID = {
   'bud-petal-build-tools': 'tools',
   'bud-petal-sell-my-products': 'crate',
   'bud-petal-sell-add-product': 'tagPlus',
+  'bud-petal-sell-orders': 'orders',
   'bud-petal-sell-payouts': 'coins',
   'bud-petal-sell-storefront': 'storefront',
   'bud-petal-shop-help': 'help',

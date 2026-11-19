@@ -6883,6 +6883,11 @@
       .product-sale-row-body {
         min-width: 0;
       }
+      /* #3704: the Orders leaf names the product on each row; its list is the same row stack. */
+      .product-sale-row-product { font-weight: 600; }
+      .orders-list { display: flex; flex-direction: column; gap: var(--space-md); }
+      .bud-leaf .orders-note { margin: 0 0 var(--space-sm); font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.75); }
+      .bud-leaf .orders-note.error { color: var(--danger-text); }
       .product-sale-row-commission {
         color: var(--brand-green);
       }
