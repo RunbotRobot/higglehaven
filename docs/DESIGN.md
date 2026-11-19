@@ -156,14 +156,20 @@ active state and one coral for danger.
 |---|---|---|
 | `--ink-rgb` | `22 36 10` | the one dark-green ink, as channels so a use can pick its own opacity: `rgb(var(--ink-rgb) / 0.25)` |
 | `--white-rgb` | `255 255 255` | white as channels, for the bud and its leaves' sheen and rings: `rgb(var(--white-rgb) / 0.9)` |
+| `--black-rgb` | `0 0 0` | black as channels, for a quiet fill or a mask: `rgb(var(--black-rgb) / 0.1)` |
 | `--ink` | the ink as a colour | text and lines on either pale surface |
 | `--pill-rgb` | `214 232 190` | the small floating HUD chrome: pale green |
 | `--panel-rgb` | `250 240 199` | large, text-heavy dialogs: pale yellow |
 | `--pill-text` | the ink | text on a pale surface |
 | `--pill-text-soft` | the ink at 65% | secondary text on a pale surface |
 | `--brand-green` | `#6ca42e` | the active state only; a step up in intensity from the pale surfaces |
+| `--brand-green-rgb` | `108 164 46` | `--brand-green` as channels, for its tints on an expanded row or a brush |
 | `--spring-green-rgb` | `62 199 91` | the movement controls' resting state, brighter than the brand green |
 | `--danger` | `#e2694f` | the one accent for destructive actions: a friendly coral, not a dark red |
+| `--danger-rgb` | `226 105 79` | `--danger` as channels, for a destructive form's outline |
+| `--denied-rgb` | `255 92 92` | a muted or refused voice control |
+| `--danger-line-rgb` | `255 120 100` | the outline of a destructive row action |
+| `--danger-soft-rgb` | `255 180 168` | coral text on the dark delete control |
 | `--danger-text` | `#a83a27` | coral for text; at least 4.5:1 on panel, pill and tinted rows |
 | `--danger-strong` | `#c0392b` | filled destructive controls |
 | `--danger-bright` | `#d9483a` | alert dots and badges |
@@ -260,6 +266,8 @@ control that may sit in a settings list is 32px tall.
 | `--radius-petal` | 24px 5px 24px 5px | a petal of the bud |
 | `--radius-bloom` | 28px 6px 28px 6px | the card that blooms beside a product |
 | `--radius-leaf` | 30px 6px 30px 6px | a leaf that grows from the bud |
+| `--radius-petal-flip` | 6px 24px 6px 24px | a petal's mirror image, for the side the menu opens toward |
+| `--radius-leaf-flip` | 6px 30px 6px 30px | a leaf's mirror image |
 | `--radius-word` | 12px 3px 12px 3px | the small word beside the bud |
 | `--bud-size` | 56px | the bud's width and height (not a radius; kept here with the shapes) |
 
