@@ -4819,6 +4819,18 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
+      .settings-gesture-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .settings-gesture-heading {
+        margin-top: 6px;
+        font-weight: 600;
+      }
       .settings-empty-note.error {
         color: var(--danger-text);
       }
