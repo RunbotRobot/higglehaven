@@ -413,6 +413,17 @@ const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
 export function budAware(page) {
+  // #3702: a product's per-row settings are folded under "More settings". Whenever an action is stuck waiting
+  // (a setting that is not drawn yet) and a closed More settings control is on screen, open it and let the action
+  // go on; an action that can already run never triggers this. Covers every way a test reaches a setting
+  // (page.click, locator clicks, fills), not only the ones that go through this wrapper.
+  if (typeof page.addLocatorHandler === 'function') {
+    page.addLocatorHandler(
+      page.locator('.seller-more-settings-toggle[aria-expanded="false"]:visible').first(),
+      async (toggle) => { await toggle.click(); },
+      { noWaitAfter: true },
+    ).catch(() => {});
+  }
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
     const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
