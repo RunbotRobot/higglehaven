@@ -8,13 +8,19 @@
 // browser page to load, which would pull the whole world into this one's unit test).
 const WORLD_GESTURE_EVENT = 'higglehaven:world-gesture';
 
-import { WALK_WORDS, LOOK_WORDS, FLY_WORDS } from './gestureWords.js';
+import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from './gestureWords.js';
 
 export const FIRST_HINTS_KEY = 'higglehaven.firstHints.done';
 export const FIRST_HINT_STEPS = [
   { kind: 'walk', text: WALK_WORDS },
   { kind: 'look', text: LOOK_WORDS },
   { kind: 'fly', text: FLY_WORDS },
+];
+// #3832: a computer with a mouse and a keyboard is taught the same three things in its own words.
+export const FIRST_HINT_STEPS_KEYBOARD = [
+  { kind: 'walk', text: KEY_WALK_WORDS },
+  { kind: 'look', text: KEY_LOOK_WORDS },
+  { kind: 'fly', text: KEY_FLY_WORDS },
 ];
 
 export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRST_HINT_STEPS }) {
@@ -66,9 +72,17 @@ function ensureEl() {
 }
 
 export function startFirstVisitHints() {
-  // Touch screens only: a mouse and keyboard person has the keys and the "?" leaf.
-  if (typeof window === 'undefined' || !window.matchMedia?.('(pointer: coarse)').matches) return null;
+  // A touch screen is taught the gestures; a computer (a fine pointer and no touch) is taught the
+  // keys and the mouse (#3832). Anything else gets nothing.
+  if (typeof window === 'undefined' || !window.matchMedia) return null;
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  const fine = window.matchMedia('(pointer: fine)').matches;
+  if (!coarse && !fine) return null;
+  // Automated browsers (the e2e suite, scripts/live-site.mjs) are desktop-shaped; a hint over their
+  // screenshots and clicks helps nobody, so the computer's hints are for real computers.
+  if (!coarse && navigator.webdriver === true) return null;
   const hints = createFirstVisitHints({
+    steps: coarse ? FIRST_HINT_STEPS : FIRST_HINT_STEPS_KEYBOARD,
     show: (text) => {
       const node = ensureEl();
       node.textContent = text;
