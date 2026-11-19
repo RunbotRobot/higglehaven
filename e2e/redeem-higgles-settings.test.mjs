@@ -71,7 +71,7 @@ await page.waitForFunction(
 );
 
 // #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
-await page.locator('.settings-account-fold > summary').click();
+await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
 const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
 console.log('Redeem Higgles status note (should show the granted balance and that Stripe isn\'t configured here):', statusText);
 
