@@ -31,6 +31,15 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
   });
 
+  it('parses slow, which runs the page\'s animations at a fraction of their speed (#3876)', () => {
+    expect(parseStep('slow:0.1')).toEqual({ command: 'slow', args: [0.1] });
+    expect(parseStep('slow:1')).toEqual({ command: 'slow', args: [1] });
+    expect(parseStep('slow:0.2:burst:unfold:5:300')).toEqual({ command: 'slow', args: [0.2], burst: { name: 'unfold', count: 5, ms: 300 } });
+    expect(() => parseStep('slow')).toThrow(/needs 1 argument/);
+    expect(() => parseStep('slow:0')).toThrow(/rate from 0.02 to 1/);
+    expect(() => parseStep('slow:2')).toThrow(/rate from 0.02 to 1/);
+  });
+
   it('refuses a bad flower step or burst with one plain line (#3817)', () => {
     expect(() => parseStep('petal:moon')).toThrow(/petal must be one of/);
     expect(() => parseStep('leaf:wardrobe')).toThrow(/leaf must be one of notices, friends, purchases, settings, help/);

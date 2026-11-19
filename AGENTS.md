@@ -72,6 +72,7 @@ forward there descends; put `land` first to walk on the ground),
 `petal:<shop|build|sell>`, `leaf:<notices|friends|purchases|settings|help>` (these find the
 control by what it is, not by where it sits; prefer them to `tap:<x>:<y>`), `settings`,
 `idle`, `wait:<ms>`, `shot[:name]`, `stats`, `cover`, and
+`slow:<rate>` (the page's CSS animations run at that fraction of their speed, `slow:0.1` for ten times slower, `slow:1` to restore, so a burst can catch a 300 ms unfold even where each still takes longer),
 `burst:<name>:<count>:<ms>` (stills a few hundred ms apart; add `:burst:<name>:<count>:<ms>`
 to the end of any step to take them while it runs, as in
 `walk:forward:2000:burst:walk:4:500`, so legs moving or a leaf unfolding can be read from
