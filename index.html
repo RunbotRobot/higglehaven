@@ -193,7 +193,6 @@
     </div>
     <button id="connectivity-indicator" type="button" hidden aria-label="Server unreachable — tap for details">&#9888;</button>
     <div id="product-info"></div>
-    <div id="rotation-readout" role="status" aria-live="off" hidden></div>
     <div id="seller-showcase-pager">
       <button id="seller-showcase-prev-btn" type="button" aria-label="Previous page">&#9664;</button>
       <span id="seller-showcase-page-label">Page 1 of 1</span>
@@ -208,29 +207,6 @@
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="multiselect-brush-indicator"></div>
-    <div id="gizmo-mode-controls">
-      <button id="mode-move" type="button">Move</button>
-      <button id="mode-rotate" type="button">Rotate</button>
-      <button id="mode-trim" type="button">Trim</button>
-      <div id="trim-length-control" class="gizmo-numeric-control">
-        <label class="trim-axis-field" data-trim-axis="x">
-          <span class="trim-axis-tag">W</span>
-          <input class="trim-length-input" data-trim-axis="x" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
-        </label>
-        <label class="trim-axis-field" data-trim-axis="y">
-          <span class="trim-axis-tag">D</span>
-          <input class="trim-length-input" data-trim-axis="y" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
-        </label>
-        <label class="trim-axis-field" data-trim-axis="z">
-          <span class="trim-axis-tag">H</span>
-          <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
-        </label>
-      </div>
-      <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
-        <span id="selection-action-status-text" class="shop-notice-text"></span>
-        <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-      </div>
-    </div>
     <!-- #3690: no pill any more. The Levels petal's leaf lends these (src/build/budPetals.js). -->
     <div id="level-controls" hidden>
       <span id="level-label">Ground</span>
@@ -878,6 +854,32 @@
          selected. -->
     <div id="item-card" class="world-card" role="region" aria-label="Selected item" data-state="closed" hidden>
       <div id="item-card-name"></div>
+      <!-- #3575: Move, Rotate and Trim are on the item's own card, under its name, not a row standing on
+           the world. Same ids and handlers; the readout and the refusal notice come with them. -->
+      <div id="gizmo-mode-controls">
+        <button id="mode-move" type="button">Move</button>
+        <button id="mode-rotate" type="button">Rotate</button>
+        <button id="mode-trim" type="button">Trim</button>
+        <div id="trim-length-control" class="gizmo-numeric-control">
+          <label class="trim-axis-field" data-trim-axis="x">
+            <span class="trim-axis-tag">W</span>
+            <input class="trim-length-input" data-trim-axis="x" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+          </label>
+          <label class="trim-axis-field" data-trim-axis="y">
+            <span class="trim-axis-tag">D</span>
+            <input class="trim-length-input" data-trim-axis="y" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+          </label>
+          <label class="trim-axis-field" data-trim-axis="z">
+            <span class="trim-axis-tag">H</span>
+            <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+          </label>
+        </div>
+        <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
+          <span id="selection-action-status-text" class="shop-notice-text"></span>
+          <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
+        </div>
+      </div>
+      <div id="rotation-readout" role="status" aria-live="off" hidden></div>
       <div id="item-card-actions">
         <!-- #3692 (Build in the bud 5/6): the bundle actions live in the card, with their ids and handlers unchanged. -->
         <button id="group-item" type="button">Bundle</button>

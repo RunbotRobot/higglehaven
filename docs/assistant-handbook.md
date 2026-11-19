@@ -649,7 +649,7 @@ are inside it.
 4. Tap the ground where you want it.
 
 **You will see:** the item stands where you tapped and is already selected, with a
-row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
+a small card beside it that has "Move", "Rotate" and the rest, and arrows around it.
 
 **If something goes wrong:**
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
@@ -671,8 +671,8 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 ### How do I move an item?
 
-1. Tap the item. It gets arrows around it and a row of buttons above it.
-2. Make sure "Move" is the green one in that row. Tap it if not.
+1. Tap the item. It gets arrows around it and a small card beside it with a row of buttons.
+2. Make sure "Move" is the yellow one on the card. Tap it if not.
 3. Drag the item to slide it along the ground. Drag the blue arrow to lift it up
    or down. Drag the red or green arrow to slide it along only that line.
 4. Let go where you want it. It saves by itself.
@@ -695,14 +695,14 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 ### How do I turn an item?
 
-1. Tap the item, then tap "Rotate" in the row above it. Three coloured rings
-   appear around it, and a line at the top reads the angles.
+1. Tap the item, then tap "Rotate" on the card beside it. Three coloured rings
+   appear around it, and a line on the card reads the angles.
 2. Drag the blue ring to turn it flat, like a record on a turntable. The line
    calls this "Turn".
 3. Drag the red or green ring to tip it over. The line calls these "Tilt".
 4. Tap "Move" to go back to sliding it.
 
-**You will see:** the item turns as you drag, and the line at the top shows how far.
+**You will see:** the item turns as you drag, and the line on the card shows how far.
 
 **If something goes wrong:**
 - It turned the wrong way or too far: the round logo button at the top left, then "Undo".
@@ -790,11 +790,11 @@ single item.
 4. Tap the bud, "Tools", then "Multi-Select" again when you want to go back to
    choosing one item at a time. The bud says "Menu" again.
 
-**You will see:** the same row of buttons as for one item, acting on all of them:
+**You will see:** the same buttons on the card as for one item, acting on all of them:
 "Move", "Rotate", "Copy", "Delete" and the rest.
 
 **If something goes wrong:**
-- Some buttons in the row are greyed out, such as "Trim": they work on one item at
+- Some buttons on the card are greyed out, such as "Trim": they work on one item at
   a time.
 - The row of buttons and the count at the top only show once something is
   chosen.
