@@ -1081,8 +1081,8 @@ nobody owns and nothing uses is removed completely.
 - It says the product is still saved in someone's layout library, or was used in a
   lándlet's past published version. It cannot be deleted while that is so; do not
   promise when it will be possible, and offer to pass it to the team.
-- They only want a quiet copy to change: "Duplicate" makes a copy to edit without
-  touching the original.
+- They only want a quiet copy to change: "Duplicate" (under "More settings" on the
+  product) makes a copy to edit without touching the original.
 
 ```controls sell
 .seller-view-btn[data-view="manage"] | Manage
