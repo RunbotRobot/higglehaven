@@ -127,26 +127,26 @@ export async function handleInstancePurchase(request, env, instanceId) {
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
   if (!template) return json({ error: 'Catalog template not found' }, 404);
   if (template.price_cents == null) {
-    throw new HttpError('This product has no price set and cannot be purchased', 400);
+    throw new HttpError('This product has no price set and cannot be purchased', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   // #1946: a test/demo model -- never a real listing the owner intends to
   // sell -- is still placeable (Build mode's own picker keeps showing it
   // to an admin session) but must never actually be bought, real money or
   // simulated alike.
   if (template.is_test_model) {
-    throw new HttpError('This is a test/demo product and cannot be purchased', 400);
+    throw new HttpError('This is a test/demo product and cannot be purchased', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   // #2017: a listing with enough distinct counterfeit flags (or an admin
   // escalation) is blocked from new purchases while under review, without
   // touching GET /api/catalog's own list/detail endpoints -- see this
   // column's own migration comment for why hiding it there isn't safe.
   if (template.flagged_hidden_at) {
-    throw new HttpError('This product is temporarily unavailable pending review', 400);
+    throw new HttpError('This product is temporarily unavailable pending review', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   // #3279: removed by its seller after others had bought it -- existing
   // owners keep it, but nobody new can.
   if (template.delisted_at) {
-    throw new HttpError('This product is no longer for sale', 400);
+    throw new HttpError('This product is no longer for sale', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   // #1948: a quick, non-atomic pre-check so an obviously sold-out item gets a
   // clear rejection before a buyer goes through checkout (real-money) or the
@@ -154,7 +154,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // bought by two near-simultaneous buyers) happens atomically in
   // writePurchaseRow's own guarded decrement, not here.
   if (template.stock_quantity === 0) {
-    throw new HttpError('This product is sold out', 400);
+    throw new HttpError('This product is sold out', 400, { code: ERROR_CODES.SOLD_OUT });
   }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
@@ -166,7 +166,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // else, independent of whether the product's own seller is in good
   // standing (that's #2985's separate, already-enforced gate).
   if (await builderHasActiveSuspension(db, landlet.owner_builder_id)) {
-    throw new HttpError('This listing is temporarily unavailable — its lándlet owner is suspended', 400);
+    throw new HttpError('This listing is temporarily unavailable — its lándlet owner is suspended', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
 
   // quantity/buyerLabel are both genuinely optional, and this endpoint has
@@ -239,7 +239,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // unaffected. Covers listings from before closed_sellers recorded
   // self-deletions, which the closed_sellers check above cannot see.
   if (template.seller_id && !seller) {
-    throw new HttpError('This product is no longer available.', 400);
+    throw new HttpError('This product is no longer available.', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     // #3429: a fleet account (a Claude Code session on the live site) never
@@ -951,7 +951,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     `).bind(quantity, template.template_id, quantity).run();
     if (decremented.meta.changes === 0) {
       if (!allowOversell) {
-        throw new HttpError('This product is sold out', 400);
+        throw new HttpError('This product is sold out', 400, { code: ERROR_CODES.SOLD_OUT });
       }
       // #1948: real money has already moved by the time
       // handlePurchaseFinalize calls this with allowOversell=true (an

@@ -35,6 +35,8 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 
+// #3652: Redeem Higgles sits in the closed "Higgles and auctions" row; open it before looking at the button.
+await page.evaluate(() => document.querySelector('.settings-account-fold')?.setAttribute('open', ''));
 const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
 const finishBtn = page.getByRole('button', { name: `Finish pending redemption of $${(PENDING_CENTS / 100).toFixed(2)}` });
 const finishBtnVisible = await finishBtn.isVisible();

@@ -65,7 +65,7 @@ Steps: `walk:<forward|back|left|right>[:ms]`,
 `aim:<up|down|left|right>[:ms]` (holds the look joystick, which is what steers
 the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
 looks at the sky; `look` drags the page and does not turn the camera in Shop),
-`look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
+`look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `mode:<shop|build|sell>`, `fly`,
 `land` (every Shop arrival starts in flight 80 m up looking down, by design, and walking
 forward there descends; put `land` first to walk on the ground),
 `menu` (open the flower's general menu if it is closed),
@@ -85,6 +85,14 @@ line arriving, a voice peer in the list. On the live site `<name>` must be a fle
 (`higglehaven` plus digits) other than your own, never a real person's; its steps are
 `peer:join` (its avatar walks up beside yours), `peer:say:<text>` (it speaks in nearby chat),
 `peer:shot[:name]` and `peer:pos`, and its console errors are reported apart under `peer`.
+
+**A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
+and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;
+`--throttle` is the slow-4G one for waits. Which figures to trust: the cloud machine's script side is
+far faster than a phone's and its GPU side (software GL) far slower, so under `--phone` trust long
+tasks, the longest script task and request timings; do not trust frame time or anything GPU-bound;
+for the GPU use triangles and draw calls per frame (`live-frame-cost.mjs`), which hold on any
+machine. A figure without its profile named says little about the owner's phone.
 
 **A seeded local world (#3930).** `npm run seed:local-world` fills a local `wrangler dev` (with
 `.dev.vars` holding `ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret`, the e2e fixture) so looks that

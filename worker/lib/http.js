@@ -40,6 +40,8 @@ export const ERROR_CODES = Object.freeze({
   STALE_REFERENCE: 'stale_reference',
   SELLER_SUSPENDED: 'seller_suspended',
   OUT_OF_LEVEL_RANGE: 'out_of_level_range', // #3372
+  SOLD_OUT: 'sold_out', // #3948
+  NOT_FOR_SALE: 'not_for_sale', // #3948
 });
 
 export class HttpError extends Error {

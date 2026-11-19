@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  parseStep, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
+  PHONE_PROFILE, THROTTLE_PROFILE, profileFor, applyProfile, parseStep, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
   unionArea, summariseCover, coverTable,
 } from './live-site-lib.mjs';
 
@@ -11,6 +11,9 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('aim:up:1500')).toEqual({ command: 'aim', args: ['up', 1500] });
     expect(parseStep('aim:left')).toEqual({ command: 'aim', args: ['left', 1000] });
     expect(parseStep('look:40:-20')).toEqual({ command: 'look', args: [40, -20] });
+    expect(parseStep('item')).toEqual({ command: 'item', args: [1] });
+    expect(parseStep('item:3')).toEqual({ command: 'item', args: [3] });
+    expect(() => parseStep('item:0')).toThrow(/whole number/);
     expect(parseStep('tap:120:300')).toEqual({ command: 'tap', args: [120, 300] });
     expect(parseStep('tap:#account-menu-toggle')).toEqual({ command: 'tap', args: ['#account-menu-toggle'] });
     expect(parseStep('tap:button:has-text("Settings")')).toEqual({ command: 'tap', args: ['button:has-text("Settings")'] });
@@ -208,6 +211,42 @@ describe('the throttle flag (#3736)', () => {
     const { options, steps } = parseArgs(['--name', 'higglehaven3', '--throttle', 'idle'], {});
     expect(options.throttle).toBe(true);
     expect(steps).toHaveLength(1);
+  });
+});
+
+describe('the phone profile (#3935)', () => {
+  it('is off unless asked for, and takes no value', () => {
+    expect(parseArgs(['--name', 'higglehaven3'], {}).options.phone).toBe(false);
+    const { options, steps } = parseArgs(['--name', 'higglehaven3', '--phone', 'idle'], {});
+    expect(options.phone).toBe(true);
+    expect(steps).toHaveLength(1);
+  });
+
+  it('does not go with --throttle: one profile per run', () => {
+    expect(() => parseArgs(['--name', 'higglehaven3', '--phone', '--throttle', 'idle'], {})).toThrow(/do not go together/);
+  });
+
+  it('names which profile ran', () => {
+    expect(profileFor({})).toBe(null);
+    expect(profileFor({ phone: true }).name).toBe('phone');
+    expect(profileFor({ throttle: true }).name).toBe('throttle');
+  });
+
+  it('slows the CPU as much as the slow profile and the connection far less, and says what to trust', () => {
+    expect(PHONE_PROFILE.cpuSlowdown).toBe(THROTTLE_PROFILE.cpuSlowdown);
+    expect(PHONE_PROFILE.downKbps).toBeGreaterThan(THROTTLE_PROFILE.downKbps * 5);
+    expect(PHONE_PROFILE.latencyMs).toBeLessThan(THROTTLE_PROFILE.latencyMs);
+    expect(PHONE_PROFILE.limits).toMatch(/Trust: long tasks/);
+    expect(PHONE_PROFILE.limits).toMatch(/Do not trust: frame time/);
+    expect(PHONE_PROFILE.limits).toMatch(/triangles and draw calls/);
+  });
+
+  it('sends the three DevTools settings in kilobits', async () => {
+    const sent = [];
+    await applyProfile({ send: async (method, params) => { sent.push([method, params]); } }, PHONE_PROFILE);
+    expect(sent.map(([method]) => method)).toEqual(['Network.enable', 'Emulation.setCPUThrottlingRate', 'Network.emulateNetworkConditions']);
+    expect(sent[1][1]).toEqual({ rate: 4 });
+    expect(sent[2][1]).toEqual({ offline: false, latency: 40, downloadThroughput: 20000 * 1024 / 8, uploadThroughput: 5000 * 1024 / 8 });
   });
 });
 

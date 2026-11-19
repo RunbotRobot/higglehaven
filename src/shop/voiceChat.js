@@ -37,7 +37,6 @@ import { assistantSpeakerLabel } from './assistantLabel.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
-import { showNotice } from '../ui/noticeModal.js';
 
 // docs/SPEC.md §2: "100 feet (~30m) of complete silence as the outer
 // range, with volume ramping up gradually as avatars get closer — not a
@@ -522,7 +521,8 @@ function escapeVoiceLabel(text) {
 
 // #3889: who has been reported from this list, so "Report sent" is said on
 // that person's row (the list is rebuilt from scratch on every change).
-const reportedVoicePeers = new Set();
+// A failure is kept the same way (#3889) so it is not lost to the rebuild.
+const reportedVoicePeers = new Map();
 
 function renderVoicePeersList() {
   if (!voicePeersPanelEl || !voicePeersListEl) return;
@@ -543,7 +543,9 @@ function renderVoicePeersList() {
       + `<button type="button" data-action="mute" class="${muted ? 'shop-voice-peer-muted' : ''}">${muted ? 'Unmute' : 'Mute'}</button>`
       + '<button type="button" data-action="report">Report</button>'
       + '<button type="button" data-action="block">Block</button>'
-      + (reportedVoicePeers.has(builderId) ? '<div class="inline-action-status settings-empty-note" role="status" aria-live="polite">Report sent. Thank you.</div>' : '')
+      + (reportedVoicePeers.has(builderId)
+        ? `<div class="inline-action-status settings-empty-note${reportedVoicePeers.get(builderId).error ? ' error' : ''}" role="status" aria-live="polite">${escapeVoiceLabel(reportedVoicePeers.get(builderId).text)}</div>`
+        : '')
       + '</div>';
   }).join('');
 }
@@ -580,10 +582,11 @@ async function reportVoicePeer(builderId) {
   try {
     await sendVoiceReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
     // #3889: said on the reported peer's row, not a pill over the world.
-    reportedVoicePeers.add(builderId);
+    reportedVoicePeers.set(builderId, { text: 'Report sent. Thank you.', error: false });
     renderVoicePeersList();
   } catch (err) {
-    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Try again.' });
+    reportedVoicePeers.set(builderId, { text: `Couldn't submit the report. ${err?.message || 'Try again.'}`, error: true });
+    renderVoicePeersList();
   }
 }
 
