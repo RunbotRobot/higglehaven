@@ -9,7 +9,7 @@
 // and e2e/shop-walk-after-landing-on-object.test.mjs already use for the
 // identical reason (no flaky hand-tuned joystick choreography needed to
 // reach an exact world position).
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budNoteText, budWordText, readSaying, closeSaying } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Suite Tester';
 const LANDLET_ID = `credit-orb-e2e-${Date.now()}`;
@@ -85,8 +85,9 @@ await page.evaluate(([x, y]) => {
 // throttled load/unload decision above), so a short real wait is enough —
 // same reasoning e2e/community-sign-edit-char-limit-guard.test.mjs gives
 // for updateSignFade's own identical per-frame shape.
-await page.waitForSelector('#shop-credit-orb-toast.visible', { timeout: 5000 });
-const toastText = await page.textContent('#shop-credit-orb-toast');
+// #3889: the confirmation is a short word beside the head that goes by itself.
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
+const toastText = await budWordText(page);
 console.log('collect confirmation toast text:', toastText);
 
 const listedAfterCollecting = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
@@ -95,7 +96,7 @@ console.log('orb no longer active after auto-collecting (should be true):', !lis
 const pass = !!myLandlet &&
   listedBeforeWalkingOver.orbs.some((o) => o.orbId === orbId) &&
   !listedAfterCollecting.orbs.some((o) => o.orbId === orbId) &&
-  toastText.includes('credit') &&
+  /credit/i.test(toastText) &&
   errors.length === 0;
 await finish(browser, {
   pass,

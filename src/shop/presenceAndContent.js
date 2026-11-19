@@ -54,6 +54,8 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
+import { setBudWord, clearBudWord } from '../ui/bud.js';
+import { sayAtHead, clearSaying } from '../ui/headSaying.js';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
@@ -102,10 +104,6 @@ import { rateLimitNoticeText } from '../rateLimitNotice.js';
 import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
-const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
-const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
-const shopCreditOrbRateLimitNoticeEl = document.getElementById('shop-credit-orb-rate-limit-notice');
-const shopCreditOrbProblemNoticeEl = document.getElementById('shop-credit-orb-problem-notice');
 export const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 
 // #1630: how many times pickShopSpawnLocation will reroll a candidate that
@@ -1939,7 +1937,7 @@ let creditOrbOfflineStreakStartedAt = null;
 
 function markCreditOrbCollectReachedServer() {
   creditOrbOfflineStreakStartedAt = null;
-  shopCreditOrbOfflineNoticeEl.classList.remove('visible');
+  clearSaying(ORB_OFFLINE_KEY);
 }
 
 function markCreditOrbCollectFailedToReachServer() {
@@ -1949,11 +1947,7 @@ function markCreditOrbCollectFailedToReachServer() {
     return;
   }
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
-    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) {
-      recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
-      bringShopNoticeToFront(shopCreditOrbOfflineNoticeEl);
-    }
-    shopCreditOrbOfflineNoticeEl.classList.add('visible');
+    sayCreditOrbOffline();
   }
 }
 
@@ -1978,56 +1972,48 @@ window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.filter((e
 // #3392: same convention, for the reversal puff shown when someone else got the orb.
 window.__testActiveCreditOrbReversalEffectCount = () => creditOrbPopEffects.filter((e) => e.kind === 'reversal').length;
 
-function showCreditOrbToast() {
-  shopCreditOrbToastEl.classList.add('visible');
-  clearTimeout(creditOrbToastHideTimer);
-  creditOrbToastHideTimer = setTimeout(() => {
-    shopCreditOrbToastEl.classList.remove('visible');
-  }, CREDIT_ORB_TOAST_VISIBLE_MS);
-}
+// #3889: the orb messages are said by the flower, not on the world. A success is a short word
+// beside the head that goes by itself (shape (c), a success may fade); a refusal or a failure is a
+// word that stays until its sentence has been opened and read (#3303: an error or refusal stays,
+// and the sentence is selectable text in the leaf). The numbers in the limit sentence come from
+// the server's reply (rateLimitNoticeText), never a second copy here (#3392, "A message that
+// limits or refuses an action states the limit and when it lifts"). Mode switches reload the
+// page, so none of these can linger into Build/Sell.
+const ORB_CREDIT_KEY = 'orb-credit';
+const ORB_LIMIT_KEY = 'orb-limit';
+const ORB_OFFLINE_KEY = 'orb-offline';
+const ORB_PROBLEM_KEY = 'orb-problem';
 let creditOrbToastHideTimer = null;
+function showCreditOrbToast() {
+  setBudWord(ORB_CREDIT_KEY, 'Credit +1', { label: 'You collected a free model-generation credit' });
+  clearTimeout(creditOrbToastHideTimer);
+  creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+}
 function hideCreditOrbToast() {
   clearTimeout(creditOrbToastHideTimer);
-  shopCreditOrbToastEl.classList.remove('visible');
+  clearBudWord(ORB_CREDIT_KEY);
 }
 
-// #3303 (owner decision: an error or refusal stays until the person dismisses
-// it): unlike the toast above, this no longer fades on a timer. It stays until
-// the person dismisses it or a collect succeeds again (the limit has plainly
-// lifted by then), and carries Copy and dismiss controls. Mode switches reload
-// the page, so it cannot linger into Build/Sell.
-const shopCreditOrbRateLimitNoticeTextEl = shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-text');
-const shopCreditOrbOfflineNoticeTextEl = shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-text');
-// #3441: the orb notices share one stack (#shop-notice-stack) so two showing at
-// once are both readable, and the one raised last sits nearest the controls
-// (highest `order`; the stack is bottom-anchored). Nothing here ever hides
-// another notice.
-let shopNoticeOrderCounter = 0;
-function bringShopNoticeToFront(noticeEl) {
-  shopNoticeOrderCounter += 1;
-  noticeEl.style.order = String(shopNoticeOrderCounter);
+function sayCreditOrbOffline() {
+  const message = "Can't collect orbs right now. You appear to be offline.";
+  sayAtHead(ORB_OFFLINE_KEY, { word: 'Offline', title: "Can't collect orbs", message });
+  recordVisibleMessage(message); // #3303
 }
+
 function showCreditOrbRateLimitNotice(rateLimit, { orbCameBack = false } = {}) {
   const text = rateLimitNoticeText('orbs', rateLimit);
-  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = orbCameBack ? `That orb is back where it was. ${text}` : text;
-  else if (orbCameBack) shopCreditOrbRateLimitNoticeTextEl.textContent = "That orb is back where it was. You've reached the orb limit for now. Try again in a bit.";
-  bringShopNoticeToFront(shopCreditOrbRateLimitNoticeEl);
-  shopCreditOrbRateLimitNoticeEl.classList.add('visible');
-  recordVisibleMessage(shopCreditOrbRateLimitNoticeTextEl.textContent);
+  let message = text || "You've reached the orb limit for now. Try again in a bit.";
+  if (orbCameBack) message = `That orb is back where it was. ${message}`;
+  sayAtHead(ORB_LIMIT_KEY, { word: 'Orb limit', title: 'Orb limit reached', message, readOnce: true });
+  recordVisibleMessage(message);
 }
 function hideCreditOrbRateLimitNotice() {
-  shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
+  clearSaying(ORB_LIMIT_KEY);
 }
-shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', hideCreditOrbRateLimitNotice);
-// #3392: a collect the server refused after the orb had popped. Like the other
-// orb notices it stays until dismissed and its text is selectable (#3303).
-const shopCreditOrbProblemNoticeTextEl = shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-text');
+
+// #3392: a collect the server refused after the orb had popped (someone else got it first, or it
+// could not be confirmed). The reversal effect plays where the orb was; the sentence is said here.
 function showCreditOrbProblemNotice(text) {
-  shopCreditOrbProblemNoticeTextEl.textContent = text;
-  bringShopNoticeToFront(shopCreditOrbProblemNoticeEl);
-  shopCreditOrbProblemNoticeEl.classList.add('visible');
+  sayAtHead(ORB_PROBLEM_KEY, { word: 'Orb missed', title: 'That orb did not count', message: text, readOnce: true });
   recordVisibleMessage(text);
 }
-shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', () => {
-  shopCreditOrbProblemNoticeEl.classList.remove('visible');
-});

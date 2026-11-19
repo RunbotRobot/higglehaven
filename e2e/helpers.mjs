@@ -1010,3 +1010,28 @@ export async function flyByView(page, direction, { lookMs = 1200, moveMs = 3000 
   await page.waitForTimeout(moveMs);
   await page.keyboard.up('KeyW');
 }
+
+// #3889: the orb messages (and the other things said out of turn) are a word beside the flower's
+// head. A word that is a door shows in #bud-note; a plain word (a success that fades) shows in the
+// head's own .bud-word. Both return '' when nothing is shown.
+export async function budNoteText(page) {
+  return page.evaluate(() => {
+    const note = document.getElementById('bud-note');
+    return note && !note.hidden && document.body.hasAttribute('data-bud-note') ? note.textContent.trim() : '';
+  });
+}
+export async function budWordText(page) {
+  return page.evaluate(() => {
+    if (!document.body.hasAttribute('data-bud-word')) return '';
+    return document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() ?? '';
+  });
+}
+// Opens the leaf behind the word beside the head and returns its sentence.
+export async function readSaying(page, key) {
+  await page.click('#bud-note');
+  await page.waitForSelector(`#bud-leaf-saying-${key}`, { timeout: 5000 });
+  return page.locator(`#bud-leaf-saying-${key} .bud-leaf-body`).innerText();
+}
+export async function closeSaying(page, key) {
+  await page.click(`#bud-leaf-saying-${key} .bud-leaf-close`);
+}

@@ -8,7 +8,7 @@
 //      window, then comes back with a plain message
 //   C: 429 (the collect limit)       -> orb comes back, the notice shows the numbers
 //      (last: a 429 starts a 30 s collecting cooldown)
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budNoteText, budWordText, readSaying, closeSaying } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Pop Tester';
 const LANDLET_ID = `credit-orb-pop-e2e-${Date.now()}`;
@@ -46,8 +46,14 @@ const touch = (key) => page.evaluate(([x, y]) => { window.__testTeleportShopAvat
   [myLandlet.center.x + spots[key][0], myLandlet.center.y + spots[key][1]]);
 const awayFromOrbs = () => page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y), [myLandlet.center.x + 20, myLandlet.center.y + 20]);
 const orbPresent = (key) => page.evaluate((id) => window.__testActiveCreditOrbIds().includes(id), orbIds[key]);
+// #3889: the notices are words beside the head; a refusal's sentence is read in its leaf and stays until closed.
+const waitForNote = (word, timeout = 3000) => page.waitForFunction((w) => {
+  const n = document.getElementById('bud-note');
+  return n && !n.hidden && n.textContent.trim() === w;
+}, word, { timeout });
 const dismissProblemNotice = async () => {
-  if (await page.isVisible('#shop-credit-orb-problem-notice.visible')) await page.click('#shop-credit-orb-problem-notice .shop-notice-dismiss-btn');
+  if ((await budNoteText(page)) === 'Orb missed') await readSaying(page, 'orb-problem');
+  if (await page.locator('#bud-leaf-saying-orb-problem').count()) await closeSaying(page, 'orb-problem');
 };
 
 // ---- A: delayed confirmation --------------------------------------------
@@ -59,13 +65,13 @@ await page.route(`**/api/credit-orbs/${orbIds.A}/collect`, async (route) => {
 });
 await touch('A');
 await page.waitForFunction((id) => !window.__testActiveCreditOrbIds().includes(id) && window.__testActiveCreditOrbPopEffectCount() >= 1, orbIds.A, { timeout: 1500 });
-const aToastBeforeResponse = await page.isVisible('#shop-credit-orb-toast.visible');
+const aToastBeforeResponse = (await budWordText(page)) === 'Credit +1';
 const aPoppedBeforeResponse = !aResponded;
 console.log('A: orb popped and toast shown before the delayed response arrived (should be true, true):', aPoppedBeforeResponse, aToastBeforeResponse);
-await page.waitForFunction(() => document.getElementById('shop-credit-orb-toast').classList.contains('visible'), null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
 await page.waitForTimeout(2300);
 const aStillGone = !(await orbPresent('A'));
-const aNoProblem = !(await page.isVisible('#shop-credit-orb-problem-notice.visible'));
+const aNoProblem = (await budNoteText(page)) !== 'Orb missed';
 console.log('A: confirmed, orb still gone and no problem notice (should be true, true):', aStillGone, aNoProblem);
 await awayFromOrbs();
 
@@ -75,12 +81,13 @@ await page.route(`**/api/credit-orbs/${orbIds.B}/collect`, (route) => route.fulf
 }));
 await touch('B');
 await page.waitForFunction(() => window.__testActiveCreditOrbReversalEffectCount() >= 1, null, { timeout: 3000, polling: 'raf' });
-await page.waitForSelector('#shop-credit-orb-problem-notice.visible', { timeout: 3000 });
-const bText = await page.textContent('#shop-credit-orb-problem-notice .shop-notice-text');
+await waitForNote('Orb missed');
+const bText = await readSaying(page, 'orb-problem');
+await closeSaying(page, 'orb-problem');
 console.log('B: reversal effect and notice:', bText);
 await page.waitForTimeout(600);
 const bGone = !(await orbPresent('B'));
-const bToastHidden = !(await page.isVisible('#shop-credit-orb-toast.visible'));
+const bToastHidden = (await budWordText(page)) !== 'Credit +1';
 console.log('B: orb stays gone, toast withdrawn (should be true, true):', bGone, bToastHidden);
 await dismissProblemNotice();
 await awayFromOrbs();
@@ -93,12 +100,13 @@ await touch('D');
 await page.waitForFunction((id) => !window.__testActiveCreditOrbIds().includes(id), orbIds.D, { timeout: 1500 });
 await page.waitForTimeout(2000);
 const dStillPoppedMidRetry = !(await orbPresent('D'));
-const dNoNoticeYet = !(await page.isVisible('#shop-credit-orb-problem-notice.visible'));
+const dNoNoticeYet = (await budNoteText(page)) !== 'Orb missed';
 console.log('D: popped and quietly retrying after 2 s (should be true, true):', dStillPoppedMidRetry, dNoNoticeYet, 'requests so far:', dRequests);
 await page.waitForFunction((id) => window.__testActiveCreditOrbIds().includes(id), orbIds.D, { timeout: 8000 });
-await page.waitForSelector('#shop-credit-orb-problem-notice.visible', { timeout: 3000 });
-const dText = await page.textContent('#shop-credit-orb-problem-notice .shop-notice-text');
-const dToastHidden = !(await page.isVisible('#shop-credit-orb-toast.visible'));
+await waitForNote('Orb missed');
+const dToastHidden = (await budWordText(page)) !== 'Credit +1';
+const dText = await readSaying(page, 'orb-problem');
+await closeSaying(page, 'orb-problem');
 const dRequestsAtGiveUp = dRequests;
 await page.waitForTimeout(1200);
 const dNotRetriggered = dRequests === dRequestsAtGiveUp;
@@ -111,12 +119,12 @@ await page.route(`**/api/credit-orbs/${orbIds.C}/collect`, (route) => route.fulf
   status: 429, contentType: 'application/json', body: JSON.stringify({ error: 'Too many requests', limit: 20, windowSeconds: 900, retryAfterSeconds: 420 }),
 }));
 await touch('C');
-await page.waitForSelector('#shop-credit-orb-rate-limit-notice.visible', { timeout: 3000 });
-const cText = await page.textContent('#shop-credit-orb-rate-limit-notice .shop-notice-text');
+await waitForNote('Orb limit');
+const cText = await readSaying(page, 'orb-limit');
 await page.waitForFunction((id) => window.__testActiveCreditOrbIds().includes(id), orbIds.C, { timeout: 3000 });
-const cToastHidden = !(await page.isVisible('#shop-credit-orb-toast.visible'));
+const cToastHidden = (await budWordText(page)) !== 'Credit +1';
 console.log('C: orb came back, notice shows the numbers, toast withdrawn:', cText, cToastHidden);
-await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-dismiss-btn');
+await closeSaying(page, 'orb-limit');
 await awayFromOrbs();
 
 const aOk = aPoppedBeforeResponse && aToastBeforeResponse && aStillGone && aNoProblem;

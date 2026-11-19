@@ -7,7 +7,7 @@
 // same idiom e2e/connectivity-indicator.test.mjs uses -- rather than a 429/
 // 500, which is a real HTTP response and deliberately does NOT trigger this
 // notice (see updateCreditOrbs's own #2447 comment).
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish, shopStickBox, budNoteText, budWordText, readSaying, closeSaying } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Offline Notice Tester';
 const LANDLET_ID = `credit-orb-offline-e2e-${Date.now()}`;
@@ -47,7 +47,7 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-const noticeHiddenBeforeAnyFailure = !(await page.isVisible('#shop-credit-orb-offline-notice.visible'));
+const noticeHiddenBeforeAnyFailure = (await budNoteText(page)) === '';
 console.log('offline notice hidden before any collect attempt (should be true):', noticeHiddenBeforeAnyFailure);
 
 // Genuinely unreachable, not just a rejecting HTTP response -- aborting the
@@ -78,7 +78,7 @@ await page.evaluate(([x, y, z]) => {
 // (3000ms) -- a brief failure streak shouldn't flash the notice yet.
 await page.waitForTimeout(1200);
 console.log('route actually intercepted at least one real collect attempt (should be true):', abortedCollectAttempts > 0);
-const noticeHiddenDuringBriefOutage = !(await page.isVisible('#shop-credit-orb-offline-notice.visible'));
+const noticeHiddenDuringBriefOutage = (await budNoteText(page)) === '';
 console.log('offline notice still hidden well under the threshold (should be true):', noticeHiddenDuringBriefOutage);
 
 // #3392: the orb pops on contact (the feel of touching it), so during the quiet
@@ -90,13 +90,17 @@ console.log('orb popped on contact and is quietly retrying, not in the scene (sh
 // Past the notice threshold (3 s) and the retry window (4 s): the sustained
 // streak surfaces the offline notice, and the never-confirmed orb comes back.
 await page.waitForTimeout(3500);
-const noticeVisibleAfterSustainedOutage = await page.isVisible('#shop-credit-orb-offline-notice.visible');
-console.log('offline notice visible after a sustained network failure (should be true):', noticeVisibleAfterSustainedOutage);
+// #3889: both messages are words beside the head and the last one set is the one worn; the
+// unconfirmed orb's own word sits on top of "Offline" until its sentence has been read.
+const problemWord = await budNoteText(page);
+const problemText = await readSaying(page, 'orb-problem');
+await closeSaying(page, 'orb-problem');
+const problemShown = problemWord === 'Orb missed';
+console.log('plain message shown for the unconfirmed orb (should be true):', problemShown, problemText);
+const noticeVisibleAfterSustainedOutage = (await budNoteText(page)) === 'Offline';
+console.log('offline word worn after a sustained network failure (should be true):', noticeVisibleAfterSustainedOutage);
 const activeAfterGiveUp = await page.evaluate(() => window.__testActiveCreditOrbIds());
 console.log('orb came back once the retry window ended, not lost for good (should be true):', activeAfterGiveUp.includes(orbId));
-const problemText = await page.textContent('#shop-credit-orb-problem-notice .shop-notice-text');
-const problemShown = await page.isVisible('#shop-credit-orb-problem-notice.visible');
-console.log('plain message shown for the unconfirmed orb (should be true):', problemShown, problemText);
 const requestsAtGiveUp = abortedCollectAttempts;
 await page.waitForTimeout(1200);
 console.log('no further attempts while still standing on the returned orb (should be true):', abortedCollectAttempts === requestsAtGiveUp);
@@ -109,10 +113,10 @@ await page.waitForTimeout(300);
 await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y), [orbWorldX, orbWorldY]);
 await page.waitForTimeout(1500);
 
-const toastVisibleAfterRecovery = await page.isVisible('#shop-credit-orb-toast.visible');
+const toastVisibleAfterRecovery = (await budWordText(page)) === 'Credit +1';
 console.log('collect-confirmation toast shown once the outage clears (should be true):', toastVisibleAfterRecovery);
 
-const noticeHiddenAfterRecovery = !(await page.isVisible('#shop-credit-orb-offline-notice.visible'));
+const noticeHiddenAfterRecovery = (await budNoteText(page)) === '';
 console.log('offline notice hidden again once a collect succeeds (should be true):', noticeHiddenAfterRecovery);
 
 const activeAfterRecovery = await page.evaluate(() => window.__testActiveCreditOrbIds());
