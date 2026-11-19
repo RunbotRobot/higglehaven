@@ -5779,6 +5779,12 @@
         flex-direction: column;
         gap: var(--space-sm);
       }
+      /* #3939: the leaf is a column with a gap, so an empty status line or list would add a gap of nothing
+         each (five of them made about 60px of blank space in an empty leaf). */
+      #friends-status:empty,
+      #friends-incoming-list:empty, #friends-outgoing-list:empty, #friends-accepted-list:empty, #friends-blocked-list:empty {
+        display: none;
+      }
       /* #1205: a lightweight 2D top-down view of every accepted friend's
          claimed lándlet — deliberately a plain canvas, not the claim
          flyover's WebGL scene (see drawFriendsMap's own comment in
