@@ -29,7 +29,11 @@ export async function runPayAttempt(state, { confirm, finalize }) {
     const result = await confirm();
     if (result?.error) {
       if (!isAlreadySucceededConfirmError(result.error)) {
-        throw new Error(result.error.message || 'Payment failed.');
+        const failure = new Error(result.error.message || 'Payment failed.');
+        // #3948: kept so describePayFailure can say what to do about this kind of failure.
+        failure.stripeCode = result.error.code;
+        failure.stripeType = result.error.type;
+        throw failure;
       }
     }
     state.paymentConfirmed = true;
@@ -42,7 +46,24 @@ export async function runPayAttempt(state, { confirm, finalize }) {
 // failed) and must not echo raw provider or server text.
 export const CHARGED_RETRY_MESSAGE = 'Your payment went through, but we couldn\'t finish your purchase yet. Tap "Finish purchase" to try again -- your card won\'t be charged again.';
 
+// #3948: before the card is charged, a failure says what happened in plain words, whether
+// anything was charged, and what to do next, instead of the provider's text alone.
+const CARD_PROBLEM_COPY = Object.freeze({
+  card_declined: 'Your card was declined. You were not charged. Try another card.',
+  insufficient_funds: "Your card doesn't have enough available to cover this. You were not charged. Try another card.",
+  expired_card: 'That card has expired. You were not charged. Try another card.',
+  incorrect_cvc: "The security code doesn't match. You were not charged. Check it and try again.",
+  incorrect_number: "That card number isn't right. You were not charged. Check it and try again.",
+  invalid_expiry_month: "That expiry date isn't right. You were not charged. Check it and try again.",
+  invalid_expiry_year: "That expiry date isn't right. You were not charged. Check it and try again.",
+  processing_error: "Your card company couldn't process that just now. You were not charged. Try again in a moment, or use another card.",
+});
+// The connection dropped while the card was being confirmed, so whether it went through is not known.
+export const CONNECTION_LOST_MESSAGE = "We couldn't confirm your payment because the connection dropped. Check My purchases before trying again: if the order isn't there, you weren't charged.";
+
 export function describePayFailure(state, error) {
   if (state.paymentConfirmed) return CHARGED_RETRY_MESSAGE;
-  return error?.message || 'Payment failed.';
+  if (error?.stripeType === 'api_connection_error') return CONNECTION_LOST_MESSAGE;
+  const copy = error?.stripeCode && Object.hasOwn(CARD_PROBLEM_COPY, error.stripeCode) && CARD_PROBLEM_COPY[error.stripeCode];
+  return copy || error?.message || 'Payment failed.';
 }

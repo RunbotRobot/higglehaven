@@ -1586,6 +1586,7 @@ describe('Finite stock tracking (#1948)', () => {
     const purchased = await api('/instances/stock-exhausted-instance/purchase', builder.session({ method: 'POST' }));
     expect(purchased.response.status).toBe(400);
     expect(purchased.body.error).toMatch(/sold out/);
+    expect(purchased.body.code).toBe('sold_out'); // #3948
   });
 
   // The pre-check above only catches an already-zero template -- this

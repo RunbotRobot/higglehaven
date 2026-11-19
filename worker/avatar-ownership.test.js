@@ -731,5 +731,6 @@ describe('Deleting an owned/equipped avatar template delists it (#3279)', () => 
     const bought = await purchase('avatar-delist-purchase-instance', buyer);
     expect(bought.response.status).toBe(400);
     expect(bought.body.error).toContain('no longer for sale');
+    expect(bought.body.code).toBe('not_for_sale'); // #3948
   });
 });

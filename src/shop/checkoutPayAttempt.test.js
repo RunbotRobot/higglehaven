@@ -2,7 +2,7 @@
 // without confirming the card a second time.
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createCheckoutPayState, runPayAttempt, describePayFailure, CHARGED_RETRY_MESSAGE,
+  createCheckoutPayState, runPayAttempt, describePayFailure, CHARGED_RETRY_MESSAGE, CONNECTION_LOST_MESSAGE,
   isAlreadySucceededConfirmError,
 } from './checkoutPayAttempt.js';
 
@@ -69,5 +69,42 @@ describe('runPayAttempt (#3116)', () => {
     expect(isAlreadySucceededConfirmError({ code: 'payment_intent_unexpected_state', payment_intent: { status: 'canceled' } })).toBe(false);
     expect(isAlreadySucceededConfirmError({ code: 'card_declined', payment_intent: { status: 'succeeded' } })).toBe(false);
     expect(isAlreadySucceededConfirmError(undefined)).toBe(false);
+  });
+});
+
+// #3948: every way paying can fail before the card is charged says what happened, whether
+// anything was charged, and what to do next, in the app's own words.
+describe('describePayFailure copy (#3948)', () => {
+  async function failureFor(error) {
+    const state = createCheckoutPayState();
+    const failure = await runPayAttempt(state, { confirm: async () => ({ error }), finalize: async () => ({}) }).catch((e) => e);
+    return { state, failure };
+  }
+
+  it.each([
+    ['card_declined', /declined.*not charged.*another card/i],
+    ['insufficient_funds', /enough.*not charged.*another card/i],
+    ['expired_card', /expired.*not charged.*another card/i],
+    ['incorrect_cvc', /security code.*not charged/i],
+    ['incorrect_number', /card number.*not charged/i],
+    ['processing_error', /not charged.*again/i],
+  ])('says what to do for %s, and that nothing was charged', async (code, pattern) => {
+    const { state, failure } = await failureFor({ code, message: 'raw provider words' });
+    const text = describePayFailure(state, failure);
+    expect(text).toMatch(pattern);
+    expect(text).not.toMatch(/raw provider words/);
+  });
+
+  it('does not claim nothing was charged when the connection dropped mid-confirmation', async () => {
+    const { state, failure } = await failureFor({ type: 'api_connection_error', message: 'Network error' });
+    expect(describePayFailure(state, failure)).toBe(CONNECTION_LOST_MESSAGE);
+    expect(CONNECTION_LOST_MESSAGE).toMatch(/My purchases/);
+    // Whether the card was charged is unknown, so the only charge claim is conditional.
+    expect(CONNECTION_LOST_MESSAGE).toMatch(/if the order isn't there/);
+  });
+
+  it('keeps the provider text for a failure it has no copy for', async () => {
+    const { state, failure } = await failureFor({ code: 'some_new_code', message: 'Something specific.' });
+    expect(describePayFailure(state, failure)).toBe('Something specific.');
   });
 });
