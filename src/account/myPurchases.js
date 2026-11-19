@@ -26,7 +26,7 @@ const stars = (rating) => '★'.repeat(rating) + '☆'.repeat(5 - rating);
 function feedbackErrorText(err) {
   if (err.status === 409) return 'That changed while you were editing, so we reloaded it. Please check and try again.';
   if (err.status === 403) return "That feedback isn't yours to change.";
-  return err.message || 'Could not save your feedback. Please try again.';
+  return err.message || 'Couldn\'t save your feedback. Please try again.';
 }
 
 function button(label, onClick) {

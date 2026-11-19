@@ -185,7 +185,7 @@ motion, not the only way to move. Other people see the same.
 
 **If something goes wrong:**
 - "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
-- A message says it could not equip the avatar: read it out; try once more, then offer to pass it to the team.
+- A message says it couldn't equip the avatar: read it out; try once more, then offer to pass it to the team.
 - An animation that does not suit the avatar is marked as not matching: the app says so next to it. Read that note out rather than guessing.
 
 ```controls any
@@ -202,7 +202,7 @@ motion, not the only way to move. Other people see the same.
 **You will see:** the app says "Thanks! Your feedback was submitted." and the window closes by itself.
 
 **If something goes wrong:**
-- It says it could not send: read the words out and ask them to try again in a minute.
+- It says it couldn't send: read the words out and ask them to try again in a minute.
 - They would rather talk it through: they can also leave a message here in the assistant window, and the assistant can pass it to the team.
 
 ```controls any

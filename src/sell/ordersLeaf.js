@@ -28,7 +28,7 @@ export function openOrdersLeaf() {
       result = await fetchSellerOrders();
     } catch (err) {
       if (mine !== token) return;
-      body.replaceChildren(note(err.message || 'Could not load your orders.', 'orders-note error'));
+      body.replaceChildren(note(err.message || 'Couldn\'t load your orders.', 'orders-note error'));
       return;
     }
     if (mine !== token) return;

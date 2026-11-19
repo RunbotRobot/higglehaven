@@ -94,7 +94,7 @@ async function renderSignPosts() {
     ({ posts, totalCount } = await fetchSignPosts(instanceId));
   } catch (err) {
     if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
-    signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
+    signPostsEmptyEl.textContent = err.message || 'Couldn\'t load posts.';
     signPostsEmptyEl.hidden = false;
     return;
   }
@@ -147,7 +147,7 @@ async function renderSignPosts() {
         // dropped it silently); focus returns to this panel when it closes.
         showNotice({
           title: "Couldn't delete this post",
-          message: err.message || 'Could not delete this post.',
+          message: err.message || 'Couldn\'t delete this post.',
           restoreModalEl: signPostsModalEl,
           restoreCloseFn: closeSignPostsModal,
         });
@@ -236,7 +236,7 @@ async function renderCalendarEvents() {
     ({ events, totalCount } = await fetchCalendarEvents(instanceId));
   } catch (err) {
     if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
-    calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
+    calendarEventsEmptyEl.textContent = err.message || 'Couldn\'t load events.';
     calendarEventsEmptyEl.hidden = false;
     return;
   }
@@ -346,7 +346,7 @@ async function renderCalendarEvents() {
       } catch (err) {
         showNotice({
           title: "Couldn't delete this event",
-          message: err.message || 'Could not delete this event.',
+          message: err.message || 'Couldn\'t delete this event.',
           restoreModalEl: calendarEventsModalEl,
           restoreCloseFn: closeCalendarEventsModal,
         });
@@ -479,7 +479,7 @@ async function renderBackupChain() {
     ({ backups } = await fetchInstanceBackups(instanceId));
   } catch (err) {
     if (myLoadToken !== backupChainLoadToken) return; // superseded while fetching
-    backupChainEmptyEl.textContent = err.message || 'Could not load the backup chain.';
+    backupChainEmptyEl.textContent = err.message || 'Couldn\'t load the backup chain.';
     backupChainEmptyEl.hidden = false;
     return;
   }
@@ -536,7 +536,7 @@ async function renderBackupChain() {
             // #2969: refresh the list right away so a dead row self-heals
             // behind the modal while it shows why the remove failed.
             renderBackupChain();
-            throw new Error(err.message || 'Could not remove this backup.');
+            throw new Error(err.message || 'Couldn\'t remove this backup.');
           }
         },
       });
@@ -573,7 +573,7 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
     // #3359: in-app notice over the backup-chain modal it came from.
     showNotice({
       title: "Couldn't reorder the backups",
-      message: err.message || 'Could not reorder the backup chain.',
+      message: err.message || 'Couldn\'t reorder the backup chain.',
       restoreModalEl: backupChainModalEl,
       restoreCloseFn: closeBackupChainModal,
     });
@@ -618,7 +618,7 @@ backupChainAddBtn.addEventListener('click', async () => {
         await renderBackupChain();
       } catch (err) {
         // #3359: in-app notice; the catalog picker this ran from is closing.
-        showNotice({ title: "Couldn't add this backup", message: err.message || 'Could not add this backup.' });
+        showNotice({ title: "Couldn't add this backup", message: err.message || 'Couldn\'t add this backup.' });
       }
     },
     () => openBackupChainModal(mesh),

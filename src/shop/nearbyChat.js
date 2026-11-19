@@ -151,7 +151,7 @@ async function reportNearbyChatSender(builderId) {
     // #3552: a success is a note that fades by itself, not a second modal.
     showFadingNote('Report sent. Thank you.');
   } catch (err) {
-    await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
+    await showNotice({ title: 'Couldn\'t submit the report', message: err?.message || 'Please try again.' });
   }
 }
 
@@ -324,7 +324,7 @@ if (chatPanelEl) {
       ownMessageIds.add(message.messageId);
       appendMessage(message);
     }).catch((err) => {
-      chatStatusEl.textContent = err.message || 'Could not send this message.';
+      chatStatusEl.textContent = err.message || 'Couldn\'t send this message.';
       chatStatusEl.classList.add('error');
     });
   });

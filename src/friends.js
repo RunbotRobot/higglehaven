@@ -34,7 +34,7 @@ export async function confirmAndOfferFriendship(builderId, label = null) {
         // The server's own sentence says why (already friends or a request is
         // already open, a limit, an id check still to do); fall back to a plain
         // line only when it sent none.
-        throw new Error(err?.message || 'Could not send the request -- please try again.');
+        throw new Error(err?.message || 'Couldn\'t send the request -- please try again.');
       }
     },
   });
