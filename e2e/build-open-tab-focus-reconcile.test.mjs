@@ -4,7 +4,7 @@
 // it regains focus, WITHOUT touching anything the builder placed themselves.
 // Drives the real sequence: open tab with the product plus an ordinary tree,
 // admin suspends the seller, the tab becomes visible again (visibilitychange),
-// and the phantom leaves the scene, the Removed Items button appears, and the
+// and the phantom leaves the scene, the Removed items button appears, and the
 // builder's tree stays.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -144,9 +144,9 @@ const alerts = await page.evaluate(() => window.__alerts);
 const buttonShown = await page.locator('#pending-restoration-btn').isVisible();
 console.log('phantom removed after focus (should be 0):', phantomsAfter);
 console.log('builder\'s own items still shown (should be totalBefore - 1):', after.length, 'of', totalBefore);
-console.log('Removed Items button visible (should be true):', buttonShown);
+console.log('Removed items button visible (should be true):', buttonShown);
 console.log('alerts:', JSON.stringify(alerts));
-const explained = alerts.some((a) => /seller is suspended/.test(a) && /Removed Items/.test(a));
+const explained = alerts.some((a) => /seller is suspended/.test(a) && /Removed items/.test(a));
 
 const pass = placeRes.status === 201
   && productsBefore === 1

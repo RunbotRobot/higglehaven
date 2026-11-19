@@ -74,7 +74,7 @@ await page.waitForFunction(
 const videoCreditsTextAfterToggle = (await page.textContent('#upload-video-credits')).trim();
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
 console.log('manual file row hidden after toggling (should be true):', fileRowHiddenAfterToggle);
-console.log('submit button reads "Generate Model" in video mode (should be true):', submitLabelInVideoMode.trim() === 'Generate Model');
+console.log('submit button reads "Generate model" in video mode (should be true):', submitLabelInVideoMode.trim() === 'Generate model');
 console.log('video-credits line after toggling into video mode (should say 0 remaining and what to do, #2442/#3585):', videoCreditsTextAfterToggle);
 
 await page.setInputFiles('#upload-video-input', FIXTURE_PATH);
@@ -129,7 +129,7 @@ const unexpectedErrors = errors.filter(
 console.log('unexpected page errors (should be empty):', unexpectedErrors);
 
 const pass = fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
-  && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate Model'
+  && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate model'
   && videoPickerVisibleAfterToggle
   && videoCreditsTextAfterToggle === '0 free model generations remaining. Collect a credit orb in the world to earn one.'
   && reachedTerminalStatus && submitReenabled && backToFileMode && unexpectedErrors.length === 0;

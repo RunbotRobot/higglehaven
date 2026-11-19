@@ -4,10 +4,10 @@
 // renderSellerIdentityField never wired deleteProfile/deleteWarning/
 // onDeleted into the shared renderIdentityField helper the way
 // renderBuilderIdentityField already did, so the Sell settings tab showed
-// Rename but never a Delete Account button at all.
+// Rename but never a Delete account button at all.
 //
 // Covers the happy path per the issue's own suggested test scope: clicking
-// Delete Account in the Storefront leaf actually calls the real endpoint,
+// Delete account in the Storefront leaf actually calls the real endpoint,
 // shows a success message, and the account has a fresh, different seller
 // identity behind it afterward (the endpoint's own 409-blocked-by-unpaid-
 // proceeds case is already covered server-side by worker/commerce.test.js's
@@ -29,7 +29,7 @@ const originalSellerId = await page.evaluate(() =>
   fetch('/api/sellers/me').then((r) => r.json()).then((d) => d.seller.sellerId));
 console.log('sellerId before delete:', originalSellerId);
 
-// #1149 renamed this button from "Delete Account" (never true -- it only
+// #1149 renamed this button from "Delete account" (never true -- it only
 // ever reset this profile, not the login) to "Reset Profile"; the
 // underlying deleteSeller behavior this test exercises is unchanged.
 const deleteBtnVisible = await page.locator('#bud-leaf-storefront button:has-text("Reset Profile")').isVisible();

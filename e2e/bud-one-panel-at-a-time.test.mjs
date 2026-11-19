@@ -1,6 +1,6 @@
-// #3843 (part of #3539): the flower is one menu or leaf at a time. Opening My Purchases while
+// #3843 (part of #3539): the flower is one menu or leaf at a time. Opening My purchases while
 // Notices is up used to leave both on screen (the second over the avatar). Opening one of the
-// panels the bud opens (Settings, Notices, Friends, My Purchases, My Lándlets) now closes the
+// panels the bud opens (Settings, Notices, Friends, My purchases, My lándlets) now closes the
 // others. Phone size, Shop, real clicks through the open menu.
 import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
 
@@ -27,12 +27,12 @@ check(JSON.stringify(await visiblePanels()) === '["notifications-modal"]', 'Noti
 
 await open('my-purchases-btn', 'my-purchases-modal');
 let now = await visiblePanels();
-console.log('after Notices then My Purchases:', JSON.stringify(now));
-check(JSON.stringify(now) === '["my-purchases-modal"]', `opening My Purchases closes Notices (open: ${now.join(', ')})`);
+console.log('after Notices then My purchases:', JSON.stringify(now));
+check(JSON.stringify(now) === '["my-purchases-modal"]', `opening My purchases closes Notices (open: ${now.join(', ')})`);
 
 await open('friends-btn', 'friends-modal');
 now = await visiblePanels();
-check(JSON.stringify(now) === '["friends-modal"]', `opening Friends closes My Purchases (open: ${now.join(', ')})`);
+check(JSON.stringify(now) === '["friends-modal"]', `opening Friends closes My purchases (open: ${now.join(', ')})`);
 
 await open('settings-btn', 'settings-modal');
 now = await visiblePanels();

@@ -16,7 +16,7 @@
 // leaving both modals' state stuck.
 import { launchPage, chooseIdentity, claimLandlet, finish, acceptConfirmModal } from './helpers.mjs';
 
-const LABEL = 'Backup Chain Suite Tester';
+const LABEL = 'Backup chain Suite Tester';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
@@ -42,7 +42,7 @@ await page.waitForTimeout(800);
 
 const backupChainBtn = () => page.locator('#toggle-backup-chain');
 
-// Same selection-gated pattern as Community Sign/Calendar's own buttons
+// Same selection-gated pattern as Community sign/Calendar's own buttons
 // (updateSelectionUI's `backupChainBtn.disabled = !singleMesh` — note the
 // whole #gizmo-mode-controls row, this button included, is only ever
 // *shown* with something selected in the first place, per its own
@@ -51,7 +51,7 @@ const backupChainBtn = () => page.locator('#toggle-backup-chain');
 // happens for a multi-item selection, not covered by this test).
 await page.waitForTimeout(300);
 const enabledWhenSelected = await backupChainBtn().isDisabled();
-console.log('Backup Chain button disabled with exactly the chair selected (should be false):', enabledWhenSelected);
+console.log('Backup chain button disabled with exactly the chair selected (should be false):', enabledWhenSelected);
 
 const { landlets } = (await fetchJson('/api/landlets?limit=100')).body;
 const myLandlet = landlets.find((l) => l.ownerBuilderId);

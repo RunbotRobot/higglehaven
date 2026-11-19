@@ -103,7 +103,7 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 
-// Both crates are still selected (Save Bundle doesn't clear selection) —
+// Both crates are still selected (Save bundle doesn't clear selection) —
 // delete the placed instances so the template's ON DELETE RESTRICT FK no
 // longer has anything blocking it. #3689: while Multi-Select is on the item card
 // is only a title (its taps go through to the world), so turn Multi-Select off

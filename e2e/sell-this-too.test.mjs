@@ -1,5 +1,5 @@
 // #2748 (leaf of #2745's shared-products redesign): the Seller modal's
-// "Sell This Too" button (src/sell/mode.js) -- lets a seller browse every
+// "Sell this too" button (src/sell/mode.js) -- lets a seller browse every
 // product in the catalog via its own dedicated #sell-this-too-modal grid
 // and attach their own listing (price/stock) to a product a *different*
 // seller originally uploaded, via POST /api/catalog/listings (#2747),
@@ -8,7 +8,7 @@
 // path now backs every new template with a 1:1 `products` row at creation
 // time (same convention migrations/0153's historical backfill used), so a
 // product created going forward -- not just a pre-existing, backfilled
-// one -- is actually "Sell This Too"-able by a second seller.
+// one -- is actually "Sell this too"-able by a second seller.
 //
 // Two separate real accounts, each its own launchPage() session (same
 // shape e2e/auction-list-bid-race.test.mjs uses for its own multi-seller
@@ -20,8 +20,8 @@
 // by e2e/seller-upload-and-resize.test.mjs and friends).
 import { launchPage, chooseIdentity, finish, openAddProductLeaf } from './helpers.mjs';
 
-const SELLER_A = 'Sell This Too Seller A';
-const SELLER_B = 'Sell This Too Seller B';
+const SELLER_A = 'Sell this too Seller A';
+const SELLER_B = 'Sell this too Seller B';
 const PRODUCT_NAME = 'Shared Reading Lamp';
 
 const sellerASession = await launchPage({ promptAnswer: SELLER_A });
@@ -61,10 +61,10 @@ await chooseIdentity(sellerBSession.page, { mode: 'sell', label: SELLER_B, isNew
 await sellerBSession.page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await sellerBSession.page.waitForTimeout(300);
 
-// #3703: Sell This Too is a choice in the Add a product leaf (the bud's petal), not a button of
+// #3703: Sell this too is a choice in the Add a product leaf (the bud's petal), not a button of
 // the Seller modal.
 const sellThisTooBtnVisible = (await sellerBSession.page.locator('#bud-petal-sell-add-product').count()) === 1;
-console.log('The Add a product petal (which leads to Sell This Too) exists in Sell (should be true):', sellThisTooBtnVisible);
+console.log('The Add a product petal (which leads to Sell this too) exists in Sell (should be true):', sellThisTooBtnVisible);
 
 // #3249: price and stock are a form in the modal now, not two native prompts.
 // Refuse every native dialog to prove nothing depends on one.
@@ -139,7 +139,7 @@ const pass =
 
 await finish(sellerBSession.browser, {
   pass,
-  label: '#2748: "Sell This Too" attaches a second seller\'s own listing to a product a different seller uploaded',
+  label: '#2748: "Sell this too" attaches a second seller\'s own listing to a product a different seller uploaded',
   errors,
 });
 await sellerASession.browser.close();

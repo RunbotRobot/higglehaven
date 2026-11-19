@@ -1,8 +1,8 @@
-// #1987 (sub-issue of #1983): the "Download My Data" button in the Account
+// #1987 (sub-issue of #1983): the "Download my data" button in the Account
 // panel, wired to GET /auth/export-data (#1984) via a Blob/createObjectURL
 // download link -- covers what's genuinely UI-specific: the button is
 // visible without needing to collapse behind a confirmation (read-only,
-// unlike Change Password/Delete Account next to it), the real download
+// unlike Change password/Delete account next to it), the real download
 // fires with the right filename shape, and the downloaded JSON actually
 // contains this account's own exported data.
 import { readFileSync } from 'node:fs';
@@ -33,11 +33,11 @@ await page.click('#auth-signup-form button[type="submit"]');
 await waitForText(page, '#account-auth-btn', 'Export Data Suite');
 await clearVerifyModalIfShown(page);
 
-// --- Open the account panel; unlike Change Password/Delete Account, this
+// --- Open the account panel; unlike Change password/Delete account, this
 // is an immediate read-only action with no collapsed confirmation form. ---
 await openAuthModal(page);
 const exportBtnVisible = await page.locator('#auth-export-data-btn').isVisible();
-console.log('Download My Data button visible (should be true):', exportBtnVisible);
+console.log('Download my data button visible (should be true):', exportBtnVisible);
 
 // --- Clicking it fires a real browser download ---
 const [download] = await Promise.all([
@@ -61,4 +61,4 @@ const pass = exportBtnVisible &&
   Boolean(contents.exportedAt) &&
   contents.profile?.account?.username === 'Export Data Suite' &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Download My Data triggers a real export download (#1987)', errors });
+await finish(browser, { pass, label: 'Download my data triggers a real export download (#1987)', errors });

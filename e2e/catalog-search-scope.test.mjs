@@ -14,7 +14,7 @@ await claimLandlet(page);
 
 // Place a single tree — a single-item placement is auto-selected
 // (handlePlacementClick's own selectOnly for a 'template' placement, same
-// as e2e/bundles.test.mjs relies on for its second tree), so Save Bundle
+// as e2e/bundles.test.mjs relies on for its second tree), so Save bundle
 // is immediately available with no Multi-Select step needed.
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });

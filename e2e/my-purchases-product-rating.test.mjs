@@ -1,10 +1,10 @@
-// #3775: rating a product is one-to-one with an order, and starts from My Purchases: each order
+// #3775: rating a product is one-to-one with an order, and starts from My purchases: each order
 // offers "Rate this product" beside "Rate this seller", shows the rating once given, and lets
 // the person change or remove it there. The endpoints are covered by the worker tests
 // (worker/product-review-buyer-account.test.js), so this serves them from fixtures to pin the panel.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
-const LABEL = 'My Purchases Product Rating Tester';
+const LABEL = 'My purchases Product Rating Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);

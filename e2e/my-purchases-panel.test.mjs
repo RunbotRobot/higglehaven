@@ -1,4 +1,4 @@
-// "My Purchases" panel (#3197): the account-menu list of the buyer's own
+// "My purchases" panel (#3197): the account-menu list of the buyer's own
 // receipts. The endpoint itself is covered by worker/purchases-mine.test.js,
 // so this test fulfils GET /api/purchases/mine from fixtures to pin the
 // panel's behaviour: newest-first rows, plain status wording, the empty
@@ -6,7 +6,7 @@
 // panel was closed being discarded, and the phone-width layout.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
-const LABEL = 'My Purchases Panel Tester';
+const LABEL = 'My purchases Panel Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);

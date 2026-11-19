@@ -11,7 +11,7 @@
 // the middle of this same contiguous block in main.js -- genuinely
 // different concerns that happen to be interleaved with the avatar code
 // there, not avatar state: Shop flight (shopFlightState/Altitude/etc.),
-// spawn-orbit (shopSpawnRotating/OrbitRadiusM), and "Go to Last Location"
+// spawn-orbit (shopSpawnRotating/OrbitRadiusM), and "Go to last location"
 // (shopLastLocationHideTimerS/etc.) now live in shop/flightMovement.js
 // (#2624), along with window.__testTeleportShopAvatar/__testShopFlightState
 // (both read/write that leaf's own state). window.__testForceShopProximityCheck/

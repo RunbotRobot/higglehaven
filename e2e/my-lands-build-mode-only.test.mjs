@@ -29,7 +29,7 @@ await page.waitForSelector('#account-menu-panel:not(.expanded)', { state: 'attac
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: false });
 await claimLandlet(page);
 await openAccountMenu(page);
-await openBudMenuOf(page, 'build'); // #3760: My Lándlets is in Build's own menu
+await openBudMenuOf(page, 'build'); // #3760: My lándlets is in Build's own menu
 const visibleInBuild = await page.locator('#my-lands-btn').isVisible();
 console.log('My Lands visible in Build mode (should be true):', visibleInBuild);
 await page.click('#account-menu-toggle');

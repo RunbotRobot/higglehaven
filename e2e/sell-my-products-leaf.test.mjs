@@ -3,7 +3,7 @@
 // from its petal: it grows from just under the bud at the top-left (no dimming scrim, so the showroom
 // shows around it), runs to the same margin on the right as on the left (#3772: nothing stands in the upper right now), and has its close control in the upper-right corner
 // with the Manage / List view switch in the header beside the title, clear of the close control.
-// (Add a product and Sell This Too are petals now, #3716; the bud over an open list is
+// (Add a product and Sell this too are petals now, #3716; the bud over an open list is
 // sell-bud-over-open-sheet.test.mjs.)
 import { launchPage, chooseIdentity, openMyProducts, finish } from './helpers.mjs';
 
