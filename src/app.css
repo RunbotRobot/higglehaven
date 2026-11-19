@@ -4827,9 +4827,16 @@
         flex-direction: column;
         gap: 6px;
       }
-      .settings-gesture-heading {
+      .settings-gesture-keys {
         margin-top: 6px;
+        font-size: var(--text-sm);
+      }
+      .settings-gesture-keys > summary {
+        cursor: pointer;
         font-weight: 600;
+      }
+      .settings-gesture-keys > ul {
+        margin-top: 6px;
       }
       .settings-empty-note.error {
         color: var(--danger-text);
