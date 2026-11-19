@@ -377,6 +377,13 @@ async function ensureMenuOpen() {
   }
   throw new Error('the menu did not open when its button was pressed');
 }
+async function closeOpenLeaf() {
+  if (!(await page.locator('.bud-leaf').count())) return;
+  await press(await controlOrFail('.bud-leaf .bud-leaf-close', 'the open leaf\'s close button'));
+  await page.waitForFunction(() => !document.querySelector('.bud-leaf'), null, { timeout: 5000 })
+    .catch(() => { throw new Error('the open leaf did not close when its close button was pressed'); });
+  await page.waitForTimeout(400);
+}
 async function takeBurst({ name, count, ms }, index) {
   const files = [];
   for (let k = 1; k <= count; k += 1) {
@@ -413,6 +420,7 @@ async function runStepAction(step, index) {
       await settle(); // like `mode`: a petal for another mode loads it, and the shot should not catch the loading screen
       return null;
     case 'leaf':
+      await closeOpenLeaf(); // a leaf already open covers the stem, so the next leaf's button could not be pressed and the step would pass over the old leaf
       await ensureMenuOpen();
       await press(await controlOrFail(LEAF_BUTTONS[a], `the ${a} leaf`));
       await page.waitForTimeout(400);
