@@ -32,6 +32,12 @@ export function anglesFromQuaternion(quaternion) {
   return { turn: round(e.z), tiltRed: round(e.x), tiltGreen: round(e.y) };
 }
 
+// The inverse: the orientation for angles typed into the card, same Euler order, same meanings.
+export function quaternionFromAngles({ turn, tiltRed, tiltGreen }) {
+  const euler = new THREE.Euler(tiltRed * DEG_TO_RAD, tiltGreen * DEG_TO_RAD, turn * DEG_TO_RAD, 'XYZ');
+  return new THREE.Quaternion().setFromEuler(euler);
+}
+
 export function formatRotationReadout({ turn, tiltRed, tiltGreen }) {
   const f = (n) => `${n.toFixed(1)}°`;
   return `Turn ${f(turn)} (blue ring) · Tilt ${f(tiltRed)} (red ring) · Tilt ${f(tiltGreen)} (green ring)`;

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   anglesFromQuaternion,
   formatRotationReadout,
+  quaternionFromAngles,
   referenceOrientation,
   snapAxisComponent,
   snapDeltaToAbsolute,
@@ -132,5 +133,16 @@ describe('snapDeltaToAbsolute (#3376)', () => {
     const reference = quat(0, 0, 37);
     const delta = axisAngle('z', 3.3);
     expect(snapDeltaToAbsolute(reference, delta, 'Z', { snap: false }).angleTo(delta)).toBeLessThan(1e-6);
+  });
+});
+
+describe('quaternionFromAngles', () => {
+  it('is the inverse of anglesFromQuaternion, so typed angles read back as typed', () => {
+    for (const angles of [{ turn: 0, tiltRed: 0, tiltGreen: 0 }, { turn: 90, tiltRed: 0, tiltGreen: 0 }, { turn: -45.5, tiltRed: 12.3, tiltGreen: -7.8 }, { turn: 180, tiltRed: 0, tiltGreen: 0 }]) {
+      const back = anglesFromQuaternion(quaternionFromAngles(angles));
+      expect(back.turn).toBeCloseTo(angles.turn, 1);
+      expect(back.tiltRed).toBeCloseTo(angles.tiltRed, 1);
+      expect(back.tiltGreen).toBeCloseTo(angles.tiltGreen, 1);
+    }
   });
 });

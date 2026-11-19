@@ -694,6 +694,11 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
 - Wrong spot: the round logo button at the top left, then "Undo".
+- You want to place it exactly: tap "More" on the card beside the item. "Nudge" has "Left", "Right",
+  "Forward" and "Back", which slide it a small step along the item's own direction (a tenth of a metre,
+  or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
+  or lower it, with its height shown beside the word "Nudge". If a press does nothing, a line says why:
+  the edge of the lándlet, the floor, or something in the way.
 
 ```controls build
 #mode-move | Move
@@ -713,6 +718,9 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 **If something goes wrong:**
 - It turned the wrong way or too far: the round logo button at the top left, then "Undo".
+- You want an exact angle: tap "More" on the card beside the item, and type the angle in degrees under
+  "Angles": "Turn", "Tilt red" or "Tilt green" (the same three the line reads). An empty or invalid
+  number is put back as it was.
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 
