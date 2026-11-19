@@ -443,12 +443,14 @@ await page.click('#checkout-pay-btn');
 // verify-card-real-stripe.test.mjs's own #verify-modal close wait gives.
 await page.waitForSelector('#checkout-modal:not(.visible)', { state: 'attached', timeout: 60000 });
 
-// #3249: the result is the in-app notice modal, not an alert(); native
+// #3945: the confirmation is in the world now: the product's card says "Yours now." (no "Thank you!"
+// sheet). A physical good still gets the delivery-link notice (#3249, shown once, selectable); native
 // dialogs stay wired as a tripwire for any purchase step regressing to one.
-await page.waitForSelector('#notice-modal.visible', { timeout: 30000 });
-const noticeTitle = await page.textContent('#notice-modal-title');
-console.log('result notice title:', noticeTitle, '| native dialogs (should be none):', dialogMessages);
-const purchaseCompleted = noticeTitle === 'Purchase complete' && dialogMessages.length === 0;
+await page.waitForFunction(() => /Yours now/.test(document.getElementById('product-card-state')?.textContent ?? ''), null, { timeout: 30000 });
+const cardLine = await page.textContent('#product-card-state');
+const noThankYouSheet = !(await page.evaluate(() => /Thank you/.test(document.getElementById('notice-modal-message')?.textContent ?? '') && document.getElementById('notice-modal').classList.contains('visible')));
+console.log('card line after purchase:', cardLine, '| no "Thank you!" sheet:', noThankYouSheet, '| native dialogs (should be none):', dialogMessages);
+const purchaseCompleted = /Yours now/.test(cardLine) && noThankYouSheet && dialogMessages.length === 0;
 
 const pass = stripeAccountComplete && purchaseCompleted && buyConfirmNamesPrice && buyConfirmFocusOnSafeChoice && !checkoutOpenedAfterCancel && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
 await page.close();
