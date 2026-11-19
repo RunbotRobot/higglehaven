@@ -14,6 +14,14 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
+// #3889: the message is a word beside the flower's head (#bud-note) that opens a leaf with the
+// sentence, not a red button on the world and not a modal dialog.
+const offlineWordHidden = () => page.evaluate(() => {
+  const note = document.getElementById('bud-note');
+  // data-bud-note goes the instant the word is cleared; the button itself is hidden 200ms later.
+  return !note || !document.body.hasAttribute('data-bud-note') || note.textContent.trim() !== 'Offline';
+});
+
 async function placeTreeAt(x, y) {
   await page.click('#add-item-btn');
   await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
@@ -23,7 +31,7 @@ async function placeTreeAt(x, y) {
   await page.waitForTimeout(800);
 }
 
-const indicatorHiddenBeforeAnyFailure = await page.locator('#connectivity-indicator').isHidden();
+const indicatorHiddenBeforeAnyFailure = await offlineWordHidden();
 console.log('indicator hidden before any sync has ever failed (should be true):', indicatorHiddenBeforeAnyFailure);
 
 // Simulate the server being genuinely unreachable (not just returning an
@@ -40,7 +48,7 @@ await page.route('**/api/instances', async (route) => {
 
 await placeTreeAt(160, 400);
 await page.waitForTimeout(300);
-const indicatorVisibleAfterFailure = await page.locator('#connectivity-indicator').isVisible();
+const indicatorVisibleAfterFailure = !(await offlineWordHidden());
 console.log('indicator visible after a network-level sync failure (should be true):', indicatorVisibleAfterFailure);
 
 // The tree still placed locally despite the failed sync — persistLayout's
@@ -51,24 +59,25 @@ const treeStillPlacedLocally = await page.evaluate(() => {
 });
 console.log('item still saved locally despite the failed sync (should be true):', treeStillPlacedLocally);
 
-// #3359: the explanation is an in-app notice (src/ui/noticeModal.js), not a
-// native alert(); read its text, then close it so it does not cover the page.
-// Any native dialog here would mean it regressed to alert().
+// #3889: tapping the word opens a leaf (the flower's one soft sheet) with the sentence as
+// selectable text; any native dialog here would mean it regressed to alert().
 let nativeDialogSeen = false;
 page.once('dialog', () => { nativeDialogSeen = true; });
-await page.click('#connectivity-indicator');
-await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
-const dialogMessage = await page.textContent('#notice-modal-message');
-await page.click('#notice-modal-ok-btn');
-await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
-console.log('tapping the icon explains what it means (should mention "server" and "device"):', dialogMessage);
+await page.click('#bud-note');
+await page.waitForSelector('#bud-leaf-saying-connection', { timeout: 5000 });
+const dialogMessage = await page.textContent('#bud-leaf-saying-connection .bud-leaf-body');
+const selectable = await page.evaluate(() => getComputedStyle(document.querySelector('#bud-leaf-saying-connection .bud-leaf-body p')).userSelect !== 'none');
+console.log('the sentence can be selected (should be true):', selectable);
+await page.click('#bud-leaf-saying-connection .bud-leaf-close');
+await page.waitForSelector('#bud-leaf-saying-connection', { state: 'detached', timeout: 5000 });
+console.log('tapping the word explains what it means (should mention "server" and "device"):', dialogMessage);
 
 // Server reachable again — the very next successful sync should hide it,
 // with no special "recovery" action needed from the builder.
 await page.unroute('**/api/instances');
 await placeTreeAt(260, 400);
 await page.waitForTimeout(500);
-const indicatorHiddenAfterRecovery = await page.locator('#connectivity-indicator').isHidden();
+const indicatorHiddenAfterRecovery = await offlineWordHidden();
 console.log('indicator hidden again after the next sync succeeds (should be true):', indicatorHiddenAfterRecovery);
 
 // The aborted POST above is deliberately a real network-level failure (the
@@ -78,7 +87,7 @@ console.log('indicator hidden again after the next sync succeeds (should be true
 const unexpectedErrors = errors.filter((e) => !e.includes('net::ERR_FAILED'));
 
 const pass = indicatorHiddenBeforeAnyFailure && indicatorVisibleAfterFailure && treeStillPlacedLocally &&
-  dialogMessage.toLowerCase().includes('server') && dialogMessage.toLowerCase().includes('device') && !nativeDialogSeen &&
+  dialogMessage.toLowerCase().includes('server') && dialogMessage.toLowerCase().includes('device') && !nativeDialogSeen && selectable &&
   indicatorHiddenAfterRecovery &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Build-mode connectivity indicator (#545)', errors: unexpectedErrors });

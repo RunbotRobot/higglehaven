@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+
+// #3889: the notice is a word beside the head (needs a DOM); this file tests only the wiring.
+vi.mock('../ui/headSaying.js', () => ({ sayAtHead: vi.fn(), clearSaying: vi.fn() }));
 import { watchContextLoss } from './contextLoss.js';
 
 // #1318
