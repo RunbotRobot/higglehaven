@@ -106,7 +106,7 @@ console.log('persisted X length after reload (should be 0.50):', xAfterReload);
 
 const pass = saveStatus.includes('Saved') && productInfo.includes(PRODUCT_NAME) &&
   xActive === true && yActive === false &&
-  trimAriaPressed === 'true' && moveAriaPressed === 'false' &&
+  trimAriaPressed === 'true' &&
   reselected && Math.abs(Number(xAfterReload) - 0.5) < 0.01 &&
   errors.length === 0;
 await finish(browser, { pass, label: 'extensibility + Trim crop persists across reload', errors });

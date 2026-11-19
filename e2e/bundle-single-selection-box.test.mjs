@@ -36,12 +36,10 @@ console.log('three trees, screen positions:', JSON.stringify(positions));
 
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(200);
-// #3692: the item card (with the bundle actions) blooms beside the first pick, so pick from the
-// right: each next item is then away from the card.
-for (const pos of [...positions].sort((a, b) => b.x - a.x)) {
-  await page.mouse.click(pos.x, pos.y);
-  await page.waitForTimeout(200);
-}
+// Pick all three loose items with the test hook: where the card (and its brush slider, which takes taps
+// while painting) blooms depends on its height, so three screen taps would depend on the card's size.
+await page.evaluate(() => window.__testSelectAllProducts());
+await page.waitForTimeout(300);
 const selectionText = await page.textContent('#item-card-name');
 const looseBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('status:', selectionText, '| boxes with three loose items selected (should be 3):', looseBoxes.length);
