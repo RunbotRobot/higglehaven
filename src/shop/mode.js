@@ -786,10 +786,9 @@ export function renderShopSettingsSection() {
   // The sentences still come from gestureWords.js, so they stay the same words the "?" leaf uses.
   const note = document.createElement('ul');
   note.className = 'settings-empty-note settings-gesture-list';
-  const addLine = (text, heading = false) => {
+  const addLine = (text) => {
     const li = document.createElement('li');
     li.textContent = text;
-    if (heading) li.className = 'settings-gesture-heading';
     note.appendChild(li);
   };
   // #3650: moving is done by touching the world (no sticks, no fly button).
@@ -798,11 +797,26 @@ export function renderShopSettingsSection() {
   addLine(`${FLY_WORDS}, and again to land`);
   addLine('While flying you go where the view points: look up and walk forward to climb, look down to descend');
   addLine(`${FRIEND_WORDS} (on a computer, click them)`);
-  addLine('On a keyboard', true);
-  addLine('WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down');
-  addLine('Hold the left mouse button on the world and drag to look around');
-  addLine('T or a double-press of space to fly, N to open the nearest product\'s card');
   field.appendChild(note);
+  // #3652: the keyboard lines fold into a closed disclosure, so a phone's first screen stays short.
+  const keys = document.createElement('details');
+  keys.className = 'settings-gesture-keys';
+  const keysSummary = document.createElement('summary');
+  keysSummary.textContent = 'On a keyboard';
+  keys.appendChild(keysSummary);
+  const keysList = document.createElement('ul');
+  keysList.className = 'settings-empty-note settings-gesture-list';
+  for (const text of [
+    'WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down',
+    'Hold the left mouse button on the world and drag to look around',
+    'T or a double-press of space to fly, N to open the nearest product\'s card',
+  ]) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    keysList.appendChild(li);
+  }
+  keys.appendChild(keysList);
+  field.appendChild(keys);
   settingsSectionEl.appendChild(field);
 
   // #1588: opt-in free-look-recenters-on-facing. Off by default — the
