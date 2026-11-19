@@ -29,6 +29,7 @@
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
+import { soldOutMessage } from './email-layout.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension, suspendedSellerTemplateIds } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
@@ -40,7 +41,7 @@ import {
   COMMISSION_HOLD_DURATION_DAYS,
 } from './commission-caps.js';
 import {
-  stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
+  stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, formatCents,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry
@@ -1279,15 +1280,13 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`);
     const preference = preferenceByBuilder.get(builderId);
     if (preference?.notifySoldOutEmail && preference.builderEmail) {
-      // #2212: template.name is free-text/seller-supplied -- escape it
-      // before it lands in the html body (the plain-text body and the
-      // subject line, neither of which render as markup, are unaffected).
-      const safeName = escapeHtml(template.name);
+      // #2212: template.name is free-text/seller-supplied -- renderEmail escapes it
+      // in the html part (the plain-text part and the subject line do not render
+      // as markup, so they are unaffected).
       await sendEmail(env, {
         to: preference.builderEmail,
         subject: `"${template.name}" just sold out`,
-        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your lándlet.</p>`,
-        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your lándlet.`,
+        ...soldOutMessage(template.name, count),
       });
     }
   }

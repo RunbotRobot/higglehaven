@@ -53,6 +53,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
 import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
+import { verifyEmailMessage, passwordResetMessage } from './email-layout.js';
 import { isReservedUsername } from './fleet-agents.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser,
@@ -160,12 +161,8 @@ async function issueEmailVerification(env, db, userId, email) {
   await db.prepare('INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
     .bind(tokenHash, userId, expiresAt).run();
   const verifyUrl = `${appBaseUrl(env)}/?verifyEmail=${token}`;
-  const emailSent = await sendEmail(env, {
-    to: email,
-    subject: 'Verify your higglehaven email',
-    html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
-    text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
-  });
+  const message = verifyEmailMessage(verifyUrl);
+  const emailSent = await sendEmail(env, { to: email, subject: 'Verify your higglehaven email', ...message });
   // #811: devVerifyUrl must reflect whether Resend is *configured*, not
   // whether the send happened to succeed -- same reasoning as
   // handleRequestPasswordReset's own env.RESEND_API_KEY gate below.
@@ -483,8 +480,7 @@ export async function handleRequestPasswordReset(request, env, db, ctx) {
     const emailPayload = {
       to: email,
       subject: 'Reset your higglehaven password',
-      html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
-      text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
+      ...passwordResetMessage(resetUrl),
     };
     if (env.RESEND_API_KEY) {
       ctx.waitUntil(sendEmail(env, emailPayload).catch((error) => {
