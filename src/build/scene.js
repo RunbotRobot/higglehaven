@@ -85,6 +85,7 @@ import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
 import { anglesFromQuaternion, formatRotationReadout, quaternionFromAngles, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
 import { nudgeVector, nudgeStepMeters, heightAboveFloor, NUDGE_DIRECTIONS } from './nudge.js';
+import { createBuildLod } from './lod.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -5036,6 +5037,16 @@ function applyEdgePanWhileDraggingProduct() {
 // movement+sky callback instead (see enterShopMode); Sell mode has no
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
+// #3929: Build's level of detail (src/build/lod.js): the same apparent-size and triangle rules Shop
+// uses, with the selected items and those around the orbit target always shown as themselves.
+const buildLod = createBuildLod({ camera, target: controls.target, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh) });
+window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
+window.__testBuildLodCounts = () => buildLod.counts();
+window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
+window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
+window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
+window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
+
 export function buildModeFrameUpdate(now) {
   // #3302: feed the Submit feedback ring buffer from Build too (it is
   // throttled to ~1Hz inside recordRenderStateSample, so calling every frame
@@ -5053,6 +5064,7 @@ export function buildModeFrameUpdate(now) {
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   controls.update();
+  buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
   updateCameraDebug(now);
   // A selected item's box must track it live while the translate/rotate
   // gizmo drags it, so the boxes are recomputed here every frame rather than

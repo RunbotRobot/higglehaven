@@ -6,6 +6,12 @@
 // the biggest single draw, with the frame time.
 //
 //   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...]
+//   node scripts/live-frame-cost.mjs --url http://127.0.0.1:8787 --email <seeded account> --mode build
+//
+// #3929: --mode build opens Build instead of Shop and reports a table per phase (entering, standing
+// still, orbiting, selecting everything and moving it), against a lándlet seeded by
+// scripts/seed-heavy-landlet.mjs. --email signs in as that throwaway local account (password is the
+// seed script's) instead of the fleet login, and only works on localhost.
 //
 // Signs in with the fleet login like scripts/live-site.mjs (the session's proxy adds the fleet key;
 // nothing is printed or stored). Standing still at the arrival spot in Shop at 390x844.
@@ -14,7 +20,10 @@ import { chromium } from 'playwright';
 const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const name = flag('--name', null);
-if (!name || !/^higglehaven\d+$/.test(name)) { console.error('live-frame-cost: --name higglehaven<N> is required (this session\'s name)'); process.exit(1); }
+const email = flag('--email', null);
+const mode = flag('--mode', 'shop');
+if (!['shop', 'build'].includes(mode)) { console.error('live-frame-cost: --mode must be shop or build'); process.exit(1); }
+if (!email && (!name || !/^higglehaven\d+$/.test(name))) { console.error('live-frame-cost: --name higglehaven<N> is required (this session\'s name), or --email for a local account'); process.exit(1); }
 const base = flag('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const seconds = Number(flag('--seconds', 35));
 
@@ -23,8 +32,13 @@ if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launch.executablePath = process.env.PL
 if (process.env.HTTPS_PROXY && !/^https?:\/\/(127\.0\.0\.1|localhost)/.test(base)) launch.proxy = { server: process.env.HTTPS_PROXY };
 const browser = await chromium.launch(launch);
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
-const login = await context.request.post(`${base}/api/auth/fleet-login`, { data: { name } });
-if (!login.ok()) { console.error(`live-frame-cost: fleet login answered ${login.status()}`); await browser.close(); process.exit(1); }
+const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(base);
+if (email && !isLocal) { console.error('live-frame-cost: --email only works against a local server'); process.exit(1); }
+const login = email
+  ? await context.request.post(`${base}/api/auth/login`, { data: { email, password: process.env.SEED_PASSWORD || 'heavy-landlet-seed-password-123' } })
+  : await context.request.post(`${base}/api/auth/fleet-login`, { data: { name } });
+if (!login.ok()) { console.error(`live-frame-cost: login answered ${login.status()}`); await browser.close(); process.exit(1); }
+if (mode === 'build') await context.addInitScript(() => { try { sessionStorage.setItem('higglehaven.startMode', 'build'); } catch { /* private window */ } });
 const page = await context.newPage();
 await page.addInitScript(() => {
   const state = window.__frameCost = { draws: [], frames: [] };
@@ -56,15 +70,67 @@ await page.addInitScript(() => {
   };
   requestAnimationFrame(tick);
 });
+const enteredAt = Date.now();
 await page.goto(base, { waitUntil: 'domcontentloaded' });
-await page.waitForSelector('body.shop-ready', { timeout: 60000 });
-await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-const frames = await Promise.race([page.evaluate(() => window.__frameCost.frames), new Promise((resolve) => setTimeout(() => resolve(null), 60000))]);
-if (!frames) {
-  console.log('The page did not answer for 60 s after the wait: the main thread is stalled (see the frame cost above, if any).');
+if (mode === 'build') {
+  // Build is ready when every placement of the seeded lándlet has a mesh.
+  await page.waitForFunction(() => (window.__testProductPositions?.().length ?? 0) > 100, null, { timeout: 180000 });
+  await page.waitForTimeout(2000);
+  console.log(`entered Build and built ${await page.evaluate(() => window.__testProductPositions().length)} meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
 } else {
-  const picks = [0.1, 0.3, 0.5, 0.7, 0.9, 1].map((f) => frames[Math.min(frames.length - 1, Math.floor(frames.length * f) - (f === 1 ? 1 : 0))]);
-  console.log(`${frames.length} frames in ${seconds} s; longest ${Math.max(...frames.map((f) => f.ms))} ms; most triangles in a frame ${Math.max(...frames.map((f) => f.triangles))}`);
-  for (const f of picks) console.log(JSON.stringify(f));
+  await page.waitForSelector('body.shop-ready', { timeout: 60000 });
 }
+
+const summarise = (label, frames) => {
+  if (!frames.length) return `${label}: no frames`;
+  const longest = Math.max(...frames.map((f) => f.ms));
+  const worst = frames.reduce((a, f) => (f.triangles > a.triangles ? f : a), frames[0]);
+  return `${label}: ${frames.length} frames, longest ${longest} ms, most draws ${Math.max(...frames.map((f) => f.draws))}, most triangles ${worst.triangles}, biggest draw ${worst.biggestDraw}`;
+};
+const answer = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), 60000))]);
+const frameCount = () => answer(page.evaluate(() => window.__frameCost.frames.length));
+async function phase(label, run) {
+  const from = await frameCount();
+  if (from === null) { console.log(`${label}: the page did not answer`); return; }
+  await run();
+  const frames = await answer(page.evaluate((start) => window.__frameCost.frames.slice(start), from));
+  console.log(frames ? summarise(label, frames) : `${label}: the page did not answer for 60 s (main thread stalled)`);
+}
+
+if (mode === 'shop') {
+  await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  const frames = await answer(page.evaluate(() => window.__frameCost.frames));
+  if (!frames) {
+    console.log('The page did not answer for 60 s after the wait: the main thread is stalled (see the frame cost above, if any).');
+  } else {
+    const picks = [0.1, 0.3, 0.5, 0.7, 0.9, 1].map((f) => frames[Math.min(frames.length - 1, Math.floor(frames.length * f) - (f === 1 ? 1 : 0))]);
+    console.log(`${frames.length} frames in ${seconds} s; longest ${Math.max(...frames.map((f) => f.ms))} ms; most triangles in a frame ${Math.max(...frames.map((f) => f.triangles))}`);
+    for (const f of picks) console.log(JSON.stringify(f));
+  }
+} else {
+  // The versions of each item are attached over many frames after entering (src/build/lod.js), so
+  // wait until nearly every item has them (or --settle seconds, default 300), saying how long it took,
+  // then measure the settled state. The wait is the cost of entering Build on a heavy lándlet.
+  const settleSeconds = Number(flag('--settle', 300));
+  const settleStart = Date.now();
+  let lod = null;
+  for (let waited = 0; waited < settleSeconds; waited += 10) {
+    await page.waitForTimeout(10000);
+    lod = await answer(page.evaluate(() => window.__testBuildLodCounts?.() ?? null));
+    console.log(`  after ${Math.round((Date.now() - settleStart) / 1000)} s: items by version ${JSON.stringify(lod)}`);
+    if (lod && lod.withoutVersions <= (lod.full + lod.mid + lod.far + lod.withoutVersions) * 0.05) break;
+  }
+  await phase('standing still, settled', () => page.waitForTimeout(Math.min(seconds, 8) * 1000));
+  await phase('selecting everything', async () => { await page.evaluate(() => window.__testSelectAllProducts?.()); await page.waitForTimeout(3000); });
+  await phase('moving the selection up and back', async () => {
+    await page.evaluate(() => window.__testDragGroupMoveZ?.(1));
+    await page.waitForTimeout(2000);
+  });
+}
+  await phase('orbiting (a drag across the view)', async () => {
+    await page.mouse.move(195, 300);
+    await page.mouse.down();
+    for (let i = 0; i < 30; i++) { await page.mouse.move(195 + i * 4, 300 + i, { steps: 1 }); await page.waitForTimeout(60); }
+    await page.mouse.up();
+  });
 await browser.close();
