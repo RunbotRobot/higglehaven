@@ -2445,8 +2445,8 @@
         margin-bottom: var(--space-sm);
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -2567,8 +2567,8 @@
         margin-bottom: var(--space-sm);
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -2973,8 +2973,8 @@
       #upload-modal-content input[type='text'] {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3041,8 +3041,8 @@
       #upload-digital-good-disclaimer-select {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3124,8 +3124,8 @@
         width: 5.5em;
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3207,8 +3207,8 @@
       #bundle-name-input {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3285,8 +3285,8 @@
       #report-reason-input {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -3367,8 +3367,8 @@
       #product-review-text {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         resize: vertical;
@@ -3475,8 +3475,8 @@
       #note-modal-schedule {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -3580,8 +3580,8 @@
         min-width: 0;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -3815,8 +3815,8 @@
       #checkout-card-element {
         padding: var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
       }
       /* #3947: follows the two real steps of paying (src/shop/checkoutPayAttempt.js), never a timer. */
       #checkout-progress {
@@ -3910,8 +3910,8 @@
         object-fit: contain;
         align-self: center;
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
       }
       /* #3941: the one field look; 16px text so a phone does not zoom on focus. */
       #feedback-description {
@@ -4009,8 +4009,8 @@
       #verify-card-element {
         padding: var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
       }
       #verify-status {
         font-size: var(--text-sm);
@@ -4171,8 +4171,8 @@
       .seller-filter-control {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -4408,8 +4408,8 @@
       .seller-min-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 5.5em;
@@ -4439,8 +4439,8 @@
       .seller-size-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 5.5em;
@@ -4524,8 +4524,8 @@
       .seller-price-input {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         width: 8em;
@@ -4576,8 +4576,8 @@
       .seller-digital-good-select {
         padding: var(--space-xs) var(--space-sm);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
@@ -5265,8 +5265,8 @@
       #auth-modal-content input[type='text'] {
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
@@ -5292,8 +5292,8 @@
         height: 34px;
         padding: 0;
         border-radius: var(--radius-md);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-        background: rgb(var(--ink-rgb) / 0.1);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text-soft);
       }
       .auth-password-toggle-btn svg {
