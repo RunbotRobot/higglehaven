@@ -18,6 +18,7 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('shot:after-fly')).toEqual({ command: 'shot', args: ['after-fly'] });
     expect(parseStep('shot')).toEqual({ command: 'shot', args: [''] });
     expect(parseStep('idle')).toEqual({ command: 'idle', args: [] });
+    expect(parseStep('marks')).toEqual({ command: 'marks', args: [] }); // #3873
   });
 
   it('parses the flower steps, land and a burst (#3817)', () => {

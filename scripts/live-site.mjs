@@ -486,6 +486,26 @@ async function runStepAction(step, index) {
       }));
     case 'cover':
       return measureCover();
+    case 'marks':
+      // #3873: where the time went in this document's life (after a mode switch, the reload that
+      // switch caused): the app's own start-up marks and the slowest requests, all in ms since
+      // navigation start.
+      return page.evaluate(() => {
+        const marks = Object.fromEntries(performance.getEntriesByType('mark')
+          .filter((m) => m.name.startsWith('hh:')).map((m) => [m.name.slice(3), Math.round(m.startTime)]));
+        const nav = performance.getEntriesByType('navigation')[0];
+        const resources = performance.getEntriesByType('resource');
+        const slowest = resources.slice().sort((x, y) => y.duration - x.duration).slice(0, 8)
+          .map((r) => ({ url: r.name.replace(location.origin, ''), startMs: Math.round(r.startTime), durationMs: Math.round(r.duration), kb: Math.round((r.transferSize || 0) / 1024) }));
+        return {
+          marks,
+          domContentLoadedMs: nav ? Math.round(nav.domContentLoadedEventEnd) : null,
+          loadMs: nav ? Math.round(nav.loadEventEnd) : null,
+          requests: resources.length,
+          transferKb: Math.round(resources.reduce((n, r) => n + (r.transferSize || 0), 0) / 1024),
+          slowest,
+        };
+      });
     default:
       throw new Error(`unhandled step ${step.command}`);
   }
@@ -576,7 +596,7 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
