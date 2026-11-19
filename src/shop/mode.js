@@ -108,7 +108,7 @@ import { closeProductCard } from './productCard.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
-import { showNotice } from '../ui/noticeModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 
 // Skip building a ground mesh for a landlet with no chance of being seen
 // (entirely beyond the wall, comfortably past any land's own footprint) —
@@ -906,7 +906,8 @@ function renderMyAvatarsField(onEquipped) {
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t equip this avatar', message: err.message || 'Please try again.' });
+          // #3889: said in the row that was tapped, not in a modal over the world.
+          showInlineActionStatus(row, `Couldn't equip this avatar. ${err.message || 'Please try again.'}`);
           equipBtn.disabled = false;
         }
       });
@@ -928,7 +929,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t load more avatars', message: err.message || 'Please try again.' });
+          showInlineActionStatus(list, `Couldn't load more avatars. ${err.message || 'Please try again.'}`);
           moreBtn.disabled = false;
         }
       });
@@ -1045,7 +1046,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t apply this animation', message: err.message || 'Please try again.' });
+          showInlineActionStatus(row, `Couldn't apply this animation. ${err.message || 'Please try again.'}`);
           equipBtn.disabled = false;
         }
       });
@@ -1067,7 +1068,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          showNotice({ title: 'Couldn\'t load more animations', message: err.message || 'Please try again.' });
+          showInlineActionStatus(list, `Couldn't load more animations. ${err.message || 'Please try again.'}`);
           moreBtn.disabled = false;
         }
       });
