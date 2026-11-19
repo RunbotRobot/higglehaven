@@ -1009,9 +1009,9 @@ price and stock. The original maker's listing is not changed.
    category and sort boxes beside it.
 3. To rename it, tap "Rename", type the new name in the window that opens and
    confirm.
-4. To change its price, tap "Edit Price", type the new price and tap "Save Price".
-   The other "Edit" lines (size, shipping, returns) work the same way: open it,
-   change it, tap its own Save button.
+4. To change its price, tap "More settings" on the product, then "Edit Price", type the new
+   price and tap "Save Price". The other "Edit" lines (size, shipping, returns) are under
+   "More settings" too and work the same way: open it, change it, tap its own Save button.
 
 **You will see:** the new name or price on the product straight away, and the word
 "Saved." beside the button.
