@@ -458,7 +458,7 @@ export async function handleStartAuction(request, db, landletId) {
   const builderId = sessionBuilder.builder_id;
   await checkRateLimit(db, `auction-start:${builderId}`, AUCTION_START_RATE_LIMIT_MAX);
   if (landlet.status !== 'claimed' || landlet.owner_builder_id !== builderId) {
-    throw new HttpError('Only the current owner of a claimed landlet can start an auction on it', 400, { code: ERROR_CODES.AUCTION_NOT_OWNER });
+    throw new HttpError('Only the current owner of a claimed lándlet can start an auction on it', 400, { code: ERROR_CODES.AUCTION_NOT_OWNER });
   }
   const startingBidCents = input.startingBidCents === undefined ? 0 : nonnegativeInteger(input.startingBidCents, 'startingBidCents');
   // "Default 24-hour duration for inactivity-triggered listings; builder-
@@ -508,15 +508,15 @@ export async function handleStartAuction(request, db, landletId) {
   if (inserted.meta.changes === 0) {
     const current = await db.prepare('SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?').bind(landletId).first();
     if (!current || current.status !== 'claimed' || current.owner_builder_id !== builderId) {
-      throw new HttpError('You no longer own this landlet — refetch and retry', 409, { code: ERROR_CODES.LANDLET_OWNERSHIP_LOST });
+      throw new HttpError('You no longer own this lándlet — refetch and retry', 409, { code: ERROR_CODES.LANDLET_OWNERSHIP_LOST });
     }
-    throw new HttpError('This landlet already has an active auction', 409, { code: ERROR_CODES.AUCTION_ALREADY_ACTIVE });
+    throw new HttpError('This lándlet already has an active auction', 409, { code: ERROR_CODES.AUCTION_ALREADY_ACTIVE });
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
   // #2427: a concurrent self-delete can remove this just-created, still-
   // zero-bid auction (builderDeletionStatements) between the INSERT above
   // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
-  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
+  if (!row) throw new HttpError('This lándlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 export async function handleAuctions(request, db, route, url) {

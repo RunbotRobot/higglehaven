@@ -572,7 +572,7 @@ async function reportEvidenceLines(db, reporterUserId, reportedUserId, surfaceAc
     return [
       'Interaction evidence (admin triage only; these records are short-lived, so "no" is weak evidence):',
       `- ${await surfaceActivityLine()}`,
-      `- Both in the same landlet right now: ${coPresent ? 'yes' : 'no'}`,
+      `- Both in the same lándlet right now: ${coPresent ? 'yes' : 'no'}`,
     ];
   } catch (error) {
     console.error('report interaction evidence lookup failed', error);
@@ -683,7 +683,7 @@ async function handleNearbyChatReportCreate(request, db) {
       WHERE user_id = ? AND landlet_id = (SELECT landlet_id FROM avatar_presence WHERE user_id = ?)
       LIMIT 1
     `).bind(reportedUserId, sessionBuilder.user_id).first();
-    return `Reported builder has a chat message still on record in the reporter's landlet: ${message ? 'yes' : 'no'}`;
+    return `Reported builder has a chat message still on record in the reporter's lándlet: ${message ? 'yes' : 'no'}`;
   }));
   const storedReportId = await fileConductReport(db, {
     table: 'nearby_chat_reports', kind: 'nearby-chat-report', reportId,
@@ -1172,7 +1172,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
       // caller's own current landlet.
       const recipientLandletId = await callersCurrentLandletId(db, toUserId);
       if (recipientLandletId === null || recipientLandletId !== landletId) {
-        throw new HttpError('toBuilderId is not currently in your landlet', 400);
+        throw new HttpError('toBuilderId is not currently in your lándlet', 400);
       }
     }
     const messageId = `voice-signal-${crypto.randomUUID()}`;

@@ -165,7 +165,7 @@ describe('Voice signaling keyed on the account (#3147)', () => {
     // The old builder id no longer names anyone: refused like any stranger.
     const stale = await sendSignal(alice, bob);
     expect(stale.response.status).toBe(400);
-    expect(stale.body.error).toMatch(/not currently in your landlet/);
+    expect(stale.body.error).toMatch(/not currently in your lándlet/);
     // The new one works, with Bob's presence (the account's) intact.
     const fresh = await sendSignal(alice, bobNow);
     expect(fresh.response.status).toBe(201);

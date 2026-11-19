@@ -131,7 +131,7 @@ async function handleSoldOutMarkers(request, db, route) {
       const stillOwned = await db.prepare('SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?')
         .bind(landletId, sessionBuilder.builder_id).first();
       if (!stillOwned) {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+        throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       throw new HttpError('Marker not found or already dismissed', 404);
     }
