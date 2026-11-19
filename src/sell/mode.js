@@ -22,11 +22,8 @@
 // directly; since that becomes a module-private binding here, it now
 // calls resetSellerView() instead (see that function's own comment).
 //
-// renderSellerIdentityField/renderSellSettingsSection
-// (Settings > Sell tab) now live here too (#2565, Option A per owner
-// decision 2026-10-28) -- settings/modal.js's renderSettingsSection just
-// calls renderSellSettingsSection() rather than reaching into this
-// module's own state directly.
+// renderSellerIdentityField (once Settings > Sell's shop name, #2565) lives here too; since #3704
+// it is the bud's Storefront leaf, and Settings has no Sell tab.
 //
 // persistCatalogThumbnail, formatPriceCents/parsePriceInputDollars/
 // formatDollarsForPriceInput, MAX_MONEY_CENTS, DIGITAL_GOOD_DISCLAIMER_TEXT,
@@ -39,7 +36,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
-import { registerBudPetals } from '../ui/bud.js';
+import { registerBudPetals, openLeaf } from '../ui/bud.js';
 import { openPayoutsLeaf } from './payoutsLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
@@ -2277,6 +2274,8 @@ registerBudPetals('sell', [
   // #3704 (6/6, slice 1): the payout account, balance and Cash out are a leaf now (src/sell/payoutsLeaf.js),
   // not the bottom of Settings > Sell. A seller identity first, as My products has always needed.
   { id: 'payouts', label: 'Payouts', run: () => { void openPayoutsFromPetal(); } },
+  // #3704 (6/6, slice 2): the shop name (Rename, Reset Profile) is a leaf; Settings has no Sell tab.
+  { id: 'storefront', label: 'Storefront', run: () => { void openStorefrontFromPetal(); } },
 ]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
@@ -2503,14 +2502,16 @@ sellThisTooSearchInput.addEventListener('input', renderSellThisTooGrid);
 sellThisTooFormEl.addEventListener('submit', submitAttachListing);
 sellThisTooBackBtn.addEventListener('click', showSellThisTooGrid);
 
-// #2565 (leaf of #2504/#2500, Option A per owner decision 2026-10-28): the
-// Settings modal's Sell tab -- extracted wholesale from src/main.js.
-// settings/modal.js's renderSettingsSection just calls
-// renderSellSettingsSection() below rather than reaching into this
-// module's own state directly.
+// #2565 (leaf of #2504/#2500): the Settings modal's Sell tab was extracted here; #3704 turned what
+// was left of it into the bud's Storefront leaf (below) and the tab is gone.
 
-function renderSellerIdentityField() {
+// #3704 (6/6, slice 2): the shop name, with Rename and Reset Profile, is the bud's Storefront leaf; it
+// was the only thing left on Settings > Sell, and that tab is gone. The calls, the warning and the
+// confirmation are the ones the Settings field made (renderIdentityField), hosted in the leaf.
+function renderSellerIdentityField(container, rerender) {
   renderIdentityField('Seller', {
+    container,
+    rerender,
     fetchProfile: fetchMySeller,
     idKey: 'sellerId',
     renameProfile: (id, label) => renameSeller(id, label),
@@ -2526,9 +2527,21 @@ function renderSellerIdentityField() {
   });
 }
 
-// The payout account, balance and Cash out used to be the rest of this tab (#452, #454). They are
-// the bud's Payouts leaf now (#3704, src/sell/payoutsLeaf.js); what is left here is the storefront
-// name, which moves to its own leaf in slice 2.
-export async function renderSellSettingsSection() {
-  renderSellerIdentityField();
+function openStorefrontLeaf() {
+  const paint = (body) => {
+    body.innerHTML = '';
+    renderSellerIdentityField(body, () => paint(body));
+  };
+  openLeaf({
+    id: 'storefront',
+    title: 'Storefront',
+    render: (body) => paint(body),
+  });
+}
+
+async function openStorefrontFromPetal() {
+  await bootstrapPromise;
+  const id = await ensureSellerIdentity();
+  if (!id) return;
+  openStorefrontLeaf();
 }

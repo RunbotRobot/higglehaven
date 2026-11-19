@@ -493,8 +493,11 @@ function bindWorldGestures(canvas) {
   // A mouse is not a gesture on a real device (it keeps the keyboard and wheel);
   // an automated browser (the e2e suite, scripts/live-site.mjs) has only a mouse
   // to drive a drag with, so there it counts, and nobody else is affected.
+  // window.__testRealMouse (added for #3831: the real-mouse e2e is itself driven by an automated
+  // browser, so it needs a way to be treated like a person's computer): set, the mouse is a mouse.
+  const automated = () => navigator.webdriver === true && window.__testRealMouse !== true;
   const touching = (event) => event.pointerType === 'touch' || event.pointerType === 'pen'
-    || (event.pointerType === 'mouse' && navigator.webdriver === true);
+    || (event.pointerType === 'mouse' && automated());
   // When the finger touched, not when this handler got to run: a long task (a model loading, a
   // slow frame) between the two taps of a double-tap must not make them look slower than they
   // were (seen live: a double-tap dropped while a 400 ms task sat between its taps).
@@ -502,7 +505,7 @@ function bindWorldGestures(canvas) {
   // #3831: a person's mouse looks around: hold the left button on the world and drag (a click
   // that does not move is still a click, and selects). One button, one meaning, so no halves.
   // (The automated browsers above already count a mouse as a finger with halves; they keep that.)
-  const mouseLooking = (event) => event.pointerType === 'mouse' && navigator.webdriver !== true;
+  const mouseLooking = (event) => event.pointerType === 'mouse' && !automated();
   canvas.addEventListener('pointerdown', (event) => {
     if (!shopActive) return;
     if (mouseLooking(event)) {
@@ -567,6 +570,9 @@ window.addEventListener('keydown', (event) => {
   if (shopKeysDown.has(event.code)) return;
   shopKeysDown.add(event.code);
   applyShopStickInput();
+  // #3832: the first-visit hint moves on when the keys are used too (walk keys walk; the turn
+  // and look keys look).
+  announceWorldGesture(/^(Key[WASD]|Arrow)/.test(event.code) ? 'walk' : 'look');
 });
 window.addEventListener('keyup', (event) => {
   if (!shopKeysDown.delete(event.code)) return;
@@ -599,6 +605,7 @@ window.addEventListener('keydown', (event) => {
   if (now - shopLastSpacePressAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
     shopLastSpacePressAt = -Infinity;
     toggleShopFlight();
+    announceWorldGesture('fly');
   } else {
     shopLastSpacePressAt = now;
   }
@@ -612,6 +619,7 @@ window.addEventListener('keydown', (event) => {
   if (!shopActive || !isFlightToggleKeyEvent(event)) return;
   event.preventDefault();
   toggleShopFlight();
+  announceWorldGesture('fly');
 });
 
 // #3824: N opens the card of the next nearest product (Shift+N the previous), for anyone who

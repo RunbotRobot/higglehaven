@@ -790,6 +790,15 @@ export async function openPayoutsLeaf(page) {
   await page.waitForSelector('#bud-leaf-payouts', { timeout: 5000 });
 }
 
+// #3704 (6/6, slice 2): the shop name, Rename and Reset Profile are the bud's Storefront leaf, not
+// the Sell tab of Settings (which is gone).
+export async function openStorefrontLeaf(page) {
+  const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
+  if (!expanded) await openAccountMenu(page);
+  await page.click('#bud-petal-sell-storefront');
+  await page.waitForSelector('#bud-leaf-storefront', { timeout: 5000 });
+}
+
 export async function openAccountMenu(page) {
   // #3650: a toggle click can be lost while the page is still re-laying out after a mode change
   // (saved-layout-preview failed twice on CI at this wait, never locally), and a panel that is

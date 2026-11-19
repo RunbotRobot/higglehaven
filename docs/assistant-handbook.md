@@ -130,10 +130,10 @@ touches one ends by sending the assistant to the runbook's hand-off.
 ### Where is Settings, and what is in each tab?
 
 1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings".
-2. Tabs run across the top: "General", "Shop", "Build" and "Sell".
+2. Tabs run across the top: "General", "Shop" and "Build".
 3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
-5. "Build" and "Sell" hold the settings for those modes, including the person's username (with "Rename") on "Build" and the payout account on "Sell".
+5. "Build" holds the settings for building, including the person's username (with "Rename"). Selling has no tab here: the payout account and the shop name are petals in the Sell menu (see "Where do I set up payouts and tax forms?").
 6. At the bottom of every tab is "Send feedback".
 7. The "×" at the top right closes Settings.
 
@@ -148,7 +148,6 @@ touches one ends by sending the assistant to the runbook's hand-off.
 #settings-tabs [data-section="general"] | General
 #settings-tabs [data-section="shop"] | Shop
 #settings-tabs [data-section="build"] | Build
-#settings-tabs [data-section="sell"] | Sell
 #settings-feedback-btn | Send feedback
 #settings-close-btn | Close
 ```
@@ -256,7 +255,7 @@ everything else.
 **You will see:** a petal for another place turns green at once and the petals stay out while that
 place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
 opens that place's own menu instead (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
-products", "Add a product" and "Payouts"; Shop's has "Chat"), and only one menu is open at a time. The bud always
+products", "Add a product", "Payouts" and "Storefront"; Shop's has "Chat"), and only one menu is open at a time. The bud always
 opens on the general menu, and that menu is the same in all three places.
 
 **If something goes wrong:**
@@ -660,7 +659,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 **If something goes wrong:**
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
-  now reads "Cancel placing". Tap the bud, then that.
+  now reads "Cancel placing". Tap the bud, then the Build petal, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
   the round logo button at the top left, the Build petal, then "Undo" to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
@@ -737,7 +736,7 @@ row of buttons above it ("Move", "Rotate" and the rest) and arrows around it.
 
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
-  reads "Cancel placing". Tap the bud, then that.
+  reads "Cancel placing". Tap the bud, then the Build petal, then that.
 - Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
 
 ```controls build
@@ -789,7 +788,7 @@ single item.
 
 1. Tap the bud, then the Build petal, then "Tools", then "Multi-Select". The sheet goes away and the bud
    says "Selecting" while it is on. A "Brush" slider is in the Tools sheet: tap
-   the bud, then "Tools" again to change it.
+   the bud, the Build petal, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
    sweep is.
 3. The top of the screen says how many are chosen, for example "2 items
@@ -1064,13 +1063,13 @@ nobody owns and nothing uses is removed completely.
 
 ### Where do I set up payouts and tax forms?
 
-1. Tap the gear at the top left (in Shop it is the round higglehaven logo button, labelled Menu until it has been opened once), then "Settings", then the "Sell" tab.
-2. "Payout Account" says whether one is set up. "Set up payout account" (or "Update
-   payout account" if there already is one) opens the steps for it.
-3. Tax forms and identity checks, where they are asked for, are filled in by you on
+1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
+2. Tap "Payouts". The leaf that opens says whether a payout account is set up.
+3. "Set up payout account" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them. If an account already exists, "Change payout details" opens the same steps.
+4. Tax forms and identity checks, where they are asked for, are filled in by you on
    those screens.
 
-**You will see:** the payout account's status at the top of the "Sell" tab.
+**You will see:** the payout account's status at the top of the "Payouts" leaf.
 
 **If something goes wrong:**
 - Anything about an amount, whether they are eligible, a payout that is late or
@@ -1079,6 +1078,22 @@ nobody owns and nothing uses is removed completely.
 - The fields look different from what is described here: ask what they see, and
   offer to pass it to the team.
 
-```controls any
-#settings-btn | Settings
+```controls sell
+.mode-nav-btn[data-mode="sell"] | Sell
+#bud-petal-sell-payouts | Payouts
+```
+
+### How do I rename my shop, or start my seller profile over?
+
+1. Switch to Sell, tap the logo and then the "Sell" petal to open Sell's menu, and tap "Storefront".
+2. The leaf shows the shop name. "Rename" changes it. "Reset Profile" starts the seller profile over after a confirmation, and says what it will do first.
+
+**You will see:** the new name in the leaf straight away.
+
+**If something goes wrong:**
+- "Reset Profile" is refused: the leaf shows the reason; do not promise anything about money, and use the runbook's hand-off if it is about unpaid proceeds.
+
+```controls sell
+.mode-nav-btn[data-mode="sell"] | Sell
+#bud-petal-sell-storefront | Storefront
 ```
