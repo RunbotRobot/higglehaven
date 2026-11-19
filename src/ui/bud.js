@@ -29,12 +29,30 @@
 // without being rebuilt, and the id the e2e suite drives is unchanged.
 
 import { iconKeyFor, svgIcon } from './budIcons.js';
+import { BUD_MENUS, budMenuProblem } from './budMenuRules.js';
+
+export { BUD_MENUS };
 
 const FIRST_OPEN_KEY = 'hh_bud_opened';
 const registry = new Map();
 const marks = new Set();
 const words = new Map();
 const MENU_WORD = 'Menu';
+// Rows that already sit in #account-menu-panel (static HTML with their own handlers) and the menu
+// each belongs to. Everything else in the panel is a registered petal, which carries its own menu.
+const STATIC_MENU = {
+  'account-auth-btn': 'general',
+  'notifications-btn': 'general',
+  'friends-btn': 'general',
+  'assistant-menu-btn': 'general',
+  'my-purchases-btn': 'general',
+  'settings-btn': 'general',
+  'account-menu-tax-notice': 'general',
+  'account-menu-landcap': 'build',
+  // The lándlet name at the top of the open menu (#3770) is a heading, not a tool: it is in no menu, so it
+  // shows above whichever one is open (its own `hidden` decides when there is a lándlet to name).
+};
+let openMenu = 'general';
 let leafEl = null;
 let leafId = null;
 
@@ -43,8 +61,20 @@ const panel = () => document.getElementById('account-menu-panel');
 
 const copyPetal = (p) => ({ id: p.id, label: p.label, name: p.name, run: p.run, domId: p.domId, element: p.element, visible: p.visible });
 
+function refuse(message) {
+  if (import.meta.env?.DEV) throw new Error(`bud: ${message}`);
+  console.error(`bud: ${message}`);
+}
+function accepted(menu, petals) {
+  return petals.filter((petal) => {
+    const problem = budMenuProblem(menu, petal);
+    if (problem) refuse(problem);
+    return !problem;
+  });
+}
+
 export function registerBudPetals(mode, petals) {
-  registry.set(mode, petals.map(copyPetal));
+  registry.set(mode, accepted(mode, petals).map(copyPetal));
   syncBud();
 }
 
@@ -52,7 +82,7 @@ export function registerBudPetals(mode, petals) {
 // rewriting the whole list. A petal with the same id replaces the earlier one.
 export function addBudPetals(mode, petals) {
   const list = registry.get(mode) || [];
-  for (const petal of petals) {
+  for (const petal of accepted(mode, petals)) {
     const at = list.findIndex((p) => p.id === petal.id);
     if (at >= 0) list[at] = copyPetal(petal);
     else list.push(copyPetal(petal));
@@ -127,6 +157,21 @@ function readSwitch() {
 
 // Petals registered for the current mode are buttons in the panel: created once, shown only
 // while their mode is showing. Existing account rows keep their own handlers and ids.
+// The general menu's petals show in every mode; a mode's own only while it is the current one.
+const inMode = (petalMode, mode) => petalMode === 'general' || petalMode === mode;
+
+// Every leaf in the panel carries the menu it belongs to, and is drawn only while that menu is the
+// open one. The static rows are marked here; registered petals were marked as they were made.
+function markMenus(host) {
+  for (const [id, menu] of Object.entries(STATIC_MENU)) {
+    const el = document.getElementById(id);
+    if (el) el.dataset.budMenu = menu;
+  }
+  for (const el of host.querySelectorAll('[data-bud-menu]')) {
+    el.toggleAttribute('data-menu-off', el.dataset.budMenu !== openMenu);
+  }
+}
+
 function syncBud() {
   // Until a mode has been entered (setCurrentMode) nothing is decided: no flash of the bud
   // on a page that is about to be Build or Sell.
@@ -139,7 +184,8 @@ function syncBud() {
         // An element that already exists (a pair of buttons with their own handlers): the bud
         // holds it and shows it only in its mode, and only while `visible()` says so.
         if (petal.element.parentElement !== host) host.appendChild(petal.element);
-        petal.element.hidden = petalMode !== mode || (petal.visible ? !petal.visible() : false);
+        petal.element.dataset.budMenu = petalMode;
+        petal.element.hidden = !inMode(petalMode, mode) || (petal.visible ? !petal.visible() : false);
         continue;
       }
       // A petal may adopt a button that already exists (domId), keeping its id and its own
@@ -168,9 +214,11 @@ function syncBud() {
         });
         host.appendChild(btn);
       }
-      btn.hidden = petalMode !== mode;
+      btn.dataset.budMenu = petalMode;
+      btn.hidden = !inMode(petalMode, mode);
     }
   }
+  markMenus(host);
   scheduleStem();
   if (!mode) return;
   // A mode with a definition has the bud; without one its old controls are still its way in.
@@ -238,7 +286,7 @@ function layoutStem() {
     if (!el.matches('button, .bud-pair')) continue;
     if (el.matches('.bud-pair')) el.querySelectorAll('button').forEach(decorateLeaf);
     else decorateLeaf(el);
-    if (el.hidden || el.style.display === 'none') {
+    if (el.hidden || el.hasAttribute('data-menu-off') || el.style.display === 'none') {
       el.removeAttribute('data-side');
       continue;
     }
@@ -271,7 +319,9 @@ function scheduleStem() {
 let leafOnClose = null;
 
 // The ring lives after the petal column, so it is last in reading order, and CSS shows it only
-// while the bud is unfolded. Choosing a mode folds the bud.
+// while the bud is unfolded. It holds the three places and the general menu (#3760): four petals
+// around the head. A place you are not in takes you there (the page reloads); the place you are in
+// opens that place's own menu; "Menu" opens the general one. One stem is open at a time.
 function modesRing() {
   let ring = document.getElementById('bud-modes');
   if (ring && ring.dataset.wired) return ring;
@@ -279,17 +329,53 @@ function modesRing() {
     ring = document.createElement('div');
     ring.id = 'bud-modes';
     ring.setAttribute('role', 'group');
-    ring.setAttribute('aria-label', 'Places');
     panel()?.after(ring);
   }
+  // The ring may already exist (public/bud-switch.js draws it from the first paint), so its label is set here.
+  ring.setAttribute('aria-label', 'Places and menu');
   ring.dataset.wired = '1';
-  // Another mode: the page reloads and keeps the ring out (beginBudModeSwitch). The mode you are
-  // already in: nothing to load, so the bud just folds.
+  const menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
+  menuBtn.id = 'bud-menu-general';
+  menuBtn.className = 'bud-menu-btn';
+  menuBtn.dataset.menu = 'general';
+  const menuWord = document.createElement('span');
+  menuWord.className = 'mode-nav-label';
+  menuWord.textContent = 'Menu';
+  menuBtn.appendChild(menuWord);
+  decoratePetal(menuBtn);
+  ring.appendChild(menuBtn);
+  // Another place: the page reloads and keeps the ring out (beginBudModeSwitch). The place you are
+  // already in: nothing to load, so its petal opens that place's own menu (#3760); "Menu" opens the
+  // general one. Neither folds the bud.
   ring.addEventListener('click', (event) => {
-    const btn = event.target.closest?.('.mode-nav-btn');
-    if (btn && btn.dataset.mode === document.body.dataset.mode) foldBud();
+    const btn = event.target.closest?.('button');
+    if (!btn) return;
+    if (btn === menuBtn) { showMenu('general'); return; }
+    if (btn.classList.contains('mode-nav-btn') && btn.dataset.mode === document.body.dataset.mode) showMenu(btn.dataset.mode);
   });
   return ring;
+}
+
+// A menu with nothing in it (Shop's, today) has no stem to open: tapping its petal does nothing.
+function menuHasLeaves(menu) {
+  return (registry.get(menu) || []).length > 0 || Object.values(STATIC_MENU).includes(menu);
+}
+
+export function currentBudMenu() {
+  return openMenu;
+}
+
+// Open one menu's stem and close the other. `menu` is one of BUD_MENUS.
+export function showMenu(menu) {
+  if (!BUD_MENUS.includes(menu) || !menuHasLeaves(menu)) return;
+  openMenu = menu;
+  document.body.dataset.budMenu = menu;
+  syncBud();
+  for (const btn of document.querySelectorAll('#bud-modes button')) {
+    const own = btn.dataset.mode ?? btn.dataset.menu;
+    btn.setAttribute('aria-expanded', String(own === menu));
+  }
 }
 
 export function closeLeaf() {
@@ -467,6 +553,17 @@ if (typeof document !== 'undefined') {
       }
     }).observe(panel(), { attributes: true, attributeFilter: ['class'] });
   }
+  // Every time the bud opens it opens on the general menu: the one thing in it that never changes.
+  const host = panel();
+  if (host) {
+    let wasOpen = host.classList.contains('expanded');
+    new MutationObserver(() => {
+      const open = host.classList.contains('expanded');
+      if (open && !wasOpen) showMenu('general');
+      wasOpen = open;
+    }).observe(host, { attributes: true, attributeFilter: ['class'] });
+  }
+  document.body.dataset.budMenu = openMenu;
   if (panel()) {
     new MutationObserver(scheduleStem).observe(panel(), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class'] });
     scheduleStem();
@@ -524,4 +621,7 @@ registerBudPetals('shop', []);
 // the slices that move them (#3690, #3691), so they are never in two places.
 registerBudPetals('build', [
   { id: 'add-item', label: 'Add item', domId: 'add-item-btn', run: () => {} },
+  // #3760: My Lándlets is a Build tool, so it lives in Build's menu, not the general one. The row keeps
+  // its id and its handler (src/account/menu.js, which also shows it only in Build).
+  { id: 'my-lands', label: 'My Lándlets', domId: 'my-lands-btn', run: () => {} },
 ]);

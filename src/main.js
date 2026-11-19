@@ -281,10 +281,13 @@ import {
   shopLandlets, updateShopProximity, updateShopLandletInfo, pickShopSpawnLocation,
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
-  shopOtherAvatars, assistantFromHit, assistantGroups,
+  shopOtherAvatars, assistantFromHit, assistantGroups, otherPersonGroups, personFromHit, personForBuilderId,
 } from './shop/presenceAndContent.js';
+// #3555: tapping another person in the Shop world offers friendship.
+import { confirmAndOfferFriendship } from './friends.js';
 // #3447: tapping an assistant in the Shop world opens its chat panel.
 import { openAssistantChat, closeAssistantChat, setAssistantStandingHooks } from './shop/assistantChat.js';
+import { showAssistantTapRing } from './shop/assistantTapRing.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
 // rendering now lives in src/shop/worldSprites.js -- see that module's own
@@ -1618,7 +1621,29 @@ renderer.domElement.addEventListener('click', (event) => {
   if (tappedAssistant) {
     setShopTappedProduct(null);
     closeProductCard();
-    openAssistantChat(tappedAssistant);
+    // #3773: the tap is answered on the assistant herself, a ring around her feet until the window is up.
+    const tappedGroup = assistantGroups().find((group) => {
+      for (let o = assistantHit.object; o; o = o.parent) if (o === group) return true;
+      return false;
+    });
+    const releaseRing = tappedGroup
+      ? showAssistantTapRing(THREE, tappedGroup, { reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true })
+      : () => {};
+    Promise.resolve(openAssistantChat(tappedAssistant)).finally(releaseRing);
+    return;
+  }
+  // #3555: a person standing in front of a product is what was tapped, so they
+  // are checked the same way: the nearer hit wins. A tap on them offers
+  // friendship (the typed exact name stays in the Friends leaf for someone not
+  // nearby), with no popup over a popup and no name to remember.
+  const personHit = raycaster.intersectObjects(otherPersonGroups(), true)[0];
+  const tappedPerson = personHit && (hits.length === 0 || personHit.distance < hits[0].distance)
+    ? personFromHit(personHit)
+    : null;
+  if (tappedPerson) {
+    setShopTappedProduct(null);
+    closeProductCard();
+    confirmAndOfferFriendship(tappedPerson.builderId, tappedPerson.label);
     return;
   }
   const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;
@@ -1647,6 +1672,16 @@ window.__testTapAssistantByUserId = (userId) => {
   const found = [...shopOtherAvatars].find(([, e]) => e.userId === userId && e.assistantName);
   if (!found) return false;
   openAssistantChat({ userId: found[1].userId, builderId: found[0], name: found[1].assistantName });
+  return true;
+};
+
+// #3555: e2e-only, same reason as the assistant hook above (a real tap needs aiming at
+// a pixel, which this suite never automates). Opens the real friendship offer for
+// a person currently drawn in the world, by their builder id.
+window.__testTapPersonByBuilderId = (builderId) => {
+  const person = personForBuilderId(builderId);
+  if (!person) return false;
+  confirmAndOfferFriendship(person.builderId, person.label);
   return true;
 };
 

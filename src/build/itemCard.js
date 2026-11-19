@@ -12,6 +12,37 @@ const moreBtn = document.getElementById('item-card-more-btn');
 const moreEl = document.getElementById('item-card-more');
 const closeBtn = document.getElementById('item-card-close-btn');
 const card = createWorldCard(cardEl);
+// #3691: the Selecting brush's size slider. It lives in #tool-controls (and the Tools leaf lends it
+// out); while Selecting is on and the card shows the selection, it is hosted here, beside what is
+// being painted, so it can be adjusted without leaving the world. scene.js keeps the same element,
+// ids and handlers: this only changes where it sits.
+const brushSlot = document.getElementById('item-card-brush');
+const brushEl = document.getElementById('multiselect-brush-control');
+const brushHome = document.getElementById('tool-controls');
+
+export function isBrushInItemCard() {
+  return brushSlot.contains(brushEl);
+}
+
+function hostBrush() {
+  if (!brushSlot.contains(brushEl)) {
+    brushSlot.append(brushEl);
+    card.markDirty();
+  }
+}
+
+function unhostBrush() {
+  if (brushSlot.contains(brushEl)) {
+    brushHome.append(brushEl);
+    card.markDirty();
+  }
+}
+
+// The Tools leaf hands the slider back to #tool-controls as it closes; if the card is still
+// showing a Selecting selection, take it again.
+export function syncBrushHost() {
+  if (open && cardEl.classList.contains('pass-through')) hostBrush();
+}
 
 const scratchCenter = new THREE.Vector3();
 const scratchSize = new THREE.Vector3();
@@ -44,6 +75,8 @@ export function showItemCard(title, { passThrough = false } = {}) {
     cardEl.classList.toggle('pass-through', passThrough);
     card.markDirty();
   }
+  if (passThrough) hostBrush();
+  else unhostBrush();
   const wasOpen = open;
   if (nameEl.textContent !== title) {
     nameEl.textContent = title;
@@ -59,6 +92,7 @@ export function showItemCard(title, { passThrough = false } = {}) {
 export function hideItemCard() {
   if (!open) return;
   open = false;
+  unhostBrush();
   nameEl.textContent = '';
   moreEl.hidden = true;
   moreBtn.setAttribute('aria-expanded', 'false');

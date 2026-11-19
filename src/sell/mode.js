@@ -40,7 +40,6 @@ import { registerBudPetals, openLeaf } from '../ui/bud.js';
 import { openPayoutsLeaf } from './payoutsLeaf.js';
 import { buildSaleRow } from './saleRow.js';
 import { openOrdersLeaf } from './ordersLeaf.js';
-import { openHelpLeaf } from '../ui/helpLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
@@ -2187,7 +2186,7 @@ async function openPayoutsFromPetal() {
 // #3699 (Sell in the bud, 1/6; part of #3648): in Sell the interface is the bud. Its petals are
 // the account rows and the Shop and Build mode buttons (moved in by src/ui/bud.js), plus these
 // two: My products reopens the product list (the bottom-right Products button it replaces is
-// gone), and "?" (#3762). Sell still opens onto My products and the list is still a sheet;
+// gone). "?" is in the general menu (#3760), not here. Sell still opens onto My products and the list is still a sheet;
 // slices 2 and 3 of #3655 change those.
 registerBudPetals('sell', [
   { id: 'my-products', label: 'My products', run: () => { void openSellerModal(); } },
@@ -2201,7 +2200,6 @@ registerBudPetals('sell', [
   { id: 'payouts', label: 'Payouts', run: () => { void openPayoutsFromPetal(); } },
   // #3704 (6/6, slice 2): the shop name (Rename, Reset Profile) is a leaf; Settings has no Sell tab.
   { id: 'storefront', label: 'Storefront', run: () => { void openStorefrontFromPetal(); } },
-  { id: 'help', label: 'Help', run: openHelpLeaf },
 ]);
 
 // #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --

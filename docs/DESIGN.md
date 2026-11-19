@@ -156,14 +156,20 @@ active state and one coral for danger.
 |---|---|---|
 | `--ink-rgb` | `22 36 10` | the one dark-green ink, as channels so a use can pick its own opacity: `rgb(var(--ink-rgb) / 0.25)` |
 | `--white-rgb` | `255 255 255` | white as channels, for the bud and its leaves' sheen and rings: `rgb(var(--white-rgb) / 0.9)` |
+| `--black-rgb` | `0 0 0` | black as channels, for a quiet fill or a mask: `rgb(var(--black-rgb) / 0.1)` |
 | `--ink` | the ink as a colour | text and lines on either pale surface |
 | `--pill-rgb` | `214 232 190` | the small floating HUD chrome: pale green |
 | `--panel-rgb` | `250 240 199` | large, text-heavy dialogs: pale yellow |
 | `--pill-text` | the ink | text on a pale surface |
 | `--pill-text-soft` | the ink at 65% | secondary text on a pale surface |
 | `--brand-green` | `#6ca42e` | the active state only; a step up in intensity from the pale surfaces |
+| `--brand-green-rgb` | `108 164 46` | `--brand-green` as channels, for its tints on an expanded row or a brush |
 | `--spring-green-rgb` | `62 199 91` | the movement controls' resting state, brighter than the brand green |
 | `--danger` | `#e2694f` | the one accent for destructive actions: a friendly coral, not a dark red |
+| `--danger-rgb` | `226 105 79` | `--danger` as channels, for a destructive form's outline |
+| `--denied-rgb` | `255 92 92` | a muted or refused voice control |
+| `--danger-line-rgb` | `255 120 100` | the outline of a destructive row action |
+| `--danger-soft-rgb` | `255 180 168` | coral text on the dark delete control |
 | `--danger-text` | `#a83a27` | coral for text; at least 4.5:1 on panel, pill and tinted rows |
 | `--danger-strong` | `#c0392b` | filled destructive controls |
 | `--danger-bright` | `#d9483a` | alert dots and badges |
@@ -260,6 +266,8 @@ control that may sit in a settings list is 32px tall.
 | `--radius-petal` | 24px 5px 24px 5px | a petal of the bud |
 | `--radius-bloom` | 28px 6px 28px 6px | the card that blooms beside a product |
 | `--radius-leaf` | 30px 6px 30px 6px | a leaf that grows from the bud |
+| `--radius-petal-flip` | 6px 24px 6px 24px | a petal's mirror image, for the side the menu opens toward |
+| `--radius-leaf-flip` | 6px 30px 6px 30px | a leaf's mirror image |
 | `--radius-word` | 12px 3px 12px 3px | the small word beside the bud |
 | `--bud-size` | 56px | the bud's width and height (not a radius; kept here with the shapes) |
 
@@ -327,8 +335,25 @@ petals; a leaf runs an action or opens a sheet (a soft sheet by the head, close
 control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
-- `registerBudPetals(mode, [{ id, label, run }])`: one definition per mode
-  (`shop`, `build`, `sell`). A mode with none has no bud, and keeps its old
+- **Four menus, one open at a time (#3760, part of #3759).** Around the head are four
+  petals: Shop, Build, Sell and Menu. The bud opens on the general menu (Menu), which is
+  **the same in every mode**: the person, Notices, Friends, My Purchases, Settings and "?".
+  A place's own tools live under that place's petal: Build's (Add item, My Lándlets,
+  Levels, Undo and Redo, Tools, and the lándlet cap line), Sell's (My products, Add a
+  product, Payouts, Storefront, Orders) and Shop's (Chat). A place with nothing in its menu would have a petal that
+  opens no stem. A tap on a place you
+  are not in takes you there (the page reloads and the ring stays out); a tap on the place
+  you are in opens that place's menu in place of the general one; a tap on Menu brings the
+  general one back; the head, Escape or the world closes whichever is open. Every leaf in
+  the stem carries the menu it belongs to (`data-bud-menu`) and is drawn only while that
+  menu is open (`body[data-bud-menu]`, `src/ui/bud.js`: `showMenu`, `currentBudMenu`). The
+  rules are in `src/ui/budMenuRules.js`: the general menu's members are a fixed list, and
+  registering a place's tool into it is refused (an error in development and in tests,
+  logged and skipped in the shipped app), so adding a member to the general menu is a
+  deliberate edit of that list and of this paragraph, never an accident. The ring's four
+  petals sit 30 degrees apart (6, 36, 66 and 96 degrees); the stem starts below them.
+- `registerBudPetals(mode, [{ id, label, run }])`: one definition per menu
+  (`shop`, `build`, `sell`, and `general` for the general menu's own members). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
 - `addBudPetals(mode, [petal])` (#3690): adds petals to a mode without
@@ -348,8 +373,11 @@ by touching the world. The module is `src/ui/bud.js`:
   Paste, parked in `#tool-controls`. Choosing Multi-Select, Measure or Paste puts the
   leaf away so the world is clear; while Multi-Select or Measure is on the bud wears
   "Selecting" or "Measuring" (`setBudWord`, following the buttons' `aria-pressed`).
-  Paste is listed only after a Copy. The Brush slider stays in the leaf for now (the
-  plan blooms it beside the selection; that is a later slice).
+  Paste is listed only after a Copy. The Brush slider blooms beside the selection: while
+  Selecting is on and the item card shows the painted selection, `src/build/itemCard.js`
+  moves `#multiselect-brush-control` into the card (`#item-card-brush`) and back out when
+  the card closes or Selecting ends; the card passes taps through while painting, but the
+  slider takes them. With nothing selected yet it is still in the Tools leaf.
 - Bundles (#3692): Bundle, Unbundle, Edit and Save Bundle are buttons of the item card (the card that
   blooms beside the selection), with the same ids and handlers; Edit's reason line shows under them.
   While Multi-Select paints, the card keeps the bundle actions (Copy, Delete and More wait for

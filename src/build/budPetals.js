@@ -10,6 +10,7 @@
 // Dig do, and when they are enabled); this module only moves them into the bud and decides
 // when the petal is drawn. Other Build slices add their own petals with addBudPetals.
 import { addBudPetals, refreshBud, openLeaf, closeLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
+import { isBrushInItemCard, syncBrushHost } from './itemCard.js';
 
 const byId = (id) => document.getElementById(id);
 
@@ -77,7 +78,12 @@ function openToolsLeaf() {
     render: (body) => {
       const list = document.createElement('div');
       list.className = 'bud-tools';
-      for (const id of TOOL_IDS) list.append(byId(id));
+      // #3691: while the item card hosts the brush slider beside the selection, the leaf does not take
+      // it away (one slider, one place).
+      for (const id of TOOL_IDS) {
+        if (id === 'multiselect-brush-control' && isBrushInItemCard()) continue;
+        list.append(byId(id));
+      }
       body.append(list);
       // Choosing a tool puts the leaf away so the world is clear to use it on; the bud then
       // wears the tool's name (below) until it is switched off. Paste starts a placement, which
@@ -89,7 +95,11 @@ function openToolsLeaf() {
     onClose: () => {
       const home = byId('tool-controls');
       if (!home) return;
-      for (const id of TOOL_IDS) home.append(byId(id));
+      for (const id of TOOL_IDS) {
+        if (id === 'multiselect-brush-control' && isBrushInItemCard()) continue;
+        home.append(byId(id));
+      }
+      syncBrushHost();
     },
   });
 }
