@@ -46,8 +46,6 @@ async function placeTreeAt(x, y) {
 
 // ---- 1. A single item ----
 await placeTreeAt(160, 380);
-check(await readoutText() === null, 'no readout while nothing is being rotated');
-await page.click('#mode-rotate');
 await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt 0\.0° \(green ring\)/, 'single item at rest reads 0, 0, 0 in plain words');
 
 const box = await page.evaluate(() => document.getElementById('rotation-readout').getBoundingClientRect().toJSON());
@@ -96,12 +94,9 @@ await waitReadout(/Tilt 7\.5° \(red ring\)/, 'Snap off: a free turn stays where
 await page.evaluate((r) => window.__testRotateSelected('x', r, { dragAxis: true }), -7.1 * DEG);
 await waitReadout(/Tilt 0\.0° \(red ring\)/, 'Snap off: 0.4 off upright settles onto exactly 0.0');
 
-// The readout stays up between drags and goes away with Rotate.
+// The readout stays up between drags (the ring is always on a selected item, #3689).
 await page.waitForTimeout(600);
 check(await readoutText() !== null, 'the readout stays after the drag ends');
-await page.click('#mode-move');
-await page.waitForTimeout(400);
-check(await readoutText() === null, 'the readout goes away when Rotate is off');
 await openSnap();
 await page.click('#toggle-snap'); // Snap back on
 
@@ -118,8 +113,8 @@ await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 await page.click('#group-item');
 await page.waitForTimeout(800);
-await page.click('#mode-rotate');
-await waitReadout(/Tilt \S+° \(red ring\)/, 'a bundle shows a readout in Rotate mode');
+await page.click('#toggle-multiselect'); // leaves multi-select: the bundle's ring is on
+await waitReadout(/Tilt \S+° \(red ring\)/, 'a bundle shows a readout with its ring on');
 const startText = await readoutText();
 
 // The two trees were left at different turns above (the first item is at 90): the
@@ -138,7 +133,6 @@ check(await readoutText() === null, 'nothing selected: no readout');
 const positions = await page.evaluate(() => window.__testProductScreenPositions());
 await page.mouse.click(positions[0].x, positions[0].y);
 await page.waitForTimeout(500);
-await page.click('#mode-rotate');
 await waitReadout(/Tilt 30\.0° \(red ring\)/, 'selecting the bundle again still reads 30.0');
 
 // Back to exactly upright with Snap off: 30 - 29.5 = 0.5 absolute settles onto 0.

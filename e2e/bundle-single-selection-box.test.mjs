@@ -53,9 +53,9 @@ await page.waitForTimeout(700);
 const groupedBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('boxes right after Group (should be 1):', groupedBoxes.length);
 
-// Move the bundle: leaves multi-select (Move exits it, keeping the
-// selection), then nudge it up and check the single box follows.
-await page.click('#mode-move');
+// Move the bundle: leave multi-select (keeping the selection), then nudge it up and check the
+// single box follows.
+await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 const beforeMove = await page.evaluate(() => window.__testSelectionBoxes());
 const dragged = await page.evaluate((offsetZ) => window.__testDragGroupMoveZ(offsetZ), 0.5);

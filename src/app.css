@@ -2111,6 +2111,10 @@
       #gizmo-mode-controls.visible {
         display: flex;
       }
+      /* #3689: with Move and Rotate gone the row holds only Trim; an item that cannot be trimmed leaves it out. */
+      #gizmo-mode-controls.visible:not(:has(#mode-trim:not([hidden]))) {
+        display: none;
+      }
       /* Below ~480px, the gap between #topbar-left (wordmark + account
          menu) and #mode-nav (both anchored to the same top row) is
          narrower than product-info's own centered text — no amount of
