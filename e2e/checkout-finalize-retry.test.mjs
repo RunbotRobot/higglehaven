@@ -63,7 +63,7 @@ const cancelDisabled = await page.locator('#checkout-cancel-btn').isDisabled();
 const barAfterFailure = await page.evaluate(() => document.getElementById('checkout-progress').hidden);
 console.log('bar while checking (should be shown at 0.2):', JSON.stringify(checkingBar), '| bar hidden after the failure (should be true):', barAfterFailure);
 const rawLeaked = /raw provider text|upstream exploded/.test(status1);
-console.log('Pay button label before (should be "Pay"):', payLabelBefore);
+console.log('Pay button label before (should be "Pay $19.99"):', payLabelBefore);
 console.log('status after the failed finalize:', status1);
 console.log('Pay button now says (should be "Finish purchase"):', payLabelAfter);
 console.log('Pay re-enabled (should be true):', payEnabled, '| Cancel disabled (should be true):', cancelDisabled);
@@ -89,7 +89,7 @@ console.log('flow result (should be ok):', JSON.stringify(flowResult));
 console.log('confirmCardPayment calls (should be 1):', confirmCalls, '| finalize calls (should be 2):', finalizeCalls);
 console.log('modal closed after success (should be true):', modalClosed);
 
-const pass = payLabelBefore.trim() === 'Pay'
+const pass = payLabelBefore.trim() === 'Pay $19.99'
   && checkingBar.shown && checkingBar.share === '0.2'
   && barAfterFailure === true
   && recordingBar === '0.7'

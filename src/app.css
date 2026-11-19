@@ -3817,6 +3817,12 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.85);
       }
+      /* #3946: the refund line sits with the price, in the same quiet size as the summary. */
+      #checkout-refund-note {
+        margin: 0;
+        font-size: var(--text-sm);
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
       #checkout-card-element {
         padding: var(--space-md);
         border-radius: var(--radius-md);

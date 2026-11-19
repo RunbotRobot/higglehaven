@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel, acceptConfirmModal, shopStickBox, goToMode, openAddProductLeaf } from './helpers.mjs';
+import { launchPage, emailForLabel, shopStickBox, goToMode, openAddProductLeaf } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -408,25 +408,23 @@ try {
   throw err;
 }
 
-// #3278: handleShopProductBuyClick confirms in the shared in-app modal now
-// (it used to be a native confirm() auto-accepted by launchPage). This file
-// still adds a dialog listener (same convention as
-// e2e/purchase-shipping.test.mjs's own dialogMessages capture) as a tripwire:
-// the "Purchase complete" result is the in-app notice modal now (#3249), so
-// any native dialog here means a purchase step regressed to confirm()/alert().
+// #3946: a purchase that takes a card opens the one payment sheet straight from Buy -- no
+// "Buy this item?" confirm first -- and the sheet says the price, the refund line and Pay with the
+// amount. Closing the sheet charges nothing and leaves the product card open and armed. (This file
+// still adds a dialog listener as a tripwire: the "Purchase complete" result is the in-app notice
+// modal, #3249, so any native dialog here means a purchase step regressed to confirm()/alert().)
 await page.click('#product-card-buy-btn');
-// Never mind first: the modal names a price, focuses the safe choice, and
-// cancelling starts no checkout and leaves the product card open and armed.
-await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
-const buyConfirmNamesPrice = /\$\d/.test(await page.textContent('#confirm-modal-message'));
-const buyConfirmFocusOnSafeChoice = await page.evaluate(() => document.activeElement?.id === 'confirm-modal-cancel-btn');
-await page.click('#confirm-modal-cancel-btn');
-await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
-const checkoutOpenedAfterCancel = (await page.locator('#checkout-modal.visible').count()) !== 0;
+await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
+const noConfirmBeforeSheet = (await page.locator('#confirm-modal.visible').count()) === 0;
+const sheetNamesPrice = /\$\d/.test(await page.textContent('#checkout-summary'));
+const sheetSaysRefund = /Refunds return 99%/.test(await page.textContent('#checkout-refund-note'));
+const payNamesAmount = /^Pay \$\d/.test((await page.textContent('#checkout-pay-btn')).trim());
+await page.click('#checkout-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('checkout-modal').classList.contains('visible'), null, { timeout: 5000 });
 const previewStillOpen = (await page.locator('#product-card:not([hidden])').count()) === 1;
-console.log('buy confirm names a price / focuses Never mind / no checkout after cancel / card still open:', buyConfirmNamesPrice, buyConfirmFocusOnSafeChoice, !checkoutOpenedAfterCancel, previewStillOpen);
+console.log('no confirm before the sheet / sheet names a price / refund line / Pay names the amount / card still open after closing:', noConfirmBeforeSheet, sheetNamesPrice, sheetSaysRefund, payNamesAmount, previewStillOpen);
+await page.waitForFunction(() => !document.getElementById('product-card-buy-btn').disabled, null, { timeout: 5000 });
 await page.click('#product-card-buy-btn');
-await acceptConfirmModal(page);
 
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('checkout-pay-btn').disabled, null, { timeout: 30000 });
@@ -452,7 +450,7 @@ const noThankYouSheet = !(await page.evaluate(() => /Thank you/.test(document.ge
 console.log('card line after purchase:', cardLine, '| no "Thank you!" sheet:', noThankYouSheet, '| native dialogs (should be none):', dialogMessages);
 const purchaseCompleted = /Yours now/.test(cardLine) && noThankYouSheet && dialogMessages.length === 0;
 
-const pass = stripeAccountComplete && purchaseCompleted && buyConfirmNamesPrice && buyConfirmFocusOnSafeChoice && !checkoutOpenedAfterCancel && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
+const pass = stripeAccountComplete && purchaseCompleted && noConfirmBeforeSheet && sheetNamesPrice && sheetSaysRefund && payNamesAmount && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
 await page.close();
 await browser.close();
 console.log('page errors:', errors.length || sellerErrors.length ? [...errors, ...sellerErrors] : 'none');
