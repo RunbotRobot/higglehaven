@@ -2,12 +2,13 @@
 // with two halves, drawn only when there is something to undo or redo; Levels is a petal whose
 // leaf says which level you are on with Build above and Dig below. The "Ground" pill and its
 // dropdown, and the Undo/Redo pills in the top-right row, are gone. 390x844.
-import { launchPage, chooseIdentity, claimLandlet, finish, openAccountMenu, budClick } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, openAccountMenu, budClick, openBudMenuOf } from './helpers.mjs';
 
 // Open the bud only when it is closed: a petal's own click may or may not fold it.
 const ensureBudOpen = async (page) => {
   const open = await page.evaluate(() => document.getElementById('account-menu-panel').classList.contains('expanded'));
   if (!open) await openAccountMenu(page);
+  await openBudMenuOf(page, 'build'); // #3760: Undo/Redo and Levels are in Build's own menu
 };
 
 const LABEL = 'Bud Undo Levels Tester';
@@ -33,6 +34,7 @@ check(!(await drawn('#undo-redo-panel #undo-btn')) && (await page.locator('#undo
 
 // ---- Nothing to undo yet: no pair petal ----
 await openAccountMenu(page);
+await openBudMenuOf(page, 'build'); // #3760: Levels, Undo and Redo are in Build's own menu
 check(await drawn('#bud-petal-build-levels'), 'the bud has a Levels petal');
 check(!(await drawn('#bud-undo-redo')), 'no Undo/Redo petal while there is nothing to undo or redo');
 // Shop and Sell are petals of the bud in Build (the mode row is gone).

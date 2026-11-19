@@ -382,7 +382,30 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
 // is only drawn while the bud is open. A test that clicks it, or waits for it as the sign that Build
 // is ready, goes through these two wrappers instead of knowing about the bud. Any other page a test
 // makes for itself can be passed through budAware too.
-const BUD_PETALS = new Set(['#add-item-btn']);
+const BUD_PETALS = new Set(['#add-item-btn', '#my-lands-btn']);
+// #3760: a place's tools are in that place's own menu, one open at a time: the bud opens on the
+// general menu, and a tap on the petal of the place you are in opens that place's stem. Which menu a
+// selector lives in: Build's, or Sell's, or (anything else) the general one.
+export function budMenuOf(selector) {
+  if (['#add-item-btn', '#my-lands-btn', '#undo-btn', '#redo-btn'].includes(selector) || selector.startsWith('#bud-petal-build-')) return 'build';
+  if (selector.startsWith('#bud-petal-sell-')) return 'sell';
+  if (selector.startsWith('#bud-petal-shop-')) return 'shop'; // Chat
+  return null;
+}
+// Open the bud and then the stem of `menu` ('build' or 'sell'): the ring petal of the place the page is in.
+export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
+  if (!(await page.locator('#account-menu-panel.expanded').count())) {
+    if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
+    await click('#account-menu-toggle');
+    await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+  }
+  if (menu) {
+    if ((await page.locator(`#account-menu-panel [data-bud-menu="${menu}"]:not([data-menu-off]):not([hidden])`).count()) === 0) {
+      await click(`#bud-modes .mode-nav-btn[data-mode="${menu}"]`);
+      await page.waitForSelector(`#account-menu-panel [data-bud-menu="${menu}"]:not([data-menu-off])`, { state: 'attached', timeout: 5000 });
+    }
+  }
+}
 // #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
 // they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
 const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
@@ -392,21 +415,16 @@ const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community
 export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
-    if (BUD_PETALS.has(selector) && !(await page.locator(selector).isVisible())) {
+    const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
+    if ((BUD_PETALS.has(selector) || menuOf) && !(await page.locator(selector).isVisible())) {
       // #3690: an open leaf (Levels) sits over the bud and swallows the tap on it; put it away first.
-      if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
-      await page.click('#account-menu-toggle');
-      await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
+      await openBudMenuOf(page, menuOf, click);
     }
     if (TOOL_CONTROLS.has(selector) && !(await page.locator(selector).isVisible())) {
       // The leaf may be open already (with the control not drawn: Paste before a Copy); a leaf
       // that is not the Tools one sits over the bud and swallows the tap on it.
       if (!(await page.locator('#bud-leaf-tools').count())) {
-        if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
-        if (!(await page.locator('#account-menu-panel.expanded').count())) {
-          await click('#account-menu-toggle');
-          await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
-        }
+        await openBudMenuOf(page, 'build', click);
         await click('#bud-petal-build-tools');
         await page.waitForSelector('#bud-leaf-tools', { timeout: 5000 });
       }
@@ -821,6 +839,10 @@ export async function openLevelMenu(page) {
 export async function budClick(page, selector) {
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!open) await openAccountMenu(page);
+  // #3760: a place's tool is in that place's own menu, so on a page the budAware wrapper was not put on
+  // (a second page a test opens for itself) this opens the place's menu first.
+  const menu = budMenuOf(selector);
+  if (menu && !(await page.locator(selector).isVisible())) await openBudMenuOf(page, menu);
   await page.click(selector);
 }
 

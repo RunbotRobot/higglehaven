@@ -1068,7 +1068,8 @@
       body[data-bud="on"][data-bud-ring] #bud-modes { display: block; }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn {
+      body[data-bud="on"] #bud-modes .mode-nav-btn,
+      body[data-bud="on"] #bud-modes .bud-menu-btn {
         --petal-turn: calc(var(--ring-a) * 1deg + var(--ring-flip) * 180deg);
         position: absolute;
         box-sizing: border-box;
@@ -1092,7 +1093,9 @@
         animation: bud-grow 0.24s var(--ease-soft) both;
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
-      body[data-bud="on"] #bud-modes .mode-nav-label {
+      body[data-bud="on"] #bud-modes .mode-nav-label,
+      body[data-bud="on"] #bud-modes .bud-menu-btn > span {
+        display: block;
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
         pointer-events: none;
@@ -1105,9 +1108,13 @@
       }
       body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
       body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 8; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 46; animation-delay: 0.04s; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 84; animation-delay: 0.08s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 6; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.04s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.08s; }
+      /* #3760: the general menu is the fourth petal on the same arc. */
+      body[data-bud="on"] #bud-modes .bud-menu-btn { --ring-a: 96; animation-delay: 0.12s; }
+      /* Which stem is open: the petal of the open menu is the lit one. */
+      body[data-bud="on"] #bud-modes button[aria-expanded="true"],
       /* The chosen petal answers at once and stays lit while its mode loads (#3752). */
       body[data-bud="on"] #bud-modes .mode-nav-btn.active,
       body[data-bud="on"] #bud-modes .mode-nav-btn[aria-current="true"] {
@@ -1116,9 +1123,11 @@
         font-weight: 600;
       }
       /* Held open while a mode loads: already out, so no motion on arrival. */
-      body[data-bud-ring="held"] #bud-modes .mode-nav-btn { animation: none; }
+      body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
+      body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
       /* Folding back in: the reverse, a little faster, the last petal first. */
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn {
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
+      body[data-bud-ring="folding"] #bud-modes .bud-menu-btn {
         animation: bud-fold 0.2s var(--ease-soft) both;
       }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
@@ -1129,7 +1138,9 @@
       body[data-bud-ring] .bud-word { visibility: hidden; }
       body:has(#account-menu-panel.expanded) #seller-showcase-pager,
       body[data-bud-ring] #seller-showcase-pager { visibility: hidden; }
-      body[data-bud="on"] #account-menu-panel { margin-top: 92px; }
+      body[data-bud="on"] #account-menu-panel { margin-top: 164px; }
+      /* #3760: only the open menu's leaves are drawn (src/ui/bud.js marks the rest). */
+      body[data-bud="on"] #account-menu-panel [data-menu-off] { display: none !important; }
       /* #3690: Undo and Redo are one petal with two halves (src/build/budPetals.js). */
       .bud-pair { display: flex; gap: var(--space-sm); }
       .bud-pair[hidden] { display: none; }
@@ -1147,9 +1158,12 @@
         body[data-bud="on"] #account-menu-toggle,
         body[data-bud="on"] #account-menu-panel button,
         body[data-bud="on"] #account-menu-panel::before { animation: none; }
-        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: bud-fade 0.12s linear both; }
-        body[data-bud-ring="held"] #bud-modes .mode-nav-btn { animation: none; }
-        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn { animation: bud-fade 0.12s linear reverse both; }
+        body[data-bud="on"] #bud-modes .mode-nav-btn,
+        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade 0.12s linear both; }
+        body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
+        body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
+        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
+        body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade 0.12s linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {

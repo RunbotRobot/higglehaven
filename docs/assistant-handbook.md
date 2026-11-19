@@ -241,26 +241,32 @@ everything else.
 .mode-nav-btn[data-mode="shop"] | Shop
 .mode-nav-btn[data-mode="build"] | Build
 .mode-nav-btn[data-mode="sell"] | Sell
-#bud-petal-shop-help | ?
+#bud-petal-general-help | ?
 ```
 
 ### How do I go between Shop, Build and Sell?
 
 1. Tap the round logo at the top left (the bud).
-2. Three petals grow out of it in an arc: "Shop", "Build" and "Sell". The one you
+2. Four petals grow out of it in an arc: "Shop", "Build", "Sell" and "Menu". The place you
    are in is shaded green.
-3. Tap the one you want.
+3. Tap the place you want. To open the menu of the place you are in, tap its own petal; to open the
+   general menu (your name, Notices, Friends, My Purchases, Settings and "?"), tap "Menu".
 
-**You will see:** the petal you tapped turns green at once and the petals stay out
-while that place loads; when it is on screen they fold back into the bud. The three
-petals are the same in all three places.
+**You will see:** a petal for another place turns green at once and the petals stay out while that
+place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
+opens that place's own menu instead (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
+products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Chat"), and only one menu is open at a time. The bud always
+opens on the general menu, and that menu is the same in all three places.
 
 **If something goes wrong:**
 - The petals are not there: the bud is folded. Tap the round logo once.
-- Tapping the place you are already in only folds the petals back: that is expected.
+- A tool someone is looking for is not in the menu that opened: it lives under its own place's petal
+  (for example "Add item" is under "Build"), not in the general menu.
+- Tapping the round logo again, or tapping the world, folds everything away: that is expected.
 
 ```controls any
 .mode-nav-btn[data-mode="shop"] | Shop
+#bud-menu-general | Menu
 ```
 
 ### How do I walk around and look around?
@@ -601,7 +607,7 @@ The message box starts one line tall and grows as you type, up to about five lin
   to the team.
 
 ```controls any
-#bud-petal-shop-help | ?
+#bud-petal-general-help | ?
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise
@@ -624,7 +630,7 @@ The message box starts one line tall and grows as you type, up to about five lin
 **You will see:** the sheet goes away and you are standing on your own lándlet. The
 top left is the small round bud with the higglehaven logo: tap it and it unfolds.
 "Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
-are inside it.
+are inside it: tap the Build petal to see them (the bud opens on the general menu, and each place keeps its own tools under its own petal).
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -644,7 +650,7 @@ are inside it.
 ### How do I add an item to my lándlet?
 
 1. In Build, tap the small round bud with the higglehaven logo at the top left,
-   then tap "Add item". A short strip opens at the bottom: a "Search" box and a
+   then the Build petal, then tap "Add item". A short strip opens at the bottom: a "Search" box and a
    row of items to swipe, the ones used most recently first.
 2. Swipe along the row, or type in the "Search" box. For the whole list, tap
    "All items": a wider panel opens with the "Search" box and, on the same row,
@@ -660,9 +666,9 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 **If something goes wrong:**
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
-  now reads "Cancel placing". Tap the bud, then that.
+  now reads "Cancel placing". Tap the bud, then the Build petal, then that.
 - The item is not where you wanted. It is selected, so use "Move" (below), or tap
-  the round logo button at the top left, then "Undo" to take it back.
+  the round logo button at the top left, the Build petal, then "Undo" to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
@@ -693,7 +699,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 - You want to line it up with something nearby: tap "More" on the card beside the
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
-- Wrong spot: the round logo button at the top left, then "Undo".
+- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
 
 ```controls build
 #mode-move | Move
@@ -712,7 +718,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 **You will see:** the item turns as you drag, and the line on the card shows how far.
 
 **If something goes wrong:**
-- It turned the wrong way or too far: the round logo button at the top left, then "Undo".
+- It turned the wrong way or too far: the round logo button at the top left, the Build petal, then "Undo".
 - A bundle says "This bundle is too big to turn any further here." It cannot turn
   more without leaving your lándlet. Move it first, or turn it the other way.
 
@@ -725,7 +731,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 1. Tap the item, then tap "Copy" on the card beside it. The top of the screen says
    "Copied 1 item".
-2. Tap the bud, then "Tools", then "Paste" (it is only listed once something is
+2. Tap the bud, then the Build petal, then "Tools", then "Paste" (it is only listed once something is
    copied). With the item still selected, the copy appears
    right on top of it.
 3. To put the copy somewhere else instead, tap empty ground first so nothing is
@@ -737,8 +743,8 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
-  reads "Cancel placing". Tap the bud, then that.
-- Wrong spot: the round logo button at the top left, then "Undo".
+  reads "Cancel placing". Tap the bud, then the Build petal, then that.
+- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
 
 ```controls build
 #copy-item | Copy
@@ -754,7 +760,7 @@ a small card beside it that has "Move", "Rotate" and the rest, and arrows around
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap the round logo button at the top left, then "Undo", straight away and it comes back.
+- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.
@@ -787,15 +793,15 @@ single item.
 
 ### How do I select several items at once?
 
-1. Tap the bud, then "Tools", then "Multi-Select". The sheet goes away and the bud
+1. Tap the bud, then the Build petal, then "Tools", then "Multi-Select". The sheet goes away and the bud
    says "Selecting" while it is on. Before anything is chosen, the "Brush" slider
-   is in the Tools sheet: tap the bud, then "Tools" again to change it.
+   is in the Tools sheet: tap the bud, the Build petal, then "Tools" again to change it.
 2. Tap each item you want, or drag across several: the slider sets how wide the
    sweep is. Once something is chosen, the slider is on the card beside the
    chosen items, so you can change the sweep without leaving them.
 3. The card beside the items says how many are chosen, for example "2 items
    selected".
-4. Tap the bud, "Tools", then "Multi-Select" again when you want to go back to
+4. Tap the bud, the Build petal, "Tools", then "Multi-Select" again when you want to go back to
    choosing one item at a time. The bud says "Menu" again.
 
 **You will see:** the same buttons on the card as for one item, acting on all of them:
@@ -820,7 +826,7 @@ single item.
 3. To keep it for later, tap "Save Bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
    "Save".
-4. To use a saved bundle, tap the bud, then "Add item", then "All items", then
+4. To use a saved bundle, tap the bud, then the Build petal, then "Add item", then "All items", then
    "Bundles", and tap its name.
 5. To split one apart, select it and tap "Unbundle".
 
@@ -845,7 +851,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I build up or dig down to another level?
 
-1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then "Levels". A sheet
+1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once), then the Build petal, then "Levels". A sheet
    opens that says which level you are on: "You are on Ground" when you are on the
    ground level.
 2. Tap "Build Level Above" to add a level over the one you are on, or "Dig Level
@@ -881,7 +887,7 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 
 ### How do I measure something?
 
-1. Tap the bud, then "Tools", then "Measure". The bud says "Measuring" while it is
+1. Tap the bud, then the Build petal, then "Tools", then "Measure". The bud says "Measuring" while it is
    on.
 2. Tap one point: an item's surface or the bare ground. Tap a second point.
 3. The top of the screen reads the straight-line distance and how much of it is
@@ -911,7 +917,7 @@ top of the screen.
    standing on shelves. A pill at the top reads "Page 1 of 1"; use "Previous page"
    and "Next page" (the two small arrows) when you have more than one page.
 3. Nothing covers the showroom: walk around it as you would anywhere. To see your
-   list, tap the round logo at the top left (the bud), then "My products". Tap "Close"
+   list, tap the round logo at the top left (the bud), then the Sell petal, then "My products". Tap "Close"
    (the × at its top right) to put the list away again.
 
 **You will see:** your own products only. Nobody else's products and no real
@@ -933,7 +939,7 @@ lándlets are shown here.
 
 ### How do I put my own product up for sale?
 
-1. In Sell, tap the round logo at the top left (the bud), then "Add a product". A
+1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product". A
    small window opens under it and asks which way. Tap "Upload my own model". The
    window is now called "Upload Model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
@@ -972,7 +978,7 @@ your "My products" list).
 
 ### How do I sell a product someone else already made?
 
-1. In Sell, tap the round logo at the top left (the bud), then "Add a product", then
+1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product", then
    "Sell one that is already here".
 2. Look through the products, or type in "Search products". Tap the one you want to
    sell.
@@ -1015,7 +1021,7 @@ price and stock. The original maker's listing is not changed.
   name or choose another.
 - A price above the limit is refused with a message naming the limit.
 - Something changed does not show up: close "My products" and open it again with
-  the round logo at the top left, then "My products"; if it is still wrong, ask
+  the round logo at the top left, the Sell petal, then "My products"; if it is still wrong, ask
   what they see and offer to pass it on.
 
 ```controls sell
@@ -1064,7 +1070,7 @@ nobody owns and nothing uses is removed completely.
 
 ### Where do I set up payouts and tax forms?
 
-1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again to open the menu.
+1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
 2. Tap "Payouts". The leaf that opens says whether a payout account is set up.
 3. "Set up payout account" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them. If an account already exists, "Change payout details" opens the same steps.
 4. Tax forms and identity checks, where they are asked for, are filled in by you on
@@ -1086,7 +1092,7 @@ nobody owns and nothing uses is removed completely.
 
 ### Where do I see what I have sold, and mark something shipped?
 
-1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again to open the menu.
+1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
 2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when.
 3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. A sale that has been refunded says "Refunded".
 
@@ -1103,7 +1109,7 @@ nobody owns and nothing uses is removed completely.
 
 ### How do I rename my shop, or start my seller profile over?
 
-1. Switch to Sell, open the menu, and tap "Storefront".
+1. Switch to Sell, tap the logo and then the "Sell" petal to open Sell's menu, and tap "Storefront".
 2. The leaf shows the shop name. "Rename" changes it. "Reset Profile" starts the seller profile over after a confirmation, and says what it will do first.
 
 **You will see:** the new name in the leaf straight away.

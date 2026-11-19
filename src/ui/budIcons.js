@@ -38,6 +38,8 @@ const PATHS = {
   orders: 'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6',
   coins: 'M3 7h18v10H3z M12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z M6.5 10v.01 M17.5 14v.01',
   tagPlus: 'M3 3h8l10 10-8 8L3 11z M7 4.8v4.4 M4.8 7h4.4',
+  // The general menu's petal in the ring: three lines, the one mark everyone reads as "menu"
+  menu: 'M4 7h16 M4 12h16 M4 17h16',
   // Fallback: a leaf, so an unknown one still looks like part of the plant
   leaf: 'M5 19C5 10 10 5 20 4c0 10-5 15-14 15z M5 19 14 10',
 };
@@ -63,10 +65,9 @@ const BY_ID = {
   'bud-petal-sell-orders': 'orders',
   'bud-petal-sell-payouts': 'coins',
   'bud-petal-sell-storefront': 'storefront',
-  'bud-petal-shop-help': 'help',
+  'bud-petal-general-help': 'help',
+  'bud-menu-general': 'menu',
   'bud-petal-shop-chat': 'chat',
-  'bud-petal-build-help': 'help',
-  'bud-petal-sell-help': 'help',
 };
 const BY_MODE = { shop: 'shop', build: 'build', sell: 'sell' };
 

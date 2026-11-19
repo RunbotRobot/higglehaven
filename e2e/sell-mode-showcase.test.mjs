@@ -75,6 +75,9 @@ const rectsOverlap = pagerBox.x < budBox.x + budBox.width &&
 console.log('pager and the bud overlap on screen (should be false):', rectsOverlap);
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded');
+// #3760: My products is in Sell's own menu: one tap on the Sell petal opens it.
+await page.click('#bud-modes .mode-nav-btn[data-mode="sell"]');
+await page.waitForSelector('#bud-petal-sell-my-products', { state: 'visible', timeout: 5000 });
 const myProductsPetalVisible = await page.locator('#bud-petal-sell-my-products').isVisible();
 console.log('"My products" petal visible in the bud (should be true):', myProductsPetalVisible);
 await page.click('#account-menu-toggle');
