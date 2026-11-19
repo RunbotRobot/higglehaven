@@ -26,6 +26,11 @@ const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
 const chatPanelEl = document.getElementById('shop-nearby-chat-panel');
 const chatLogEl = document.getElementById('shop-nearby-chat-log');
+const chatEmptyEl = document.getElementById('shop-nearby-chat-empty');
+// #3875: with nobody having spoken, the panel says what it is for instead of showing an empty box.
+function syncChatEmpty() {
+  if (chatEmptyEl) chatEmptyEl.hidden = chatLogEl.querySelector('.shop-nearby-chat-message') !== null;
+}
 const chatStatusEl = document.getElementById('shop-nearby-chat-status');
 const chatFormEl = document.getElementById('shop-nearby-chat-form');
 const chatInputEl = document.getElementById('shop-nearby-chat-input');
@@ -109,6 +114,7 @@ function appendMessage(message) {
   }
   chatLogEl.appendChild(line);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  syncChatEmpty();
 }
 
 // #3551: one line shows its actions at a time. Tapping the line again, or
@@ -137,6 +143,7 @@ function toggleLineActions(line) {
 function removeMessagesFromBuilder(builderId) {
   chatLogEl.querySelectorAll(`.shop-nearby-chat-message[data-builder-id="${builderId}"]`)
     .forEach((el) => el.remove());
+  syncChatEmpty();
 }
 
 // Same report flow voiceChat.js's reportVoicePeer uses for this action.
@@ -193,6 +200,7 @@ function resetChatLog() {
   chatCursor = null;
   seenMessageIds.clear();
   chatLogEl.replaceChildren();
+  syncChatEmpty();
 }
 
 if (mutedToggleEl) {
@@ -359,6 +367,7 @@ export function pollNearbyChatIfNeeded(now) {
       chatCursor = null;
       seenMessageIds.clear();
       chatLogEl.replaceChildren();
+      syncChatEmpty();
     }
     if (result.nextCursor) chatCursor = result.nextCursor;
     result.messages.forEach(appendMessage);
