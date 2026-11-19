@@ -1501,6 +1501,31 @@ yourself via `update_trigger` the next time you're running under it; you
 can self-edit your own trigger's prompt even though editing another
 session's is blocked.
 
+**"Nothing new" is not "nothing to do" (2026-11-19; from the owner's
+usage note of 2026-11-18: "We've utilized 25% of our weekly usage through
+34 hours (and we're hoping to land at 100% after 3.5 days)").** Twice in
+one day sessions stood down with "no new feedback or issue cards since
+the last hour" while a dozen leaves sat open. A check-in that filters by
+`since` sees only what changed, and an old free leaf never changes. So
+before a check-in ends with nothing claimed, run two more queries, in
+this order:
+
+1. Your own cards: `SELECT task_id, note FROM control_room_tasks WHERE
+   session='<your name>' AND status='in_progress'`. If a note says work
+   is left, do the next slice. If you are not going to, release the card
+   (status `queued`, session empty, one line saying what is left) so it
+   stops looking held. If its issue is closed, mark it `done`.
+2. Free cards: `SELECT number, title, note FROM control_room_tasks WHERE
+   kind='issue' AND status='queued' AND coalesce(session,'')='' AND
+   coalesce(waiting_on,'claude') IN ('claude','') AND
+   replace(updated_at,' ','T') > '<two weeks ago>'`. Take the first one
+   that is still open on GitHub, through the usual three-step gate, and
+   mark `done` any whose issue has closed.
+
+These are two cheap queries, not a re-read of the backlog, so they do not
+conflict with "Claude usage is the binding constraint". Stand down only
+when both come back empty.
+
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
 (`mcp__Claude_Code_Remote__create_trigger`, self-bound — omit
