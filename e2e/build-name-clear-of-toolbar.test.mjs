@@ -32,11 +32,12 @@ await page.waitForTimeout(800);
 // E2E_SHOT_DIR=<dir> saves a still of the card (for a PR description).
 if (process.env.E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SHOT_DIR}/item-card-tools.png` });
 const b = await boxes();
-check(b.name.shown && b.toolbar.shown, `the item card and the toolbar row are both showing (${JSON.stringify(b)})`);
+check(b.name.shown, `the item card is showing (${JSON.stringify(b)})`);
+// #3689: with Move and Rotate gone the tool row holds only Trim, so a Tree (not trimmable) has no row at all.
+check(!b.toolbar.shown, `the tool row is left out when it would be empty (${JSON.stringify(b.toolbar)})`);
 check(!b.pill.shown, `the name is not also drawn in the top pill (${JSON.stringify(b.pill)})`);
 check(b.name.left >= 0 && b.name.right <= 390 && b.name.top >= 0 && b.name.bottom <= 844, `the item card is wholly on screen (${JSON.stringify(b.name)})`);
 check(await page.evaluate(() => document.getElementById('item-card-name').textContent.includes('Tree')), 'the card is titled with the item name');
-check(b.toolbar.top >= b.name.top && b.toolbar.bottom <= b.name.bottom && b.toolbar.left >= b.name.left - 1 && b.toolbar.right <= b.name.right + 1, `the tool row is a row of the item card, not standing on the world (#3575) (${JSON.stringify({ name: b.name, toolbar: b.toolbar })})`);
 check(!b.compass.shown, `the compass is not standing on the world, so the name cannot run under it (#3772)`);
 check(b.name.top >= b.undo.bottom || b.name.right <= b.undo.left, `the name does not run under the Undo/Redo pair (${JSON.stringify({ name: b.name, undo: b.undo })})`);
 

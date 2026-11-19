@@ -31,7 +31,7 @@ await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 await page.click('#group-item');
 await page.waitForTimeout(700);
-await page.click('#mode-move');
+await page.click('#toggle-multiselect'); // leaves multi-select, keeps the bundle selected
 await page.waitForTimeout(300);
 
 // Drag far past the top of the only (ground) level.
