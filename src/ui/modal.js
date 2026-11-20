@@ -33,9 +33,14 @@ export function closeModalA11y(modalEl) {
   activeModalCloseFn = null;
   const returnTo = modalReturnFocusEl;
   modalReturnFocusEl = null;
+  let restored = false;
   if (returnTo && document.body.contains(returnTo) && returnTo.offsetParent !== null) {
     returnTo.focus({ preventScroll: true });
-  } else if (document.getElementById('account-menu-toggle')?.offsetParent !== null) {
+    // #4012: the menu panel is still drawn, but inert, while it folds, and an inert element cannot take
+    // focus: when the focus did not land, the fallback below is the landing spot.
+    restored = document.activeElement === returnTo;
+  }
+  if (!restored && document.getElementById('account-menu-toggle')?.offsetParent !== null) {
     // The settings/notifications/friends/my-lands triggers all live inside
     // the collapsible account-menu panel (see openAccountMenu's own
     // comment in e2e/helpers.mjs), which auto-collapses — hiding the very

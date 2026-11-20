@@ -37,7 +37,10 @@ async function inspect(label) {
     const stem = getComputedStyle(panel, '::before');
     const overlaps = [];
     for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) if (overlap(rows[i].box, rows[j].box)) overlaps.push([rows[i].id, rows[j].id]);
-    return { rows, overlaps, stemWidth: stem.width, stemContent: stem.content, vw: innerWidth, vh: innerHeight };
+    // #4016: the stem's top edge is the panel's top less --stem-rise; it must reach the head (its middle, behind the petals).
+    const head = document.getElementById('account-menu-toggle').getBoundingClientRect();
+    const stemTop = panel.getBoundingClientRect().top - parseFloat(stem.top ? getComputedStyle(panel).getPropertyValue('--stem-rise') || '0' : '0');
+    return { rows, overlaps, stemWidth: stem.width, stemContent: stem.content, vw: innerWidth, vh: innerHeight, stemTop, headMiddle: head.top + head.height / 2 };
   });
   console.log(`${label}:`, JSON.stringify(report.rows.map((r) => `${r.side}:${r.id}`)));
   check(report.rows.length >= 3, `${label}: the menu has leaves (${report.rows.length})`);
@@ -51,6 +54,7 @@ async function inspect(label) {
     check(row.tap.every(([w, h]) => w >= 44 && h >= 44), `${label}: ${row.id} tap size ${JSON.stringify(row.tap)}`);
     check(row.box.left >= 0 && row.box.right <= report.vw && row.box.bottom <= report.vh, `${label}: ${row.id} is on the screen`);
   });
+  check(Math.abs(report.stemTop - report.headMiddle) <= 2, `${label}: the stem grows from the head (top ${report.stemTop}, head middle ${report.headMiddle})`);
   check(report.overlaps.length === 0, `${label}: no two leaves overlap (${JSON.stringify(report.overlaps)})`);
   if (process.env.STILLS_DIR) await page.screenshot({ path: `${process.env.STILLS_DIR}/stem-${label}.png` });
   // Fold it again so the next mode starts from rest.
