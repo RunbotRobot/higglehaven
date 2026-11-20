@@ -507,6 +507,19 @@ boolean (`400` otherwise); `true` hides the tips. Returns `{ "user": { ... } }`;
 `GET /api/auth/me` or logs in, so the opening screen (which draws before
 anything is signed in) honours it on the next open.
 
+### `PUT /api/auth/first-hints`
+
+```json
+{ "done": true }
+```
+
+Session-gated (`401` without one), rate-limited per account. Saves that the
+account has been through the first-visit hints (walk, look, fly; #3657) so
+another device does not replay them: `done` must be `true` (`400` otherwise) and
+it is never cleared. Returns `{ "user": { ... } }`; `user.firstHintsDone` is
+`false` until then, then `true`. The browser copies a `true` onto its own
+storage when it reads `GET /api/auth/me` or logs in.
+
 Every builder-owned or seller-owned mutation (claiming a landlet, placing
 an instance, creating a product, etc. — see "Builders"/"Sellers" sections
 below) requires the session's account to have both `ageAttestedAt` set and

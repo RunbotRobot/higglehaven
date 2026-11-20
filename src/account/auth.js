@@ -29,6 +29,7 @@ import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
 import { resetIdentityFlowPromises } from './identity.js';
 import { describeCardRefusal, VERIFY_INTRO, VERIFY_INTRO_PROOF_ONLY, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
 import { adoptAccountLoadingTips } from '../ui/loadingTipPrefs.js';
+import { adoptAccountFirstHints } from '../ui/firstVisitHints.js';
 
 export async function requireLogin(view = 'signup', hint) {
   if (currentAuthUser) return currentAuthUser;
@@ -507,6 +508,7 @@ async function refreshCurrentUser() {
   try {
     currentAuthUser = await fetchCurrentUser();
     adoptAccountLoadingTips(currentAuthUser);
+    adoptAccountFirstHints(currentAuthUser);
   } catch (err) {
     console.warn('Could not refresh current user:', err);
   }
@@ -597,6 +599,7 @@ authForms.login.addEventListener('submit', async (event) => {
   try {
     currentAuthUser = await logIn({ email, password });
     adoptAccountLoadingTips(currentAuthUser);
+    adoptAccountFirstHints(currentAuthUser);
     refreshAccountAuthUI();
     // #1730: disarm before closing -- notifyAuthResult(currentAuthUser)
     // below must be what resolves pendingAuthResolvers, not closeAuthModal's

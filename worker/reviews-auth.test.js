@@ -2922,6 +2922,32 @@ describe('Authentication', () => {
     expect(on.body.user.loadingTipsOff).toBe(false);
   });
 
+  // #3657: the account remembers that the first-visit hints are done, so another
+  // device does not replay them. Only `done: true` is accepted, and it sticks.
+  it('saves that the first-visit hints are done on the account', async () => {
+    const builder = await signupBuilder('first-hints-builder');
+    const noSession = await api('/auth/first-hints', { method: 'PUT', body: JSON.stringify({ done: true }) });
+    expect(noSession.response.status).toBe(401);
+
+    const before = await api('/auth/me', builder.session());
+    expect(before.body.user.firstHintsDone).toBe(false);
+
+    for (const bad of [{ done: false }, { done: 'yes' }, {}]) {
+      const refused = await api('/auth/first-hints', builder.session({ method: 'PUT', body: JSON.stringify(bad) }));
+      expect(refused.response.status).toBe(400);
+    }
+    const still = await api('/auth/me', builder.session());
+    expect(still.body.user.firstHintsDone).toBe(false);
+
+    const done = await api('/auth/first-hints', builder.session({ method: 'PUT', body: JSON.stringify({ done: true }) }));
+    expect(done.response.status).toBe(200);
+    expect(done.body.user.firstHintsDone).toBe(true);
+    const again = await api('/auth/first-hints', builder.session({ method: 'PUT', body: JSON.stringify({ done: true }) }));
+    expect(again.response.status).toBe(200);
+    const me = await api('/auth/me', builder.session());
+    expect(me.body.user.firstHintsDone).toBe(true);
+  });
+
   // #2240: this endpoint had no rate limit at all, unlike every structurally
   // comparable sibling (card-setup-intent, confirm-card, didit-verification-
   // session) -- an already-attested account repeatedly re-POSTing is a

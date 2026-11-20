@@ -150,7 +150,7 @@ import {
 import {
   handleSignup, handleLogin, handleLogout, handleDeleteAccount, handleChangePassword, handleMe,
   handleVerifyEmail, handleRequestPasswordReset, handleResetPassword, handleResendVerification,
-  handleChangeEmail, handleAgeAttest, handleLoadingTips,
+  handleChangeEmail, handleAgeAttest, handleLoadingTips, handleFirstHints,
 } from './lib/auth-routes.js';
 // #2537: presence/friendships/direct-messages/notifications route handlers,
 // extracted into worker/lib/social.js -- see that module's own header
@@ -2841,6 +2841,8 @@ export function userFromRow(row) {
     taxFormCompletedAt: row.tax_form_completed_at,
     // #3763: null until the person chooses; true means the opening-screen tips are off.
     loadingTipsOff: row.loading_tips_off === null || row.loading_tips_off === undefined ? null : row.loading_tips_off === 1,
+    // #3657: true once the person has been through the first-visit hints (walk, look, fly).
+    firstHintsDone: row.first_hints_done === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3201,6 +3203,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'PUT' && route.length === 2 && route[1] === 'loading-tips') {
     return handleLoadingTips(request, db);
+  }
+  if (request.method === 'PUT' && route.length === 2 && route[1] === 'first-hints') {
+    return handleFirstHints(request, db);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-verification-session') {
     return handleDiditVerificationSession(request, env, db);
