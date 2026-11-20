@@ -75,7 +75,7 @@ import {
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
-import { planSelectionBoxes } from './selectionBoxes.js';
+import { planSelectionBoxes, writeBoxEdges, BOX_EDGE_VERTICES, BOX_EDGE_FLOATS, batchCapacity } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
@@ -3404,6 +3404,73 @@ export function removeSelectionOutline(mesh) {
   selectionOutlines.delete(mesh);
 }
 
+// #3996: the loose items' boxes, drawn as one line mesh (every box's twelve edges) and one
+// instanced mesh (every box's translucent fill). Built on first use, grown by doubling.
+let looseSelectionBatch = null;
+const looseFillMatrix = new THREE.Matrix4();
+
+function buildLooseSelectionBatch(capacity) {
+  const positions = new THREE.BufferAttribute(new Float32Array(capacity * BOX_EDGE_FLOATS), 3);
+  positions.setUsage(THREE.DynamicDrawUsage);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', positions);
+  const outline = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: SELECTION_OUTLINE_COLOR, toneMapped: false }));
+  outline.frustumCulled = false;
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: SELECTION_OUTLINE_COLOR, transparent: true, opacity: SELECTION_FILL_OPACITY, depthWrite: false,
+  });
+  const fill = new THREE.InstancedMesh(selectionFillGeometry, fillMaterial, capacity);
+  fill.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  fill.frustumCulled = false;
+  fill.count = 0;
+  scene.add(outline);
+  scene.add(fill);
+  return { capacity, outline, fill };
+}
+
+function disposeLooseSelectionBatch(batch) {
+  scene.remove(batch.outline);
+  scene.remove(batch.fill);
+  batch.outline.geometry.dispose();
+  batch.outline.material.dispose();
+  batch.fill.material.dispose();
+  batch.fill.dispose();
+}
+
+function syncLooseSelectionBatch(boxes) {
+  const count = boxes.length;
+  if (count === 0) {
+    if (looseSelectionBatch) {
+      looseSelectionBatch.outline.visible = false;
+      looseSelectionBatch.fill.visible = false;
+    }
+    return;
+  }
+  const capacity = batchCapacity(count, looseSelectionBatch?.capacity ?? 0);
+  if (!looseSelectionBatch || capacity !== looseSelectionBatch.capacity) {
+    if (looseSelectionBatch) disposeLooseSelectionBatch(looseSelectionBatch);
+    looseSelectionBatch = buildLooseSelectionBatch(capacity);
+  }
+  const { outline, fill } = looseSelectionBatch;
+  const positions = outline.geometry.getAttribute('position');
+  const array = positions.array;
+  for (let i = 0; i < count; i += 1) {
+    const { min, max } = boxes[i];
+    writeBoxEdges(array, i * BOX_EDGE_FLOATS, min.x, min.y, min.z, max.x, max.y, max.z);
+    const sx = (max.x - min.x) * SELECTION_FILL_PADDING;
+    const sy = (max.y - min.y) * SELECTION_FILL_PADDING;
+    const sz = (max.z - min.z) * SELECTION_FILL_PADDING;
+    looseFillMatrix.set(sx, 0, 0, (min.x + max.x) / 2, 0, sy, 0, (min.y + max.y) / 2, 0, 0, sz, (min.z + max.z) / 2, 0, 0, 0, 1);
+    fill.setMatrixAt(i, looseFillMatrix);
+  }
+  positions.needsUpdate = true;
+  outline.geometry.setDrawRange(0, count * BOX_EDGE_VERTICES);
+  fill.count = count;
+  fill.instanceMatrix.needsUpdate = true;
+  outline.visible = true;
+  fill.visible = true;
+}
+
 function createSelectionBox() {
   // Box3Helper reads its own mutable `box`, so one helper follows a whole
   // bundle's union bounds with no per-member geometry (BoxHelper, one per
@@ -3420,7 +3487,7 @@ function createSelectionBox() {
   const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
   fill.frustumCulled = false;
   scene.add(fill);
-  return { helper, fill };
+  return { helper, fill, box: helper.box };
 }
 
 function disposeSelectionBox(entry) {
@@ -3445,31 +3512,40 @@ function updateSelectionBoxes() {
   }
   const plan = planSelectionBoxes(visibleMeshes);
   const live = new Set();
+  const looseBoxes = [];
   for (const { key, members } of plan) {
     live.add(key);
+    // #3996: a bundle keeps its own drawn box; every loose item's box goes into the two shared
+    // batches below, so a big selection costs two draws, not two per item.
+    const isBundle = typeof key === 'string';
     let entry = selectionBoxes.get(key);
     if (!entry) {
-      entry = createSelectionBox();
+      entry = isBundle ? createSelectionBox() : { box: new THREE.Box3() };
       selectionBoxes.set(key, entry);
     }
-    const unionBox = entry.helper.box;
+    const unionBox = entry.box;
     unionBox.makeEmpty();
     for (const member of members) {
       scratchBox.setFromObject(member);
       unionBox.union(scratchBox);
     }
-    unionBox.getSize(scratchBoxSize);
-    unionBox.getCenter(scratchBoxCenter);
-    entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
-    entry.fill.position.copy(scratchBoxCenter);
+    if (isBundle) {
+      unionBox.getSize(scratchBoxSize);
+      unionBox.getCenter(scratchBoxCenter);
+      entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+      entry.fill.position.copy(scratchBoxCenter);
+    } else {
+      looseBoxes.push(unionBox);
+    }
   }
+  syncLooseSelectionBatch(looseBoxes);
   for (const [key, entry] of selectionBoxes) {
     if (live.has(key)) continue;
-    disposeSelectionBox(entry);
+    if (entry.helper) disposeSelectionBox(entry);
     selectionBoxes.delete(key);
   }
   selectionBounds.makeEmpty();
-  for (const { helper } of selectionBoxes.values()) selectionBounds.union(helper.box);
+  for (const { box } of selectionBoxes.values()) selectionBounds.union(box);
 }
 
 // #3324: test-only hook (the window.__test* convention used throughout this
@@ -3478,10 +3554,19 @@ function updateSelectionBoxes() {
 // members are selected.
 window.__testSelectionBoxes = () => {
   updateSelectionBoxes();
-  return [...selectionBoxes.values()].map(({ helper }) => ({
-    min: [helper.box.min.x, helper.box.min.y, helper.box.min.z],
-    max: [helper.box.max.x, helper.box.max.y, helper.box.max.z],
+  return [...selectionBoxes.values()].map(({ box }) => ({
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
   }));
+};
+// #3996: how many objects the selection puts in the scene (each is a draw call), so an e2e can
+// assert that a big selection of loose items costs two, not two per item.
+window.__testSelectionDrawObjects = () => {
+  updateSelectionBoxes();
+  let objects = 0;
+  for (const entry of selectionBoxes.values()) if (entry.helper) objects += 2;
+  if (looseSelectionBatch?.outline.visible) objects += 2;
+  return objects;
 };
 
 // #1950 (sub-issue of #1947): a second, independent highlight for placed
