@@ -271,7 +271,7 @@ everything else.
 **You will see:** a petal for another place turns green at once and the petals stay out while that
 place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
 opens that place's own menu instead (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
-products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Chat"), and only one menu is open at a time. The bud always
+products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Chat" and "Nearby"), and only one menu is open at a time. The bud always
 opens on the general menu, and that menu is the same in all three places.
 
 **If something goes wrong:**
@@ -374,6 +374,9 @@ ground.
 5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
    of the nearest product, and N again for the next nearest; Shift and N go back. The
    product's name is read out, and Tab reaches the card's buttons. Escape closes it.
+6. Without a keyboard (a screen reader on a phone): tap the round logo at the top left,
+   tap the "Shop" petal, then tap "Nearby". The box lists the products within reach, the
+   nearest first, each with how far away it is; tap one to open its card.
 
 **You will see:** a small card next to the product, with the world still moving
 behind it.
@@ -392,6 +395,7 @@ behind it.
 #product-card-review-btn | Rate this product
 #product-card-buy-btn | Buy
 #product-card-return-policy-btn | Return policy
+#bud-petal-shop-nearby | Nearby
 ```
 
 ### How do I buy something?

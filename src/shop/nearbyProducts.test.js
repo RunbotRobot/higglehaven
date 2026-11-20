@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nearestProducts, stepNearby, nearbyAnnouncement, NEARBY_LIMIT } from './nearbyProducts.js';
+import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, NEARBY_LIMIT } from './nearbyProducts.js';
 
 const items = [{ id: 'far', d: 30 }, { id: 'near', d: 2 }, { id: 'mid', d: 9 }, { id: 'tie', d: 9 }, { id: 'gone', d: NaN }];
 const dist = (i) => i.d;
@@ -40,5 +40,14 @@ describe('nearbyAnnouncement', () => {
     expect(nearbyAnnouncement('Mossy chair', 2, 5)).toBe('Mossy chair, 2 of 5 nearby');
     expect(nearbyAnnouncement('Mossy chair', 1, 1)).toBe('Mossy chair');
     expect(nearbyAnnouncement('', 1, 1)).toBe('Product');
+  });
+});
+
+describe('distanceWords', () => {
+  it('says whole metres, and Here under one', () => {
+    expect(distanceWords(0.4)).toBe('Here');
+    expect(distanceWords(2.6)).toBe('3 m');
+    expect(distanceWords(40)).toBe('40 m');
+    expect(distanceWords(NaN)).toBe('');
   });
 });

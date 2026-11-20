@@ -27,7 +27,7 @@ import { meshDimensions } from '../world/models.js';
 import { createWorldCard } from '../ui/worldCard.js';
 import { productInfoParts, setShopTappedProduct, shopReviews } from './worldSprites.js';
 import { camera } from '../world/scene.js';
-import { nearestProducts, stepNearby, nearbyAnnouncement, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
+import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -201,18 +201,36 @@ export function closeProductCard() {
 // Returns false when no product is near.
 const nearbyStatusEl = document.getElementById('shop-nearby-status');
 const scratchNearby = new THREE.Vector3();
+const nearbyList = () => nearestProducts(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position));
+
+// Opens one product's card the way a tap does, with the same focus and announcement as N.
+function showNearbyProduct(review, position, total) {
+  setShopTappedProduct(review);
+  openProductCard(review);
+  if (nearbyStatusEl) nearbyStatusEl.textContent = nearbyAnnouncement(nameEl.textContent, position, total);
+  cardEl.focus({ preventScroll: true });
+}
+
 export function stepToNearbyProduct(direction = 1) {
-  const list = nearestProducts(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position));
+  const list = nearbyList();
   const step = stepNearby(list, openReview, direction);
   if (!step) {
     if (nearbyStatusEl) nearbyStatusEl.textContent = NO_NEARBY_PRODUCTS;
     return false;
   }
-  setShopTappedProduct(step.item);
-  openProductCard(step.item);
-  if (nearbyStatusEl) nearbyStatusEl.textContent = nearbyAnnouncement(nameEl.textContent, step.position, step.total);
-  cardEl.focus({ preventScroll: true });
+  showNearbyProduct(step.item, step.position, step.total);
   return true;
+}
+
+// The Nearby leaf (src/shop/nearbyLeaf.js): the same nearest-first products N steps through, as rows
+// a screen reader can reach by name. `choose()` opens that product's card.
+export function nearbyProductChoices() {
+  const list = nearbyList();
+  return list.map((review, at) => ({
+    name: productInfoParts(review.mesh.userData.template).name,
+    distance: distanceWords(review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position)),
+    choose: () => showNearbyProduct(review, at + 1, list.length),
+  }));
 }
 
 // A shopper folding the card away themselves (the close button, Escape): the
