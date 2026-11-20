@@ -35,16 +35,21 @@
     path.setAttribute('d', 'M44 66 C 44 104, 112 84, 112 126 L 112 ' + (126 + n * PITCH));
   });
 
-  function showStem(name, on) {
+  // #4012: folding runs in the reverse order of unfolding, and a stem that swaps for another waits for the
+  // first to fold (about .5 s), so no leaf is ever drawn without the stem it grows from.
+  var FOLD_MS = 520;
+  function showStem(name, on, after) {
     var el = stems[name];
     if (!el) return;
     window.clearTimeout(hideTimers[name]);
     if (on) {
       el.hidden = false;
-      window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { el.classList.add('on'); }); });
+      hideTimers[name] = window.setTimeout(function () {
+        window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { el.classList.add('on'); }); });
+      }, after ? FOLD_MS : 0);
     } else {
       el.classList.remove('on');
-      hideTimers[name] = window.setTimeout(function () { el.hidden = true; }, 520);
+      hideTimers[name] = window.setTimeout(function () { el.hidden = true; }, FOLD_MS);
     }
   }
 
@@ -57,9 +62,16 @@
     petals.forEach(function (p) {
       p.classList.toggle('here', p.dataset.petal === state.mode);
       p.classList.toggle('lit', p.dataset.petal === state.lit);
+      // #4012: the petal whose stem is open stays marked (the menu petal for the menu's stem, a mode's own for its stem).
+      var openPetal = state.open === 'menu' || state.open === 'help' ? 'menu' : state.open === 'mode' ? state.mode : null;
+      p.classList.toggle('open', p.dataset.petal === openPetal);
     });
     var shown = state.open === 'menu' || state.open === 'help' ? 'menu' : state.open === 'mode' ? state.mode : null;
-    Object.keys(stems).forEach(function (name) { showStem(name, name === shown); });
+    var wasShown = Object.keys(stems).filter(function (name) { return stems[name].classList.contains('on'); });
+    var swapping = shown !== null && wasShown.length > 0 && wasShown.indexOf(shown) === -1;
+    // A stem was open and the flower is closing: the petals wait for it to fold (data-fold, flower.css).
+    stage.dataset.fold = shown === null && wasShown.length > 0 ? 'staged' : 'plain';
+    Object.keys(stems).forEach(function (name) { showStem(name, name === shown, swapping); });
     helpEl.hidden = state.open !== 'help';
     Array.prototype.forEach.call(document.querySelectorAll('#modes .pick'), function (b) { b.setAttribute('aria-pressed', b.dataset.mode === state.mode ? 'true' : 'false'); });
     showCover();

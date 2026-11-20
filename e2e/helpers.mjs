@@ -744,8 +744,9 @@ async function clickModeButton(page, mode) {
   if (await page.evaluate(() => document.body.dataset.mode) === mode) return false;
   const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
   // #3752: the petals are still drawn for the short fold after the bud closes (Escape, a leaf opening);
-  // judging them visible then and clicking would land as they vanish. Let the fold finish first.
-  await page.waitForFunction(() => document.body.dataset.budRing !== 'folding', null, { timeout: 5000 }).catch(() => {});
+  // judging them visible then and clicking would land as they vanish. Let the fold finish first. #4012:
+  // the fold has stages now (leaves, then the stem, with the petals held out: "staged", then "folding").
+  await page.waitForFunction(() => !['folding', 'staged'].includes(document.body.dataset.budRing), null, { timeout: 5000 }).catch(() => {});
   if (!(await nav.isVisible())) await openAccountMenu(page);
   await nav.click();
   return true;

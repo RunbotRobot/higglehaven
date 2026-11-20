@@ -122,13 +122,57 @@ function foldRing() {
   }, FOLD_MS);
 }
 
+// #4012: the flower folds in the reverse order it unfolds, so nothing is ever drawn without what it grows
+// from: the leaves fold into the stem, then the stem draws up into the head, then the petals close. The
+// panel keeps drawing (class bud-folding, not tappable) for the first two steps while the petals stay
+// out and still (data-bud-ring="staged"); then the ring folds as it always has. Each step is
+// --motion-fold (0.2 s, src/tokens.css), and the stem's animation ending ends them. Reduced motion skips the stages.
+const STAGE_MS = 200;
+const STAGED_FALLBACK_MS = 1500; // if the stem's animation never ends (the panel was not drawn)
+let stagedTimer = null;
+let stagedListener = null;
+const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function endStagedFold() {
+  clearTimeout(stagedTimer);
+  const host = panel();
+  if (stagedListener) host?.removeEventListener('animationend', stagedListener);
+  stagedListener = null;
+  host?.classList.remove('bud-folding');
+  host?.removeAttribute('inert');
+}
+
+// Whatever closes the menu (its own toggle, Escape, a leaf opening) only removes `expanded`; the fold
+// starts from that change (the observer in wire(), below), so every way of closing folds the same way.
 function foldBud() {
-  const wasOpen = panel()?.classList.contains('expanded');
   panel()?.classList.remove('expanded');
   toggle()?.classList.remove('active');
   toggle()?.setAttribute('aria-expanded', 'false');
+}
+
+function startFold() {
+  const host = panel();
+  const ring = document.body.getAttribute('data-bud-ring');
   // The petals fold in instead of vanishing, unless a mode is still loading (they stay out then).
-  if (wasOpen && document.body.getAttribute('data-bud-ring') !== 'held') foldRing();
+  if (ring === 'held' || ring === 'staged') return;
+  if (host && document.body.dataset.bud === 'on' && !reducedMotion()) {
+    clearTimeout(swapTimer);
+    host.classList.remove('bud-leaves-folding');
+    endStagedFold();
+    host.classList.add('bud-folding');
+    host.setAttribute('inert', '');
+    setRing('staged');
+    const finish = () => {
+      endStagedFold();
+      if (document.body.getAttribute('data-bud-ring') === 'staged') foldRing(); // not if a mode began loading meanwhile
+    };
+    // The stem is the last thing to draw up, so its animation ending is the end of the two stages.
+    stagedListener = (event) => { if (event.target === host && event.animationName === 'bud-stem-draw') finish(); };
+    host.addEventListener('animationend', stagedListener);
+    stagedTimer = setTimeout(finish, STAGED_FALLBACK_MS);
+    return;
+  }
+  foldRing();
 }
 
 // Marks one mode's petal as the current one; the others are not.
@@ -280,6 +324,7 @@ function decorateLeaf(el) {
 function layoutStem() {
   const host = panel();
   if (!host) return;
+  if (host.classList.contains('bud-folding')) return; // #4012: the leaves are folding, so their boxes are not the stem's length
   let index = 0;
   let last = null;
   for (const el of host.children) {
@@ -366,16 +411,42 @@ export function currentBudMenu() {
   return openMenu;
 }
 
-// Open one menu's stem and close the other. `menu` is one of BUD_MENUS.
-export function showMenu(menu) {
-  if (!BUD_MENUS.includes(menu) || !menuHasLeaves(menu)) return;
-  openMenu = menu;
-  document.body.dataset.budMenu = menu;
-  syncBud();
+function markOpenPetal(menu) {
   for (const btn of document.querySelectorAll('#bud-modes button')) {
     const own = btn.dataset.mode ?? btn.dataset.menu;
     btn.setAttribute('aria-expanded', String(own === menu));
   }
+}
+
+// Open one menu's stem and close the other. `menu` is one of BUD_MENUS. #4012: when another stem is
+// already open its leaves fold into the stem first (the petal answers at once), and then the new
+// stem's leaves unfold, so a leaf never hangs in the air between the two.
+let swapTimer = null;
+export function showMenu(menu, { immediate = false } = {}) {
+  if (!BUD_MENUS.includes(menu) || !menuHasLeaves(menu)) return;
+  const host = panel();
+  clearTimeout(swapTimer);
+  host?.classList.remove('bud-leaves-folding');
+  if (!immediate && host?.classList.contains('expanded') && menu !== openMenu && document.body.dataset.bud === 'on' && !reducedMotion()) {
+    markOpenPetal(menu);
+    host.classList.add('bud-leaves-folding');
+    swapTimer = setTimeout(() => {
+      host.classList.remove('bud-leaves-folding');
+      applyMenu(menu);
+      // The stem grows to the new menu's length instead of jumping (--stem-h is a registered length, src/app.css).
+      host.classList.add('bud-swapped');
+      setTimeout(() => host.classList.remove('bud-swapped'), 400);
+    }, STAGE_MS);
+    return;
+  }
+  applyMenu(menu);
+}
+
+function applyMenu(menu) {
+  openMenu = menu;
+  document.body.dataset.budMenu = menu;
+  syncBud();
+  markOpenPetal(menu);
 }
 
 // #3876: a leaf folds back into the flower instead of vanishing. What folds is a picture of the leaf
@@ -574,10 +645,13 @@ if (typeof document !== 'undefined') {
   document.addEventListener('higglehaven:mode-failed', () => {
     if (switching) litPetal(switching.from);
   });
-  // Opening the bud again while the petals are still folding cancels the fold.
+  // Opening the bud again while it is still folding (the stages or the petals) cancels the fold.
   if (panel()) {
     new MutationObserver(() => {
-      if (panel().classList.contains('expanded') && document.body.getAttribute('data-bud-ring') === 'folding') {
+      if (!panel().classList.contains('expanded')) return;
+      const ring = document.body.getAttribute('data-bud-ring');
+      if (ring === 'staged') endStagedFold();
+      if (ring === 'folding' || ring === 'staged') {
         clearTimeout(foldTimer);
         setRing(null);
       }
@@ -589,7 +663,8 @@ if (typeof document !== 'undefined') {
     let wasOpen = host.classList.contains('expanded');
     new MutationObserver(() => {
       const open = host.classList.contains('expanded');
-      if (open && !wasOpen) showMenu('general');
+      if (open && !wasOpen) showMenu('general', { immediate: true });
+      if (!open && wasOpen) startFold();
       wasOpen = open;
     }).observe(host, { attributes: true, attributeFilter: ['class'] });
   }
