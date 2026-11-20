@@ -174,6 +174,7 @@ if (mode === 'shop') {
     await page.evaluate(() => document.getElementById('undo-btn')?.click());
     await page.waitForTimeout(3000);
   });
+  console.log(`  after the undo: items by version ${JSON.stringify(await answer(page.evaluate(() => window.__testBuildLodCounts?.() ?? null)))}, batches ${JSON.stringify(await answer(page.evaluate(() => window.__testBuildBatchCounts?.() ?? null)))}, meshes ${await answer(page.evaluate(() => window.__testProductPositions?.().length ?? null))}`);
 }
   await phase(mode === 'build' ? 'orbiting, everything selected' : 'orbiting (a drag across the view)', async () => {
     await page.mouse.move(195, 300);
