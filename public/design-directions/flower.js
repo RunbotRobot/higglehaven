@@ -1,4 +1,4 @@
-// The flower (#3764, with the head options of #3754): a mock-up page, not the app. A phone screen drawn at
+// The flower (#3764, head chosen in #3754): a mock-up page, not the app. A phone screen drawn at
 // its real size; tap the head for four petals, the menu petal for its stem, your own mode's petal for that
 // mode's stem, another mode's petal to watch it light while the place "loads" and the flower fold. Nothing
 // here talks to the server. Classic script (the site's CSP allows scripts from this origin only).
@@ -143,14 +143,6 @@
   Array.prototype.forEach.call(document.querySelectorAll('#modes .pick'), function (b) {
     b.addEventListener('click', function () { if (state.loading) return; state.mode = b.dataset.mode; if (state.open === 'mode' || state.open === 'help') state.open = state.open === 'help' ? 'help' : 'mode'; render(); });
   });
-  Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (b) {
-    b.addEventListener('click', function () {
-      Array.prototype.forEach.call(document.querySelectorAll('.head-art'), function (a) { a.toggleAttribute('hidden', a.dataset.head !== b.dataset.pick); }); // #3754: these are <svg>, and `hidden` is not a property of an SVGElement, so assigning it did nothing
-      Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (o) { o.setAttribute('aria-pressed', o === b ? 'true' : 'false'); });
-      showCover();
-    });
-  });
-
   window.addEventListener('resize', fitStage);
   fitStage();
   render();

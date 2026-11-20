@@ -90,7 +90,7 @@ Four things are built with:
 
 | thing | what it is for | size and shape | how it arrives and leaves | never |
 |---|---|---|---|---|
-| **the head** (the bud) | the only standing piece of interface; carries the higglehaven logo; the door to everything else | `--bud-size` (56px), round, `--shadow-bud`; upper-left corner, always; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes; wears one mark for anything unread and, when something is announced, a word that is itself a door (#3774) | carry a count, a second control, or text that stays after it has been learned |
+| **the head** (the bud) | the only standing piece of interface; carries the higglehaven logo; the door to everything else | `--bud-size` (56px), the solid green bud with the logo in cream (`public/bud-head.svg`, option C, #3754), shadow following its outline (`--filter-head`) with a thin pale edge so it holds on grass; upper-left corner, always | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes; wears one mark for anything unread and, when something is announced, a word that is itself a door (#3774) | carry a count, a second control, or text that stays after it has been learned |
 | **a petal** | where a person is: Shop, Build and Sell, in a half-ring at the head; each is a picture (shop front, hammer, price tag) with its word | at least 44px, `--radius-petal`, pale green; the current mode green with `aria-current`; shadow `--shadow-petal` | grows out of the head when it is tapped (0.24s in all, a few tens of ms apart), stays lit while another mode loads, folds back when that mode's first screen is up | be a thing you open (those are leaves), or sit apart from the head |
 | **a leaf** | a thing you open from the head's menu: You, Notices, Friends, Purchases, Settings, Help; in Build, Add item, Lándlets, Levels, Undo, Tools; in Sell, My products, Add product | an icon with its one word under it, 76px wide, `--radius-leaf`, `--shadow-leaf`; leaves alternate right and left of a stem set 88px in from the edge | the stem grows from the head and the leaves open in turn (about a third of a second in all); the same way back | open on top of another leaf, or leave a leaf without an icon in `src/ui/budIcons.js` |
 | **a card that blooms beside a thing** | a product's name, price and Buy, or the item selected in Build with its actions; where the thing is | `--radius-bloom`, a short stem down to the thing, one yellow petal (`--petal-yellow`) for Buy | scales up out of the thing over `--motion-bloom`; goes when the person walks on | hide the thing it is about |
@@ -118,8 +118,12 @@ Not built yet; do not describe these to a person as if they exist:
 - **One help door** (#3762): a "Help" leaf (a question mark) holding how to move, how higglehaven
   works, the manuals for shopping, building and selling, and the way to an
   assistant.
-- **The head's look** (#3754): five drawings are on `flower.html` for the owner to
-  choose from; until then the head is the pale circle with the logo.
+- **The head's look** (#3754): the owner chose option C on 2026-11-20, the solid
+  green bud with the logo in cream. It is the head in the app (`public/bud-head.svg`),
+  and `flower.html` keeps only that drawing; the pale circle with the square logo tile
+  is retired. Known cost: cream on `#6ca42e` is about 2.7 to 1, a little under the 3 to 1
+  that a graphic wants, and the logo is large and the word "Menu" sits beside it; the
+  unread dot sits on the bud's shoulder, ringed in white.
 - **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
   menu in lettering the builder chooses from a set.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
@@ -283,6 +287,9 @@ Soft shapes: a pill or a circle before a rectangle with corners.
 | `--shadow-petal` | 0 4px 14px, ink at 20% | a petal |
 | `--shadow-leaf` | 0 8px 26px, ink at 20% | a leaf and a card that blooms |
 | `--shadow-breath` | 0 6px 18px ink at 18%, and a 5px white ring at 35% | the bud's breath at its fullest |
+| `--filter-head` | a thin pale edge and a drop shadow 0 4px 8px, ink at 25% | the head's shadow, following the bud's outline (#3754) |
+| `--filter-head-breath` | `--filter-head` with the shadow deeper and a soft white glow | the head's breath at its fullest |
+| `--filter-head-pulse` | `--filter-head` with a spring-green glow | the head's pulse until it is first opened, and while an assistant window opens |
 | `--filter-petals` | drop shadow 0 4px 8px, ink at 20% | one shadow for the ring's three petals together (a filter, so a clip-path cannot cut it off) |
 | `--glow-teach` | 4px spring-green ring at 35% | the "?" icon while the bud teaches |
 | `--glow-pulse` | 8px spring-green ring at 35% | the bud's pulse until it is first opened |
@@ -373,7 +380,7 @@ auction), no blame ("invalid", "you must", "error").
 - **higgles** is lowercase, plural, and starts a sentence only when it has to.
 - A **product** is something for sale. An **item** is a product placed on a lándlet in Build. Do not use
   one for the other.
-- The **menu** opens from the round logo at the top left. A person never reads "bud", "flower",
+- The **menu** opens from the logo bud at the top left. A person never reads "bud", "flower",
   "petal", "leaf", "stem" or "modal": those are our words for how it is built. Name a thing by what it
   opens ("Notices", "Orders") and a window by what is in it. (Checked.)
 - A **username** is a person; a **shop name** is a shop. "Profile" only where a reset or a delete needs
