@@ -394,6 +394,7 @@ export function budMenuOf(selector) {
 }
 // Open the bud and then the stem of `menu` ('build' or 'sell'): the ring petal of the place the page is in.
 export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
+  await settleBudFold(page);
   if (!(await page.locator('#account-menu-panel.expanded').count())) {
     if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
     await click('#account-menu-toggle');
@@ -412,6 +413,11 @@ const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste
 // #3693: Community sign, Community calendar and Backup chain sit in the item card's More, so they
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
+// #4012: for a moment after the bud closes its panel is still drawn, folding (not tappable). A test that
+// judges a petal visible then would click it as it goes, so the helpers below wait for the fold to finish.
+export async function settleBudFold(page) {
+  await page.waitForFunction(() => !document.getElementById('account-menu-panel')?.classList.contains('bud-folding'), null, { timeout: 3000 }).catch(() => {});
+}
 export function budAware(page) {
   // #3702: a product's per-row settings are folded under "More settings". Whenever an action is stuck waiting
   // (a setting that is not drawn yet) and a closed More settings control is on screen, open it and let the action
@@ -433,6 +439,7 @@ export function budAware(page) {
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
     const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
+    if (BUD_PETALS.has(selector) || menuOf || TOOL_CONTROLS.has(selector)) await settleBudFold(page);
     if ((BUD_PETALS.has(selector) || menuOf) && !(await page.locator(selector).isVisible())) {
       // #3690: an open leaf (Levels) sits over the bud and swallows the tap on it; put it away first.
       await openBudMenuOf(page, menuOf, click);
@@ -823,6 +830,7 @@ export async function openAccountMenu(page) {
   // already open must not be toggled shut. So: skip if open, and re-click once if the first
   // click did not open it.
   const isOpen = () => page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded') === true);
+  await settleBudFold(page);
   if (await isOpen()) return;
   await page.click('#account-menu-toggle');
   if (!(await page.waitForSelector('#account-menu-panel.expanded', { timeout: 3000 }).then(() => true, () => false))) {
@@ -855,6 +863,7 @@ export async function openLevelMenu(page) {
 // there while the bud is open (and only drawn once there is something to undo or redo).
 // Opens the bud when it is closed, then clicks the control inside it.
 export async function budClick(page, selector) {
+  await settleBudFold(page);
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!open) await openAccountMenu(page);
   // #3760: a place's tool is in that place's own menu, so on a page the budAware wrapper was not put on
