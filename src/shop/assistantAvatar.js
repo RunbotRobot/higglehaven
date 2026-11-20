@@ -16,6 +16,9 @@ import { assistantBusyFrom, assistantNameFrom, assistantTagLines } from './assis
 const SHIRT_COLOR = 0xf4f1ea;
 const PATCH_COLOR = 0x3f8f5a;
 const TAG_HEIGHT_ABOVE_HEAD_M = 0.3;
+// #3556: the top of the default avatar's head, for anything that hangs above it (the speech cue).
+export const AVATAR_HEAD_TOP_Z_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2
+  + SHOP_AVATAR_HEAD_RADIUS_M * 2;
 const TAG_WORLD_UNITS_PER_PX = 0.006;
 
 function createAssistantShirt() {

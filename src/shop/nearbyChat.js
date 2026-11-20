@@ -18,6 +18,7 @@ import { confirmAndBlockPerson } from '../blocks.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
+import { announceNearbySpeech } from './speechCue.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { addBudPetals, openLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
 
@@ -38,6 +39,9 @@ const mutedToggleEl = document.getElementById('shop-nearby-chat-muted-toggle');
 const mutedListEl = document.getElementById('shop-nearby-chat-muted-list');
 
 let chatOpen = false;
+// #3556: false until the first batch after opening (or a change of lándlet) has been drawn, so the
+// backlog does not raise a cue over everyone who spoke before the leaf opened.
+let chatCuesArmed = false;
 let chatLastPollAt = 0;
 let chatCursor = null;
 // #2802: undefined (not null) so the very first poll's response -- whose
@@ -70,11 +74,14 @@ function hasIdVerifiedSession() {
   return currentAuthUser?.trustTier === 'id_verified';
 }
 
-function appendMessage(message) {
+function appendMessage(message, { cue = false } = {}) {
   if (seenMessageIds.has(message.messageId)) return;
   seenMessageIds.add(message.messageId);
   if (mutedBuilderIds.has(message.builderId)) return; // #2956: suppress a muted sender's messages
   const isOwn = ownMessageIds.has(message.messageId);
+  // #3556: who spoke is shown as a mark over their avatar, never a name (this chat is anonymous). Only
+  // for a line that arrives while the leaf is open, not the backlog a poll brings in on opening.
+  if (cue && !isOwn) announceNearbySpeech(message.builderId);
   const line = document.createElement('div');
   line.className = 'shop-nearby-chat-message';
   line.classList.toggle('own', isOwn);
@@ -298,6 +305,7 @@ function openChatLeaf() {
     },
     onClose: () => {
       chatOpen = false;
+      chatCuesArmed = false;
       chatPanelEl.classList.remove('open');
       for (const home of lentHomes) home.parent.insertBefore(home.el, home.next); // back where the page keeps them
     },
@@ -365,13 +373,16 @@ export function pollNearbyChatIfNeeded(now) {
     // landlet), before appending this response's own messages.
     if (result.landletId !== chatLastKnownLandletId) {
       chatLastKnownLandletId = result.landletId;
+      chatCuesArmed = false;
       chatCursor = null;
       seenMessageIds.clear();
       chatLogEl.replaceChildren();
       syncChatEmpty();
     }
     if (result.nextCursor) chatCursor = result.nextCursor;
-    result.messages.forEach(appendMessage);
+    const cue = chatCuesArmed;
+    result.messages.forEach((message) => appendMessage(message, { cue }));
+    chatCuesArmed = true;
     // #3128: the signed-in account isn't known at module load, so the persisted
     // list is (re)drawn here, once a poll proves the account is live.
     renderMutedList();

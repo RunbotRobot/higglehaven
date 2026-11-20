@@ -10392,7 +10392,10 @@ against one budget per client IP.
   `users.is_fleet` and the username, never from anything a client sends. The
   Shop draws such an avatar with a collared shirt and a tag reading the name and
   the word "assistant". Nearby chat and the voice roster stay unlabeled for
-  every sender, assistants included.
+  every sender, assistants included. (#3556: who just spoke in nearby chat is
+  shown as a nameless speech mark over that avatar for a few seconds
+  (`src/shop/speechCue.js`), only for a line that arrives while the Chat leaf is
+  open; it carries no name, alias or id, and a muted sender raises none.)
 - **Assistant shifts (#3449).** An assistant session has no browser, so it keeps
   itself on shift with `POST /api/assistant/heartbeat` (body `{ busy?: boolean }`;
   omitted keeps the last value; rate limited to 60 a minute). Only an assistant
