@@ -13,7 +13,7 @@
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
-import { showNotice } from '../ui/noticeModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { openTextNoteModal } from '../ui/textNoteModal.js';
 import {
   fetchSignPosts, deleteSignPost,
@@ -62,6 +62,7 @@ communitySignBtn.addEventListener('click', async () => {
 // itself (those are Shop-mode-only, see registerShopSign), so this modal
 // is the only place a builder ever sees what's actually been posted.
 const signPostsModalEl = document.getElementById('sign-posts-modal');
+const signPostsModalContentEl = document.getElementById('sign-posts-modal-content');
 const signPostsCloseBtn = document.getElementById('sign-posts-close-btn');
 const signPostsListEl = document.getElementById('sign-posts-list');
 const signPostsEmptyEl = document.getElementById('sign-posts-empty');
@@ -143,14 +144,10 @@ async function renderSignPosts() {
         await deleteSignPost(instanceId, post.postId, { category });
         await renderSignPosts();
       } catch (err) {
-        // #3359: an in-app notice, not alert() (a suppressed native dialog
-        // dropped it silently); focus returns to this panel when it closes.
-        showNotice({
-          title: "Couldn't delete this post",
-          message: err.message || 'Couldn\'t delete this post.',
-          restoreModalEl: signPostsModalEl,
-          restoreCloseFn: closeSignPostsModal,
-        });
+        // #3889 (shape b): said in this panel, kept and selectable (was a
+        // notice modal over it, #3359). The re-render below rebuilds only the
+        // list, so the line stays.
+        showInlineActionStatus(signPostsModalContentEl, err.message || 'Couldn\'t delete this post.');
         // #2963: re-render instead of just re-enabling the button -- a
         // concurrent delete of this same post (the author's own composer,
         // or a second open copy of this panel) is exactly the kind of
@@ -166,6 +163,7 @@ async function renderSignPosts() {
 
 function openSignPostsModal(mesh) {
   signPostsTargetMesh = mesh;
+  showInlineActionStatus(signPostsModalContentEl, '');
   signPostsModalEl.classList.add('visible');
   openModalA11y(signPostsModalEl, closeSignPostsModal);
   renderSignPosts();
@@ -209,6 +207,7 @@ communityCalendarBtn.addEventListener('click', async () => {
 // A builder's moderation view onto one calendar's events — same shell/
 // pattern as the sign posts modal just above.
 const calendarEventsModalEl = document.getElementById('calendar-events-modal');
+const calendarEventsModalContentEl = document.getElementById('calendar-events-modal-content');
 const calendarEventsCloseBtn = document.getElementById('calendar-events-close-btn');
 const calendarEventsListEl = document.getElementById('calendar-events-list');
 const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
@@ -311,12 +310,7 @@ async function renderCalendarEvents() {
                 // #2963: re-render instead of leaving the stale row behind.
                 await renderCalendarEvents();
                 if (err?.status !== 404) throw err;
-                showNotice({
-                  title: 'Event already removed',
-                  message: 'This event was already removed, so your edit was not saved.',
-                  restoreModalEl: calendarEventsModalEl,
-                  restoreCloseFn: closeCalendarEventsModal,
-                });
+                showInlineActionStatus(calendarEventsModalContentEl, 'This event was already removed, so your edit was not saved.'); // #3889 shape b
                 return;
               }
               await renderCalendarEvents();
@@ -344,12 +338,7 @@ async function renderCalendarEvents() {
         await deleteCalendarEvent(instanceId, event.eventId, { category });
         await renderCalendarEvents();
       } catch (err) {
-        showNotice({
-          title: "Couldn't delete this event",
-          message: err.message || 'Couldn\'t delete this event.',
-          restoreModalEl: calendarEventsModalEl,
-          restoreCloseFn: closeCalendarEventsModal,
-        });
+        showInlineActionStatus(calendarEventsModalContentEl, err.message || 'Couldn\'t delete this event.'); // #3889 shape b
         // #2963: re-render instead of just re-enabling the button -- see
         // the sign-posts delete handler's own comment above.
         await renderCalendarEvents();
@@ -363,6 +352,7 @@ async function renderCalendarEvents() {
 
 function openCalendarEventsModal(mesh) {
   calendarEventsTargetMesh = mesh;
+  showInlineActionStatus(calendarEventsModalContentEl, '');
   calendarEventsModalEl.classList.add('visible');
   openModalA11y(calendarEventsModalEl, closeCalendarEventsModal);
   renderCalendarEvents();
@@ -394,6 +384,7 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
 // backupChainBtn's own disabled-only (no active state) line in
 // updateSelectionUI.
 const backupChainModalEl = document.getElementById('backup-chain-modal');
+const backupChainModalContentEl = document.getElementById('backup-chain-modal-content');
 const backupChainCloseBtn = document.getElementById('backup-chain-close-btn');
 const backupChainListEl = document.getElementById('backup-chain-list');
 const backupChainEmptyEl = document.getElementById('backup-chain-empty');
@@ -570,13 +561,8 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
     await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
     await renderBackupChain();
   } catch (err) {
-    // #3359: in-app notice over the backup-chain modal it came from.
-    showNotice({
-      title: "Couldn't reorder the backups",
-      message: err.message || 'Couldn\'t reorder the backup chain.',
-      restoreModalEl: backupChainModalEl,
-      restoreCloseFn: closeBackupChainModal,
-    });
+    // #3889 (shape b): said in the backup-chain panel it came from.
+    showInlineActionStatus(backupChainModalContentEl, err.message || 'Couldn\'t reorder the backup chain.');
     // #2969: re-render instead of just re-enabling the buttons -- see
     // removeBtn's own handler above. A concurrent delete of one of these
     // backups (a second open copy of this panel) would 409 this full-
@@ -589,6 +575,7 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
 
 function openBackupChainModal(mesh) {
   backupChainTargetMesh = mesh;
+  showInlineActionStatus(backupChainModalContentEl, '');
   backupChainModalEl.classList.add('visible');
   openModalA11y(backupChainModalEl, closeBackupChainModal);
   renderBackupChain();
@@ -617,8 +604,9 @@ backupChainAddBtn.addEventListener('click', async () => {
         await addInstanceBackup(instanceId, { templateId: template.templateId });
         await renderBackupChain();
       } catch (err) {
-        // #3359: in-app notice; the catalog picker this ran from is closing.
-        showNotice({ title: "Couldn't add this backup", message: err.message || 'Couldn\'t add this backup.' });
+        // #3889 (shape b): back to the backup-chain panel, which says it.
+        openBackupChainModal(mesh);
+        showInlineActionStatus(backupChainModalContentEl, err.message || 'Couldn\'t add this backup.');
       }
     },
     () => openBackupChainModal(mesh),
