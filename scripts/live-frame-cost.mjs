@@ -9,7 +9,7 @@
 //   node scripts/live-frame-cost.mjs --url http://127.0.0.1:8787 --email <seeded account> --mode build [--batching off]
 //
 // #3929: --mode build opens Build instead of Shop and reports a table per phase (entering, standing
-// still, orbiting, selecting everything and moving it), against a lándlet seeded by
+// still, orbiting, selecting everything, moving it and undoing the move), against a lándlet seeded by
 // scripts/seed-heavy-landlet.mjs. --email signs in as that throwaway local account (password is the
 // seed script's) instead of the fleet login, and only works on localhost.
 //
@@ -87,6 +87,12 @@ await page.addInitScript(() => {
   };
   requestAnimationFrame(tick);
 });
+const summarise = (label, frames) => {
+  if (!frames.length) return `${label}: no frames`;
+  const longest = Math.max(...frames.map((f) => f.ms));
+  const worst = frames.reduce((a, f) => (f.triangles > a.triangles ? f : a), frames[0]);
+  return `${label}: ${frames.length} frames, longest ${longest} ms, most draws ${Math.max(...frames.map((f) => f.draws))}, most triangles ${worst.triangles}, biggest draw ${worst.biggestDraw}`;
+};
 const enteredAt = Date.now();
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 if (mode === 'build') {
@@ -94,6 +100,10 @@ if (mode === 'build') {
   await page.waitForFunction(() => (window.__testProductPositions?.().length ?? 0) > 100, null, { timeout: 180000 });
   await page.waitForTimeout(2000);
   console.log(`entered Build and built ${await page.evaluate(() => window.__testProductPositions().length)} meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
+  // #3929 item 4: the frames during entering (from the page opening to the last mesh built), so a
+  // long gap while the wall is built shows up as a longest frame, not only as seconds of waiting.
+  const enteringFrames = await page.evaluate(() => window.__frameCost.frames.slice());
+  console.log(summarise('entering Build (page open to meshes built)', enteringFrames));
   // #3929: --batching off draws every item as its own object (src/build/batching.js), for the "before".
   if (flag('--batching', 'on') === 'off') await page.evaluate(() => window.__testSetBuildBatching?.(false));
 } else if (mode === 'sell') {
@@ -106,12 +116,6 @@ if (mode === 'build') {
   await page.waitForSelector('body.shop-ready', { timeout: 60000 });
 }
 
-const summarise = (label, frames) => {
-  if (!frames.length) return `${label}: no frames`;
-  const longest = Math.max(...frames.map((f) => f.ms));
-  const worst = frames.reduce((a, f) => (f.triangles > a.triangles ? f : a), frames[0]);
-  return `${label}: ${frames.length} frames, longest ${longest} ms, most draws ${Math.max(...frames.map((f) => f.draws))}, most triangles ${worst.triangles}, biggest draw ${worst.biggestDraw}`;
-};
 const answer = (promise) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), 60000))]);
 const frameCount = () => answer(page.evaluate(() => window.__frameCost.frames.length));
 async function phase(label, run) {
@@ -164,6 +168,11 @@ if (mode === 'shop') {
   await phase('moving the selection up and back', async () => {
     await page.evaluate(() => window.__testDragGroupMoveZ?.(1));
     await page.waitForTimeout(2000);
+  });
+  // #3929 item 4: undo of that move restores a snapshot of every item.
+  await phase('undoing the move', async () => {
+    await page.evaluate(() => document.getElementById('undo-btn')?.click());
+    await page.waitForTimeout(3000);
   });
 }
   await phase(mode === 'build' ? 'orbiting, everything selected' : 'orbiting (a drag across the view)', async () => {
