@@ -5,7 +5,7 @@
 // prints, for a few frames spread over the run, the draw calls, triangles (instances counted) and
 // the biggest single draw, with the frame time.
 //
-//   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...] [--phone]
+//   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...] [--phone] [--max-triangles N]
 //   node scripts/live-frame-cost.mjs --url http://127.0.0.1:8787 --email <seeded account> --mode build [--batching off]
 //
 // #3929: --mode build opens Build instead of Shop and reports a table per phase (entering, standing
@@ -16,6 +16,9 @@
 // --phone (#3935) slows the CPU 4x and uses a home-wifi phone connection (see PHONE_PROFILE in
 // scripts/live-site-lib.mjs) and prints what that profile can and cannot tell: triangles and draw
 // calls per frame are the GPU proxy that holds on any machine; the frame time is software GL.
+//
+// --max-triangles N (#3935) is the budget for the GPU proxy: after the run it prints the most triangles
+// any frame asked for and exits 2 when that passes N, so a PR can say "within budget" in one line.
 //
 // Signs in with the fleet login like scripts/live-site.mjs (the session's proxy adds the fleet key;
 // nothing is printed or stored). Standing still at the arrival spot in Shop at 390x844.
@@ -32,6 +35,8 @@ if (!email && (!name || !/^higglehaven\d+$/.test(name))) { console.error('live-f
 const base = flag('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const seconds = Number(flag('--seconds', 35));
 const phone = args.includes('--phone');
+const maxTriangles = flag('--max-triangles', null);
+if (maxTriangles !== null && !(Number(maxTriangles) > 0)) { console.error('live-frame-cost: --max-triangles needs a number above zero'); process.exit(1); }
 
 const launch = {};
 if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launch.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
@@ -167,4 +172,11 @@ if (mode === 'shop') {
     for (let i = 0; i < 30; i++) { await page.mouse.move(195 + i * 4, 300 + i, { steps: 1 }); await page.waitForTimeout(60); }
     await page.mouse.up();
   });
+let overBudget = false;
+if (maxTriangles !== null) {
+  const most = await answer(page.evaluate(() => Math.max(0, ...window.__frameCost.frames.map((f) => f.triangles))));
+  if (most === null) { console.log(`budget --max-triangles ${maxTriangles}: no figure (the page did not answer)`); overBudget = true; }
+  else { overBudget = most > Number(maxTriangles); console.log(`budget --max-triangles ${maxTriangles}: most triangles in a frame ${most} is ${overBudget ? 'OVER' : 'within'} the limit`); }
+}
 await browser.close();
+if (overBudget) process.exit(2);

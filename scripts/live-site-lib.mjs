@@ -141,6 +141,35 @@ export function coverTable(rows) {
   return lines.join('\n');
 }
 
+// #3935: what a `budget` step can hold a run to. The long-task figures are meaningful under the CPU
+// throttle of --phone; the frame time is software GL on the cloud machine, so a budget on it says so.
+export const BUDGET_METRICS = {
+  longtask: { label: 'longest long task', unit: 'ms', read: (stats) => stats?.longTasks?.longestMs ?? null },
+  longtasks: { label: 'long tasks', unit: '', read: (stats) => stats?.longTasks?.count ?? null },
+  frame: { label: 'longest frame', unit: 'ms', read: (stats) => stats?.longestFrameMs ?? null, caution: 'frame time on the cloud machine is software GL, not a phone GPU: trust it only as a comparison against the same run before' },
+};
+
+// Pure: the figures so far (the `stats` step's shape) against one budget. Returns what to put in the
+// report: the value, the limit, whether it is within, and one plain line either way.
+export function evaluateBudget(metric, limit, stats) {
+  const spec = BUDGET_METRICS[metric];
+  if (!spec) throw new Error(`unknown budget metric "${metric}"`);
+  const value = spec.read(stats);
+  const unit = spec.unit ? ` ${spec.unit}` : '';
+  if (value === null || !Number.isFinite(value)) {
+    return { metric, limit, value: null, within: false, line: `budget ${metric}:${limit}: no figure (the page's frame monitor did not answer)` };
+  }
+  const within = value <= limit;
+  return {
+    metric,
+    limit,
+    value,
+    within,
+    line: `budget ${metric}:${limit}: ${spec.label} ${value}${unit} is ${within ? 'within' : 'OVER'} the limit of ${limit}${unit}`,
+    ...(spec.caution ? { caution: spec.caution } : {}),
+  };
+}
+
 // A step is `command` or `command:arg:arg`. Returns { command, args } or throws
 // one plain line naming what is wrong.
 export function parseStep(token) {
@@ -233,6 +262,14 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!LEAVES.includes(args[0])) throw new Error(`step "${token}": leaf must be one of ${LEAVES.join(', ')}`);
       return { command, args: [args[0]] };
+    case 'budget': {
+      // budget:<metric>:<limit> (#3935): fail the run when the figures since the last lap (or the start)
+      // pass a stated limit, so a change can say "within budget" with a number.
+      need(2);
+      if (!BUDGET_METRICS[args[0]]) throw new Error(`step "${token}": budget metric must be one of ${Object.keys(BUDGET_METRICS).join(', ')}`);
+      if (args.length !== 2 || args[1] === '' || !(Number(args[1]) > 0)) throw new Error(`step "${token}": budget needs a limit above zero (budget:${args[0]}:600)`);
+      return { command, args: [args[0], Number(args[1])] };
+    }
     case 'peer': {
       // peer:join | peer:shot[:name] | peer:pos | peer:say:<text>: the second page's steps (--with, #3930).
       need(1);
@@ -258,7 +295,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
   }
 }
 
