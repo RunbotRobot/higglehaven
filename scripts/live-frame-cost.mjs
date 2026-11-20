@@ -171,7 +171,10 @@ if (mode === 'shop') {
     await page.evaluate(() => window.__testDragGroupMoveZ?.(1));
     await page.waitForTimeout(2000);
   });
-  // #3929 item 4: undo of that move restores a snapshot of every item.
+  // #3929 item 4: undo of that move restores a snapshot of every item. (Caveat: the test hook's move can
+  // pass the top level, which the app refuses with its own notice, and the orbit drag leaves the camera
+  // off the wall, so the figures from here on are of an empty view; read them for draw calls of the
+  // selection, not for the wall.)
   await phase('undoing the move', async () => {
     await page.evaluate(() => document.getElementById('undo-btn')?.click());
     await page.waitForTimeout(3000);
