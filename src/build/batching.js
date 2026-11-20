@@ -21,6 +21,11 @@ import * as THREE from 'three';
 import { batchKey, MIN_BATCH_SIZE } from '../shop/instanceBatching.js';
 import { TIER_FULL, TIER_MID, TIER_FAR } from '../shop/lodTier.js';
 
+// A batch is culled as a whole, so one batch for a whole wall is drawn while any of it is in view.
+// Items are grouped by the square of the ground they stand on (identical items in one square share a
+// batch), so a batch whose square is off screen is skipped. Measured on the 1,690-item heavy lándlet.
+export const BATCH_CELL_M = 16;
+
 const scratch = new THREE.Matrix4();
 const inverse = new THREE.Matrix4();
 
@@ -114,7 +119,9 @@ export function createBuildBatching({ scene, isSelected, minBatchSize = MIN_BATC
         const data = object.userData;
         const key = batchKey({ crop: data.crop, scale: data.scale, isCommunitySign: data.isCommunitySign, isCommunityCalendar: data.isCommunityCalendar }, data.template);
         if (key === null) continue;
-        const full = `${key}|${data.lodShown ?? TIER_FULL}`;
+        const e = object.matrixWorld.elements;
+        const cell = `${Math.floor(e[12] / BATCH_CELL_M)},${Math.floor(e[13] / BATCH_CELL_M)}`;
+        const full = `${key}|${data.lodShown ?? TIER_FULL}|${cell}`;
         if (!wanted.has(full)) wanted.set(full, []);
         wanted.get(full).push(object);
       }

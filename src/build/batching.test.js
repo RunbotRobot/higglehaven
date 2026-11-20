@@ -36,6 +36,15 @@ function setup(count, options) {
 }
 
 describe('Build batching', () => {
+  it('splits a long row into batches by the square of ground the items stand on', () => {
+    const { batching, objects } = setup(24); // 2 m apart: x from 0 to 46, three 16 m squares
+    batching.sync(objects);
+    const counts = batching.counts();
+    expect(counts.groups).toBe(3);
+    expect(counts.items).toBe(24);
+  });
+
+
   it('draws identical unselected items with one instanced mesh and hides their own copies', () => {
     const { scene, batching, objects } = setup(6);
     batching.sync(objects);
@@ -108,13 +117,23 @@ describe('Build batching', () => {
   it('follows a moved item: the matrix is rewritten on the next sync', () => {
     const { scene, batching, objects } = setup(5);
     batching.sync(objects);
-    objects[3].position.x = 40;
+    objects[3].position.x = 12; // still inside the same 16 m square
     objects[3].updateMatrixWorld(true);
     batching.sync(objects);
     const mesh = scene.children.find((child) => child.isInstancedMesh);
     const out = new THREE.Matrix4();
     mesh.getMatrixAt(3, out);
-    expect(new THREE.Vector3().setFromMatrixPosition(out).x).toBeCloseTo(40);
+    expect(new THREE.Vector3().setFromMatrixPosition(out).x).toBeCloseTo(12);
+  });
+
+  it('moves an item into the batch of the square it was moved to', () => {
+    const { batching, objects } = setup(14); // x 0..26: squares 0 and 1
+    batching.sync(objects);
+    expect(batching.counts().groups).toBe(2);
+    objects[0].position.x = 20;
+    objects[0].updateMatrixWorld(true);
+    batching.sync(objects);
+    expect(batching.counts()).toEqual({ groups: 2, items: 14, drawCalls: 2 });
   });
 
   it('does not rebuild a batch that has not changed', () => {
