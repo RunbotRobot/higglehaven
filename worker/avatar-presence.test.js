@@ -79,16 +79,21 @@ describe('POST /api/presence', () => {
   // env.DB.prepare hijack idiom as other POST-then-reselect race tests in
   // this suite, targeting the exact re-SELECT SQL (the only call site in
   // this file matching this exact string).
-  it('does not crash with a raw 500 if the caller is deleted concurrently between the upsert and its re-SELECT', async () => {
+  it('does not crash with a raw 500 if the write returns no row (the account vanished under it)', async () => {
+    // #3464: the upsert and the re-read are one INSERT ... RETURNING statement
+    // now, so there is no gap left for a deletion to land in; what remains is
+    // the statement coming back with nothing. Same env.DB.prepare hijack idiom
+    // as the other POST-then-reselect race tests in this suite, swapping the
+    // write for a statement that returns no row (it keeps the seven bound
+    // parameters the real one takes).
     const builder = await signupBuilder('presence-post-reselect-race');
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
     let armed = true;
     env.DB.prepare = (sql) => {
-      if (armed && sql === 'SELECT * FROM avatar_presence WHERE user_id = ?') {
+      if (armed && sql.includes('INSERT INTO avatar_presence') && sql.includes('RETURNING')) {
         armed = false;
-        originalPrepare('DELETE FROM avatar_presence WHERE user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
-          .bind(builder.builderId).run();
+        return originalPrepare('SELECT * FROM avatar_presence WHERE 0 AND ?1 IS ?2 AND ?3 IS ?4 AND ?5 IS ?6 AND ?7 IS NULL');
       }
       return originalPrepare(sql);
     };

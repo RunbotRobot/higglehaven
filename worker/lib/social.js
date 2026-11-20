@@ -19,7 +19,7 @@ import { json, HttpError } from './http.js';
 import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
-import { checkRateLimit } from './rate-limit.js';
+import { checkRateLimit, rateLimitInsertStatement, rateLimitRefusal } from './rate-limit.js';
 import {
   requireCurrentUser, assertOwner, requireSessionBuilder, suspendedSellerTemplateIds,
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
@@ -264,9 +264,15 @@ const PRESENCE_NEARBY_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 // when the caller named someone who does not resolve: nowhere, same as stale).
 async function callersCurrentLandletId(db, userId) {
   if (!userId) return null;
-  const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
   const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE user_id = ?')
     .bind(userId).first();
+  return currentLandletIdFromRow(ownPresence);
+}
+
+// #3464: the staleness rule on its own, so a caller that already read the row
+// (inside a batch) applies the same rule instead of copying it.
+function currentLandletIdFromRow(ownPresence) {
+  const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
   return ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
 }
 
@@ -289,7 +295,15 @@ export async function handlePresence(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     // #3147: the quota belongs to the person, so it is keyed on the account.
-    await checkRateLimit(db, `presence-nearby:${sessionBuilder.user_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
+    // #3464: the rate-limit insert and the caller's own presence read depend on
+    // neither other, so they ride in one D1 round trip; the refusal is thrown
+    // after, so a 429 still wins and every attempt is counted exactly as before.
+    const nearbyBucket = `presence-nearby:${sessionBuilder.user_id}`;
+    const [limitInsert, ownPresenceRead] = await db.batch([
+      rateLimitInsertStatement(db, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX),
+      db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
+    ]);
+    await rateLimitRefusal(db, limitInsert, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX);
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
     // #2269: a client-supplied `landletId` query param used to be trusted
     // outright -- any verified account could enumerate landlet ids via the
@@ -302,7 +316,7 @@ export async function handlePresence(request, db, route, url) {
     // trust a client-supplied location claim" fix already applied to the
     // credit-orb collect endpoint (#2222) -- so a caller can only ever see
     // who's nearby wherever they themselves actually, recently were.
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
+    const landletId = currentLandletIdFromRow(ownPresenceRead.results[0]);
     if (landletId === null) {
       return json({ avatars: [] });
     }
@@ -310,16 +324,22 @@ export async function handlePresence(request, db, route, url) {
     // each person by their CURRENT builder profile, so the join supplies it
     // (and a person with no builder profile right now has nothing to render,
     // which is what the old ON DELETE CASCADE on a profile reset did too).
-    const { results } = await db.prepare(`
-      SELECT avatar_presence.*, builders.builder_id AS builder_id,
-        users.is_fleet AS is_fleet, users.username AS fleet_username
-      FROM avatar_presence
-      JOIN builders ON builders.user_id = avatar_presence.user_id
-      JOIN users ON users.user_id = avatar_presence.user_id
-      WHERE avatar_presence.landlet_id = ? AND avatar_presence.user_id != ? AND avatar_presence.updated_at >= ?
-        AND ${notBlockedEitherWayByUserSql('?', 'avatar_presence.user_id')}
-      ORDER BY avatar_presence.updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
-    `).bind(landletId, sessionBuilder.user_id, staleBefore, sessionBuilder.user_id).all();
+    // #3464: the on-shift assistants are read alongside this query, not after
+    // it (their lookup never needed these rows, only the exclusion below does,
+    // and that is applied here in memory), so the two D1 round trips overlap.
+    const [{ results }, shiftCandidates] = await Promise.all([
+      db.prepare(`
+        SELECT avatar_presence.*, builders.builder_id AS builder_id,
+          users.is_fleet AS is_fleet, users.username AS fleet_username
+        FROM avatar_presence
+        JOIN builders ON builders.user_id = avatar_presence.user_id
+        JOIN users ON users.user_id = avatar_presence.user_id
+        WHERE avatar_presence.landlet_id = ? AND avatar_presence.user_id != ? AND avatar_presence.updated_at >= ?
+          AND ${notBlockedEitherWayByUserSql('?', 'avatar_presence.user_id')}
+        ORDER BY avatar_presence.updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
+      `).bind(landletId, sessionBuilder.user_id, staleBefore, sessionBuilder.user_id).all(),
+      onShiftAssistantRowsFor(db, landletId, [sessionBuilder.user_id]),
+    ]);
     // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
     // the client is the one actually hiding the mesh, but a flying avatar's
     // position is still withheld here too, not just left to the renderer's
@@ -328,7 +348,8 @@ export async function handlePresence(request, db, route, url) {
     // self) or from GET .../me (that endpoint is "where was I," unaffected).
     // #3449: assistants on shift stand on public land and report no position of
     // their own; the server places them (assistant-shift.js).
-    const shiftRows = await onShiftAssistantRowsFor(db, landletId, [sessionBuilder.user_id, ...results.map((row) => row.user_id)]);
+    const reportedIds = new Set(results.map((row) => row.user_id));
+    const shiftRows = shiftCandidates.filter((row) => !reportedIds.has(row.user_id));
     const visible = [...results, ...shiftRows].filter((row) => !row.flying);
     const visibleIds = visible.map((row) => row.builder_id);
     const [equipped, animations] = await Promise.all([
@@ -363,23 +384,29 @@ export async function handlePresence(request, db, route, url) {
     let landletId = null;
     if (input.landletId !== undefined && input.landletId !== null) {
       landletId = stringValue(input.landletId, 'landletId');
-      // Cheap spoof guard: reject a report for a landlet that doesn't even
-      // exist rather than trusting any client-supplied string verbatim —
-      // #1099's own GET scopes its query by this column, so a bogus value
-      // here would otherwise silently poison that lookup. This doesn't (and
-      // can't cheaply) confirm the caller is actually near this landlet,
-      // only that it's a real one.
-      await requireLandlet(db, landletId);
     }
-    await db.prepare(`
+    // Cheap spoof guard: reject a report for a landlet that doesn't even
+    // exist rather than trusting any client-supplied string verbatim —
+    // #1099's own GET scopes its query by this column, so a bogus value
+    // here would otherwise silently poison that lookup. This doesn't (and
+    // can't cheaply) confirm the caller is actually near this landlet,
+    // only that it's a real one.
+    // #3464: the existence guard, the upsert and the re-read are one statement
+    // (INSERT ... SELECT ... WHERE EXISTS ... RETURNING), one D1 round trip
+    // instead of three. When it returns no row the guard refused it (or the
+    // account vanished); the follow-up below only runs on that rare path and
+    // raises the same "Lándlet not found" error requireLandlet always did.
+    const { results: written } = await db.prepare(`
       INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE ?2 IS NULL OR EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ?2)
       ON CONFLICT(user_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
         heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.user_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
-    const row = await db.prepare('SELECT * FROM avatar_presence WHERE user_id = ?')
-      .bind(sessionBuilder.user_id).first();
+      RETURNING *
+    `).bind(sessionBuilder.user_id, landletId, x, y, z, heading, flying ? 1 : 0).all();
+    const row = written[0];
+    if (!row && landletId !== null) await requireLandlet(db, landletId);
     // #2492: not found here means a concurrent account deletion (which now
     // removes this row explicitly, #3147; it used to be migrations/0100's ON
     // DELETE CASCADE on builder_id) landed in the single await gap
