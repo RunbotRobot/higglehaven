@@ -201,6 +201,18 @@ export async function saveLoadingTipsPreference(off) {
   return user;
 }
 
+// #3657: the account remembers that the first-visit hints are done, so another
+// device does not replay them. Best effort: the device already remembers on its
+// own, and a signed-out visitor simply gets a 401 the caller ignores.
+export async function saveFirstHintsDone() {
+  const { user } = await requestJson('/auth/first-hints', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ done: true }),
+  });
+  return user;
+}
+
 export async function ageAttest() {
   const { user } = await requestJson('/auth/age-attest', {
     method: 'POST',
