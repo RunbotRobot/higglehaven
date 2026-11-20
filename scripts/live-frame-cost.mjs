@@ -27,7 +27,7 @@ const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ?
 const name = flag('--name', null);
 const email = flag('--email', null);
 const mode = flag('--mode', 'shop');
-if (!['shop', 'build'].includes(mode)) { console.error('live-frame-cost: --mode must be shop or build'); process.exit(1); }
+if (!['shop', 'build', 'sell'].includes(mode)) { console.error('live-frame-cost: --mode must be shop, build or sell'); process.exit(1); }
 if (!email && (!name || !/^higglehaven\d+$/.test(name))) { console.error('live-frame-cost: --name higglehaven<N> is required (this session\'s name), or --email for a local account'); process.exit(1); }
 const base = flag('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const seconds = Number(flag('--seconds', 35));
@@ -44,7 +44,7 @@ const login = email
   ? await context.request.post(`${base}/api/auth/login`, { data: { email, password: process.env.SEED_PASSWORD || 'heavy-landlet-seed-password-123' } })
   : await context.request.post(`${base}/api/auth/fleet-login`, { data: { name } });
 if (!login.ok()) { console.error(`live-frame-cost: login answered ${login.status()}`); await browser.close(); process.exit(1); }
-if (mode === 'build') await context.addInitScript(() => { try { sessionStorage.setItem('higglehaven.startMode', 'build'); } catch { /* private window */ } });
+if (mode === 'build' || mode === 'sell') await context.addInitScript((m) => { try { sessionStorage.setItem('higglehaven.startMode', m); } catch { /* private window */ } }, mode);
 const page = await context.newPage();
 if (phone) {
   await applyProfile(await context.newCDPSession(page), PHONE_PROFILE);
@@ -91,6 +91,12 @@ if (mode === 'build') {
   console.log(`entered Build and built ${await page.evaluate(() => window.__testProductPositions().length)} meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
   // #3929: --batching off draws every item as its own object (src/build/batching.js), for the "before".
   if (flag('--batching', 'on') === 'off') await page.evaluate(() => window.__testSetBuildBatching?.(false));
+} else if (mode === 'sell') {
+  // #3929: Sell's showroom is ready when every product has a mesh (--products N on the seed).
+  const expected = Number(flag('--products', 50));
+  await page.waitForFunction((n) => (window.__testSellerShowcaseCount?.() ?? 0) >= n, expected, { timeout: 240000 });
+  await page.waitForTimeout(3000);
+  console.log(`entered Sell and built ${await page.evaluate(() => window.__testSellerShowcaseCount())} showroom meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
 } else {
   await page.waitForSelector('body.shop-ready', { timeout: 60000 });
 }
@@ -121,6 +127,8 @@ if (mode === 'shop') {
     console.log(`${frames.length} frames in ${seconds} s; longest ${Math.max(...frames.map((f) => f.ms))} ms; most triangles in a frame ${Math.max(...frames.map((f) => f.triangles))}`);
     for (const f of picks) console.log(JSON.stringify(f));
   }
+} else if (mode === 'sell') {
+  await phase('standing still', () => page.waitForTimeout(Math.min(seconds, 8) * 1000));
 } else {
   // The versions of each item are attached over many frames after entering (src/build/lod.js), so
   // wait until nearly every item has them (or --settle seconds, default 300), saying how long it took,
