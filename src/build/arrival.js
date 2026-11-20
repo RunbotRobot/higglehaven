@@ -6,16 +6,27 @@
 // pass lets it in from its hold-back (src/build/lod.js), so each batch let in together is clustered and
 // arrives together.
 //
-// Cost: one dissolve per cluster, not per item (every item of a cluster shares the one material clone
-// per original material and one uniform), a fog per cluster up to the scene-wide cap, and update() walks
-// only the clusters still arriving, so a lándlet at rest costs nothing. Only items let in during the
-// first load arrive this way; a placement, paste or undo afterwards is drawn at once.
+// Cost, bounded on every axis (review of #4008):
+//   - Draw calls: an item that dissolves is drawn by itself (its materials are patched), so only the
+//     BUILD_ARRIVAL_MAX_ITEMS nearest the orbit target, across everything arriving at once, get a
+//     dissolve. Every other item is not touched and goes straight to batching (src/build/batching.js)
+//     in the same pass, so a lándlet of 1,400 bricks never draws 1,400 of them one by one. The fog
+//     covers the cluster either way; the items outside the cap simply do not fade.
+//   - Frame time: clustering sees only the capped items; creating dissolves and fogs, and restoring
+//     them at the end, stop when BUILD_ARRIVAL_SLICE_MS is spent (what was not reached is not
+//     dissolved, or is restored on the next frame).
+//   - One dissolve per cluster, a fog per cluster up to the scene-wide cap, and update() walks only
+//     the clusters still arriving, so a lándlet at rest costs nothing.
+// Only items let in during the first load arrive this way; a placement, paste or undo afterwards is
+// drawn at once.
 import { createArrivalFog, createArrivalDissolve } from '../shop/arrivalEffect.js';
 import { arrivalLevels, clusterArrivals, pickFogClusters } from '../shop/arrivalFog.js';
 import { aliveArrivalFogCount } from '../shop/arrivalRun.js';
 
 // A cluster whose items never settle (every one deleted, say) is ended after this long.
 export const BUILD_ARRIVAL_MAX_S = 5;
+export const BUILD_ARRIVAL_MAX_ITEMS = 96; // dissolving items alive at once (each is its own draw call)
+export const BUILD_ARRIVAL_SLICE_MS = 3; // what setting up or restoring clusters may use of a frame
 
 const DEFAULT_EFFECTS = { createFog: createArrivalFog, createDissolve: createArrivalDissolve };
 
@@ -27,8 +38,7 @@ function prefersReducedMotion() {
   }
 }
 
-// The subtrees of an item that can be drawn: its full model and its attached simpler versions, so a
-// version flip during the second the arrival lasts still shows a dissolving mesh.
+// The subtrees of an item that can be drawn: its full model and its attached simpler versions.
 function drawableRoots(object) {
   const data = object.userData;
   const roots = [];
@@ -38,25 +48,43 @@ function drawableRoots(object) {
   return roots;
 }
 
+function rootCount(object) {
+  const data = object.userData;
+  return (data.model ? 1 : 0) + (data.lodTiers?.mid ? 1 : 0) + (data.lodTiers?.far ? 1 : 0);
+}
+
 // parent: the group the items live in (the fog is added to it, in the same local frame as the items'
-// positions). anchor(): { x, y } in that frame, so the nearest clusters get the fogs when the cap
-// leaves too few.
+// positions). anchor(): { x, y } in that frame: the nearest items get the dissolves and the nearest
+// clusters the fogs.
 export function createBuildArrival({
   parent,
   anchor = () => ({ x: 0, y: 0 }),
   clock = () => performance.now(),
   reducedMotion = prefersReducedMotion,
   effects = DEFAULT_EFFECTS,
+  maxItems = BUILD_ARRIVAL_MAX_ITEMS,
+  sliceMs = BUILD_ARRIVAL_SLICE_MS,
 }) {
   const states = [];
   let aliveFogs = 0;
+  let arriving = 0;
+
+  // One dissolve over every drawable root of the cluster (createArrivalDissolve only traverses).
+  // Rebuilt when an item's versions attach mid-arrival, so a version it flips to dissolves too.
+  function makeDissolve(state) {
+    const roots = state.objects.flatMap(drawableRoots);
+    state.rootCount = roots.length;
+    state.dissolve = effects.createDissolve({ traverse: (fn) => roots.forEach((root) => root.traverse(fn)) });
+  }
 
   function finish(state) {
     state.fog?.dispose();
     if (state.fog) aliveFogs -= 1;
     state.fog = null;
     state.dissolve?.restore();
+    state.dissolve = null;
     for (const object of state.objects) object.userData.lodArriving = false;
+    arriving -= state.objects.length;
     const at = states.indexOf(state);
     if (at >= 0) states.splice(at, 1);
   }
@@ -64,36 +92,44 @@ export function createBuildArrival({
   return {
     // objects: the items just let in together, already drawn (visible) in the version they will show.
     start(objects) {
-      const reduced = reducedMotion();
+      const room = maxItems - arriving;
+      if (room <= 0 || objects.length === 0) return;
+      const reduced = reducedMotion(); // read once for this arrival, not every frame
+      const at = anchor();
+      const nearest = objects.length <= room ? objects : objects
+        .map((object) => ({ object, d: Math.hypot(object.position.x - at.x, object.position.y - at.y) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, room)
+        .map((entry) => entry.object);
       const items = [];
       const byId = new Map();
-      objects.forEach((object, index) => {
+      nearest.forEach((object, index) => {
         const radius = object.userData.lodRadiusM ?? 1;
-        const id = index;
-        byId.set(id, object);
+        byId.set(index, object);
         items.push({
-          id, x: object.position.x, y: object.position.y, halfWidth: radius, halfDepth: radius,
+          id: index, x: object.position.x, y: object.position.y, halfWidth: radius, halfDepth: radius,
           groupId: object.userData.groupId ?? undefined, bundleId: object.userData.bundleId ?? undefined,
           zMin: object.position.z - radius, zMax: object.position.z + radius,
         });
       });
       const clusters = clusterArrivals(items);
-      const picked = reduced ? { fogged: [], plain: clusters } : pickFogClusters(clusters, aliveFogs + aliveArrivalFogCount(), anchor());
+      const picked = reduced ? { fogged: [], plain: clusters } : pickFogClusters(clusters, aliveFogs + aliveArrivalFogCount(), at);
       const fogged = new Set(picked.fogged.map((cluster) => cluster.key));
+      const startedMs = performance.now();
       clusters.forEach((cluster, index) => {
+        if (performance.now() - startedMs > sliceMs) return; // not reached: drawn plainly, batched at once
         const members = cluster.ids.map((id) => byId.get(id));
-        const roots = members.flatMap(drawableRoots);
         let zMin = Infinity;
         let zMax = -Infinity;
         for (const id of cluster.ids) {
           zMin = Math.min(zMin, items[id].zMin);
           zMax = Math.max(zMax, items[id].zMax);
         }
-        const state = { objects: members, startMs: clock(), fog: null, dissolve: null };
-        // One dissolve over every drawable root of the cluster (createArrivalDissolve only traverses).
-        state.dissolve = effects.createDissolve({ traverse: (fn) => roots.forEach((root) => root.traverse(fn)) });
+        const state = { objects: members, startMs: clock(), fog: null, dissolve: null, rootCount: 0, reduced, done: false };
+        makeDissolve(state);
         state.dissolve.setLevel(0);
         for (const object of members) object.userData.lodArriving = true;
+        arriving += members.length;
         if (fogged.has(cluster.key)) {
           const extent = { width: 2 * cluster.halfX, depth: 2 * cluster.halfY, height: Math.max(1, zMax - zMin) };
           const lift = 0.65 * Math.max(1.5, 0.6 * Math.max(extent.width, extent.depth, extent.height));
@@ -108,22 +144,38 @@ export function createBuildArrival({
     update() {
       if (states.length === 0) return;
       const nowMs = clock();
-      const reduced = reducedMotion();
+      const startedMs = performance.now();
+      let finishing = 0;
       for (const state of [...states]) {
         const ageS = (nowMs - state.startMs) / 1000;
         // Ready from the start: the items are already let in, so only the fog's rise is waited for.
-        const levels = arrivalLevels(ageS, 0, { reducedMotion: reduced, fog: state.fog !== null });
+        const levels = arrivalLevels(ageS, 0, { reducedMotion: state.reduced, fog: state.fog !== null });
+        const gone = state.objects.every((object) => !object.parent);
+        if (levels.done || ageS > BUILD_ARRIVAL_MAX_S || gone) {
+          // Restoring clones is work too: one at a time while the slice lasts (always one), and a
+          // cluster not reached waits a frame at full strength.
+          if (finishing === 0 || performance.now() - startedMs < sliceMs) { finish(state); finishing += 1; } else { state.fog?.setLevel(0); state.dissolve.setLevel(1); }
+          continue;
+        }
+        // Versions that attached since the dissolve was made are dissolved too, or the first flip into
+        // one would show it opaque.
+        let count = 0;
+        for (const object of state.objects) count += rootCount(object);
+        if (count !== state.rootCount) {
+          state.dissolve.restore();
+          makeDissolve(state);
+        }
         state.fog?.setLevel(levels.fog);
         state.dissolve.setLevel(levels.item);
-        if (levels.done || ageS > BUILD_ARRIVAL_MAX_S || state.objects.every((object) => !object.parent)) finish(state);
       }
     },
     arrivingCount() {
-      return states.reduce((sum, state) => sum + state.objects.length, 0);
+      return arriving;
     },
     fogCount() {
       return aliveFogs;
     },
+    // The scene is torn down or the landlet changed: every fog goes and every original material is back.
     dispose() {
       for (const state of [...states]) finish(state);
     },

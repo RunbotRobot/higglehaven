@@ -2574,6 +2574,11 @@ let lastReconcileAt = 0;
 // main.js calls this once Build mode's initial instances have all loaded; a
 // focus event during bootstrap would otherwise reconcile an empty scene and
 // race the initial load into duplicates.
+// #4003: Build's arrival fog and dissolves go with the scene (mode switch away from Build).
+export function disposeBuildArrival() {
+  buildArrival.dispose();
+}
+
 export function markBuildSceneReady() {
   buildSceneReady = true;
   // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
@@ -5155,6 +5160,7 @@ window.__testBuildBatchCounts = () => buildBatching.counts();
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
+window.__testBuildArrivingCount = () => buildArrival.arrivingCount(); // e2e: items still dissolving in (not batched yet)
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
