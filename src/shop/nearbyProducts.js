@@ -4,11 +4,10 @@
 // its name announced; Shift+N steps back. Pure ordering lives here, so it can be unit-tested; the
 // key wiring is in flightMovement.js and the card and announcement in productCard.js.
 //
-// Why a key and not a "Nearby" leaf in the bud menu: the menu is the same in every mode (a Shop-only
-// row would change it under a person), and a list over the world is exactly the permanent control
-// the interface is trying not to be. Tapping stays the way for everyone who can; N is the way when
-// they cannot. When Shop gets its own submenu under its petal, a Nearby list can join it there
-// (the same function orders it).
+// Two ways in, neither standing on the world: the N key, and a "Nearby" leaf under Shop's own petal
+// (src/shop/nearbyLeaf.js, for a screen reader on a phone, where there is no key): the same ordering
+// and the same card. The general menu is not touched (a Shop-only row there would change it under a
+// person), and nothing is drawn until the leaf is opened. Tapping stays the way for everyone who can.
 
 // How many of the nearest products the key cycles through: enough to reach what is around, few
 // enough that a full turn is quick.
@@ -46,3 +45,13 @@ export function nearbyAnnouncement(name, position, total) {
 }
 
 export const NO_NEARBY_PRODUCTS = 'No products nearby';
+
+// What the Nearby leaf says when nothing is within reach.
+export const NEARBY_LEAF_EMPTY = 'No products within reach. Walk closer to a lándlet to see what is near.';
+
+// How far a product is, in words a row can carry: whole metres, "Here" under one.
+export function distanceWords(metres) {
+  if (!Number.isFinite(metres)) return '';
+  const whole = Math.round(metres);
+  return whole < 1 ? 'Here' : `${whole} m`;
+}

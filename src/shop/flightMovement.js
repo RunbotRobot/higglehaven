@@ -104,6 +104,7 @@ import {
 // self-contained leaf with no main.js/presenceAndContent.js legacy to
 // respect -- see that module's own header comment.
 import { pollNearbyChatIfNeeded } from './nearbyChat.js';
+import './nearbyLeaf.js'; // #3824: registers Shop's Nearby petal
 import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
