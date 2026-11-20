@@ -5406,6 +5406,8 @@
         font-weight: var(--weight-semibold);
         overflow-wrap: anywhere;
       }
+      /* #4002: the trust-tier line (Credit-card verified) reads like the email-verified line above it. */
+      #auth-account-trust-tier,
       #auth-account-verified {
         font-size: var(--text-xs);
         color: rgb(var(--ink-rgb) / 0.65);
@@ -5445,6 +5447,9 @@
       #auth-logged-in[hidden] {
         display: none;
       }
+      /* #4002: Change email and Verify with government ID are the same quiet button as their siblings. */
+      #auth-change-email-btn,
+      #auth-verify-id-btn,
       #auth-resend-verify-btn,
       #auth-logout-btn,
       #auth-change-password-btn,
