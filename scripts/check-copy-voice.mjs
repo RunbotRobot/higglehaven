@@ -101,11 +101,54 @@ function workerSources(dir = 'worker') {
   return out;
 }
 
+// A control that shows a word and is given a different accessible name breaks voice control and reads as two
+// names for one thing (WCAG 2.5.3, "label in name"; #3888): the visible word must appear in the aria-label or
+// title. Checked where both are plain strings in the source: markup (`<button aria-label="..">Word</button>`,
+// in index.html or a template string) and `el.textContent = '..'` beside `el.setAttribute('aria-label', '..')`.
+// A glyph-only control (x, minus, an arrow) has no word to match and is not checked.
+const norm = (t) => t.toLowerCase().replace(/&[a-z#0-9]+;/g, ' ').replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+const hasWord = (t) => /[A-Za-z]{2}/.test(t.replace(/&[a-z#0-9]+;/gi, ' '));
+const nameHolds = (visible, name) => ` ${norm(name)} `.includes(` ${norm(visible)} `);
+
+export function findLabelNameBreaks(files) {
+  const breaks = [];
+  const add = (file, source, index, visible, name) => {
+    if (!hasWord(visible) || nameHolds(visible, name)) return;
+    breaks.push({ file, line: source.slice(0, index).split('\n').length, text: `${visible} / ${name}`, word: 'label in name', why: `the visible word "${visible.trim()}" is not in the accessible name "${name}"` });
+  };
+  for (const { file, source } of files) {
+    for (const m of source.matchAll(/<(?:button|a)\b[^>]*?\b(?:aria-label|title)="([^"$]*)"[^>]*>([^<$]*)</g)) add(file, source, m.index, m[2].trim(), m[1]);
+    const lines = source.split('\n');
+    lines.forEach((line, i) => {
+      const t = line.match(/(\w+)\.textContent\s*=\s*(['"])([^'"$]*)\2/);
+      if (!t) return;
+      for (let j = Math.max(0, i - 4); j <= Math.min(lines.length - 1, i + 4); j++) {
+        const a = lines[j].match(new RegExp(`${t[1]}\\.setAttribute\\(\\s*['"](?:aria-label|title)['"]\\s*,\\s*(['"])([^'"$]*)\\1`));
+        if (a) add(file, source, source.indexOf(line), t[3], a[2]);
+      }
+    });
+  }
+  return breaks;
+}
+
+function clientSources() {
+  const out = [{ file: 'index.html', source: readFileSync('index.html', 'utf8') }];
+  const walkSrc = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walkSrc(path);
+      else if (name.endsWith('.js') && !name.endsWith('.test.js')) out.push({ file: path, source: readFileSync(path, 'utf8') });
+    }
+  };
+  walkSrc('src');
+  return out;
+}
+
 export function main() {
   const rows = collectCopy();
-  const breaks = [...findVoiceBreaks(rows), ...findCaseBreaks(rows), ...findWorkerVoiceBreaks(workerSources())];
+  const breaks = [...findVoiceBreaks(rows), ...findCaseBreaks(rows), ...findWorkerVoiceBreaks(workerSources()), ...findLabelNameBreaks(clientSources())];
   if (breaks.length === 0) {
-    console.log('check-copy-voice: no banned words and no Title Case labels in what people read');
+    console.log('check-copy-voice: no banned words, no Title Case labels, and every visible word is in its accessible name');
     return 0;
   }
   console.error(`check-copy-voice: ${breaks.length} string(s) use a word the voice note bans (docs/DESIGN.md, "Voice"):`);
