@@ -192,3 +192,28 @@ describe('Build level of detail while the versions attach', () => {
     expect(mid.visible).toBe(true);
   });
 });
+
+describe('Build arrival from the first load hold (#4003 slice a)', () => {
+  it('hands what was let in from the hold to the arrival once, and never a plain placement', () => {
+    const started = [];
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+    camera.position.set(0, -30, 20);
+    camera.updateMatrixWorld(true);
+    const held = Array.from({ length: 3 }, (_, index) => item(index, 100));
+    const placed = item(9, 100);
+    const scene = new THREE.Scene();
+    [...held, placed].forEach((object) => scene.add(object));
+    const lod = createBuildLod({
+      camera, target: new THREE.Vector3(0, 0, 0), getMeshes: () => [...held, placed], isSelected: () => false,
+      viewportHeight: () => 844, arrival: { start: (objects) => started.push(objects) },
+    });
+    held.forEach((object) => lod.holdNew(object));
+    expect(held.every((object) => !object.userData.model.visible)).toBe(true);
+    lod.update(1000, true);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toEqual(expect.arrayContaining(held));
+    expect(started[0]).not.toContain(placed);
+    lod.update(2000, true);
+    expect(started).toHaveLength(1); // a later pass does not start it again
+  });
+});

@@ -72,6 +72,10 @@ async function settle(predicate, label) {
 
 // Nothing is over any budget yet: every item is drawn in full.
 await settle((c) => c.mid + c.far === 0, 'nothing is reduced at the start');
+// #4003: items let in on the first load dissolve out of fog for about a second and a half and are
+// batched only after it; wait for that to finish (not a fixed time), then for a pass to batch them.
+await page.waitForFunction(() => window.__testBuildArrivingCount() === 0, null, { timeout: 30000 });
+await tick();
 const start = await counts();
 console.log(`${triangles}-triangle model, ${COUNT} placements, default budget:`, JSON.stringify(start));
 check(start.mid + start.far === 0, 'standing beside them with the default budget, no item is drawn from a reduced version');

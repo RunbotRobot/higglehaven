@@ -348,7 +348,7 @@ import {
   setCurrentLandletAreaM2, setCurrentLandletLevels, setCurrentLevelIndex,
   buildModeFrameUpdate,
   controls, rotateControls, translateControls,
-  clearSelection, addSelectionOutline,
+  clearSelection, addSelectionOutline, disposeBuildArrival,
   cancelPlacementMode, updateTrimLengthInput,
   measurePointA, measurePointB, updateMeasureResultText,
   syncUpdate, footprintsOverlap, footprintCorners,
@@ -2048,6 +2048,7 @@ async function enterSellMode() {
     if (el) el.style.display = 'none';
   }
   clearSelection();
+  disposeBuildArrival(); // #4003: fogs and dissolving materials of Build's first load go with it
   translateControls.detach();
   rotateControls.detach();
   for (const mesh of productMeshes) {

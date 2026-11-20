@@ -227,4 +227,16 @@ describe('Build batching', () => {
     expect(objects[2].userData.model.visible).toBe(false);
     expect(objects[2].userData.batchRoot).toBeUndefined();
   });
+
+  it('does not batch an item whose materials are dissolving in, and batches it once it has arrived (#4003)', () => {
+    const { scene, batching, objects } = setup(6);
+    objects[0].userData.lodArriving = true;
+    batching.sync(objects);
+    expect(batching.counts().items).toBe(5);
+    expect(objects[0].userData.model.visible).toBe(true);
+    objects[0].userData.lodArriving = false;
+    batching.sync(objects);
+    expect(batching.counts().items).toBe(6);
+    expect(scene.children.filter((child) => child.isInstancedMesh)).toHaveLength(1);
+  });
 });
