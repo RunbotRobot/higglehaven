@@ -239,6 +239,28 @@ If you don't already know your own session's name: call
 `mcp__Claude_Code_Remote__get_session` with no `session_id` (it
 describes the calling session) and read its `title`.
 
+**GitHub is reached with `gh api` now (2026-11-20).** The built-in GitHub
+tools this file names elsewhere (`issue_read`, `issue_write`, `list_issues`,
+`sub_issue_write`, `list_pull_requests`, and the ones for opening and merging
+a PR) were retired for the whole account that day; only
+`subscribe_pr_activity` is left. Wherever this file names one, use the REST
+call from the repo root instead. `gh pr`, `gh issue` and anything GraphQL are
+refused. With `R=repos/RunbotRobot/higglehaven`:
+
+```
+gh api $R/issues/N                                   # read (assignees, sub_issues_summary)
+gh api -X POST $R/issues/N/assignees -f 'assignees[]=RunbotRobot'   # claim, then re-read
+gh api -X POST $R/issues/N/comments -f body='...'    # comment
+gh api -X POST $R/issues -f title='...' -f body='...'            # file an issue
+gh api -X POST $R/pulls -f title='...' -f head=<branch> -f base=main -f body='...'
+gh api $R/commits/<sha>/check-runs                   # CI on a commit
+gh api -X PUT $R/pulls/N/merge -f merge_method=squash
+```
+
+Every session shares the one GitHub login, so `assignees` still cannot tell
+sessions apart: the Control Room card stays the claim that names you. A tool
+that is gone is not a reason to stop or to ask.
+
 The cycle, every time you're asked to make a change:
 
 1. Update your session-name branch to match the current `main` (if it
