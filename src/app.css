@@ -7138,6 +7138,7 @@
         color: rgb(var(--ink-rgb) / 0.85);
       }
       #claim-confirm-btn {
+        min-height: 44px;
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
@@ -7162,13 +7163,15 @@
         justify-content: space-between;
         gap: var(--space-sm);
       }
+      /* #3942: Refresh is a quiet button (DESIGN.md, "Inside a leaf"), 44px to hit. */
       #claim-modal-actions button {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
       }
       /* #3874: on a phone turned on its side (390px tall or less) the map's square box was squeezed by the
          column to a strip a few pixels high, so a new builder could not choose a lándlet. The sheet
