@@ -269,7 +269,9 @@ export async function handleLogin(request, db, url) {
   const password = typeof input.password === 'string' ? input.password : '';
 
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
+  // #3888: said in the voice of docs/DESIGN.md ("how we say no"), the same words for every case so
+  // nothing says which part was wrong or whether the address has an account.
+  const invalidCredentials = () => new HttpError("That email or password isn't right. Try again.", 401);
   if (!row) {
     await verifyPassword(password, dummyPasswordHash());
     throw invalidCredentials();
