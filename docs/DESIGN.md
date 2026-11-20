@@ -418,9 +418,8 @@ browser dialog (#3889; the table of what existed is in the first comment on that
 
 - **(a) At the thing it is about.** A card says it about its own product; the Build selection status
   sits under the item it is about; a reversal plays where the thing was (the orb's grey puff).
-  Planned, not built yet: the purchase result, which carries a one-time delivery link and so has to
-  be read and kept, is said on the product card it came from, with the link in selectable text, and
-  stays until the person closes the card.
+  Built: a purchase is confirmed on the product card it came from ("Yours now.", with a burst of
+  confetti at the product, #3945). Not built: the one-time delivery link (see "Stays a notice" below).
 - **(b) In the leaf or the modal, by the control that was used.** `showInlineActionStatus`
   (`src/ui/inlineActionStatus.js`) or the sheet's own status line. A confirmation of something done in
   a leaf ("Report sent") belongs here, not over the world.
@@ -436,11 +435,34 @@ server's reply, never a copy of them in the client. Two words at once do not sta
 latest is worn, and the earlier one shows again when it is read. Remove the old message in the same
 change that moves it ("One model, not a hybrid").
 
-**Still on the old notice modal** (`showNotice`, `src/ui/noticeModal.js`): about two dozen call sites in
-Shop checkout, avatar and animation equipping, nearby chat and voice reports, Build's metadata
-modals and save failures, and the shared picker. They are being moved onto (a) and (b) one mode at a
-time; do not copy the modal for new messages.
+**Stays a notice modal** (`showNotice`, `src/ui/noticeModal.js`). The rule of thumb: a message stays a
+modal only when nothing on the screen could carry it *and* it has to be read before the person goes
+on. That means one of three things: it is not the result of a tap on a control (a sign-in, an emailed
+link), it says work may be lost so it has to wait to be closed ("No silent loss"; a line that the next
+action overwrites is how a loss goes unnoticed), or it is shown once and the person must be able to
+select it. Anything else is (a), (b) or (c), and a new message never copies the modal. The callers
+that stay, checked against the code on 2026-11-20 (#3889):
 
+- **Account suspension** (`src/account/auth.js`): shown once on sign-in, not tied to a tap, no
+  control to sit beside; it can be read again from the Account menu.
+- **"Delivery confirmed" and "Couldn't confirm delivery"** (`src/main.js`): opened from an emailed
+  link by someone who may have no account and no panel, who cannot look the result up afterwards.
+- **"Note already removed"** (`src/main.js`): the result of a tap on a sign in the world; there is no
+  panel row to carry it.
+- **"Blocked"** (`src/blocks.js`, how to unblock): follows a block made from the friends list or a
+  message, and what it says leaves the panel it was made in.
+- **The delivery link after a purchase** (`src/shop/productCheckout.js`, "Purchase complete"): shown
+  only once, so it is a sheet the buyer can select from (#3249); the confirmation itself is on the
+  card.
+- **Build's save and placement failures** (`tellBuilder` in `src/build/scene.js`, fifteen uses):
+  they arrive after the gesture, from a background save, often for several items at once, and say
+  work may not survive a reload or was taken off the builder's lándlet.
+
+Not yet moved, and not decided to stay: the purchase refusal ("Purchase didn't go through",
+`src/shop/productCheckout.js`). It involves money, so moving it is its own careful change. Also
+`tellBuilder`'s few results of a tap (placed or restored counts) could be a line on the toolbar; they
+are rare and name a count, not a control. Equipping an avatar or animation, nearby-chat and voice
+reports, Build's metadata modals and the shared picker have already moved onto (a) and (b).
 ## Never
 
 - A heavy or dark panel, a black or near-black surface, a thick border.
