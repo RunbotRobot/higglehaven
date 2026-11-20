@@ -62,8 +62,8 @@ function drawBubble(canvas) {
 
 // Puts the mark on `group` at `headTopZ` (the top of the head, in the group's own units). Returns
 // { refresh(), dispose() }: refresh() on every new line keeps it standing; dispose() removes it at once
-// (the avatar is leaving). `three` is the THREE namespace (passed in so a test needs none).
-export function showSpeechCue(three, group, headTopZ, { now = () => performance.now(), reducedMotion = false } = {}) {
+// (the avatar is leaving); `onGone` is told when the mark is gone either way. `three` is the THREE namespace (passed in so a test needs none).
+export function showSpeechCue(three, group, headTopZ, { now = () => performance.now(), reducedMotion = false, onGone = null } = {}) {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 80;
@@ -87,6 +87,7 @@ export function showSpeechCue(three, group, headTopZ, { now = () => performance.
     group.remove(sprite);
     texture.dispose();
     material.dispose();
+    if (onGone) onGone();
   }
   function tick() {
     if (gone) return;

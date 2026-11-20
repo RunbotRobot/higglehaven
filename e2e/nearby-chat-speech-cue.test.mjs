@@ -39,11 +39,25 @@ await page.route((url) => url.pathname === '/api/presence', async (route) => {
     contentType: 'application/json',
     body: JSON.stringify({
       avatars: [
-        { builderId: SPEAKER, x: 3, y: 4, z: 0, heading: 0, equippedAvatar: null, equippedAnimation: null },
-        { builderId: QUIET, x: -3, y: 4, z: 0, heading: 0, equippedAvatar: null, equippedAnimation: null },
+        { builderId: SPEAKER, x: 60, y: 0, z: 0, heading: 0, equippedAvatar: null, equippedAnimation: null },
+        { builderId: QUIET, x: -60, y: 0, z: 0, heading: 0, equippedAvatar: null, equippedAnimation: null },
       ],
     }),
   });
+});
+
+// Both avatars stand well outside the voice range (src/shop/voiceChat.js opens a peer connection to anyone
+// within 30 m), so no call is attempted; the voice routes are stubbed with their empty shapes as well, so
+// nothing here depends on the real voice endpoints (which refuse a client-only id_verified account) and
+// the page's network goes quiet.
+await page.route('**/api/voice/**', async (route) => {
+  const { pathname } = new URL(route.request().url());
+  const method = route.request().method();
+  let body = {};
+  if (pathname.endsWith('/voice/ice-config')) body = { iceServers: [] };
+  else if (pathname.endsWith('/voice/friend-channels')) body = { channels: [] };
+  else if (pathname.endsWith('/voice/signal') && method === 'GET') body = { messages: [], nextCursor: null };
+  await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 });
 
 // The first poll after opening is the backlog (one old line from the speaker). Later polls return
@@ -82,7 +96,9 @@ const landletCreated = await fetchJson('/api/landlets', {
 });
 console.log('landlet created (status should be 201):', landletCreated.status);
 await page.route('**/api/auth/me', patchTrustTierToIdVerified); // from here on the client reads id_verified
-await page.reload({ waitUntil: 'networkidle' });
+// domcontentloaded, not networkidle: readiness is waited for below (body.shop-ready, #shop-status), and the
+// Shop's own polling means the network is never idle for long.
+await page.reload({ waitUntil: 'domcontentloaded' });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 await page.evaluate(() => window.__testToggleShopFlight());

@@ -1397,7 +1397,11 @@ setNearbySpeechHandler((builderId) => {
     entry.speechCue.refresh();
     return;
   }
-  entry.speechCue = showSpeechCue(THREE, entry.group, AVATAR_HEAD_TOP_Z_M, { reducedMotion: otherAvatarReducedMotion() });
+  entry.speechCue = showSpeechCue(THREE, entry.group, AVATAR_HEAD_TOP_Z_M, {
+    reducedMotion: otherAvatarReducedMotion(),
+    onGone: refreshOtherShopAvatarsDiagnostic, // the e2e hook follows the mark itself, not the next poll
+  });
+  refreshOtherShopAvatarsDiagnostic();
 });
 
 function releaseOtherAvatarEntry(entry) {
