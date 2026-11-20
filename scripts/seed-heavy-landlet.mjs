@@ -24,6 +24,9 @@ if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(BASE_URL)) {
   process.exit(1);
 }
 const BRICKS = Number(flag('--bricks', 1650));
+// #3929: --products N adds N more products from the same seller (the brick model, 5,120 triangles each)
+// so Sell's showroom can be measured with a full page (live-frame-cost --mode sell).
+const EXTRA_PRODUCTS = Number(flag('--products', 0));
 const ADMIN_BOOTSTRAP_SECRET = process.env.SEED_ADMIN_BOOTSTRAP_SECRET || 'local-dev-admin-secret';
 const PASSWORD = 'heavy-landlet-seed-password-123';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -121,6 +124,10 @@ const mkTemplate = async (name, category, modelUrl, dimensions, priceCents, tier
 })).template;
 const brick = await mkTemplate('Brick - Orange', 'building-materials', brickModelUrl, { width: 0.5, depth: 0.5, height: 0.5 }, 120, { modelMidUrl: brickMidUrl, modelFarUrl: brickFarUrl });
 
+for (let i = 0; i < EXTRA_PRODUCTS; i++) {
+  await mkTemplate(`Showroom product ${i + 1}`, 'furniture', brickModelUrl, { width: 0.5, depth: 0.5, height: 0.5 }, 500 + i, { modelMidUrl: brickMidUrl, modelFarUrl: brickFarUrl, modelSizeBytes: glb.byteLength });
+}
+
 const mixedFiles = ['crate.glb', 'planter.glb', 'lamp.glb', 'table.glb', 'chair.glb', 'tree.glb', 'bench.glb', 'bookshelf.glb'];
 const mixed = [];
 for (const file of mixedFiles) {
@@ -144,4 +151,4 @@ for (let i = 0; i < items.length; i += 100) {
   const { instances } = await api('/instances/batch', builder.cookie, { method: 'POST', body: JSON.stringify({ instances: items.slice(i, i + 100) }) });
   placed += instances.length;
 }
-console.log(JSON.stringify({ email: builder.email, password: PASSWORD, username: builder.username, landletId, templateId: brick.templateId, brickTriangles: triangles, tiers: withTiers, bricks: BRICKS, placed }));
+console.log(JSON.stringify({ email: builder.email, password: PASSWORD, username: builder.username, landletId, templateId: brick.templateId, brickTriangles: triangles, tiers: withTiers, bricks: BRICKS, placed, extraProducts: EXTRA_PRODUCTS }));
