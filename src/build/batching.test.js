@@ -216,4 +216,15 @@ describe('Build batching', () => {
     expect(batching.counts().items).toBe(0);
     for (const object of objects) expect(object.userData.model.visible).toBe(true);
   });
+
+  // #4003: an item waiting for its simpler versions is not drawn at all, so it is never batched.
+  it('leaves an item that is held back out of every batch and keeps it undrawn', () => {
+    const { batching, objects } = setup(6);
+    objects[2].userData.lodHeld = true;
+    objects[2].userData.model.visible = false;
+    batching.sync(objects);
+    expect(batching.counts().items).toBe(5);
+    expect(objects[2].userData.model.visible).toBe(false);
+    expect(objects[2].userData.batchRoot).toBeUndefined();
+  });
 });
