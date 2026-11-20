@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PHONE_PROFILE, THROTTLE_PROFILE, profileFor, applyProfile, parseStep, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
-  unionArea, summariseCover, coverTable, parseServerTiming, summariseServerTimings,
+  unionArea, summariseCover, coverTable, parseServerTiming, summariseServerTimings, evaluateBudget,
 } from './live-site-lib.mjs';
 
 describe('live-site steps (#3430)', () => {
@@ -298,5 +298,45 @@ describe('server timing (#3464)', () => {
   it('is a flag, off unless asked', () => {
     expect(parseArgs(['--name', 'higglehaven4']).options.serverTiming).toBe(false);
     expect(parseArgs(['--name', 'higglehaven4', '--server-timing']).options.serverTiming).toBe(true);
+  });
+});
+
+describe('live-site budget step (#3935)', () => {
+  const stats = { longestFrameMs: 883, longTasks: { count: 17, longestMs: 587, longestAtMs: 4200 } };
+
+  it('parses budget:<metric>:<limit> and refuses a bad metric or limit with one plain line', () => {
+    expect(parseStep('budget:longtask:600')).toEqual({ command: 'budget', args: ['longtask', 600] });
+    expect(parseStep('budget:longtasks:20')).toEqual({ command: 'budget', args: ['longtasks', 20] });
+    expect(parseStep('budget:frame:900')).toEqual({ command: 'budget', args: ['frame', 900] });
+    expect(() => parseStep('budget:longtask')).toThrow(/needs 2 argument/);
+    expect(() => parseStep('budget:triangles:50000')).toThrow(/metric must be one of longtask, longtasks, frame/);
+    expect(() => parseStep('budget:longtask:0')).toThrow(/limit above zero/);
+    expect(() => parseStep('budget:longtask:fast')).toThrow(/limit above zero/);
+    expect(() => parseStep('budget:longtask:600:extra')).toThrow(/limit above zero/);
+  });
+
+  it('says within when the figure is at or under the limit, and OVER when it passes it', () => {
+    const within = evaluateBudget('longtask', 600, stats);
+    expect(within).toMatchObject({ metric: 'longtask', limit: 600, value: 587, within: true });
+    expect(within.line).toBe('budget longtask:600: longest long task 587 ms is within the limit of 600 ms');
+    expect(evaluateBudget('longtask', 587, stats).within).toBe(true);
+    const over = evaluateBudget('longtask', 500, stats);
+    expect(over).toMatchObject({ value: 587, within: false });
+    expect(over.line).toBe('budget longtask:500: longest long task 587 ms is OVER the limit of 500 ms');
+  });
+
+  it('reads the count of long tasks and the longest frame, and cautions about frame time', () => {
+    expect(evaluateBudget('longtasks', 20, stats)).toMatchObject({ value: 17, within: true });
+    expect(evaluateBudget('longtasks', 10, stats).line).toBe('budget longtasks:10: long tasks 17 is OVER the limit of 10');
+    const frame = evaluateBudget('frame', 800, stats);
+    expect(frame).toMatchObject({ value: 883, within: false });
+    expect(frame.caution).toMatch(/software GL/);
+    expect(evaluateBudget('longtask', 600, stats).caution).toBeUndefined();
+  });
+
+  it('is not within budget when the page gave no figure (a missing number never passes)', () => {
+    expect(evaluateBudget('longtask', 600, null)).toMatchObject({ value: null, within: false });
+    expect(evaluateBudget('longtask', 600, null).line).toMatch(/no figure/);
+    expect(evaluateBudget('frame', 800, { longTasks: { count: 0, longestMs: 0 } }).within).toBe(false);
   });
 });

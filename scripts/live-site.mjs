@@ -42,6 +42,13 @@
 //   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
+//   lap                                   like stats, then count afresh: the figures since the last lap
+//   budget:<metric>:<limit>               fail the run (exit 2) when the figures since the last lap (or
+//                                         the start) pass the limit; metric is longtask (longest long
+//                                         task, ms), longtasks (how many) or frame (longest frame, ms:
+//                                         software GL, see --phone). The report's step carries the value
+//                                         and the limit, so a PR can say "within budget" with a number.
+//                                         The run goes on after an over-budget step.
 //   pos                                   where the avatar stands now, and which mode and flags the page is in
 //   peer:join                             (with --with) the second page's avatar walks up beside this one
 //   peer:say:<text> / peer:shot[:name] / peer:pos   the second page speaks in nearby chat / is photographed / reports where it stands
@@ -68,7 +75,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile, parseServerTiming, summariseServerTimings,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile, parseServerTiming, summariseServerTimings, evaluateBudget,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -653,6 +660,11 @@ async function runStepAction(step, index) {
       await page.evaluate(() => window.__frameMonitor?.reset()).catch(() => {});
       return lap;
     }
+    case 'budget': {
+      // #3935: the figures since the last lap (or the start) against a stated limit; the run goes on either way.
+      const [metric, limit] = step.args;
+      return evaluateBudget(metric, limit, await frameStats());
+    }
     case 'pos':
       return page.evaluate(() => ({
         avatar: window.__testShopAvatarPosition?.() ?? null,
@@ -775,6 +787,12 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
+      if (step.command === 'budget') {
+        // An over-budget step fails the run (exit 2) but does not stop the steps after it, so one run can hold several phases to account.
+        if (!value.within) console.error(`live-site: ${value.line}`);
+        result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
+        continue;
+      }
       result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
