@@ -15,19 +15,24 @@ const SPEAKER = 'speaker-1';
 const QUIET = 'quiet-1';
 const { browser, page, errors } = await launchPage();
 
+// The real sign-up and verification run first (chooseIdentity clears the verify modal with the
+// simulated card step), because creating a lándlet needs a server-verified account. Nearby chat's leaf
+// is gated on the client's own trust tier being id_verified, and this deployment never configures
+// DIDIT_API_KEY, so that tier is patched into /api/auth/me only AFTER the lándlet exists (below), the
+// same client-side patch nearby-chat-mute-and-report.test.mjs uses. The chat poll itself is mocked, so
+// the server's own id_verified gate on /api/nearby-chat is never reached.
 async function patchTrustTierToIdVerified(route) {
   const response = await route.fetch();
   const body = await response.json();
   if (body.user) body.user.trustTier = 'id_verified';
   await route.fulfill({ response, contentType: 'application/json', body: JSON.stringify(body) });
 }
-await page.route('**/api/auth/me', patchTrustTierToIdVerified);
-await page.route('**/api/auth/signup', patchTrustTierToIdVerified);
 
-// The two other avatars are told to the client directly (status 200 stated here, not inherited from a
-// real response): this test's account is only client-side id_verified, so a real GET /api/presence would
-// refuse it. Everything the client then does with them is the real code.
-await page.route('**/api/presence*', async (route) => {
+// The two other avatars are told to the client directly, with the status stated here rather than
+// inherited from a real response, so exactly who is nearby is under the test's control. Only GET
+// /api/presence itself (not /api/presence/me, which the client also reads) is answered; everything the
+// client then does with the avatars is the real code.
+await page.route((url) => url.pathname === '/api/presence', async (route) => {
   if (route.request().method() !== 'GET') return route.continue();
   await route.fulfill({
     status: 200,
@@ -76,6 +81,7 @@ const landletCreated = await fetchJson('/api/landlets', {
   body: JSON.stringify({ landletId: LANDLET_ID, name: 'Speech Cue Landlet', areaM2: 1000, status: 'claimed', ownerBuilderId: builder.builderId }),
 });
 console.log('landlet created (status should be 201):', landletCreated.status);
+await page.route('**/api/auth/me', patchTrustTierToIdVerified); // from here on the client reads id_verified
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
