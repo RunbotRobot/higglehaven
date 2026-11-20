@@ -63,9 +63,13 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
   transition-delay: calc(var(--i) * 40ms);
 }
 .petal.general { background: linear-gradient(160deg, rgb(var(--panel-rgb)), rgb(var(--panel-rgb) / 0.92)); }
-.stage[data-open="petals"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: auto; }
+/* #4012: the petals stay out while a stem is open, so the flower is whole: head, four petals, stem and leaves. */
+.stage[data-open="petals"] .petal, .stage[data-open="menu"] .petal, .stage[data-open="mode"] .petal, .stage[data-open="help"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: auto; }
+/* Folding runs in the reverse order of unfolding: the leaves fold into the stem (about .3 s), the stem draws
+   up into the head (.2 s), then the petals close. flower.js sets data-fold="staged" when a stem was open. */
+.stage[data-fold="staged"][data-open="closed"] .petal { transition-delay: calc(.5s + var(--i) * 40ms); }
 .stage[data-loading="true"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: none; }
-.petal.here, .petal.lit { background: var(--brand-green); font-weight: 600; }
+.petal.here, .petal.lit, .petal.open { background: var(--brand-green); font-weight: 600; }
 .stage[data-loading="true"] .petal:not(.lit) { opacity: .55; }
 .petal .pin { position: absolute; left: 60px; top: 18px; transform: translate(-50%, -50%) rotate(calc(var(--turn) * -1)); display: flex; flex-direction: column; align-items: center; gap: 1px; pointer-events: none; }
 .ic { width: 20px; height: 20px; display: block; }
@@ -75,18 +79,18 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 .stem[hidden], .help[hidden] { display: none; }
 .stem { position: absolute; left: 0; top: 0; z-index: 0; }
 .stem-line { position: absolute; left: -16px; top: -16px; width: 390px; height: 600px; overflow: visible; pointer-events: none; }
-.stem-line path { fill: none; stroke: rgb(var(--pill-rgb)); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .5s ease; filter: drop-shadow(0 2px 4px rgb(var(--ink-rgb) / 0.2)); }
-.stem.on .stem-line path { stroke-dashoffset: 0; }
+.stem-line path { fill: none; stroke: rgb(var(--pill-rgb)); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .2s ease-in .3s; filter: drop-shadow(0 2px 4px rgb(var(--ink-rgb) / 0.2)); }
+.stem.on .stem-line path { stroke-dashoffset: 0; transition: stroke-dashoffset .5s ease; }
 .leaf {
   --k: 0;
   position: absolute; top: calc(112px + var(--k) * 40px); width: 96px; height: 50px; padding: 0; border: 0;
   background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--panel-rgb) / 0.94));
   box-shadow: 0 4px 12px rgb(var(--ink-rgb) / 0.2); color: var(--ink); cursor: pointer;
-  opacity: 0; transform: scale(0.3); transition: transform .28s ease, opacity .2s ease; transition-delay: calc(var(--k) * 60ms + 120ms);
+  opacity: 0; transform: scale(0.3); transition: transform .2s ease-in, opacity .2s ease-in; transition-delay: calc((5 - var(--k)) * 20ms);
 }
 .leaf.r { left: 96px; border-radius: 24px 5px 24px 5px; transform-origin: 0 50%; }
 .leaf.l { left: 0; border-radius: 5px 24px 5px 24px; transform-origin: 100% 50%; }
-.stem.on .leaf { opacity: 1; transform: scale(1); }
+.stem.on .leaf { opacity: 1; transform: scale(1); transition: transform .28s ease, opacity .2s ease; transition-delay: calc(var(--k) * 60ms + 120ms); }
 .leaf .lin { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
 .leaf .ic { width: 24px; height: 24px; }
 .stem[data-stem="build"] .leaf, .stem[data-stem="sell"] .leaf, .stem[data-stem="shop"] .leaf { background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--pill-rgb) / 0.9)); }

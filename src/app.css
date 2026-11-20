@@ -860,6 +860,28 @@
         white-space: nowrap;
         animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
       }
+      /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
+         stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
+         panel is still drawn while it does (not tappable). A swap between two stems folds only the leaves. */
+      #account-menu-panel.bud-folding,
+      #account-menu-panel.bud-leaves-folding { display: flex; pointer-events: none; }
+      body[data-bud="on"] #account-menu-panel.bud-folding button,
+      body[data-bud="on"] #account-menu-panel.bud-folding > .bud-pair,
+      body[data-bud="on"] #account-menu-panel.bud-leaves-folding button,
+      body[data-bud="on"] #account-menu-panel.bud-leaves-folding > .bud-pair {
+        animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both;
+        animation-delay: 0s;
+      }
+      body[data-bud="on"] #account-menu-panel.bud-folding::before {
+        animation: bud-stem-draw var(--motion-fold) var(--ease-fold) var(--motion-fold) both;
+      }
+      /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
+         (already finished), so changing its direction would jump to the end instead of playing. */
+      @keyframes bud-leaf-fold { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.6); } }
+      @keyframes bud-stem-draw { from { transform: scaleY(1); } to { transform: scaleY(0); } }
+      /* The stem grows to a new menu's length instead of jumping (a swap between two stems). */
+      @property --stem-h { syntax: '<length>'; inherits: true; initial-value: 0px; }
+      #account-menu-panel.bud-swapped { transition: --stem-h var(--motion-grow) var(--ease-soft); }
       /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
       body[data-bud="on"] #account-menu-panel > button,
       body[data-bud="on"] #account-menu-panel > .bud-pair {
@@ -1023,7 +1045,9 @@
       }
       /* Held open while a mode loads: already out, so no motion on arrival. */
       body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
+      body[data-bud-ring="held"] #bud-modes .bud-menu-btn,
+      body[data-bud-ring="staged"] #bud-modes .mode-nav-btn,
+      body[data-bud-ring="staged"] #bud-modes .bud-menu-btn { animation: none; }
       /* Folding back in: the reverse, a little faster, the last petal first. */
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
       body[data-bud-ring="folding"] #bud-modes .bud-menu-btn {
@@ -1063,7 +1087,9 @@
         body[data-bud="on"] #bud-modes .mode-nav-btn,
         body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear both; }
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
+        body[data-bud-ring="held"] #bud-modes .bud-menu-btn,
+        body[data-bud-ring="staged"] #bud-modes .mode-nav-btn,
+        body[data-bud-ring="staged"] #bud-modes .bud-menu-btn { animation: none; }
         body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
         body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
       }
