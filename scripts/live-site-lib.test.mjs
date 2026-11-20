@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PHONE_PROFILE, THROTTLE_PROFILE, profileFor, applyProfile, parseStep, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
-  unionArea, summariseCover, coverTable,
+  unionArea, summariseCover, coverTable, parseServerTiming, summariseServerTimings,
 } from './live-site-lib.mjs';
 
 describe('live-site steps (#3430)', () => {
@@ -280,5 +280,23 @@ describe('the second page: --with and the peer steps (#3930)', () => {
     expect(() => parseStep('peer:say')).toThrow(/words to say/);
     expect(() => parseStep('peer:dance')).toThrow(/peer must be one of/);
     expect(() => parseStep('peer')).toThrow();
+  });
+});
+
+describe('server timing (#3464)', () => {
+  it('reads the worker\'s Server-Timing value', () => {
+    expect(parseServerTiming('d1;dur=42;desc="5 trips"')).toEqual({ d1Ms: 42, trips: 5 });
+    expect(parseServerTiming('d1;dur=3.5;desc="1 trip"')).toEqual({ d1Ms: 3.5, trips: 1 });
+    expect(parseServerTiming('cdn-cache;desc=HIT')).toBeNull();
+    expect(parseServerTiming(undefined)).toBeNull();
+  });
+
+  it('reports medians over the runs seen', () => {
+    expect(summariseServerTimings([{ d1Ms: 40, trips: 5 }, { d1Ms: 10, trips: 4 }, { d1Ms: 30, trips: 5 }])).toEqual({ runs: 3, d1MsMedian: 30, tripsMedian: 5 });
+  });
+
+  it('is a flag, off unless asked', () => {
+    expect(parseArgs(['--name', 'higglehaven4']).options.serverTiming).toBe(false);
+    expect(parseArgs(['--name', 'higglehaven4', '--server-timing']).options.serverTiming).toBe(true);
   });
 });

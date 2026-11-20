@@ -302,7 +302,7 @@ export function gateRefusalMessage(status) {
   return `The site answered ${status}: the preview gate did not accept this session, so the fleet key is not configured for this environment (see #3428). Nothing else was tried.`;
 }
 
-// The flags: --url, --name, --desktop, --login, --out, --timing (repeatable), --cover-report.
+// The flags: --url, --name, --desktop, --login, --out, --timing (repeatable), --server-timing, --cover-report.
 // Everything else is a step.
 // #3736: `--throttle` -- a slow phone on a slow connection, so a wait that is
 // invisible on fast hardware shows up. The standard "slow 4G" mobile profile.
@@ -350,6 +350,7 @@ export function parseArgs(argv, env = {}) {
     coverReport: false,
     throttle: false,
     phone: false,
+    serverTiming: false,
   };
   const steps = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -370,6 +371,7 @@ export function parseArgs(argv, env = {}) {
     else if (arg === '--cover-report') options.coverReport = true;
     else if (arg === '--throttle') options.throttle = true;
     else if (arg === '--phone') options.phone = true;
+    else if (arg === '--server-timing') options.serverTiming = true;
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
     else steps.push(parseStep(arg));
   }
@@ -387,4 +389,20 @@ export function parseArgs(argv, env = {}) {
   }
   if (steps.some((step) => step.command === 'peer') && options.with === null) throw new Error('peer steps need --with <name>: a second account to stand beside this one');
   return { options, steps };
+}
+
+// #3464: a `Server-Timing` value from the worker ('d1;dur=42;desc="5 trips"') as numbers, or null.
+export function parseServerTiming(value) {
+  const match = /d1;dur=(\d+(?:\.\d+)?);desc="(\d+) trips?"/.exec(value || '');
+  return match ? { d1Ms: Number(match[1]), trips: Number(match[2]) } : null;
+}
+
+// One line per timed route: how many D1 trips and how long they took, as medians over the runs seen.
+export function summariseServerTimings(samples) {
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+  return { runs: samples.length, d1MsMedian: median(samples.map((s) => s.d1Ms)), tripsMedian: median(samples.map((s) => s.trips)) };
 }
