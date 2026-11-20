@@ -26,7 +26,7 @@ function item(index, triangles) {
   return object;
 }
 
-function setup(count, triangles) {
+function setup(count, triangles, selected = new Set()) {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
   camera.position.set(0, -30, 20);
   camera.updateMatrixWorld(true);
@@ -34,9 +34,9 @@ function setup(count, triangles) {
   const scene = new THREE.Scene();
   objects.forEach((object) => scene.add(object));
   const lod = createBuildLod({
-    camera, target: new THREE.Vector3(0, 0, 0), getMeshes: () => objects, isSelected: () => false, viewportHeight: () => 844,
+    camera, target: new THREE.Vector3(0, 0, 0), getMeshes: () => objects, isSelected: (object) => selected.has(object), viewportHeight: () => 844,
   });
-  return { lod, objects };
+  return { lod, objects, scene };
 }
 
 const drawn = (objects) => objects.filter((object) => object.userData.model.visible);
@@ -89,5 +89,76 @@ describe('Build level of detail while the versions attach', () => {
     const held = objects.filter((object) => object.userData.lodHeld);
     expect(held.length).toBeGreaterThan(0);
     for (const object of held) expect(object.userData.lodTiersState).toBeDefined();
+  });
+
+  // A drawn item is never drawn out again: one that was protected (selected) while its versions loaded
+  // keeps drawing when the selection moves on.
+  it('keeps drawing an item that stopped being protected while its versions still load', () => {
+    const selected = new Set();
+    const { lod, objects } = setup(400, 5120, selected);
+    selected.add(objects[399]); // far along the row, so only its selection protects it
+    lod.update(1000, true);
+    expect(objects[399].userData.model.visible).toBe(true);
+    selected.delete(objects[399]);
+    lod.update(1300, true);
+    expect(objects[399].userData.model.visible).toBe(true);
+    expect(objects[399].userData.lodHeld).toBeFalsy();
+  });
+
+  // The budget is for the way in. Long after entering, a new placement is judged on its own.
+  it('never holds a new placement made after the lándlet has settled in', () => {
+    const { lod, objects, scene } = setup(400, 5120);
+    lod.update(1000, true);
+    for (const object of objects) object.userData.lodTiersState = 'loading'; // versions still on their way
+    const later = 1000 + BUILD_HOLD_MAX_MS + 1000;
+    lod.update(later, true); // the entering window is over: everything draws, nothing is counted
+    const added = item(500, 5120);
+    scene.add(added);
+    objects.push(added);
+    lod.update(later + 300, true);
+    expect(added.userData.model.visible).toBe(true);
+    expect(added.userData.lodHeld).toBeFalsy();
+    expect(lod.counts().held).toBe(0);
+  });
+
+  // A hidden object still absorbs a raycast unless its own raycast says no (src/world/models.js).
+  it('does not let a tap land on an item that is held back, and does again once it is let in', () => {
+    const { lod, objects } = setup(400, 5120);
+    lod.update(1000, true);
+    const held = objects.find((object) => object.userData.lodHeld);
+    const drawnOne = objects[0];
+    expect(held).toBeDefined();
+    expect(held.userData.model.raycast()).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(drawnOne.userData.model, 'raycast')).toBe(false);
+    lod.update(1000 + BUILD_HOLD_MAX_MS + 1000, true); // let in
+    expect(held.userData.lodHeld).toBeFalsy();
+    expect(Object.prototype.hasOwnProperty.call(held.userData.model, 'raycast')).toBe(false);
+  });
+
+  it('lets in a held item that stops being a placed item with versions to wait for', () => {
+    const { lod, objects } = setup(400, 5120);
+    lod.update(1000, true);
+    const held = objects.find((object) => object.userData.lodHeld);
+    held.removeFromParent(); // no longer in the scene
+    lod.update(1300, true);
+    expect(held.userData.lodHeld).toBeFalsy();
+    expect(held.userData.model.visible).toBe(true);
+  });
+
+  // Letting a held item in shows it in the version it should be in, never in full for a tick first.
+  it('shows a released item whose versions are there in its reduced version straight away', () => {
+    const { lod, objects } = setup(400, 5120);
+    lod.update(1000, true);
+    const held = objects[399];
+    expect(held.userData.lodHeld).toBe(true);
+    const mid = new THREE.Group();
+    mid.visible = false;
+    held.add(mid);
+    held.userData.lodTiers = { mid };
+    held.userData.lodTiersState = 'ready';
+    lod.update(1300, true);
+    expect(held.userData.lodHeld).toBeFalsy();
+    expect(held.userData.model.visible).toBe(false);
+    expect(mid.visible).toBe(true);
   });
 });

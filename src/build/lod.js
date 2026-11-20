@@ -25,14 +25,16 @@ import {
   apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, TIER_FULL, largestFirst,
   MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready,
 } from '../shop/lodTier.js';
-import { attachInstanceTiers, setInstanceLodState, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
+import { attachInstanceTiers, setInstanceLodState, setLodChildHitTestable, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
 
 export const BUILD_LOD_INTERVAL_MS = 250;
 export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching and flipping may use
 // #4003: items whose versions have not attached yet are drawn from their full model, so on a heavy
 // lándlet the way in drew up to 8.4 million triangles in a frame. Those beyond this many triangles
 // (nearest first, and an item already drawn stays drawn) wait, undrawn, until their versions attach
-// and then arrive in the version they should be in; a wait never lasts longer than HOLD_MAX_MS.
+// and then arrive in the version they should be in. The budget is for the way in: an item counts
+// against it, and can be held, only for HOLD_MAX_MS after it was first seen, so a placement or a paste
+// long after entering is judged on its own, and a single new item is always drawn.
 export const BUILD_HOLD_BACK_TRIANGLES = MAX_FULL_DETAIL_TRIANGLES;
 export const BUILD_HOLD_MAX_MS = 20000;
 
@@ -116,16 +118,19 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
 
   // #4003: what has no versions yet and does not fit the triangle budget is not drawn until they are
   // there. A held item is unready, unprotected and has never been drawn; everything else draws.
-  function applyHoldBack(list, listItems, nowMs) {
+  // `tiers` are the versions the budget gave each item, used to show a released item in the right one.
+  function applyHoldBack(list, listItems, tiers, nowMs) {
     const candidates = [];
     list.forEach((object, i) => {
       const data = object.userData;
+      if (data.lodSeenMs === undefined) data.lodSeenMs = nowMs;
       const waiting = data.lodTiersState !== 'ready' && data.lodTiersState !== 'none';
-      if (!waiting) { setHeld(object, false); return; }
+      const recent = nowMs - data.lodSeenMs <= BUILD_HOLD_MAX_MS;
+      if (!waiting || !recent) { setHeld(object, false, tiers[i]); return; }
       // A protected item (selected, or where the builder works) is always drawn, but its triangles
-      // still count against the budget, so what is held back is what is left after them.
-      if (listItems[i].protected) { setHeld(object, false); candidates.push(i); return; }
-      if (data.lodHeldSinceMs !== undefined && nowMs - data.lodHeldSinceMs > BUILD_HOLD_MAX_MS) { data.lodDrawnWaiting = true; setHeld(object, false); return; }
+      // still count against the budget, so what is held back is what is left after them. It is drawn,
+      // so it stays drawn when it stops being protected.
+      if (listItems[i].protected) { data.lodDrawnWaiting = true; setHeld(object, false, tiers[i]); candidates.push(i); return; }
       candidates.push(i);
     });
     const flags = holdBackUnready(candidates.map((i) => ({
@@ -135,22 +140,35 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const object = list[i];
       if (listItems[i].protected) return;
       if (flags[k]) {
-        if (object.userData.lodHeldSinceMs === undefined) object.userData.lodHeldSinceMs = nowMs;
-        setHeld(object, true);
+        setHeld(object, true, tiers[i]);
         // The versions of a held item must be on their way, whichever tier it will end up in.
         if (object.userData.lodTiersState === undefined) requestTiers(object);
       } else {
         object.userData.lodDrawnWaiting = true;
-        setHeld(object, false);
+        setHeld(object, false, tiers[i]);
       }
     });
   }
 
-  function setHeld(object, held) {
+  // A held item is not drawn and cannot be tapped (a hidden object still absorbs a raycast unless its
+  // own raycast says no, src/world/models.js). Letting it in shows it in the version it should be in
+  // when its versions are there (so it never draws in full for a tick first), else its own model.
+  function setHeld(object, held, tier = TIER_FULL) {
     const data = object.userData;
-    if (data.lodHeld === held || (!held && !data.lodHeld)) return;
+    if (!held && !data.lodHeld) return;
+    if (held && data.lodHeld) return;
     data.lodHeld = held;
-    if (data.model) data.model.visible = !held;
+    if (!data.model) return;
+    if (held) {
+      data.model.visible = false;
+      setLodChildHitTestable(data.model, false);
+    } else if (data.lodTiersState === 'ready') {
+      data.lodApplied = tier;
+      setInstanceLodState(object, tier);
+    } else {
+      data.model.visible = true;
+      setLodChildHitTestable(data.model, true);
+    }
   }
 
   function update(now = performance.now(), force = false) {
@@ -162,7 +180,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     objects.length = 0;
     const height = viewportHeight();
     for (const object of getMeshes()) {
-      if (!hasLodTiers(object) || !object.parent) continue;
+      if (!hasLodTiers(object) || !object.parent) { if (object.userData.lodHeld) setHeld(object, false); continue; }
       scratchPosition.setFromMatrixPosition(object.matrixWorld);
       const px = apparentSizePx(radiusOf(object), scratchPosition.distanceTo(camera.position), camera.fov, height);
       const groundDistanceM = Math.hypot(scratchPosition.x - target.x, scratchPosition.y - target.y);
@@ -182,7 +200,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       objects.push(object);
     }
     const tiers = budgetedTiers(items, undefined, undefined, fullTriangleCap);
-    applyHoldBack(objects, items, now);
+    applyHoldBack(objects, items, tiers, now);
     flips.length = 0;
     for (let i = 0; i < objects.length; i++) {
       const object = objects[i];
