@@ -744,15 +744,22 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgb(var(--white-rgb) / 0.5);
-        box-shadow: var(--shadow-card);
-        animation: bud-breathe var(--motion-breath) ease-in-out infinite;
+        /* #3754 (the owner chose option C): the head is the solid green bud with the logo in cream
+           (public/bud-head.svg), so there is no backing disc: the picture's shadow follows the
+           bud's own outline, and breathing and pulsing animate that shadow on the picture
+           (bud-head-breathe/-pulse). */
+        background: transparent;
+        border: 0;
+        box-shadow: none;
       }
-      body[data-bud="on"] #account-menu-toggle.active {
-        background: rgb(var(--white-rgb) / 0.8);
-        animation: none;
+      body[data-bud="on"] .bud-logo {
+        display: block;
+        width: 100%;
+        height: 100%;
+        filter: var(--filter-head);
+        animation: bud-head-breathe var(--motion-breath) ease-in-out infinite;
       }
-      body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
+      body[data-bud="on"] #account-menu-toggle.active .bud-logo { animation: none; }
       body[data-bud="on"][data-bud-new] .bud-word,
       body[data-bud="on"][data-bud-word] .bud-word {
         display: block;
@@ -799,8 +806,8 @@
       /* #3723: the first-visit word steps aside while the bud is open, where the mode petals now
          fan out over its right edge. */
       body[data-bud="on"] #account-menu-toggle.active .bud-word { display: none; }
-      body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
-        animation: bud-pulse 1.6s ease-in-out infinite;
+      body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) .bud-logo {
+        animation: bud-head-pulse 1.6s ease-in-out infinite;
       }
       /* #3762: on the first open ever, the "?" leaf pulses so the instructions are found. */
       body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] {
@@ -1039,6 +1046,8 @@
       .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--shadow-breath); } }
+      @keyframes bud-head-breathe { 0%, 100% { filter: var(--filter-head); } 50% { filter: var(--filter-head-breath); } }
+      @keyframes bud-head-pulse { 0%, 100% { filter: var(--filter-head); } 50% { filter: var(--filter-head-pulse); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--glow-pulse); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
@@ -1048,6 +1057,7 @@
       @keyframes bud-stem-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
+        body[data-bud="on"] .bud-logo,
         body[data-bud="on"] #account-menu-panel button,
         body[data-bud="on"] #account-menu-panel::before { animation: none; }
         body[data-bud="on"] #bud-modes .mode-nav-btn,
@@ -1200,12 +1210,13 @@
       body[data-bud-mark] #account-menu-toggle::after {
         content: '';
         position: absolute;
-        top: 2px;
-        right: 4px;
-        width: 9px;
-        height: 9px;
+        top: 11px;
+        right: 7px;
+        width: 10px;
+        height: 10px;
         border-radius: var(--radius-round);
         background: var(--danger-bright);
+        box-shadow: var(--ring-badge); /* #3754: the dot sits on the green bud's shoulder, ringed in white so it reads on green */
       }
       /* A small dot on the collapsed toggle summarizing "something in here
          needs your attention" — pure CSS (:has(), already relied on
@@ -1223,6 +1234,16 @@
         height: 7px;
         border-radius: var(--radius-round);
         background: var(--danger-bright);
+      }
+      /* #3754: on the green bud the same dot sits on its shoulder, ringed in white. */
+      body[data-bud="on"] #account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after,
+      body[data-bud="on"] #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after,
+      body[data-bud="on"] #account-menu:has(#dm-badge:not([hidden])) #account-menu-toggle::after {
+        top: 11px;
+        right: 7px;
+        width: 10px;
+        height: 10px;
+        box-shadow: var(--ring-badge);
       }
       #account-menu-panel {
         display: none;
@@ -1771,7 +1792,7 @@
          the window is shown with its conversation in it: the head breathes, the "?" row says so, and
          the cursor is a wait cursor over the world (the assistant in the world has no control to mark). */
       body.assistant-opening { cursor: progress; }
-      body.assistant-opening #account-menu-toggle { animation: bud-pulse 1.1s ease-in-out infinite; }
+      body.assistant-opening #account-menu-toggle .bud-logo { animation: bud-head-pulse 1.1s ease-in-out infinite; }
       #help-ask-assistant-btn[aria-busy="true"] { opacity: 0.7; }
       #assistant-chat-form {
         display: flex;

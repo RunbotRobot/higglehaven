@@ -41,7 +41,7 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 
 /* The flower: its origin is the head's top-left corner, 16 px in from the screen's corner. */
 .flower { position: absolute; left: 16px; top: 16px; width: 0; height: 0; }
-.head { position: absolute; left: 0; top: 0; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; z-index: 3; filter: drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.25)); }
+.head { position: absolute; left: 0; top: 0; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; z-index: 3; filter: drop-shadow(0 0 1.5px rgb(var(--white-rgb) / 0.9)) drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.25)); }
 .head-art { display: block; }
 .head-art[hidden] { display: none; }
 .head .ring { position: absolute; inset: -5px; border-radius: 50%; border: 3px solid transparent; pointer-events: none; }
