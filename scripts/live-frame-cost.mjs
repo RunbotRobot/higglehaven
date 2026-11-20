@@ -105,6 +105,14 @@ if (mode === 'build') {
   // long gap while the wall is built shows up as a longest frame, not only as seconds of waiting.
   const enteringFrames = await page.evaluate(() => window.__frameCost.frames.slice());
   console.log(summarise('entering Build (page open to meshes built)', enteringFrames));
+  // #4003: where in the entering window the heavy frames sit (time since the first frame, summed from the
+  // frame gaps), so "the worst frame" can be told apart from "every frame until the hold-back applies".
+  let clock = 0;
+  const timeline = enteringFrames.map((f, i) => { clock += f.ms; return { i, atMs: clock, ms: f.ms, triangles: f.triangles, draws: f.draws }; });
+  const heaviest = [...timeline].sort((a, b) => b.triangles - a.triangles).slice(0, 6).sort((a, b) => a.i - b.i);
+  console.log(`  heaviest entering frames (frame #, at ms, gap ms, triangles, draws): ${heaviest.map((f) => `#${f.i} at ${f.atMs} ${f.ms} ${f.triangles} ${f.draws}`).join(' | ')}`);
+  const over = enteringFrames.filter((f) => f.triangles > 1200000).length;
+  console.log(`  entering frames over 1.2 M triangles: ${over} of ${enteringFrames.length}`);
   // #4003: --trace prints the entering frames over --trace-over triangles (default 1,200,000, Shop's budget)
   // with the time into the window, the draw calls and how many items were held back or drawn, so the worst
   // frame can be placed (before the hold applies, or the protected near ring).
