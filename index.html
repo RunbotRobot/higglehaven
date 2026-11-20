@@ -222,7 +222,7 @@
       <button id="paste-btn" type="button" disabled hidden>Paste</button>
     </div>
     <div id="add-item-panel">
-      <div id="catalog-picker" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="catalog-picker" role="dialog" aria-modal="true" aria-label="Add item" tabindex="-1">
         <button id="catalog-picker-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <button id="catalog-all-items-btn" type="button">All items</button>
         <div id="catalog-mode-tabs">
@@ -278,7 +278,7 @@
         </div>
       </div>
     </div>
-    <div id="bundle-name-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="bundle-name-modal" role="dialog" aria-modal="true" aria-labelledby="bundle-name-modal-title" tabindex="-1">
       <div id="bundle-name-modal-content">
         <button id="bundle-name-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="bundle-name-modal-title">Name this bundle</h2>
@@ -394,7 +394,7 @@
          one. Same bundle-name-modal shell/pattern (#2761) a moderation flow
          gets exactly like any other user-facing prompt -- native confirm()
          is not an option here either. -->
-    <div id="moderation-category-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="moderation-category-modal" role="dialog" aria-modal="true" aria-labelledby="moderation-category-modal-title" tabindex="-1">
       <div id="moderation-category-modal-content">
         <button id="moderation-category-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="moderation-category-modal-title">Remove this content</h2>
@@ -411,7 +411,7 @@
         </div>
       </div>
     </div>
-    <div id="upload-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title" tabindex="-1">
       <div id="upload-modal-content">
         <button id="upload-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="upload-modal-title">Add a product</h2>
@@ -529,10 +529,10 @@
          reachable from the Build-mode catalog picker's #add-item-panel --
          see src/sell/mode.js's own comment on this button's click
          handler for why). -->
-    <div id="sell-this-too-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="sell-this-too-modal" role="dialog" aria-modal="true" aria-labelledby="sell-this-too-modal-title" tabindex="-1">
       <div id="sell-this-too-modal-content">
         <button id="sell-this-too-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Sell this too</h2>
+        <h2 id="sell-this-too-modal-title">Sell this too</h2>
         <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
         <div id="sell-this-too-grid"></div>
         <div id="sell-this-too-empty" hidden>No products match your search.</div>
@@ -568,10 +568,10 @@
          (posted to the Control Room for review); the mechanism here is
          what's real, the text is easy to revise without touching this
          markup again. -->
-    <div id="refund-policy-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="refund-policy-modal" role="dialog" aria-modal="true" aria-labelledby="refund-policy-modal-title" tabindex="-1">
       <div id="refund-policy-modal-content">
         <button id="refund-policy-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Refund policy</h2>
+        <h2 id="refund-policy-modal-title">Refund policy</h2>
         <p>
           When you return a purchase, you'll get back 99% of what you paid — not the full 100%.
         </p>
@@ -595,7 +595,7 @@
         </p>
       </div>
     </div>
-    <div id="checkout-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="checkout-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title" tabindex="-1">
       <div id="checkout-modal-content">
         <button id="checkout-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="checkout-modal-title">Checkout</h2>
@@ -609,9 +609,9 @@
         </div>
       </div>
     </div>
-    <div id="verify-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="verify-modal" role="dialog" aria-modal="true" aria-labelledby="verify-modal-title" tabindex="-1">
       <div id="verify-modal-content">
-        <h2>Verify to continue</h2>
+        <h2 id="verify-modal-title">Verify to continue</h2>
         <!-- #3565: the intro, the card-step line and the ID button's label are set
              from src/account/cardVerifyCopy.js (one source, unit tested). -->
         <p id="verify-modal-intro"></p>
@@ -647,11 +647,11 @@
         <button id="verify-logout-btn" type="button">Log out instead</button>
       </div>
     </div>
-    <div id="seller-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="seller-modal" role="dialog" aria-modal="true" aria-labelledby="seller-modal-title" tabindex="-1">
       <div id="seller-modal-content">
         <button id="seller-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <div class="modal-heading-row">
-          <h2>My products</h2>
+          <h2 id="seller-modal-title">My products</h2>
           <button id="seller-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="seller-hint" aria-label="More info about this list">?</button>
           <!-- #3701: the Manage / List view switch lives in the leaf's header, beside its title, so
                the controls below the header are one row. -->
@@ -684,10 +684,10 @@
         <div id="seller-status" role="status" aria-live="polite"></div>
       </div>
     </div>
-    <div id="notifications-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="notifications-modal" role="dialog" aria-modal="true" aria-labelledby="notifications-modal-title" tabindex="-1">
       <div id="notifications-modal-content">
         <button id="notifications-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Notices</h2>
+        <h2 id="notifications-modal-title">Notices</h2>
         <div id="notifications-actions" hidden>
           <button id="notifications-mark-all-btn" type="button" hidden>Mark all read</button>
           <button id="notifications-clear-read-btn" type="button" hidden>Clear read</button>
@@ -706,10 +706,10 @@
         <div id="my-purchases-empty" class="empty-state" role="status" aria-live="polite" hidden>You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.</div>
       </div>
     </div>
-    <div id="friends-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="friends-modal" role="dialog" aria-modal="true" aria-labelledby="friends-modal-title" tabindex="-1">
       <div id="friends-modal-content">
         <button id="friends-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Friends</h2>
+        <h2 id="friends-modal-title">Friends</h2>
         <div class="friends-toolbar">
           <button id="friends-add-btn" type="button">+ Add friend</button>
           <button id="friends-map-btn" type="button">Show map</button>
@@ -740,15 +740,15 @@
         <div id="friends-panel-empty" class="empty-state">No friends yet. Tap + Add friend to invite someone by name.</div>
       </div>
     </div>
-    <div id="friends-map-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="friends-map-modal" role="dialog" aria-modal="true" aria-labelledby="friends-map-modal-title" tabindex="-1">
       <div id="friends-map-modal-content">
         <button id="friends-map-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Friends map</h2>
+        <h2 id="friends-map-modal-title">Friends map</h2>
         <canvas id="friends-map-canvas"></canvas>
         <div id="friends-map-empty">None of your friends have claimed a lándlet yet.</div>
       </div>
     </div>
-    <div id="dm-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="dm-modal" role="dialog" aria-modal="true" aria-labelledby="dm-modal-title" tabindex="-1">
       <div id="dm-modal-content">
         <button id="dm-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="dm-modal-title">Messages</h2>
@@ -763,49 +763,49 @@
         </form>
       </div>
     </div>
-    <div id="my-lands-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="my-lands-modal" role="dialog" aria-modal="true" aria-labelledby="my-lands-modal-title" tabindex="-1">
       <div id="my-lands-modal-content">
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>My lándlets</h2>
+        <h2 id="my-lands-modal-title">My lándlets</h2>
         <div id="my-lands-status" role="status" aria-live="polite"></div>
         <div id="my-lands-list"></div>
         <div id="my-lands-empty" class="empty-state">You don't own a lándlet yet. Claim one in Build mode to start building.</div>
       </div>
     </div>
-    <div id="sign-posts-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="sign-posts-modal" role="dialog" aria-modal="true" aria-labelledby="sign-posts-modal-title" tabindex="-1">
       <div id="sign-posts-modal-content">
         <button id="sign-posts-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Sign posts</h2>
+        <h2 id="sign-posts-modal-title">Sign posts</h2>
         <div id="sign-posts-truncated" hidden></div>
         <div id="sign-posts-list"></div>
         <div id="sign-posts-empty">No posts on this sign yet.</div>
         <button id="sign-posts-unflag-btn" type="button">Remove community sign</button>
       </div>
     </div>
-    <div id="calendar-events-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="calendar-events-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-events-modal-title" tabindex="-1">
       <div id="calendar-events-modal-content">
         <button id="calendar-events-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Calendar events</h2>
+        <h2 id="calendar-events-modal-title">Calendar events</h2>
         <div id="calendar-events-truncated" hidden></div>
         <div id="calendar-events-list"></div>
         <div id="calendar-events-empty">No events on this calendar yet.</div>
         <button id="calendar-events-unflag-btn" type="button">Remove community calendar</button>
       </div>
     </div>
-    <div id="backup-chain-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="backup-chain-modal" role="dialog" aria-modal="true" aria-labelledby="backup-chain-modal-title" tabindex="-1">
       <div id="backup-chain-modal-content">
         <button id="backup-chain-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Backup chain</h2>
+        <h2 id="backup-chain-modal-title">Backup chain</h2>
         <p id="backup-chain-intro">If this item sells out, the next one in this list automatically takes its place.</p>
         <div id="backup-chain-list"></div>
         <div id="backup-chain-empty">No backups configured yet.</div>
         <button id="backup-chain-add-btn" type="button">+ Add backup</button>
       </div>
     </div>
-    <div id="pending-restoration-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="pending-restoration-modal" role="dialog" aria-modal="true" aria-labelledby="pending-restoration-modal-title" tabindex="-1">
       <div id="pending-restoration-modal-content">
         <button id="pending-restoration-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Removed items</h2>
+        <h2 id="pending-restoration-modal-title">Removed items</h2>
         <p id="pending-restoration-intro">These were taken off your lándlet because their seller was suspended. They come back automatically if the suspension is lifted, or you can clear one for good to free up the spot.</p>
         <div id="pending-restoration-list"></div>
         <div id="pending-restoration-empty">Nothing is waiting to be restored.</div>
@@ -940,10 +940,10 @@
     <!-- #2718 (sub-issue of #2715): src/feedback/submitFeedbackUI.js owns
          every element below -- open/close, the screenshot capture, and the
          submit flow to POST /api/feedback/bug-report (#2719). -->
-    <div id="feedback-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-modal-title" tabindex="-1">
       <div id="feedback-modal-content">
         <button id="feedback-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Submit feedback</h2>
+        <h2 id="feedback-modal-title">Submit feedback</h2>
         <img id="feedback-screenshot-preview" alt="Screenshot of the current view" hidden />
         <label>Describe what happened (optional)
           <textarea id="feedback-description" maxlength="1000" placeholder="What went wrong? The more detail, the better."></textarea>
@@ -955,10 +955,10 @@
         </div>
       </div>
     </div>
-    <div id="settings-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
       <div id="settings-modal-content">
         <button id="settings-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Settings</h2>
+        <h2 id="settings-modal-title">Settings</h2>
         <div id="settings-tabs">
           <button class="settings-tab-btn" type="button" data-section="general">General</button>
           <button class="settings-tab-btn" type="button" data-section="shop">Shop</button>
@@ -972,7 +972,7 @@
         </div>
       </div>
     </div>
-    <div id="auth-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" tabindex="-1">
       <div id="auth-modal-content">
         <button id="auth-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="auth-modal-title">Log in</h2>
@@ -1135,10 +1135,10 @@
         <div id="auth-status" role="status" aria-live="polite"></div>
       </div>
     </div>
-    <div id="claim-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div id="claim-modal" role="dialog" aria-modal="true" aria-labelledby="claim-modal-title" tabindex="-1">
       <div id="claim-modal-content">
         <button id="claim-back-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Claim a lándlet</h2>
+        <h2 id="claim-modal-title">Claim a lándlet</h2>
         <div id="claim-hint">Fly around the world, choose a lándlet to see it, then claim it below. You can only claim one.</div>
         <div id="claim-map-wrap">
           <canvas id="claim-map-canvas"></canvas>
