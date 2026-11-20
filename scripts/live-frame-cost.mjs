@@ -34,6 +34,7 @@ if (!['shop', 'build', 'sell'].includes(mode)) { console.error('live-frame-cost:
 if (!email && (!name || !/^higglehaven\d+$/.test(name))) { console.error('live-frame-cost: --name higglehaven<N> is required (this session\'s name), or --email for a local account'); process.exit(1); }
 const base = flag('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const seconds = Number(flag('--seconds', 35));
+const shotDir = flag('--shot-dir', null); // #3929: PNGs of the settled view and the view after the undo
 const phone = args.includes('--phone');
 const maxTriangles = flag('--max-triangles', null);
 if (maxTriangles !== null && !(Number(maxTriangles) > 0)) { console.error('live-frame-cost: --max-triangles needs a number above zero'); process.exit(1); }
@@ -156,6 +157,7 @@ if (mode === 'shop') {
     previousLod = JSON.stringify(lod);
   }
   await phase('standing still, settled', () => page.waitForTimeout(Math.min(seconds, 8) * 1000));
+  if (shotDir) await page.screenshot({ path: `${shotDir}/build-settled.png` });
   // #3929: orbiting before anything is selected, where the batches draw the wall; the last row below
   // orbits with everything selected, which is every item drawn as itself.
   await phase('orbiting, nothing selected', async () => {
@@ -174,6 +176,7 @@ if (mode === 'shop') {
     await page.evaluate(() => document.getElementById('undo-btn')?.click());
     await page.waitForTimeout(3000);
   });
+  if (shotDir) await page.screenshot({ path: `${shotDir}/build-after-undo.png` });
   console.log(`  after the undo: items by version ${JSON.stringify(await answer(page.evaluate(() => window.__testBuildLodCounts?.() ?? null)))}, batches ${JSON.stringify(await answer(page.evaluate(() => window.__testBuildBatchCounts?.() ?? null)))}, meshes ${await answer(page.evaluate(() => window.__testProductPositions?.().length ?? null))}`);
 }
   await phase(mode === 'build' ? 'orbiting, everything selected' : 'orbiting (a drag across the view)', async () => {
