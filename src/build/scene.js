@@ -1424,6 +1424,9 @@ async function replaceMeshWithCrop(mesh, crop) {
 // bootstrap() has long since filled it in.
 export const productMeshes = [];
 
+// #4003: true until bootstrap has added the lándlet's first batch of items (markBuildSceneReady).
+let buildFirstLoad = true;
+
 export async function addInstanceToScene(instance) {
   const object = await createMeshForInstance(instance);
   if (!object) return null;
@@ -1434,6 +1437,7 @@ export async function addInstanceToScene(instance) {
   // included.
   landletElevationGroup.add(object);
   productMeshes.push(object);
+  if (buildFirstLoad) buildLod.holdNew(object); // #4003: undrawn until the next pass has judged it
   adoptVersion(instance); // #1062: a mesh built from a server instance starts at that version
   // #1950: covers every way a new mesh can appear -- bootstrap()'s initial
   // batch, placing a fresh item from the catalog, and undo/redo recreating
@@ -2571,6 +2575,10 @@ let lastReconcileAt = 0;
 // race the initial load into duplicates.
 export function markBuildSceneReady() {
   buildSceneReady = true;
+  // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
+  // pass, before the next frame, judges all of them against the entering budget.
+  buildLod.update(performance.now(), true);
+  buildFirstLoad = false;
 }
 
 // Never reconcile over work this tab hasn't finished saving: an action in
