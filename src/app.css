@@ -380,6 +380,12 @@
       #layout-preview-toolbar.visible {
         display: flex;
       }
+      /* #3889: a paste refusal is said on its own row of the toolbar, selectable. */
+      #layout-preview-toolbar .inline-action-status {
+        flex-basis: 100%;
+        text-align: center;
+        user-select: text;
+      }
       #layout-preview-back-btn,
       #layout-preview-paste-btn {
         border: none;

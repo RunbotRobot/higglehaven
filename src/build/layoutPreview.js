@@ -14,7 +14,7 @@
 // (same "fix the stale import" step #2555 did for claim/flow.js's own
 // ui/modal.js import once ui/modal.js itself landed).
 import * as THREE from 'three';
-import { showNotice } from '../ui/noticeModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { fetchCatalog, fetchSavedLayout, fetchAllLandlets, createInstancesRemote } from '../api.js';
 import { computeSavedLayoutGround, pointInDragRect } from '../savedLayoutPreview.js';
 import { scene, camera, renderer, registerModeFrameUpdate } from '../world/scene.js';
@@ -194,9 +194,10 @@ layoutPreviewPasteBtn.addEventListener('click', async () => {
   if (selected.length === 0) return;
   const targetLandletId = layoutPreviewPasteTargetEl.value;
   if (!targetLandletId) {
-    showNotice({ title: "Can't paste yet", message: "You don't have a claimed lándlet to paste onto. Claim one first." }); // #3359
+    showInlineActionStatus(layoutPreviewPasteBtn.parentElement, "You don't have a claimed lándlet to paste onto. Claim one first."); // #3889 shape b (was a notice, #3359)
     return;
   }
+  showInlineActionStatus(layoutPreviewPasteBtn.parentElement, '');
   layoutPreviewPasteBtn.disabled = true;
   try {
     // Both instanceId and id (savedLayoutInstanceFromRow's own alias for
@@ -226,14 +227,14 @@ layoutPreviewPasteBtn.addEventListener('click', async () => {
       selectedSavedInstanceIds.delete(instance.instanceId);
     }
     const remaining = selected.length - succeededCount;
-    // #3359: an in-app notice (a browser can drop alert() unseen); it stays
-    // until closed and its text is selectable.
-    showNotice({
-      title: succeededCount > 0 ? 'Pasted some items' : "Couldn't paste these items",
-      message: succeededCount > 0
+    // #3889 (shape b): said in the toolbar by the Paste button, kept and
+    // selectable until the next try (was a notice modal, #3359).
+    showInlineActionStatus(
+      layoutPreviewPasteBtn.parentElement,
+      succeededCount > 0
         ? `Pasted ${succeededCount} item(s), but ${remaining} failed: ${err.message || ''}`.trim()
         : (err.message || "Couldn't paste these items."),
-    });
+    );
     layoutPreviewPasteBtn.disabled = false;
   }
 });
