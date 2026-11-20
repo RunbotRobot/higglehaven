@@ -145,7 +145,7 @@
   });
   Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (b) {
     b.addEventListener('click', function () {
-      Array.prototype.forEach.call(document.querySelectorAll('.head-art'), function (a) { a.hidden = a.dataset.head !== b.dataset.pick; });
+      Array.prototype.forEach.call(document.querySelectorAll('.head-art'), function (a) { a.toggleAttribute('hidden', a.dataset.head !== b.dataset.pick); }); // #3754: these are <svg>, and `hidden` is not a property of an SVGElement, so assigning it did nothing
       Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (o) { o.setAttribute('aria-pressed', o === b ? 'true' : 'false'); });
       showCover();
     });
