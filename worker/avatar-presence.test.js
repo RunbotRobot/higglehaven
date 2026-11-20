@@ -79,13 +79,17 @@ describe('POST /api/presence', () => {
   // env.DB.prepare hijack idiom as other POST-then-reselect race tests in
   // this suite, targeting the exact re-SELECT SQL (the only call site in
   // this file matching this exact string).
-  it('does not crash with a raw 500 if the write returns no row (the account vanished under it)', async () => {
+  it('defensive: a write that returns no row is a clean 404, not a raw 500', async () => {
     // #3464: the upsert and the re-read are one INSERT ... RETURNING statement
-    // now, so there is no gap left for a deletion to land in; what remains is
-    // the statement coming back with nothing. Same env.DB.prepare hijack idiom
-    // as the other POST-then-reselect race tests in this suite, swapping the
-    // write for a statement that returns no row (it keeps the seven bound
-    // parameters the real one takes).
+    // now, so the old race this test was written for (a deletion landing
+    // between the two, #2492) can no longer happen, and this fallback is
+    // effectively unreachable in practice. It stays as defensive coverage of
+    // the null-row branch only: it does NOT prove the race is handled, it
+    // proves that if the statement ever returned nothing the caller would get
+    // the same clean 404. Same env.DB.prepare hijack idiom as the other
+    // POST-then-reselect tests in this suite, swapping the write for a
+    // statement that returns no row (it keeps the seven bound parameters the
+    // real one takes).
     const builder = await signupBuilder('presence-post-reselect-race');
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
