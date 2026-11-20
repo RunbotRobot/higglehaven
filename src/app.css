@@ -840,8 +840,9 @@
       body[data-bud="on"] #account-menu-panel::before {
         content: '';
         position: absolute;
-        top: 0;
-        height: var(--stem-h, 0px);
+        /* #4016: from the head's middle (src/ui/bud.js measures --stem-rise), behind the petals, down to the last leaf. */
+        top: calc(-1 * var(--stem-rise, 0px));
+        height: calc(var(--stem-h, 0px) + var(--stem-rise, 0px));
         left: var(--stem-x);
         width: 4px;
         margin-left: -2px;

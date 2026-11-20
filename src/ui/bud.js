@@ -348,6 +348,12 @@ function layoutStem() {
   if (last && hostBox.height > 0) {
     const box = last.getBoundingClientRect();
     host.style.setProperty('--stem-h', `${Math.round(box.top + box.height / 2 - hostBox.top)}px`);
+    // #4016: the stem grows from the head, not from the panel (which starts below the petals): it is
+    // drawn up from the panel's top to the head's middle, behind the petals, so it shows between and
+    // below them and is joined to the flower; folding draws it up into the head.
+    const head = toggle()?.getBoundingClientRect();
+    const rise = head && head.height > 0 ? hostBox.top - (head.top + head.height / 2) : 0;
+    host.style.setProperty('--stem-rise', `${Math.max(0, Math.round(rise))}px`);
   }
 }
 
