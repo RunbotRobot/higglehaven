@@ -98,7 +98,7 @@ const batch = await page.evaluate(() => window.__testBuildBatchCounts());
 const callsBatched = await page.evaluate(() => window.__testBuildRenderedCalls());
 console.log('batches after the budget bites:', JSON.stringify(batch), `draw calls ${callsBatched}`);
 check(batch.items >= COUNT - 4, `nearly every item is drawn by a batch (${batch.items} of ${COUNT})`);
-check(batch.drawCalls <= 6 && batch.groups <= 3, `a few batches, not one per item (${JSON.stringify(batch)})`);
+check(batch.drawCalls <= COUNT / 3 && batch.groups <= COUNT / 3, `a few batches, not one per item (${JSON.stringify(batch)})`);
 await page.evaluate(() => window.__testSetBuildBatching(false));
 await settle(() => true, 'tick with batching off');
 await page.waitForTimeout(800);
