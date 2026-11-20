@@ -87,6 +87,7 @@ import { anglesFromQuaternion, formatRotationReadout, quaternionFromAngles, refe
 import { nudgeVector, nudgeStepMeters, heightAboveFloor, NUDGE_DIRECTIONS } from './nudge.js';
 import { createBuildBatching } from './batching.js';
 import { createBuildLod } from './lod.js';
+import { createBuildArrival } from './arrival.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -5147,7 +5148,9 @@ function applyEdgePanWhileDraggingProduct() {
 // (src/build/batching.js); every item's own object stays in the scene and is what a tap selects.
 const buildBatching = createBuildBatching({ scene, isSelected: (mesh) => selectedMeshes.has(mesh) });
 selectedMeshes.onAdd = (mesh) => buildBatching.releaseNow(mesh);
-const buildLod = createBuildLod({ camera, target: controls.target, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
+// #4003: items let in on the first load resolve out of fog (src/build/arrival.js).
+const buildArrival = createBuildArrival({ parent: landletElevationGroup, anchor: () => ({ x: controls.target.x, y: controls.target.y }) });
+const buildLod = createBuildLod({ camera, target: controls.target, arrival: buildArrival, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
 window.__testBuildBatchCounts = () => buildBatching.counts();
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
@@ -5176,6 +5179,7 @@ export function buildModeFrameUpdate(now) {
   applyEdgePanWhileDraggingProduct();
   controls.update();
   buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
+  buildArrival.update(); // #4003: fog and dissolve of the items just let in; nothing when none
   updateCameraDebug(now);
   // A selected item's box must track it live while the translate/rotate
   // gizmo drags it, so the boxes are recomputed here every frame rather than

@@ -68,6 +68,7 @@ function eligible(object, isSelected) {
   if (!object.parent || !data.template || !data.model) return false;
   if (isSelected(object)) return false;
   if (data.lodHeld) return false; // #4003: waiting for its versions, not drawn at all
+  if (data.lodArriving) return false; // #4003: its own materials are dissolving in; batched once it has arrived
   const root = shownRoot(object);
   return Boolean(root);
 }

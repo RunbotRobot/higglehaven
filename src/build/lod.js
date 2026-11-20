@@ -69,7 +69,7 @@ function fullTrianglesOf(object) {
 // orbit camera's look-at point (world space). Returns { update(now, force), counts() }.
 // onTicked(objects): called at the end of every pass with the items it considered, after any version
 // flips, so what draws them (src/build/batching.js) is brought in step in the same synchronous step.
-export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked = null, viewportHeight = () => window.innerHeight }) {
+export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked = null, arrival = null, viewportHeight = () => window.innerHeight }) {
   let lastTickMs = -Infinity;
   let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
   let protectNear = true; // e2e-only switch: false leaves only the selected items protected
@@ -222,6 +222,14 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       window.__buildLodFlipCount = (window.__buildLodFlipCount ?? 0) + 1; // e2e counts tier changes
       if (performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
     }
+    // #4003: what was let in this pass from the first load's hold resolves out of fog together.
+    if (arrival) {
+      const arriving = objects.filter((object) => object.userData.lodArrive && !object.userData.lodHeld);
+      if (arriving.length > 0) {
+        for (const object of arriving) object.userData.lodArrive = false;
+        arrival.start(arriving);
+      }
+    }
     onTicked?.(objects);
   }
 
@@ -242,6 +250,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   // lets it in at once when it fits or has no versions to wait for.
   function holdNew(object) {
     if (!hasLodTiers(object) || !object.userData.model) return;
+    object.userData.lodArrive = true; // #4003: let in later, it arrives through fog; a placement never comes here
     setHeld(object, true);
   }
 
