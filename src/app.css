@@ -4994,9 +4994,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-2xs);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .version-row-info {
         font-size: var(--text-xs);
@@ -5023,9 +5020,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-xs);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .auction-row-info {
         font-size: var(--text-xs);
@@ -5126,11 +5120,6 @@
         gap: var(--space-md);
         max-height: 260px;
         overflow-y: auto;
-      }
-      .low-stock-row {
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .low-stock-row[hidden] {
         display: none;
@@ -5539,7 +5528,7 @@
          text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
       .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
       .pending-restoration-row, .friend-row, .dm-row, .seller-row, .product-review-row, .seller-feedback-row,
-      .product-sale-row, .sold-out-marker-row {
+      .product-sale-row, .sold-out-marker-row, .version-row, .auction-row, .low-stock-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
         background: var(--fill-row);

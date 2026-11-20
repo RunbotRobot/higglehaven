@@ -326,6 +326,8 @@ be selected and there is no Copy button; an icon is a picture of the thing with
 its word beside it; a leaf does not change what it does when it changes how it
 looks. A row, field or button that is not one of these five is either an
 exception named on #3933 or the next thing to bring onto them.
+`npm test` holds the count of distinct row looks at one (`scripts/leaf-parts-baseline.json`,
+#3939): a new `-row` class joins the shared row rule in `src/app.css` and keeps only its layout.
 
 ## Motion
 
