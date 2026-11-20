@@ -1925,12 +1925,14 @@
         border-bottom: 14px solid rgb(var(--ink-rgb) / 0.85);
         transform-origin: 4px 14px;
       }
+      /* #3942: Undo and Redo are quiet buttons (DESIGN.md, "Inside a leaf"). */
       #undo-redo-panel button {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #undo-redo-panel button:disabled {
@@ -2300,17 +2302,21 @@
       #level-nav button:disabled {
         opacity: 0.35;
       }
+      /* #3942: the Levels leaf's actions are quiet buttons (DESIGN.md, "Inside a leaf"); the one that
+         removes a level reads in --danger-text and is confirmed in its own modal. */
       #level-build-btn, #level-dig-btn, #level-remove-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #level-remove-btn {
-        background: var(--danger);
-        color: var(--white);
+        border: 1px solid rgb(var(--danger-rgb) / 0.5);
+        background: none;
+        color: var(--danger-text);
       }
       #level-status:not(:empty) {
         font-size: var(--text-sm);
@@ -2344,19 +2350,21 @@
       #catalog-picker.strip {
         width: min(calc(100vw - 16px), 360px);
         max-height: none;
-        padding: 40px var(--space-md) var(--space-md);
+        /* #3942: room for All items, which is now 44px tall at the top. */
+        padding: 56px var(--space-md) var(--space-md);
       }
       #catalog-picker.strip #catalog-all-items-btn {
         display: block;
         position: absolute;
         top: 8px;
         right: 52px;
-        min-height: 32px;
-        padding: 0 var(--space-lg);
+        /* #3942: All items is a quiet button (DESIGN.md, "Inside a leaf"). */
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: var(--pill-text);
+        color: var(--ink);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #catalog-picker.strip #catalog-mode-tabs,
@@ -2767,14 +2775,16 @@
         font-size: var(--text-md);
         line-height: 1;
       }
+      /* #3942: the Tools leaf's toggles and Paste are quiet buttons; a toggle that is on fills green. */
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
