@@ -53,6 +53,7 @@
 // session's name), --desktop (1280x800 instead of phone), --size WxH (a touch screen of that size,
 // e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
+// --server-timing (asks the worker how many D1 trips each timed route made and how long they took, #3464; report's `serverTimings`),
 // --throttle (CPU 4x slower, 150 ms round trip, 1.6/0.75 Mbps: a slow phone, #3736),
 // --phone (CPU 4x slower, 40 ms, 20/5 Mbps: a phone on home wifi, so a frame or a long task means a
 // phone; the report's `profile` says which figures to trust, #3935),
@@ -67,7 +68,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile, parseServerTiming, summariseServerTimings,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -106,6 +107,10 @@ const context = await browser.newContext({
   hasTouch: device.hasTouch,
 });
 const page = await context.newPage();
+if (options.serverTiming) {
+  // Same-origin API calls only (a cross-origin one would need a CORS preflight for the new header).
+  await context.route(`${baseUrl}/api/**`, (route) => route.continue({ headers: { ...route.request().headers(), 'x-server-timing': '1' } }));
+}
 const mainPage = page;
 
 const result = { url: baseUrl, name: options.name, device: options.size ? `touch ${options.size.width}x${options.size.height}` : options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
@@ -117,6 +122,7 @@ if (profile) {
   result.throttle = profile; // kept for #3736's readers; `profile` is the one that names which ran
 }
 const timingSamples = new Map();
+const serverTimingSamples = new Map();
 page.on('pageerror', (error) => result.consoleErrors.push(error.message));
 page.on('console', (message) => {
   if (message.type() === 'error') result.consoleErrors.push(message.text());
@@ -133,6 +139,13 @@ page.on('requestfinished', async (request) => {
   const key = `${request.method()} ${routeOf(url)}`;
   if (!timingSamples.has(key)) timingSamples.set(key, []);
   timingSamples.get(key).push(duration);
+  if (options.serverTiming) {
+    const served = parseServerTiming((await request.response())?.headers()['server-timing']);
+    if (served) {
+      if (!serverTimingSamples.has(key)) serverTimingSamples.set(key, []);
+      serverTimingSamples.get(key).push(served);
+    }
+  }
 });
 
 async function signIn(ctx = context, name = options.name) {
@@ -773,6 +786,10 @@ try {
   }
   result.frame = await frameStats();
   for (const [key, samples] of timingSamples) result.timings[key] = summarizeTimings(samples);
+  if (options.serverTiming) {
+    result.serverTimings = {};
+    for (const [key, samples] of serverTimingSamples) result.serverTimings[key] = summariseServerTimings(samples);
+  }
 } finally {
   await browser.close();
 }

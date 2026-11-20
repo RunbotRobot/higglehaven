@@ -2501,6 +2501,16 @@ either of those as an explicit open question, not yet resolved.
 }
 ```
 
+### `Server-Timing` for D1, on request (#3464)
+
+Any request that sends `x-server-timing: 1` is answered with a `Server-Timing`
+header of the form `d1;dur=<ms>;desc="<n> trips"`: how many D1 statements the
+request ran (a batch counts once) and the summed time spent waiting on them
+(statements run together add up to more than the request's own wall time). It
+changes nothing else about the response, and a request without the header gets
+no `Server-Timing` at all. `scripts/live-site.mjs --server-timing` sends it for
+the same-origin API calls and reports medians per timed route.
+
 ### `GET /api/instances/:id/purchase-quote` (#3946)
 
 What Buy would do for this signed-in, verified account, without doing it.

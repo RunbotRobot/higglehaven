@@ -88,7 +88,7 @@ line arriving, a voice peer in the list. On the live site `<name>` must be a fle
 
 **A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
 and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;
-`--throttle` is the slow-4G one for waits. Which figures to trust: the cloud machine's script side is
+`--throttle` is the slow-4G one for waits. `--server-timing` asks the worker, for the routes you name with `--timing`, how many D1 trips each made and how long they took (the report's `serverTimings`, medians), which separates the database from a busy page (#3464). Which figures to trust: the cloud machine's script side is
 far faster than a phone's and its GPU side (software GL) far slower, so under `--phone` trust long
 tasks, the longest script task and request timings; do not trust frame time or anything GPU-bound;
 for the GPU use triangles and draw calls per frame (`live-frame-cost.mjs`), which hold on any

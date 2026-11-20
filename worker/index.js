@@ -104,6 +104,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // that module's own header comment for what deliberately stayed here
 // instead (the lifecycle actions and sold-out-marker/self-dealing-review
 // siblings this leaf doesn't own).
+import { createD1Timing } from './lib/d1-timing.js';
 import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from './lib/purchase-creation.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
@@ -450,6 +451,16 @@ async function routeRequest(request, env, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
+    // #3464: opt-in only. A request that sends `x-server-timing: 1` is answered with how many D1
+    // trips it made and how long they took (Server-Timing); no one else gets a new header.
+    if (env.DB && request.headers.get('x-server-timing') === '1') {
+      const timing = createD1Timing();
+      const response = withSecurityHeaders(await routeRequest(request, { ...env, DB: timing.wrap(env.DB) }, ctx));
+      if (response.status === 101) return response;
+      const headers = new Headers(response.headers);
+      headers.set('server-timing', timing.header());
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }
     return withSecurityHeaders(await routeRequest(request, env, ctx));
   },
 
