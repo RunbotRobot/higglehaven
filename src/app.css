@@ -3007,13 +3007,17 @@
         font-size: var(--text-xs);
         color: rgb(var(--ink-rgb) / 0.6);
       }
+      /* #3940: the wizard's fields are the one field look (DESIGN.md, "Inside a leaf"): 16px text so a
+         phone does not zoom on focus, and a 44px target. */
       #upload-modal-content input[type='text'] {
+        min-height: 44px;
+        box-sizing: border-box;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       /* #1602: a small "?" button that reveals a popup of explanatory text
          next to the control it describes, instead of that text sitting
@@ -3075,13 +3079,16 @@
         align-items: center;
         gap: 8px !important;
       }
+      /* #3940: the one field look. */
       #upload-digital-good-disclaimer-select {
+        min-height: 44px;
+        box-sizing: border-box;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       #upload-status {
         font-size: var(--text-sm);
@@ -3158,13 +3165,15 @@
         flex: 1;
       }
       .upload-dimension-input {
-        width: 5.5em;
-        padding: var(--space-xs) var(--space-sm);
+        width: 6.5em;
+        min-height: 44px;
+        box-sizing: border-box;
+        padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       #upload-modal-actions {
         display: flex;
