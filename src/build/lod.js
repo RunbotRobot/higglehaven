@@ -117,7 +117,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   }
 
   // #4003: what has no versions yet and does not fit the triangle budget is not drawn until they are
-  // there. A held item is unready, unprotected and has never been drawn; everything else draws.
+  // there. A held item is unready, unselected and has never been drawn; everything else draws.
   // `tiers` are the versions the budget gave each item, used to show a released item in the right one.
   function applyHoldBack(list, listItems, tiers, nowMs) {
     const candidates = [];
@@ -127,18 +127,21 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const waiting = data.lodTiersState !== 'ready' && data.lodTiersState !== 'none';
       const recent = nowMs - data.lodSeenMs <= BUILD_HOLD_MAX_MS;
       if (!waiting || !recent) { setHeld(object, false, tiers[i]); return; }
-      // A protected item (selected, or where the builder works) is always drawn, but its triangles
-      // still count against the budget, so what is held back is what is left after them. It is drawn,
-      // so it stays drawn when it stops being protected.
-      if (listItems[i].protected) { data.lodDrawnWaiting = true; setHeld(object, false, tiers[i]); candidates.push(i); return; }
+      // A selected item is always drawn, but its triangles still count against the budget, so what is
+      // held back is what is left after them. It is drawn, so it stays drawn when it is deselected.
+      // The near ring is not exempt while versions are still attaching (#4003): on a dense wall it is
+      // most of the lándlet, 1,000 bricks and 5 million triangles in the first frames. Its nearest items
+      // are drawn first, within the same budget, and the rest arrive as their versions attach, nearest
+      // first (the attach queue is nearest first too).
+      if (listItems[i].selected) { data.lodDrawnWaiting = true; setHeld(object, false, tiers[i]); candidates.push(i); return; }
       candidates.push(i);
     });
     const flags = holdBackUnready(candidates.map((i) => ({
-      tris: listItems[i].tris, dist: listItems[i].dist, sticky: listItems[i].protected || list[i].userData.lodDrawnWaiting === true,
+      tris: listItems[i].tris, dist: listItems[i].dist, sticky: listItems[i].selected || list[i].userData.lodDrawnWaiting === true,
     })), BUILD_HOLD_BACK_TRIANGLES);
     candidates.forEach((i, k) => {
       const object = list[i];
-      if (listItems[i].protected) return;
+      if (listItems[i].selected) return;
       if (flags[k]) {
         setHeld(object, true, tiers[i]);
         // The versions of a held item must be on their way, whichever tier it will end up in.
@@ -187,11 +190,13 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const near = isNearFullDetail(groundDistanceM, object.userData.lodNear === true);
       object.userData.lodNear = near;
       object.userData.lodDistM = groundDistanceM;
-      const protectedItem = (protectNear && near) || isSelected(object);
+      const selectedItem = isSelected(object);
+      const protectedItem = (protectNear && near) || selectedItem;
       object.userData.lodProtected = protectedItem; // read by src/build/batching.js: protected items are never batched
       items.push({
         px,
         protected: protectedItem,
+        selected: selectedItem,
         wanted: protectedItem ? TIER_FULL : nextTier(object.userData.lodTier, px),
         tris: fullTrianglesOf(object),
         dist: groundDistanceM,
@@ -231,9 +236,19 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     return out;
   }
 
+  // #4003: an item that arrives while a lándlet is first loading waits, undrawn, for the next pass to
+  // decide whether the budget has room for it. Items arrive in bursts between the quarter-second passes
+  // (1,400 bricks in one frame), and a burst drawn before a pass is a whole wall at full detail. The pass
+  // lets it in at once when it fits or has no versions to wait for.
+  function holdNew(object) {
+    if (!hasLodTiers(object) || !object.userData.model) return;
+    setHeld(object, true);
+  }
+
   return {
     update,
     counts,
+    holdNew,
     setFullTriangleCap(triangles) { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; },
     setProtectNear(on) { protectNear = on !== false; },
   };

@@ -54,6 +54,36 @@ describe('Build level of detail while the versions attach', () => {
     expect(objects[399].userData.model.visible).toBe(false);
   });
 
+  // The wall the builder is standing at is the near ring (within 10 m of the point looked at), which is
+  // protected once its versions are there. While they are still attaching it has no exemption from the
+  // budget, or a dense wall draws a million triangles a thousand bricks over in the first frames.
+  it('holds back the near ring too while versions attach, nearest first, and keeps a selected item', () => {
+    const selected = new Set();
+    const { lod, objects } = setup(400, 5120, selected);
+    objects.forEach((object, index) => { object.position.set(index * 0.01, 0, 0); object.updateMatrixWorld(true); }); // all within 4 m
+    selected.add(objects[399]);
+    lod.update(1000, true);
+    expect(trianglesOf(objects)).toBeLessThanOrEqual(BUILD_HOLD_BACK_TRIANGLES + 5120);
+    expect(objects[0].userData.model.visible).toBe(true);
+    expect(objects[398].userData.model.visible).toBe(false);
+    expect(objects[399].userData.model.visible).toBe(true); // selected: always drawn
+  });
+
+  // Items arrive in bursts between passes while a lándlet first loads; they wait undrawn for the pass.
+  it('keeps an item that arrives while loading undrawn until a pass judges it, then lets in what fits', () => {
+    const { lod, objects } = setup(400, 5120);
+    objects.forEach((object) => lod.holdNew(object));
+    expect(drawn(objects)).toHaveLength(0);
+    expect(objects[0].userData.model.raycast()).toBe(false); // not tappable while undrawn
+    lod.update(1000, true);
+    expect(trianglesOf(objects)).toBeLessThanOrEqual(BUILD_HOLD_BACK_TRIANGLES);
+    expect(objects[0].userData.model.visible).toBe(true);
+    const small = setup(20, 5120);
+    small.objects.forEach((object) => small.lod.holdNew(object));
+    small.lod.update(1000, true);
+    expect(drawn(small.objects)).toHaveLength(20);
+  });
+
   it('draws everything when it fits', () => {
     const { lod, objects } = setup(50, 5120);
     lod.update(1000, true);
