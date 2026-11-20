@@ -578,7 +578,7 @@ re-verification period configured.
 { "email": "ada@example.com", "password": "correct horse battery staple" }
 ```
 
-`401` with an identical, generic "Invalid email or password" message
+`401` with an identical, generic "That email or password isn't right. Try again." message
 whether the email doesn't exist or the password is wrong — telling the two
 apart would let an attacker enumerate which emails have accounts here.
 The unknown-email path also burns the same PBKDF2 cost a real password
@@ -656,7 +656,7 @@ could satisfy it. `deleted_at` is stamped for any other code that needs to
 recognize a deleted row (e.g. #1147's disconnection pass) — note this is
 just a marker, not itself what blocks login: once the real email is gone
 from the row, a login attempt against it already gets the same generic
-"Invalid email or password" response issued for any other email that was
+"That email or password isn't right. Try again." response issued for any other email that was
 never registered. Every session for the account is deleted in the same
 atomic batch (`db.batch`, mirroring `reset-password`'s own "sign out every
 device" reasoning above) as the builder/seller deletion and the `users`
