@@ -74,7 +74,8 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
-import { applyAssistantLook } from './assistantAvatar.js';
+import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
+import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
@@ -1387,7 +1388,25 @@ function startAssistantTransition(entry, kind, now) {
   });
 }
 
+// #3556: a nearby-chat line from this builder just arrived: a soft mark stands over their avatar for a
+// moment (no name, no id: nearby chat is anonymous). Not drawn for an avatar that is not in view.
+setNearbySpeechHandler((builderId) => {
+  const entry = shopOtherAvatars.get(builderId);
+  if (!entry || entry.transitionKind === 'depart') return;
+  if (entry.speechCue && !entry.speechCue.gone) {
+    entry.speechCue.refresh();
+    return;
+  }
+  entry.speechCue = showSpeechCue(THREE, entry.group, AVATAR_HEAD_TOP_Z_M, {
+    reducedMotion: otherAvatarReducedMotion(),
+    onGone: refreshOtherShopAvatarsDiagnostic, // the e2e hook follows the mark itself, not the next poll
+  });
+  refreshOtherShopAvatarsDiagnostic();
+});
+
 function releaseOtherAvatarEntry(entry) {
+  entry.speechCue?.dispose();
+  entry.speechCue = null;
   entry.transition?.cancel();
   entry.transition = null;
   scene.remove(entry.group);
@@ -1413,6 +1432,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     userId: entry.userId ?? null, // added for #3447 -- e2e taps an assistant by its account, as it cannot aim at a pixel
     assistantName: entry.assistantName ?? null, // added for #3445 -- e2e needs to see that a fleet avatar carries its name tag and shirt, and an ordinary one does not
     hasAssistantShirt: Boolean(entry.assistantShirt), // added for #3445, same reason
+    hasSpeechCue: Boolean(entry.speechCue && !entry.speechCue.gone), // added for #3556 -- e2e needs to see the anonymous mark over whoever just spoke in nearby chat
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
