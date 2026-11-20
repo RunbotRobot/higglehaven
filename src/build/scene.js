@@ -75,7 +75,7 @@ import {
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
-import { planSelectionBoxes } from './selectionBoxes.js';
+import { planSelectionBoxes, splitSelectionPlan, writeBoxEdges, BOX_EDGE_VERTICES } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
@@ -3423,6 +3423,69 @@ function createSelectionBox() {
   return { helper, fill };
 }
 
+// #3996: many loose items selected (Select All, a marquee over a wall) are drawn together: one instanced
+// mesh for every fill and one line mesh for every outline, so a thousand selected items cost two draw calls
+// where they cost two thousand. The arrays grow by doubling; nothing is rebuilt while the count only changes.
+const selectionBatch = { capacity: 0, fills: null, edges: null, positions: null, boxes: [] };
+const batchScratchBox = new THREE.Box3();
+const batchScratchMatrix = new THREE.Matrix4();
+const batchScratchQuaternion = new THREE.Quaternion();
+
+function growSelectionBatch(count) {
+  if (selectionBatch.capacity >= count) return;
+  let capacity = Math.max(64, selectionBatch.capacity);
+  while (capacity < count) capacity *= 2;
+  if (selectionBatch.fills) {
+    scene.remove(selectionBatch.fills);
+    selectionBatch.fills.dispose();
+    scene.remove(selectionBatch.edges);
+    selectionBatch.edges.geometry.dispose();
+  } else {
+    selectionBatch.fillMaterial = new THREE.MeshBasicMaterial({
+      color: SELECTION_OUTLINE_COLOR, transparent: true, opacity: SELECTION_FILL_OPACITY, depthWrite: false,
+    });
+    selectionBatch.edgeMaterial = new THREE.LineBasicMaterial({ color: SELECTION_OUTLINE_COLOR, toneMapped: false });
+  }
+  selectionBatch.capacity = capacity;
+  selectionBatch.fills = new THREE.InstancedMesh(selectionFillGeometry, selectionBatch.fillMaterial, capacity);
+  selectionBatch.fills.frustumCulled = false;
+  selectionBatch.positions = new Float32Array(capacity * BOX_EDGE_VERTICES * 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(selectionBatch.positions, 3));
+  selectionBatch.edges = new THREE.LineSegments(geometry, selectionBatch.edgeMaterial);
+  selectionBatch.edges.frustumCulled = false;
+  scene.add(selectionBatch.fills);
+  scene.add(selectionBatch.edges);
+}
+
+// entries: loose selection plan entries ({ members: [mesh] }). Returns nothing; fills selectionBatch.boxes.
+function updateSelectionBatch(entries) {
+  selectionBatch.boxes.length = 0;
+  if (entries.length === 0) {
+    if (selectionBatch.fills) { selectionBatch.fills.visible = false; selectionBatch.edges.visible = false; }
+    return;
+  }
+  growSelectionBatch(entries.length);
+  const { fills, edges, positions } = selectionBatch;
+  fills.visible = true;
+  edges.visible = true;
+  let offset = 0;
+  entries.forEach((entry, index) => {
+    batchScratchBox.setFromObject(entry.members[0]);
+    batchScratchBox.getSize(scratchBoxSize);
+    batchScratchBox.getCenter(scratchBoxCenter);
+    scratchBoxSize.multiplyScalar(SELECTION_FILL_PADDING);
+    batchScratchMatrix.compose(scratchBoxCenter, batchScratchQuaternion, scratchBoxSize);
+    fills.setMatrixAt(index, batchScratchMatrix);
+    offset = writeBoxEdges(positions, offset, batchScratchBox.min, batchScratchBox.max);
+    selectionBatch.boxes.push({ min: batchScratchBox.min.clone(), max: batchScratchBox.max.clone() });
+  });
+  fills.count = entries.length;
+  fills.instanceMatrix.needsUpdate = true;
+  edges.geometry.setDrawRange(0, entries.length * BOX_EDGE_VERTICES);
+  edges.geometry.attributes.position.needsUpdate = true;
+}
+
 function disposeSelectionBox(entry) {
   scene.remove(entry.helper);
   entry.helper.geometry.dispose();
@@ -3438,14 +3501,15 @@ function disposeSelectionBox(entry) {
 // #3689: the union of every drawn selection box, kept for the item card to anchor to.
 const selectionBounds = new THREE.Box3();
 function updateSelectionBoxes() {
-  if (selectionOutlines.size === 0 && selectionBoxes.size === 0) return;
+  if (selectionOutlines.size === 0 && selectionBoxes.size === 0 && selectionBatch.boxes.length === 0) return;
   const visibleMeshes = [];
   for (const [mesh, outline] of selectionOutlines) {
     if (!outline.hidden) visibleMeshes.push(mesh);
   }
-  const plan = planSelectionBoxes(visibleMeshes);
+  const { batched, single } = splitSelectionPlan(planSelectionBoxes(visibleMeshes));
+  updateSelectionBatch(batched);
   const live = new Set();
-  for (const { key, members } of plan) {
+  for (const { key, members } of single) {
     live.add(key);
     let entry = selectionBoxes.get(key);
     if (!entry) {
@@ -3470,6 +3534,7 @@ function updateSelectionBoxes() {
   }
   selectionBounds.makeEmpty();
   for (const { helper } of selectionBoxes.values()) selectionBounds.union(helper.box);
+  for (const box of selectionBatch.boxes) selectionBounds.union(box);
 }
 
 // #3324: test-only hook (the window.__test* convention used throughout this
@@ -3478,11 +3543,13 @@ function updateSelectionBoxes() {
 // members are selected.
 window.__testSelectionBoxes = () => {
   updateSelectionBoxes();
-  return [...selectionBoxes.values()].map(({ helper }) => ({
-    min: [helper.box.min.x, helper.box.min.y, helper.box.min.z],
-    max: [helper.box.max.x, helper.box.max.y, helper.box.max.z],
+  return [...Array.from(selectionBoxes.values(), (entry) => entry.helper.box), ...selectionBatch.boxes].map((box) => ({
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
   }));
 };
+// #3996: e2e: how many draw calls the selection boxes cost (the helper and fill of each own box, plus the batch).
+window.__testSelectionBoxDraws = () => selectionBoxes.size * 2 + (selectionBatch.boxes.length > 0 ? 2 : 0);
 
 // #1950 (sub-issue of #1947): a second, independent highlight for placed
 // items matching the active low-stock filter in Settings > Build --

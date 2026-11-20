@@ -130,6 +130,18 @@ if (reducedId) {
   check((await page.evaluate((id) => window.__testBuildLodTierOf(id), reducedId.id)) === 'full', 'the selected item is drawn in full');
 }
 
+// Selecting many items draws their boxes together (#3996): one box per item, but two draw calls in all,
+// not two per item.
+await page.evaluate(() => window.__testSelectAllProducts());
+await page.waitForTimeout(800);
+const boxes = await page.evaluate(() => window.__testSelectionBoxes().length);
+const boxDraws = await page.evaluate(() => window.__testSelectionBoxDraws());
+const callsSelected = await page.evaluate(() => window.__testBuildRenderedCalls());
+console.log(`all ${COUNT} selected: ${boxes} boxes, ${boxDraws} draw calls for the boxes, ${callsSelected} draw calls in the frame`);
+check(boxes === COUNT, `every selected item has its box (${boxes} of ${COUNT})`);
+check(boxDraws === 2, `the boxes of ${COUNT} loose items are two draw calls (${boxDraws})`);
+check(callsSelected < COUNT * 2, `the frame is nowhere near two draw calls per selected item (${callsSelected})`);
+
 // Raising the budget and protecting the neighbourhood of the orbit target returns everything to full.
 await page.evaluate(() => { window.__testSetBuildFullTriangleCap(null); window.__testSetBuildLodProtectNear(true); });
 const back = await settle((c) => c.full === COUNT, 'everything returns to full');
