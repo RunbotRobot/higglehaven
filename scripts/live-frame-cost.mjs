@@ -97,8 +97,20 @@ const summarise = (label, frames) => {
 const enteredAt = Date.now();
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 if (mode === 'build') {
+  // #4003: --shot-dir also saves a still every 1.5 s while Build is being entered (entering-<n>.png),
+  // so the fog the held items arrive through can be looked at, not only counted.
+  let enteringDone = false;
+  const enteringShots = (async () => {
+    for (let n = 1; shotDir && !enteringDone && n <= 12; n += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (enteringDone) break;
+      await page.screenshot({ path: `${shotDir}/entering-${String(n).padStart(2, '0')}.png` }).catch(() => {});
+    }
+  })();
   // Build is ready when every placement of the seeded lándlet has a mesh.
   await page.waitForFunction(() => (window.__testProductPositions?.().length ?? 0) > 100, null, { timeout: 180000 });
+  enteringDone = true;
+  await enteringShots;
   await page.waitForTimeout(2000);
   console.log(`entered Build and built ${await page.evaluate(() => window.__testProductPositions().length)} meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
   // #3929 item 4: the frames during entering (from the page opening to the last mesh built), so a
