@@ -1252,6 +1252,25 @@ most likely to come up again.
   because an upload shown to every visitor needs the reporting and removal
   every other upload has.)
 
+  **The flower is one plant, whole and attached (2026-11-20, #3754, #4012).**
+  Three notes after a few days of use. The head: "I like option C for the
+  bud" (the solid green bud with the logo in cream; #3754). An open menu:
+  "I want the shop/build/sell/menu petals to stay visible when the menu
+  leaves appear. This maintains a fully expanded flower, instead of only
+  ever showing petals or leaves." And folding: "When the menu collapses in
+  the mockup, the leaves are still present after the stem has already gone.
+  Let's fine-tune the timing so that there's never a leaf floating in the air
+  with no stem." So opening adds to the flower and never swaps one part for
+  another: with a stem open, the head, the four petals, the stem and its
+  leaves are all on screen. And it folds in the reverse order it opened: a
+  leaf goes back into the stem before the stem draws up, and at no frame is
+  any part visible without the part it grows from. The principle, for
+  anything animated: a thing made of attached parts keeps them attached in
+  every frame, and a transition is checked as stills (`slow:0.1` and a
+  burst), not at full speed. (higglehaven1's reading, told to the owner:
+  still one stem at a time; with a stem open, another petal swaps to its
+  stem or takes you to its mode.)
+
 - **A surface opens with its contents in it; an empty one reads as loss.**
   (2026-11-18, #3773.) "When I click the assistant button, the subsequent
   modal opens before the chat conversation has loaded, which initially
