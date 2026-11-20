@@ -1112,16 +1112,17 @@
       .bud-leaf .payout-why { margin: 0; font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.7); }
       .payout-field { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
       .payout-label { font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.75); }
+      /* #3940: the payout fields are the one field look (DESIGN.md, "Inside a leaf"). Look only. */
       .payout-field input {
         width: 100%;
         box-sizing: border-box;
         min-height: 44px;
-        padding: var(--space-xs) var(--space-md);
-        border: none;
+        padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        color: var(--ink);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       .payout-dob { display: flex; flex-direction: column; gap: var(--space-3xs); }
       .payout-dob-row, .payout-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
@@ -1137,16 +1138,17 @@
         padding: var(--space-sm) var(--space-lg) var(--space-lg);
         background: linear-gradient(to top, rgb(var(--panel-rgb) / 0.98) 70%, rgb(var(--panel-rgb) / 0));
       }
+      /* #3940: Back and Change are the quiet button, Next, Update and Cash out the primary button. */
       .payout-btn {
         min-height: 44px;
-        padding: 0 var(--space-2xl);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        padding: var(--space-xs) var(--space-lg);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         border-radius: var(--radius-pill);
         background: transparent;
         color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
-      .payout-btn.payout-primary { flex: 1 1 auto; background: rgb(var(--ink-rgb) / 0.88); border-color: transparent; color: rgb(var(--white-rgb)); }
+      .payout-btn.payout-primary { flex: 1 1 auto; padding: var(--space-sm) var(--space-2xl); border: none; background: var(--brand-green); color: var(--ink); }
       .payout-btn:disabled { opacity: 0.5; }
 
       /* #3819: with a mouse, everything the head offers shows it can be clicked (the pointer, and a
@@ -7021,14 +7023,16 @@
         font-size: var(--text-2xs);
         color: var(--pill-text-soft);
       }
+      /* #3940: Refund is a quiet button that reads as destructive (DESIGN.md, "Inside a leaf"). */
       .product-sale-row-refund-btn {
         flex-shrink: 0;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: var(--danger);
-        color: var(--white);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--danger-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .product-sale-row-refund-btn:disabled {
         opacity: 0.5;
