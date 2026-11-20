@@ -67,6 +67,7 @@ function eligible(object, isSelected) {
   const data = object.userData;
   if (!object.parent || !data.template || !data.model) return false;
   if (isSelected(object)) return false;
+  if (data.lodHeld) return false; // #4003: waiting for its versions, not drawn at all
   const root = shownRoot(object);
   return Boolean(root);
 }
@@ -106,6 +107,7 @@ export function createBuildBatching({ scene, isSelected, minBatchSize = MIN_BATC
     const root = object.userData.batchRoot;
     object.userData.batchRoot = undefined;
     if (!root) return;
+    if (object.userData.lodHeld) return; // #4003: a held item stays undrawn until it is let in
     // Drawn as itself again if the version it hid is still the one it shows (a version the item has
     // since left was already hidden by the level of detail pass).
     if (shownRoot(object) === root) root.visible = true;

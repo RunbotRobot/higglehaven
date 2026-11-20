@@ -157,6 +157,34 @@ function applyFullTriangleBudget(items, tiers, cap) {
   }
 }
 
+// #4003: items whose simpler versions have not attached yet can only be drawn from their full
+// model, which on a heavy lándlet is millions of triangles in the first frames. This picks which of
+// them wait (are not drawn) until their versions are there: `items` is a list of { tris, dist,
+// sticky }, the triangle count of the full model (0 when unknown, which is never held), its ground
+// distance to the point being looked at, and whether it is already being drawn (an item that is
+// drawn stays drawn: nothing that appeared blinks out again). The sticky ones count first, then the
+// nearest of the rest are let in while the total stays within `cap`; the nearest is always let in.
+// Returns the held flags in the same order. Nothing is ever replaced by a stand-in: a held item is
+// drawn, from its own real model, the moment its versions arrive or it is let in.
+export function holdBackUnready(items, cap = MAX_FULL_DETAIL_TRIANGLES) {
+  const held = items.map(() => false);
+  let used = 0;
+  items.forEach((item) => {
+    if (item.sticky && item.tris > 0) used += item.tris;
+  });
+  const candidates = [];
+  items.forEach((item, index) => {
+    if (!item.sticky && item.tris > 0) candidates.push(index);
+  });
+  candidates.sort((a, b) => (items[a].dist ?? Infinity) - (items[b].dist ?? Infinity));
+  for (const index of candidates) {
+    const { tris } = items[index];
+    if (used === 0 || used + tris <= cap) used += tris;
+    else held[index] = true;
+  }
+  return held;
+}
+
 // Given the apparent sizes (px) of every item that wants a detail level, the
 // size below which items must drop to the next cheaper level so no more than
 // `cap` stay at it: the cap-th largest size (items strictly smaller drop). 0 when they all

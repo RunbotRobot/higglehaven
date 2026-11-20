@@ -23,12 +23,18 @@
 import * as THREE from 'three';
 import {
   apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, TIER_FULL, largestFirst,
-  MAX_FULL_DETAIL_TRIANGLES, countModelTriangles,
+  MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready,
 } from '../shop/lodTier.js';
 import { attachInstanceTiers, setInstanceLodState, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
 
 export const BUILD_LOD_INTERVAL_MS = 250;
 export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching and flipping may use
+// #4003: items whose versions have not attached yet are drawn from their full model, so on a heavy
+// lándlet the way in drew up to 8.4 million triangles in a frame. Those beyond this many triangles
+// (nearest first, and an item already drawn stays drawn) wait, undrawn, until their versions attach
+// and then arrive in the version they should be in; a wait never lasts longer than HOLD_MAX_MS.
+export const BUILD_HOLD_BACK_TRIANGLES = MAX_FULL_DETAIL_TRIANGLES;
+export const BUILD_HOLD_MAX_MS = 20000;
 
 const scratchPosition = new THREE.Vector3();
 
@@ -96,7 +102,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     }, 0);
   }
 
+  // Nearest first: what the builder looks at gets its simpler versions (and so leaves the wait) first.
   function drainAttachQueue(startMs) {
+    if (attachQueue.length > 1) attachQueue.sort((a, b) => (a.userData.lodDistM ?? Infinity) - (b.userData.lodDistM ?? Infinity));
     while (attachQueue.length > 0 && performance.now() - startMs < BUILD_LOD_SLICE_MS) {
       const object = attachQueue.shift();
       const scenes = object.userData.lodScenes;
@@ -104,6 +112,45 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       if (!object.parent) { object.userData.lodTiersState = 'none'; continue; }
       object.userData.lodTiersState = attachInstanceTiers(object, scenes) ? 'ready' : 'none';
     }
+  }
+
+  // #4003: what has no versions yet and does not fit the triangle budget is not drawn until they are
+  // there. A held item is unready, unprotected and has never been drawn; everything else draws.
+  function applyHoldBack(list, listItems, nowMs) {
+    const candidates = [];
+    list.forEach((object, i) => {
+      const data = object.userData;
+      const waiting = data.lodTiersState !== 'ready' && data.lodTiersState !== 'none';
+      if (!waiting) { setHeld(object, false); return; }
+      // A protected item (selected, or where the builder works) is always drawn, but its triangles
+      // still count against the budget, so what is held back is what is left after them.
+      if (listItems[i].protected) { setHeld(object, false); candidates.push(i); return; }
+      if (data.lodHeldSinceMs !== undefined && nowMs - data.lodHeldSinceMs > BUILD_HOLD_MAX_MS) { data.lodDrawnWaiting = true; setHeld(object, false); return; }
+      candidates.push(i);
+    });
+    const flags = holdBackUnready(candidates.map((i) => ({
+      tris: listItems[i].tris, dist: listItems[i].dist, sticky: listItems[i].protected || list[i].userData.lodDrawnWaiting === true,
+    })), BUILD_HOLD_BACK_TRIANGLES);
+    candidates.forEach((i, k) => {
+      const object = list[i];
+      if (listItems[i].protected) return;
+      if (flags[k]) {
+        if (object.userData.lodHeldSinceMs === undefined) object.userData.lodHeldSinceMs = nowMs;
+        setHeld(object, true);
+        // The versions of a held item must be on their way, whichever tier it will end up in.
+        if (object.userData.lodTiersState === undefined) requestTiers(object);
+      } else {
+        object.userData.lodDrawnWaiting = true;
+        setHeld(object, false);
+      }
+    });
+  }
+
+  function setHeld(object, held) {
+    const data = object.userData;
+    if (data.lodHeld === held || (!held && !data.lodHeld)) return;
+    data.lodHeld = held;
+    if (data.model) data.model.visible = !held;
   }
 
   function update(now = performance.now(), force = false) {
@@ -121,6 +168,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const groundDistanceM = Math.hypot(scratchPosition.x - target.x, scratchPosition.y - target.y);
       const near = isNearFullDetail(groundDistanceM, object.userData.lodNear === true);
       object.userData.lodNear = near;
+      object.userData.lodDistM = groundDistanceM;
       const protectedItem = (protectNear && near) || isSelected(object);
       object.userData.lodProtected = protectedItem; // read by src/build/batching.js: protected items are never batched
       items.push({
@@ -134,6 +182,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       objects.push(object);
     }
     const tiers = budgetedTiers(items, undefined, undefined, fullTriangleCap);
+    applyHoldBack(objects, items, now);
     flips.length = 0;
     for (let i = 0; i < objects.length; i++) {
       const object = objects[i];
@@ -155,8 +204,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
 
   // How many items are drawn in each version now (only items that have versions attached).
   function counts() {
-    const out = { full: 0, mid: 0, far: 0, withoutVersions: 0 };
+    const out = { full: 0, mid: 0, far: 0, withoutVersions: 0, held: 0 };
     for (const object of getMeshes()) {
+      if (object.userData.lodHeld) out.held += 1;
       if (object.userData.lodTiersState !== 'ready') { out.withoutVersions += 1; continue; }
       out[object.userData.lodApplied ?? TIER_FULL] += 1;
     }
