@@ -91,6 +91,28 @@ console.log(`triangles in the last frame: ${drawnBefore} before, ${drawnAfter} a
 check(drawnBefore >= COUNT * triangles * 0.9, `all ${COUNT} models in full draw about ${COUNT * triangles} triangles (${drawnBefore})`);
 check(drawnAfter < drawnBefore / 3, `the frame is a fraction of that once the budget bites (${drawnAfter} of ${drawnBefore})`);
 
+// Identical items that are not being worked on are drawn by one instanced mesh per version (#3929,
+// src/build/batching.js): far fewer draw calls for the same items and the same triangles, and each item
+// is still there to be tapped.
+const batch = await page.evaluate(() => window.__testBuildBatchCounts());
+const callsBatched = await page.evaluate(() => window.__testBuildRenderedCalls());
+console.log('batches after the budget bites:', JSON.stringify(batch), `draw calls ${callsBatched}`);
+check(batch.items >= COUNT - 4, `nearly every item is drawn by a batch (${batch.items} of ${COUNT})`);
+check(batch.drawCalls <= 6 && batch.groups <= 3, `a few batches, not one per item (${JSON.stringify(batch)})`);
+await page.evaluate(() => window.__testSetBuildBatching(false));
+await settle(() => true, 'tick with batching off');
+await page.waitForTimeout(800);
+const callsUnbatched = await page.evaluate(() => window.__testBuildRenderedCalls());
+const trianglesUnbatched = await page.evaluate(() => window.__testBuildRenderedTriangles());
+await page.evaluate(() => window.__testSetBuildBatching(true));
+await settle(() => true, 'tick with batching on again');
+await page.waitForTimeout(800);
+const callsOn = await page.evaluate(() => window.__testBuildRenderedCalls());
+const trianglesOn = await page.evaluate(() => window.__testBuildRenderedTriangles());
+console.log(`draw calls ${callsUnbatched} unbatched, ${callsOn} batched; triangles ${trianglesUnbatched} and ${trianglesOn}`);
+check(callsOn < callsUnbatched - (COUNT - 8), `batching removes the per-item draw calls (${callsOn} against ${callsUnbatched})`);
+check(Math.abs(trianglesOn - trianglesUnbatched) < trianglesUnbatched * 0.05 + 50, `and draws the same triangles (${trianglesOn} against ${trianglesUnbatched})`);
+
 // A tap on a reduced item selects it, and it is then drawn in full.
 const reducedId = await page.evaluate(() => {
   const positions = window.__testProductScreenPositions();

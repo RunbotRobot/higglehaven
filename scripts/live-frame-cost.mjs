@@ -6,7 +6,7 @@
 // the biggest single draw, with the frame time.
 //
 //   node scripts/live-frame-cost.mjs --name higglehaven10 [--seconds 35] [--url https://...] [--phone]
-//   node scripts/live-frame-cost.mjs --url http://127.0.0.1:8787 --email <seeded account> --mode build
+//   node scripts/live-frame-cost.mjs --url http://127.0.0.1:8787 --email <seeded account> --mode build [--batching off]
 //
 // #3929: --mode build opens Build instead of Shop and reports a table per phase (entering, standing
 // still, orbiting, selecting everything and moving it), against a lándlet seeded by
@@ -89,6 +89,8 @@ if (mode === 'build') {
   await page.waitForFunction(() => (window.__testProductPositions?.().length ?? 0) > 100, null, { timeout: 180000 });
   await page.waitForTimeout(2000);
   console.log(`entered Build and built ${await page.evaluate(() => window.__testProductPositions().length)} meshes in ${Math.round((Date.now() - enteredAt) / 1000)} s`);
+  // #3929: --batching off draws every item as its own object (src/build/batching.js), for the "before".
+  if (flag('--batching', 'on') === 'off') await page.evaluate(() => window.__testSetBuildBatching?.(false));
 } else {
   await page.waitForSelector('body.shop-ready', { timeout: 60000 });
 }
@@ -130,19 +132,28 @@ if (mode === 'shop') {
   for (let waited = 0; waited < settleSeconds; waited += 10) {
     await page.waitForTimeout(10000);
     lod = await answer(page.evaluate(() => window.__testBuildLodCounts?.() ?? null));
-    console.log(`  after ${Math.round((Date.now() - settleStart) / 1000)} s: items by version ${JSON.stringify(lod)}`);
+    const batched = await answer(page.evaluate(() => window.__testBuildBatchCounts?.() ?? null));
+    console.log(`  after ${Math.round((Date.now() - settleStart) / 1000)} s: items by version ${JSON.stringify(lod)}, batches ${JSON.stringify(batched)}`);
     // Settled: the same counts twice running (the items beside the orbit target never need versions).
     if (JSON.stringify(lod) === previousLod) break;
     previousLod = JSON.stringify(lod);
   }
   await phase('standing still, settled', () => page.waitForTimeout(Math.min(seconds, 8) * 1000));
+  // #3929: orbiting before anything is selected, where the batches draw the wall; the last row below
+  // orbits with everything selected, which is every item drawn as itself.
+  await phase('orbiting, nothing selected', async () => {
+    await page.mouse.move(195, 300);
+    await page.mouse.down();
+    for (let i = 0; i < 30; i++) { await page.mouse.move(195 + i * 4, 300 + i, { steps: 1 }); await page.waitForTimeout(60); }
+    await page.mouse.up();
+  });
   await phase('selecting everything', async () => { await page.evaluate(() => window.__testSelectAllProducts?.()); await page.waitForTimeout(3000); });
   await phase('moving the selection up and back', async () => {
     await page.evaluate(() => window.__testDragGroupMoveZ?.(1));
     await page.waitForTimeout(2000);
   });
 }
-  await phase('orbiting (a drag across the view)', async () => {
+  await phase(mode === 'build' ? 'orbiting, everything selected' : 'orbiting (a drag across the view)', async () => {
     await page.mouse.move(195, 300);
     await page.mouse.down();
     for (let i = 0; i < 30; i++) { await page.mouse.move(195 + i * 4, 300 + i, { steps: 1 }); await page.waitForTimeout(60); }
