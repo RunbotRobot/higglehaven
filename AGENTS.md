@@ -453,6 +453,29 @@ most likely to come up again.
   for roughly December 2026; the GitHub-concurrency question is
   revisited then, not before.
 
+- **Usage is paced to last the whole week; the model is not changed to
+  use up allowance.** (2026-11-19.) Half way through a week meant to use
+  double the allowance the fleet had used 54%, and at its speed would
+  still have run out two days before the reset, stopping the assistants
+  in the world and higglehaven1 with it. Asked whether to slow down or
+  run into the limit, the owner: "Yes, please try to pace our usage to
+  last up until the Monday reset... I'm not inclined to change the model
+  for the sake of reaching usage, unless we decide it's the right call
+  regardless of usage pacing." So higglehaven1 steers how many sessions
+  work so that the allowance reaches the reset, from the owner's usage
+  readings (it cannot see the percentage itself). Running out early is a
+  failure now that people in the world depend on the same allowance;
+  leaving a large share unused is one too. A model is chosen for what the
+  work needs, never to burn or to save allowance. This narrows the
+  decision above and the older note under "Continuing without a prompt"
+  that the owner would rather the fleet run into the limit than leave
+  capacity unused: close to the limit, yes; out before the reset, no.
+  From the same note: "It seems like my logic of the design work being
+  less test-intensive doesn't necessarily hold up. So while I do want to
+  continue on design work, we don't need to make it an exclusive theme
+  for either this or next week." A theme for a week is a lean, not a
+  fence.
+
 - **Owner items are surfaced in conversation, one at a time — never as
   an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
   above.) Proactive email is for genuine emergencies only. **Channel
@@ -1550,29 +1573,33 @@ These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
 
-**Pace for the week of 2026-11-16: a normal usage week, so half the fleet rests
-(owner, 2026-11-19).** The doubled-usage week did not reach its pace. The owner:
-"Usage is still only at 54% for the week, even though it's now Thursday morning...
-Let's make this be a normal usage week and try again next week." At the fleet's
-speed the weekly allowance would run out on Saturday, two days before it resets,
-and that stops every session on the account, the assistants in the world included.
-Waking sessions less often did not slow them (a session with work goes from one
-merge straight to the next), so until 2026-11-23 21:00Z:
+**Pace for the week of 2026-11-16: usage has to last until the Monday reset, so
+most of the fleet rests (owner, 2026-11-19).** The doubled-usage week did not reach
+its pace, and the owner made it a normal week. At 65% on Thursday evening: "Yes,
+please try to pace our usage to last up until the Monday reset." That leaves 35
+points for about 89 hours, roughly half of what the fleet was still using with eight
+sessions working. Waking sessions less often does not slow them (a session with work
+goes from one merge straight to the next), so until 2026-11-23 21:00Z:
 
-- A session whose number is odd (higglehaven3, 5, 7, 9, 11, 13, 15) finishes and
-  merges what it already holds, releases anything it will not finish (card
-  `queued`, session empty, one line saying what is left), and then claims nothing
-  new. Its check-ins end at once: no queries, no notes.
-- Even-numbered sessions carry on as usual, one task at a time, and they are the
-  ones who take owner feedback and bug-report cards.
+- **Working: higglehaven2, 4, 6 and 12.** One task at a time, straight from one card
+  to the next, and they are the ones who take owner feedback and bug-report cards.
   A card with status `queued` and an empty session is free, whoever wrote its
   note last: "Released by higglehavenN" means exactly that, and so does a note
   that lists what is left. (On 2026-11-19 several sessions stood down with "the
   free cards belong to other sessions" while a dozen such cards had work in them.)
+- **Resting: every other coding session (3, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16).**
+  Finish and merge what you already hold, release anything you will not finish
+  (card `queued`, session empty, one line saying what is left), then claim nothing
+  new. Your check-ins end at once: no queries, no notes.
+- The work is not interface-only any more (owner, same note: "while I do want to
+  continue on design work, we don't need to make it an exclusive theme for either
+  this or next week"): a working session takes the first free card whatever its
+  subject.
 - The two queries above apply only to the sessions that are working.
 
-higglehaven1 removes this paragraph when the week resets or if the owner asks for
-full speed. If it is still here after 2026-11-23 21:00Z, ignore it.
+higglehaven1 changes who works as the owner's usage readings come in, and removes
+this paragraph when the week resets. If it is still here after 2026-11-23 21:00Z,
+ignore it.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
