@@ -59,7 +59,9 @@ function fullTrianglesOf(object) {
 
 // getMeshes(): the placed items. isSelected(mesh): whether the builder has it selected. target: the
 // orbit camera's look-at point (world space). Returns { update(now, force), counts() }.
-export function createBuildLod({ camera, target, getMeshes, isSelected, viewportHeight = () => window.innerHeight }) {
+// onTicked(objects): called at the end of every pass with the items it considered, after any version
+// flips, so what draws them (src/build/batching.js) is brought in step in the same synchronous step.
+export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked = null, viewportHeight = () => window.innerHeight }) {
   let lastTickMs = -Infinity;
   let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
   let protectNear = true; // e2e-only switch: false leaves only the selected items protected
@@ -120,6 +122,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, viewport
       const near = isNearFullDetail(groundDistanceM, object.userData.lodNear === true);
       object.userData.lodNear = near;
       const protectedItem = (protectNear && near) || isSelected(object);
+      object.userData.lodProtected = protectedItem; // read by src/build/batching.js: protected items are never batched
       items.push({
         px,
         protected: protectedItem,
@@ -145,8 +148,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, viewport
       object.userData.lodApplied = tiers[i];
       setInstanceLodState(object, tiers[i]);
       window.__buildLodFlipCount = (window.__buildLodFlipCount ?? 0) + 1; // e2e counts tier changes
-      if (performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) return;
+      if (performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
     }
+    onTicked?.(objects);
   }
 
   // How many items are drawn in each version now (only items that have versions attached).

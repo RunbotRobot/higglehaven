@@ -85,6 +85,7 @@ import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
 import { anglesFromQuaternion, formatRotationReadout, quaternionFromAngles, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
 import { nudgeVector, nudgeStepMeters, heightAboveFloor, NUDGE_DIRECTIONS } from './nudge.js';
+import { createBuildBatching } from './batching.js';
 import { createBuildLod } from './lod.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
@@ -2078,6 +2079,7 @@ function deleteInstance(mesh, { sync = true, persist = true } = {}) {
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
+  buildBatching.releaseNow(mesh); // #3929: its instance stops drawing it at once, not at the next tick
   instanceVersions.delete(instanceId); // #1062: a removed instance has no version to protect
   // #1950: unlike selectionOutlines (cleared by the caller via
   // clearSelection() before every delete path), the low-stock highlight
@@ -3305,7 +3307,16 @@ const pointerNdc = new THREE.Vector2();
 // (replace vs. add/remove) rather than needing two entirely separate
 // selection systems. The move/rotate gizmos can only ever attach to one
 // object, so they're only shown when the set holds exactly one.
-export const selectedMeshes = new Set();
+// #3929: tells the draw-call batching (src/build/batching.js) the moment an item is selected, so a drag
+// starts on the item's own object and the batch stops drawing it in the same step.
+class SelectionSet extends Set {
+  add(mesh) {
+    super.add(mesh);
+    this.onAdd?.(mesh);
+    return this;
+  }
+}
+export const selectedMeshes = new SelectionSet();
 export let multiSelectMode = false;
 
 // #1945: an adjustable-size brush, shown only while multi-select is on,
@@ -5039,12 +5050,19 @@ function applyEdgePanWhileDraggingProduct() {
 // registers null (see enterSellMode).
 // #3929: Build's level of detail (src/build/lod.js): the same apparent-size and triangle rules Shop
 // uses, with the selected items and those around the orbit target always shown as themselves.
-const buildLod = createBuildLod({ camera, target: controls.target, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh) });
+// #3929: identical items the builder is not working on are drawn by one instanced mesh per part
+// (src/build/batching.js); every item's own object stays in the scene and is what a tap selects.
+const buildBatching = createBuildBatching({ scene, isSelected: (mesh) => selectedMeshes.has(mesh) });
+selectedMeshes.onAdd = (mesh) => buildBatching.releaseNow(mesh);
+const buildLod = createBuildLod({ camera, target: controls.target, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
+window.__testBuildBatchCounts = () => buildBatching.counts();
+window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
+window.__testBuildRenderedCalls = () => renderer.info.render.calls; // the last frame's draw calls (#3929)
 window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
 
 export function buildModeFrameUpdate(now) {
