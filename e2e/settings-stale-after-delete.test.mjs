@@ -13,7 +13,7 @@
 // no tab switch or modal reopen in between -- exactly the gap #1124
 // describes.
 import {
-  launchPage, chooseIdentity, claimLandlet, openAccountMenu, grantHigglesAsAdmin, waitForText, finish, acceptConfirmModal } from './helpers.mjs';
+  launchPage, chooseIdentity, claimLandlet, openAccountMenu, grantHigglesAsAdmin, waitForText, finish, acceptConfirmModal, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Settings Stale After Delete Tester';
 const GRANTED_CENTS = 5000; // $50.00
@@ -47,6 +47,7 @@ console.log('Redeem Higgles text before delete (should show the granted $50.00):
 // #1149 renamed this button from "Delete account" (never true -- it only
 // ever reset this profile, not the login) to "Reset profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
+await openBuildMoreFold(page); // #4019: the username row is folded
 await page.click('#settings-section button:has-text("Reset profile")');
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await waitForText(page, '#settings-section', 'Reset', { timeout: 20000 });
