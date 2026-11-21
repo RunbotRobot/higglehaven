@@ -925,7 +925,8 @@
       /* #3761: the Person leaf's word is the account's name, which can be long: one line, cut with an
          ellipsis at the leaf's edge, not broken in the middle of a word ("higglehaven1" over "0"). A
          block rather than a column so the cut can be drawn. */
-      body[data-bud="on"] #account-menu-panel #account-auth-btn {
+      body[data-bud="on"] #account-menu-panel #account-auth-btn,
+      body[data-bud="on"] #bud-row #account-auth-btn {
         display: block;
         text-align: center;
         white-space: nowrap;
@@ -935,6 +936,7 @@
            the edge instead of running to it. */
         padding-inline: var(--space-xs);
       }
+      body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
       body[data-bud="on"] #account-menu-panel .bud-icon,
       body[data-bud="on"] #bud-row .bud-icon { display: block; line-height: 0; color: var(--ink); }

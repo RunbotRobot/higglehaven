@@ -152,6 +152,9 @@ function foldBud() {
 
 function startFold() {
   const host = panel();
+  // The row folds with the petals, so while it does nothing in it can be pressed or take focus (a leaf that
+  // closes the menu hands focus back to the head, not to a button that is about to go).
+  rowEl().setAttribute('inert', '');
   const ring = document.body.getAttribute('data-bud-ring');
   // The petals fold in instead of vanishing, unless a mode is still loading (they stay out then).
   if (ring === 'held' || ring === 'staged') return;
@@ -224,8 +227,6 @@ function markMenus(host) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.dataset.budMenu = menu;
-    // A row member moves into the row, in the order listed above; the rest stay in the stem.
-    if (menu === BUD_ROW && el.parentElement !== rowEl()) rowEl().appendChild(el);
   }
   for (const el of host.querySelectorAll('[data-bud-menu]')) {
     el.toggleAttribute('data-menu-off', el.dataset.budMenu !== openMenu);
@@ -243,8 +244,7 @@ function syncBud() {
       if (petal.element) {
         // An element that already exists (a pair of buttons with their own handlers): the bud
         // holds it and shows it only in its mode, and only while `visible()` says so.
-        const home = petalMode === BUD_ROW ? rowEl() : host;
-        if (petal.element.parentElement !== home) home.appendChild(petal.element);
+        if (petal.element.parentElement !== host && !(petalMode === BUD_ROW && petal.element.parentElement === rowEl())) host.appendChild(petal.element);
         petal.element.dataset.budMenu = petalMode;
         petal.element.hidden = !inMode(petalMode, mode) || (petal.visible ? !petal.visible() : false);
         continue;
@@ -258,7 +258,7 @@ function syncBud() {
         btn.classList.add('bud-petal');
         btn.dataset.budMode = petalMode;
         btn.addEventListener('click', foldBud);
-        if (btn.parentElement !== (petalMode === BUD_ROW ? rowEl() : host)) (petalMode === BUD_ROW ? rowEl() : host).appendChild(btn);
+        if (btn.parentElement !== host && !(petalMode === BUD_ROW && btn.parentElement === rowEl())) host.appendChild(btn);
       }
       if (!btn) {
         btn = document.createElement('button');
@@ -273,7 +273,7 @@ function syncBud() {
           foldBud();
           petal.run();
         });
-        (petalMode === BUD_ROW ? rowEl() : host).appendChild(btn);
+        host.appendChild(btn);
       }
       btn.dataset.budMenu = petalMode;
       btn.hidden = !inMode(petalMode, mode);
@@ -282,6 +282,7 @@ function syncBud() {
   markMenus(host);
   scheduleStem();
   if (!mode) return;
+  homeRow(registry.has(mode));
   // A mode with a definition has the bud; without one its old controls are still its way in.
   document.body.dataset.bud = registry.has(mode) ? 'on' : 'off';
   // #3723: the three modes are a group of their own, a half-ring of petals at the bud's corner
@@ -289,6 +290,17 @@ function syncBud() {
   // are the existing .mode-nav-btn buttons moved here, so their ids and handlers carry over; a
   // mode without a bud keeps them in the old top row.
   placeModePetals(registry.has(mode), mode);
+}
+
+// The row's buttons live in #bud-row while the bud is on and in the panel (where they always were) while
+// it is not, so a mode with no bud (the layout preview) still has its Notices and Settings.
+function homeRow(inBud) {
+  const host = panel();
+  if (!host) return;
+  const home = inBud ? rowEl() : host;
+  for (const el of document.querySelectorAll('[data-bud-menu="row"], #account-auth-btn, #notifications-btn, #assistant-menu-btn, #settings-btn')) {
+    if (el.parentElement !== home) home.appendChild(el);
+  }
 }
 
 // The three mode buttons live in the ring while the bud is on and in the old top row while it is
@@ -644,7 +656,10 @@ if (typeof document !== 'undefined') {
     let wasOpen = host.classList.contains('expanded');
     new MutationObserver(() => {
       const open = host.classList.contains('expanded');
-      if (open && !wasOpen) showMenu(document.body.dataset.mode);
+      if (open && !wasOpen) {
+        document.getElementById('bud-row')?.removeAttribute('inert');
+        showMenu(document.body.dataset.mode);
+      }
       if (!open && wasOpen) startFold();
       wasOpen = open;
     }).observe(host, { attributes: true, attributeFilter: ['class'] });

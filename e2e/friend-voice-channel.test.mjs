@@ -56,7 +56,7 @@
 // GET/POST /api/voice/signal and GET /api/voice/ice-config -- it needs a
 // Node-side in-memory mock below rather than a real call.
 import { chromium } from 'playwright';
-import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName, budClick } from './helpers.mjs';
+import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName, budClick, budAware } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -201,6 +201,7 @@ async function launchVoicePage(label) {
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
   });
   const page = await browser.newPage({ viewport: { width: 420, height: 860 }, permissions: ['microphone'] });
+  budAware(page); // #4025: Friends is Shop's menu; from Build the helper presses it in the page
   // #3556: the microphone is in the Chat leaf, and an open leaf polls nearby chat. This page's
   // trust tier is patched client-side only, so the real endpoint refuses (403) and the run would
   // log page errors; nothing in this test is about chat.
