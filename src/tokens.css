@@ -185,4 +185,17 @@
   --motion-fold: 0.2s;
   --ease-fold: ease-in;
   --motion-reduced: 0.15s;
+
+  /* The flower opens in three beats that overlap, about half a second in all (#4027): the petals and the
+     top row form (0 to 0.2 s), the stem draws down from the head (0.1 to 0.35 s), and the leaves unfurl from
+     the stem, top to bottom (0.22 s on, 0.02 s apart: done by 0.5 s). It folds in the reverse order, faster:
+     the leaves into the stem, the stem up into the head, then the petals (about 0.5 s). Nothing waits on it:
+     every part can be tapped as soon as it is on screen. */
+  --motion-open-petals: 0.2s;
+  --motion-open-stem: 0.25s;
+  --delay-open-stem: 0.1s;
+  --motion-open-leaf: 0.2s;
+  --delay-open-leaves: 0.22s;
+  --step-open-leaf: 0.02s;
+  --motion-fold-leaf: 0.12s;
 }
