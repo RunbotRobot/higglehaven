@@ -1271,6 +1271,37 @@ most likely to come up again.
   still one stem at a time; with a stem open, another petal swaps to its
   stem or takes you to its mode.)
 
+  **The flower has three menus and one row (2026-11-21, #4025, #4026, #4027).**
+  After a day with the whole flower: "Let's get rid of the Menu petal.
+  Clicking the bud will open the three petals with the three modes, and will
+  simultaneously expand the leaves. The menu that is visible should be
+  specific to the mode... This seems inconsistent with my previous statement
+  that I don't want menus to change what they show based on context. The
+  difference here is that these will be three separate submenus, not a single
+  menu that changes dynamically. Friends and My Purchases go in Shop." For
+  what belongs to no mode (the account, Notices, Settings, Help): "I think
+  these should expand to a row of icons on the top when the bud is pressed.
+  Creating three distinct submenus will enable us to have more buttons
+  available in each mode." On the stem: "too thin and too dark. It appears
+  black, and I'd like it to appear some shade of green. It should also connect
+  horizontally to the bud, not offset to the right... the stem can curve to
+  the left above the leaves and straighten upwards again to go to the bud." On
+  opening: "I want the menu to animate as growing out of the bud. The petals
+  form, then the stem extends down, then the leaves unfurl. We don't want the
+  animation to be long enough to be annoying for practical use, though." This
+  replaces the general-menu petal of 2026-11-18 and its "one of any of the
+  four": there are three petals, one tap on the bud opens everything, and the
+  leaves shown are those of the mode the person is in. The principles: the
+  rule against menus that change is a rule about predictability, so a fixed
+  menu for each place is fine and one menu that reshuffles itself is not; what
+  belongs to no place gets a fixed place of its own, not a share of every
+  menu; a fix made for an audit (the near-black stem of #4024, for contrast)
+  does not get to make a living thing look dead, so the contrast is met
+  another way; and an animation serves use, so it is short, never refuses a
+  tap, and can be interrupted. (higglehaven1's readings, told to the owner:
+  the petal of another mode takes you there; the petal of the mode you are in
+  is only marked; the opening takes about half a second.)
+
 - **A surface opens with its contents in it; an empty one reads as loss.**
   (2026-11-18, #3773.) "When I click the assistant button, the subsequent
   modal opens before the chat conversation has loaded, which initially
