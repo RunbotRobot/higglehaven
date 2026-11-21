@@ -54,8 +54,9 @@ await uploadProduct('Showcase Crate Two');
 // under the per-page byte cap — one page.
 const pagerVisibleWhileModalOpen = await page.locator('#seller-showcase-pager').isVisible();
 const pageLabelWhileModalOpen = await page.textContent('#seller-showcase-page-label');
-console.log('pager already visible behind the modal (should be true):', pagerVisibleWhileModalOpen);
-console.log('page label with two small products (should be "Page 1 of 1"):', pageLabelWhileModalOpen);
+// #4021: one page has nothing to turn, so the pager is not drawn at all.
+console.log('pager hidden behind the modal with one page (should be false):', pagerVisibleWhileModalOpen);
+console.log('page label with two small products (not shown; still "Page 1 of 1"):', pageLabelWhileModalOpen);
 
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);
@@ -66,13 +67,10 @@ const pagerVisibleAfterClose = await page.locator('#seller-showcase-pager').isVi
 // real-bounding-box check, now against the thing that stands where the old controls were).
 const manageBtnGone = (await page.locator('#seller-showcase-manage-btn').count()) === 0;
 console.log('the old "Products" button is gone (should be true):', manageBtnGone);
+// With one page the pager is hidden, so it cannot collide with the bud.
 const pagerBox = await page.locator('#seller-showcase-pager').boundingBox();
-const budBox = await page.locator('#account-menu-toggle').boundingBox();
-const rectsOverlap = pagerBox.x < budBox.x + budBox.width &&
-  pagerBox.x + pagerBox.width > budBox.x &&
-  pagerBox.y < budBox.y + budBox.height &&
-  pagerBox.y + pagerBox.height > budBox.y;
-console.log('pager and the bud overlap on screen (should be false):', rectsOverlap);
+const rectsOverlap = false;
+console.log('pager is not on screen with one page (should be true):', pagerBox === null);
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded');
 // #3760: My products is in Sell's own menu: one tap on the Sell petal opens it.
@@ -120,8 +118,8 @@ const someRowExpanded = await page.locator('.seller-row.expanded').count();
 console.log('reopened on Manage view (should be true):', modalOnManageAfterClick);
 console.log('a product row is expanded after the click (should be >= 1):', someRowExpanded);
 
-const firstSectionPass = pagerVisibleWhileModalOpen && pageLabelWhileModalOpen === 'Page 1 of 1' &&
-  pagerVisibleAfterClose && manageBtnVisible && !rectsOverlap && prevDisabled && nextDisabled &&
+const firstSectionPass = !pagerVisibleWhileModalOpen && pageLabelWhileModalOpen === 'Page 1 of 1' &&
+  !pagerVisibleAfterClose && pagerBox === null && manageBtnVisible && !rectsOverlap && prevDisabled && nextDisabled &&
   opened && modalOnManageAfterClick && someRowExpanded >= 1;
 
 // #1427: loadSellerShowcasePage resolves a whole page's real product
