@@ -859,7 +859,7 @@
         stroke-linejoin: round;
         stroke-dasharray: 1;
         stroke-dashoffset: 0;
-        animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
+        animation: bud-stem-grow var(--motion-open-stem) var(--ease-bloom) var(--delay-open-stem) both;
       }
       #bud-stem .bud-stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10px; }
       #bud-stem .bud-stem-core { stroke: var(--brand-green); stroke-width: 6px; }
@@ -872,19 +872,21 @@
         box-shadow: var(--shadow-petal);
         font-size: var(--text-md);
         white-space: nowrap;
-        animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
+        animation: bud-unfold var(--motion-open-leaf) var(--ease-bloom) both;
       }
+      /* The row forms with the petals, not with the leaves. */
+      body[data-bud="on"] #bud-row button { animation: bud-unfold var(--motion-open-petals) var(--ease-bloom) both; }
       /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
          stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
          panel is still drawn while it does (not tappable). */
       #account-menu-panel.bud-folding { display: flex; pointer-events: none; }
       body[data-bud="on"] #account-menu-panel.bud-folding button,
       body[data-bud="on"] #account-menu-panel.bud-folding > .bud-pair {
-        animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both;
+        animation: bud-leaf-fold var(--motion-fold-leaf) var(--ease-fold) both;
         animation-delay: 0s;
       }
       body[data-bud="on"] #account-menu-panel.bud-folding #bud-stem path {
-        animation: bud-stem-draw var(--motion-fold) var(--ease-fold) var(--motion-fold) both;
+        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-fold) var(--motion-fold-leaf) both;
       }
       /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
          (already finished), so changing its direction would jump to the end instead of playing. */
@@ -898,7 +900,7 @@
         box-sizing: border-box;
         width: var(--leaf-w);
         margin-bottom: -22px;
-        animation-delay: calc(var(--leaf-i, 0) * 0.018s);
+        animation-delay: calc(var(--delay-open-leaves) + var(--leaf-i, 0) * var(--step-open-leaf));
       }
       body[data-bud="on"] #account-menu-panel > .bud-pair { width: 88px; gap: 0; }
       body[data-bud="on"] #account-menu-panel [data-side="right"] { margin-left: calc(var(--stem-x) + 4px); transform-origin: left center; }
@@ -1048,7 +1050,7 @@
         text-align: center;
         transform-origin: 0 22px;
         transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2));
-        animation: bud-grow var(--motion-grow) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
+        animation: bud-grow var(--motion-open-petals) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
       body[data-bud="on"] #bud-modes .mode-nav-label {
@@ -1066,8 +1068,8 @@
       body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
       body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 6; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.04s; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.08s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.03s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.06s; }
       /* Which stem is open: the petal of the open menu is the lit one. */
       body[data-bud="on"] #bud-modes button[aria-expanded="true"],
       /* The chosen petal answers at once and stays lit while its mode loads (#3752). */
@@ -1084,8 +1086,8 @@
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn {
         animation: bud-fold var(--motion-fold) var(--ease-fold) both;
       }
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.04s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.06s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.03s; }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="sell"] { animation-delay: 0s; }
       /* The petals cover the word beside the bud and the Sell pager while they are out. */
       body:has(#account-menu-panel.expanded) .bud-word,
