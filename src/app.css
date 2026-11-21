@@ -847,7 +847,7 @@
         width: 4px;
         margin-left: -2px;
         border-radius: var(--radius-sm);
-        background: rgb(var(--ink-rgb) / 0.55);
+        background: rgb(var(--ink-rgb) / 0.8);
         transform-origin: top;
         animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
       }
@@ -907,7 +907,7 @@
         width: 6px;
         height: 4px;
         margin-top: -2px;
-        background: rgb(var(--ink-rgb) / 0.55);
+        background: rgb(var(--ink-rgb) / 0.8);
       }
       body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
       body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
