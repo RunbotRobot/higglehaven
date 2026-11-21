@@ -1051,3 +1051,15 @@ export async function readSaying(page, key) {
 export async function closeSaying(page, key) {
   await page.click(`#bud-leaf-saying-${key} .bud-leaf-close`);
 }
+
+// #4019: the Build tab keeps the username, lándlet cap, low stock and sold-out markers in one closed
+// "Profile, lándlet cap and stock" row, and the earlier versions in a closed "Earlier versions" row.
+// Open them before looking at (not just clicking) something inside; the row is drawn as soon as the tab is.
+export async function openBuildMoreFold(page) {
+  await page.waitForSelector('.settings-more-fold', { state: 'attached', timeout: 10000 });
+  await page.evaluate(() => document.querySelector('.settings-more-fold')?.setAttribute('open', ''));
+}
+export async function openEarlierVersions(page) {
+  await page.waitForSelector('.settings-earlier-versions:not([hidden])', { state: 'attached', timeout: 10000 });
+  await page.evaluate(() => document.querySelectorAll('.settings-earlier-versions').forEach((el) => el.setAttribute('open', '')));
+}

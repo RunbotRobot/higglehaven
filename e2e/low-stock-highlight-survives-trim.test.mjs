@@ -13,7 +13,7 @@
 // box-geometry fallback with no real uploaded model (docs/API.md's
 // "Extensible products (crop)"), so there's no need to drive the Sell-mode
 // upload flow just to get a croppable instance.
-import { launchPage, chooseIdentity, claimLandlet, clickUntilSelected, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, clickUntilSelected, finish, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Low Stock Trim Tester';
 const PRODUCT_NAME = 'Low Stock Trim Product';
@@ -67,6 +67,7 @@ await page.click('#account-menu-toggle');
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page); // #4019: Low stock is in the folded "Profile, lándlet cap and stock" row
 await page.waitForSelector('.low-stock-list', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelectorAll('.low-stock-row').length >= 1, undefined, { timeout: 10000 });
 const qtyInput = page.locator('.low-stock-filter-input').first();

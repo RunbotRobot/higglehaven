@@ -5267,7 +5267,7 @@ async function renderLandCapField() {
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
   try {
     // ownedAreaM2 comes straight from the builder object now (#312) —
     // the backend's own recomputeLandCap already sums every owned
@@ -5322,6 +5322,8 @@ function renderBuilderIdentityField() {
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
     onRenamed: (id, label) => { setShopBuilderLabel(id, label); },
+    // #4019: the username sits in the "Profile, lándlet cap and stock" row.
+    container: moreFoldEl,
   });
 }
 
@@ -5561,25 +5563,47 @@ async function renderRedeemHigglesField() {
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
 // #3652: Redeem Higgles, Sell your lándlet and Active Auctions are occasional money matters, so they
-// sit behind one closed row and the Build tab's first screen holds what a builder checks often
-// (username, lándlet cap, low-stock). The fold is made first, so fields that load later go either
-// into it or in front of it, whatever order their requests come back in.
+// sit behind one closed row. #4019: the rest of what a builder rarely touches (username and reset,
+// lándlet cap, low stock, sold-out markers) sits behind a second closed row, and Version history shows
+// only its latest version with the earlier ones folded, so the tab's first screen is Publish and the
+// live version (the tall tab covered 86% of a phone screen with all of it open). The folds are made
+// first, so fields that load later go into them, whatever order their requests come back in.
 let higglesFoldEl = null;
 const higglesHost = () => higglesFoldEl || settingsSectionEl;
-function appendBeforeHigglesFold(el) {
+let moreFoldEl = null;
+// Whether the "Profile, lándlet cap and stock" row is open, kept across the redraws one open Settings
+// makes (a rename redraws the tab and must not shut the row it was made in); each time Settings opens
+// the row starts closed again (resetBuildSettingsFolds).
+let buildMoreFoldOpen = false;
+export function resetBuildSettingsFolds() { buildMoreFoldOpen = false; }
+function appendToMoreFold(el) {
+  if (moreFoldEl && moreFoldEl.parentNode === settingsSectionEl) moreFoldEl.appendChild(el);
+  else settingsSectionEl.appendChild(el);
+}
+// Publish, Version history and Saved layouts sit above both closed rows.
+function appendAboveFolds(el) {
   if (higglesFoldEl && higglesFoldEl.parentNode === settingsSectionEl) settingsSectionEl.insertBefore(el, higglesFoldEl);
   else settingsSectionEl.appendChild(el);
 }
 
 export function renderBuildSettingsSection() {
-  renderBuilderIdentityField();
   const fold = document.createElement('details');
-  fold.className = 'settings-account-fold';
+  fold.className = 'settings-account-fold settings-higgles-fold';
   const foldSummary = document.createElement('summary');
   foldSummary.textContent = 'Higgles and auctions';
   fold.appendChild(foldSummary);
   settingsSectionEl.appendChild(fold);
   higglesFoldEl = fold;
+  const moreFold = document.createElement('details');
+  moreFold.className = 'settings-account-fold settings-more-fold';
+  const moreSummary = document.createElement('summary');
+  moreSummary.textContent = 'Profile, lándlet cap and stock';
+  moreFold.appendChild(moreSummary);
+  moreFold.open = buildMoreFoldOpen;
+  moreFold.addEventListener('toggle', () => { buildMoreFoldOpen = moreFold.open; });
+  settingsSectionEl.appendChild(moreFold);
+  moreFoldEl = moreFold;
+  renderBuilderIdentityField();
   renderLandCapField();
   renderRedeemHigglesField();
   renderAuctionSection();
@@ -5589,7 +5613,7 @@ export function renderBuildSettingsSection() {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
     note.textContent = 'Enter Build mode on a claimed lándlet to publish or manage versions.';
-    settingsSectionEl.appendChild(note);
+    settingsSectionEl.insertBefore(note, fold);
     return;
   }
   const landletId = currentLandletId;
@@ -5612,7 +5636,7 @@ export function renderBuildSettingsSection() {
   publishStatus.id = 'build-publish-status';
   publishStatus.className = 'settings-empty-note';
   publishField.appendChild(publishStatus);
-  settingsSectionEl.appendChild(publishField);
+  appendAboveFolds(publishField);
 
   const historyField = document.createElement('div');
   historyField.className = 'settings-field';
@@ -5622,13 +5646,28 @@ export function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  // #4019: only the newest version is on the first screen; the earlier ones (and Load more) are in a
+  // closed row below it, drawn only once there is an earlier version to show.
+  const earlierFold = document.createElement('details');
+  earlierFold.className = 'settings-account-fold settings-earlier-versions';
+  earlierFold.hidden = true;
+  const earlierSummary = document.createElement('summary');
+  earlierSummary.textContent = 'Earlier versions';
+  earlierFold.appendChild(earlierSummary);
+  const earlierList = document.createElement('div');
+  earlierList.className = 'version-list';
+  earlierFold.appendChild(earlierList);
   const historyLoadMoreBtn = document.createElement('button');
   historyLoadMoreBtn.type = 'button';
   historyLoadMoreBtn.className = 'version-action-btn';
   historyLoadMoreBtn.textContent = 'Load more';
   historyLoadMoreBtn.hidden = true;
-  historyField.appendChild(historyLoadMoreBtn);
-  settingsSectionEl.appendChild(historyField);
+  earlierFold.appendChild(historyLoadMoreBtn);
+  historyField.appendChild(earlierFold);
+  const syncEarlierFold = () => {
+    earlierFold.hidden = !earlierList.querySelector('.version-row') && !versionHistoryNextCursor;
+  };
+  appendAboveFolds(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
   // (#633) land here — reusing Version History's own .settings-field/
@@ -5654,7 +5693,7 @@ export function renderBuildSettingsSection() {
   savedLayoutsLoadMoreBtn.textContent = 'Load more';
   savedLayoutsLoadMoreBtn.hidden = true;
   savedLayoutsField.appendChild(savedLayoutsLoadMoreBtn);
-  settingsSectionEl.appendChild(savedLayoutsField);
+  appendAboveFolds(savedLayoutsField);
 
   let savedLayoutsLoadToken = 0;
   // The cursor for whatever page comes after the ones currently rendered —
@@ -5787,6 +5826,8 @@ export function renderBuildSettingsSection() {
   let versionHistoryActiveVersionId = null;
 
   function appendVersionRow(version, activeVersionId) {
+    // The newest version is the first row drawn; every later one goes in the Earlier versions row.
+    const target = historyList.querySelector('.version-row') ? earlierList : historyList;
     const row = document.createElement('div');
     row.className = 'version-row';
 
@@ -5884,14 +5925,16 @@ export function renderBuildSettingsSection() {
     actions.appendChild(restoreBtn);
 
     row.appendChild(actions);
-    historyList.appendChild(row);
+    target.appendChild(row);
   }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    earlierList.innerHTML = '';
     historyLoadMoreBtn.hidden = true;
     versionHistoryNextCursor = null;
+    syncEarlierFold();
     let versions;
     let activeVersionId;
     let nextCursor;
@@ -5919,6 +5962,7 @@ export function renderBuildSettingsSection() {
     versionHistoryNextCursor = nextCursor;
     versionHistoryActiveVersionId = activeVersionId;
     historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    syncEarlierFold();
   }
 
   historyLoadMoreBtn.addEventListener('click', async () => {
@@ -5930,6 +5974,7 @@ export function renderBuildSettingsSection() {
       for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
       versionHistoryNextCursor = nextCursor;
       historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+      syncEarlierFold();
     } catch (err) {
       console.warn('Could not load more versions:', err);
     } finally {
@@ -6485,7 +6530,7 @@ async function renderLowStockSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
 
   // A days-remaining threshold only ever excludes a row that actually has a
   // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
@@ -6593,7 +6638,7 @@ async function renderSoldOutMarkersSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
 
   toggle.addEventListener('change', () => {
     setShowSoldOutMarkers(toggle.checked);

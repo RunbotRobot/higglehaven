@@ -556,6 +556,15 @@ by touching the world. The module is `src/ui/bud.js`:
   dimming scrim, so the world shows around it; it stays inside the screen and scrolls
   inside itself. A panel that moves into the bud takes this look, not a full-screen
   dialog.
+- The Build tab of Settings keeps its first screen for what a builder does often (#4019, which
+  reverses the part of #3652 that put the username, lándlet cap and low stock there): Publish and
+  the newest version are on top. Everything else is a closed `<details>` row below, using the
+  same `.settings-account-fold` look: "Earlier versions" (inside Version history, drawn only once
+  there is an earlier one), "Higgles and auctions", and "Profile, lándlet cap and stock"
+  (username with Rename and Reset profile, lándlet cap, low stock, sold-out markers). A row
+  starts closed each time Settings opens and stays as the person left it while that Settings is
+  open (a rename redraws the tab). The Build tab had been 86% of a phone screen; the measured
+  figure after this change is owed from a look at 390x844.
 - The three modes are a petal group of their own, a half-ring at the bud's corner (#3723,
   #3752): Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, the same three in
   every mode with the current one green and `aria-current`. Each is a petal: a button turned to
