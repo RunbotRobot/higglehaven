@@ -11,7 +11,7 @@
 // own auto-accepting one -- see helpers.mjs) rather than anything on-screen,
 // since the dialog text itself is exactly what the fix changes.
 import {
-  launchPage, chooseIdentity, claimLandlet, openAccountMenu, grantHigglesAsAdmin, finish, acceptConfirmModal } from './helpers.mjs';
+  launchPage, chooseIdentity, claimLandlet, openAccountMenu, grantHigglesAsAdmin, finish, acceptConfirmModal, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Delete Balance Warning Tester';
 const GRANTED_CENTS = 12345; // $123.45
@@ -34,6 +34,7 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 // the confirm() dialog text this test checks (via dialogMessage below) is
 // unaffected since the balance-forfeit note is appended after the
 // (now-updated) opening sentence either way.
+await openBuildMoreFold(page); // #4019: the username row is folded
 await page.click('#settings-section button:has-text("Reset profile")');
 // #3278: the confirm is the shared in-app modal now; read its message, then
 // accept it, and give the delete's own async follow-up (fetchProfile/

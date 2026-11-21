@@ -21,7 +21,7 @@
 // unaffected and keep the original pattern.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, saveBundleAs, fillBundleNameModal, openAddProductLeaf } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, saveBundleAs, fillBundleNameModal, openAddProductLeaf, openBuildMoreFold } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -48,6 +48,7 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page); // #4019: the username is in the folded "Profile, lándlet cap and stock" row
 const builderIdentityField = page.locator('.settings-field').filter({ hasText: 'Username' });
 await builderIdentityField.waitFor({ timeout: 10000 });
 const builderRenameBtn = builderIdentityField.locator('button', { hasText: 'Rename' });
@@ -67,7 +68,7 @@ const NEW_BUILDER_LABEL = 'Renamed Builder Identity';
 await builderRenameBtn.click();
 await fillBundleNameModal(page, NEW_BUILDER_LABEL);
 await page.waitForFunction(
-  (name) => document.querySelector('.settings-field')?.textContent.includes(name),
+  (name) => document.querySelector('.settings-more-fold .settings-field')?.textContent.includes(name),
   NEW_BUILDER_LABEL,
   { timeout: 10000 },
 );

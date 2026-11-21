@@ -7,7 +7,7 @@
 // window.__testLowStockHighlightedInstanceIds for #1950's sibling panel),
 // not DOM/pixel inspection, plus a real click through the Settings > Build
 // panel's toggle and per-marker Dismiss button.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Sold Out Marker Tester';
 const INSTANCE_ID = 'sold-out-marker-instance';
@@ -68,6 +68,7 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page); // #4019: Sold-out markers are in the folded "Profile, lándlet cap and stock" row
 await page.waitForSelector('.sold-out-marker-list', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelectorAll('.sold-out-marker-row').length >= 1, undefined, { timeout: 10000 });
 
