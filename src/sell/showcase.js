@@ -62,7 +62,7 @@ function disposeSellerShowcaseMeshes() {
 
 function updateSellerShowcasePagerUI() {
   const totalPages = sellerShowcasePages.length;
-  sellerShowcasePagerEl.classList.toggle('visible', totalPages > 0);
+  sellerShowcasePagerEl.classList.toggle('visible', totalPages > 1);
   sellerShowcasePageLabelEl.textContent = `Page ${totalPages === 0 ? 0 : sellerShowcasePageIndex + 1} of ${totalPages}`;
   sellerShowcasePrevBtn.disabled = sellerShowcasePageIndex <= 0;
   sellerShowcaseNextBtn.disabled = sellerShowcasePageIndex >= totalPages - 1;
