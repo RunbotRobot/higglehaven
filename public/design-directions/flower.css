@@ -59,15 +59,16 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
   transform-origin: 0 18px;
   transform: rotate(calc(var(--turn) - 40deg)) translateX(0) scale(0.2);
   opacity: 0; pointer-events: none;
-  transition: transform .26s ease, opacity .2s ease;
-  transition-delay: calc(var(--i) * 40ms);
+  transition: transform .2s ease, opacity .15s ease;
+  transition-delay: calc(var(--i) * 30ms);
 }
 /* #4012, #4025: the petals stay out while the stem is open, so the flower is whole: head, three petals, the row, stem and leaves. */
 .stage[data-open="open"] .petal, .stage[data-open="help"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: auto; }
-/* Folding runs in the reverse order of unfolding: the leaves fold into the stem (about .3 s), the stem draws
-   up into the head (.2 s), then the petals close. flower.js sets data-fold="staged" when a stem was open. */
-.stage[data-fold="staged"][data-open="closed"] .petal { transition-delay: calc(.5s + var(--i) * 40ms); }
-.stage[data-fold="staged"][data-open="closed"] .top { transition-delay: calc(.5s + var(--i) * 40ms); }
+/* Folding runs in the reverse order of unfolding: the leaves fold into the stem (.12 s), the stem draws
+   up into the head (.12 s), then the petals close (#4027: about half a second in all). flower.js sets
+   data-fold="staged" when a stem was open. */
+.stage[data-fold="staged"][data-open="closed"] .petal { transition-delay: calc(.25s + var(--i) * 30ms); }
+.stage[data-fold="staged"][data-open="closed"] .top { transition-delay: calc(.25s + var(--i) * 30ms); }
 .stage[data-loading="true"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: none; }
 .petal.here, .petal.lit, .petal.open { background: var(--brand-green); font-weight: 600; }
 .stage[data-loading="true"] .petal:not(.lit) { opacity: .55; }
@@ -77,7 +78,7 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 
 /* The row beside the head: what belongs to no place, the same in every place (#4025). It grows with the petals. */
 .toprow { position: absolute; left: 138px; top: 3px; z-index: 1; }
-.top { position: absolute; top: 0; left: calc(var(--i) * 54px); width: 50px; height: 50px; padding: 0; border: 0; border-radius: 24px 5px 24px 5px; color: var(--ink); cursor: pointer; background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--panel-rgb) / 0.94)); box-shadow: 0 4px 12px rgb(var(--ink-rgb) / 0.2); opacity: 0; transform: translateX(-20px) scale(0.3); transform-origin: 0 50%; pointer-events: none; transition: transform .26s ease, opacity .2s ease; transition-delay: calc(var(--i) * 40ms); }
+.top { position: absolute; top: 0; left: calc(var(--i) * 54px); width: 50px; height: 50px; padding: 0; border: 0; border-radius: 24px 5px 24px 5px; color: var(--ink); cursor: pointer; background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--panel-rgb) / 0.94)); box-shadow: 0 4px 12px rgb(var(--ink-rgb) / 0.2); opacity: 0; transform: translateX(-20px) scale(0.3); transform-origin: 0 50%; pointer-events: none; transition: transform .2s ease, opacity .15s ease; transition-delay: calc(var(--i) * 30ms); }
 .top .lin { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
 .stage[data-open="open"] .top, .stage[data-open="help"] .top, .stage[data-loading="true"] .top { opacity: 1; transform: none; pointer-events: auto; }
 .stage[data-loading="true"] .top { pointer-events: none; }
@@ -86,18 +87,23 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 .stem[hidden], .help[hidden] { display: none; }
 .stem { position: absolute; left: 0; top: 0; z-index: 0; }
 .stem-line { position: absolute; left: -16px; top: -16px; width: 390px; height: 600px; overflow: visible; pointer-events: none; }
-.stem-line path { fill: none; stroke: rgb(var(--pill-rgb)); stroke-width: 5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .2s ease-in .3s; filter: drop-shadow(0 2px 4px rgb(var(--ink-rgb) / 0.2)); }
-.stem.on .stem-line path { stroke-dashoffset: 0; transition: stroke-dashoffset .5s ease; }
+/* #4026: green (the head's own), 6px, with a pale edge and a hairline of ink outside it; one curve from the head's
+   centre line. #4027: it draws down in .25 s from .1 s, and back up into the head in .12 s after the leaves fold. */
+.stem-line { filter: drop-shadow(0 0 1px rgb(var(--ink-rgb) / 0.55)); }
+.stem-line path { fill: none; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .12s ease-in .12s; }
+.stem-line .stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10; }
+.stem-line .stem-core { stroke: var(--brand-green); stroke-width: 6; }
+.stem.on .stem-line path { stroke-dashoffset: 0; transition: stroke-dashoffset .25s ease .1s; }
 .leaf {
   --k: 0;
   position: absolute; top: calc(112px + var(--k) * 40px); width: 96px; height: 50px; padding: 0; border: 0;
   background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--panel-rgb) / 0.94));
   box-shadow: 0 4px 12px rgb(var(--ink-rgb) / 0.2); color: var(--ink); cursor: pointer;
-  opacity: 0; transform: scale(0.3); transition: transform .2s ease-in, opacity .2s ease-in; transition-delay: calc((5 - var(--k)) * 20ms);
+  opacity: 0; transform: scale(0.3); transition: transform .12s ease-in, opacity .12s ease-in; transition-delay: calc((5 - var(--k)) * 10ms);
 }
 .leaf.r { left: 96px; border-radius: 24px 5px 24px 5px; transform-origin: 0 50%; }
 .leaf.l { left: 0; border-radius: 5px 24px 5px 24px; transform-origin: 100% 50%; }
-.stem.on .leaf { opacity: 1; transform: scale(1); transition: transform .28s ease, opacity .2s ease; transition-delay: calc(var(--k) * 60ms + 120ms); }
+.stem.on .leaf { opacity: 1; transform: scale(1); transition: transform .2s ease, opacity .15s ease; transition-delay: calc(var(--k) * 20ms + 220ms); }
 .leaf .lin { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
 .leaf .ic { width: 24px; height: 24px; }
 .stem[data-stem="build"] .leaf, .stem[data-stem="sell"] .leaf, .stem[data-stem="shop"] .leaf { background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--pill-rgb) / 0.9)); }

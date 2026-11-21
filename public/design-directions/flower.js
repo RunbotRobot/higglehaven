@@ -31,13 +31,20 @@
   Object.keys(stems).forEach(function (name) {
     var n = stems[name].querySelectorAll('.leaf').length;
     var path = stems[name].querySelector('path');
-    path.setAttribute('pathLength', '1');
-    path.setAttribute('d', 'M44 66 C 44 104, 112 84, 112 126 L 112 ' + (126 + n * PITCH));
+    // #4026: green, with a pale edge under it (a second path), from the head's own centre line, down, across to the
+    // leaves' line above the first leaf and straight down: one curve, no corner.
+    var d = 'M44 44 L 44 76 C 44 104, 112 84, 112 126 L 112 ' + (126 + n * PITCH);
+    var edge = path.cloneNode(false);
+    edge.setAttribute('class', 'stem-edge');
+    path.setAttribute('class', 'stem-core');
+    path.parentNode.insertBefore(edge, path);
+    [edge, path].forEach(function (p2) { p2.setAttribute('pathLength', '1'); p2.setAttribute('d', d); });
   });
 
   // #4012: folding runs in the reverse order of unfolding, and a stem that swaps for another waits for the
-  // first to fold (about .5 s), so no leaf is ever drawn without the stem it grows from.
-  var FOLD_MS = 520;
+  // first to fold (about .25 s: leaves .12 s, then the stem .12 s), so no leaf is ever drawn without the stem it
+  // grows from. #4027: opening is three overlapping beats in half a second.
+  var FOLD_MS = 260;
   function showStem(name, on, after) {
     var el = stems[name];
     if (!el) return;
