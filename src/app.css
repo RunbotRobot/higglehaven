@@ -3069,6 +3069,19 @@
         color: var(--pill-text);
         font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
+      /* #3940: the file picker's own button (the browser's grey "Choose File") is the quiet button
+         (DESIGN.md, "Inside a leaf"): the line at --alpha-line, ink text, 44px to hit. */
+      #upload-file-input::file-selector-button,
+      #upload-video-input::file-selector-button {
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
+        margin-right: var(--space-sm);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+      }
       /* #1602: a small "?" button that reveals a popup of explanatory text
          next to the control it describes, instead of that text sitting
          inline and permanently taking up space. Generic/reusable (scoped
