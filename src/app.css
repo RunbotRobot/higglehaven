@@ -3086,6 +3086,15 @@
         font: var(--text-2xs)/var(--leading-none) var(--font-sans);
         cursor: pointer;
         padding: 0;
+        position: relative;
+      }
+      /* #3940: the mark stays 18 px, but a thumb needs about 40: an invisible ring around it takes
+         the tap, so the small "?" is as easy to hit as any button. */
+      .info-tooltip-btn::after {
+        content: '';
+        position: absolute;
+        inset: -11px;
+        border-radius: var(--radius-round);
       }
       /* #3585: a help note, not a paragraph inside the form -- one or two
          short lines set off by a thin rule, so it reads as a note beside the
