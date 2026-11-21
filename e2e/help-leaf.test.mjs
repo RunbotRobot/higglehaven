@@ -80,6 +80,7 @@ await page.waitForSelector('body[data-mode="build"][data-bud="on"]', { timeout: 
 perMode.build = (await page.locator('#bud-petal-general-help').count()) === 1 && !(await page.locator('#bud-petal-build-help').count()); // #3760: one general petal, registered once
 console.log('"?" petal in Build and Sell:', JSON.stringify(perMode));
 
+console.log('flags:', JSON.stringify({ teachOnFirstOpen, teachGoneAfterHelp, noOldPetal, leafGone, settingsAskGone }));
 const pass = seeLabelled && JSON.stringify(rows) === JSON.stringify(['How to move', 'How higglehaven works', 'Shopping', 'Building', 'Selling', 'Tips', 'Ask an assistant'])
   && tipLines.length >= 4 && noOldPetal && entries.length >= 4 && stepCount >= 2 && leafGone && settingsAskGone
   && perMode.build && perMode.sell && teachOnFirstOpen && teachGoneAfterHelp && errors.length === 0;
