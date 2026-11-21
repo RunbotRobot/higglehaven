@@ -595,9 +595,20 @@ by touching the world. The module is `src/ui/bud.js`:
   colour; a leaf with no icon there gets a plain leaf and a console warning, so a new leaf cannot
   ship as words only. src/ui/bud.js places the stem by walking the *visible* leaves (never
   :nth-child) and again whenever one is added, shown, hidden or has its text replaced. The stem
-  grows from the top and the leaves open in turn (about a third of a second in all); under
+  grows from the head and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- **The stem is a plant's stem (#4026).** Green (`--brand-green`, the head's own green), 6px with a 2px pale
+  edge on each side (10px in all) and a hairline of ink outside that, one continuous curve with no corner:
+  it leaves the head on the head's own centre line, runs down, curves across to the leaves' line above the
+  first leaf and goes straight down to the middle of the last leaf (`#bud-stem`, an svg that
+  src/ui/bud.js draws from the measured boxes). It is drawn down from the head as the menu opens and drawn
+  back up into it as it folds. The leaves' connectors take the same green and weight. Contrast of the whole
+  stem against the ground behind it (WCAG ratio, `--panel-rgb` edge over each ground): grass 3.4, near-water
+  3.2, upland 2.6, alpine 2.5, sky 1.5 for the edge alone, and the ink hairline lifts the pale grounds
+  further; the green core on its own against the pale edge is 2.5. This is the trade the owner made on
+  2026-11-21 (a stem that reads as green and not black, over the near-black of #4024); it is below the 3:1 of
+  #3818 on upland, alpine and sky, which the pale edge and the hairline carry.
 - The three mode petals of the ring (#3761) are a picture first with their one small word under it, like every
   leaf: a shop front, a hammer and a price tag, drawn in the same line weight (src/ui/budIcons.js, by the
   petal's `data-mode`). The picture sits in the petal's upright label, so it stays upright with the word
