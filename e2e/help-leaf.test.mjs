@@ -12,7 +12,7 @@ await page.waitForSelector('body[data-bud="on"]', { timeout: 30000 });
 
 async function openHelp() {
   await openAccountMenu(page);
-  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
+  await page.locator('#bud-row button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 }
 
@@ -73,11 +73,11 @@ const perMode = {};
 await goToMode(page, 'sell', { openProducts: false });
 await page.waitForSelector('body[data-mode="sell"][data-bud="on"]', { timeout: 30000 });
 await openAccountMenu(page);
-perMode.sell = await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().isVisible();
+perMode.sell = await page.locator('#bud-row button:visible', { hasText: /^Help$/ }).first().isVisible();
 await page.keyboard.press('Escape');
 await goToMode(page, 'build', { openProducts: false });
 await page.waitForSelector('body[data-mode="build"][data-bud="on"]', { timeout: 30000 });
-perMode.build = (await page.locator('#bud-petal-general-help').count()) === 1 && !(await page.locator('#bud-petal-build-help').count()); // #3760: one general petal, registered once
+perMode.build = (await page.locator('#bud-petal-row-help').count()) === 1 && !(await page.locator('#bud-petal-build-help').count()); // #3760: one general petal, registered once
 console.log('"?" petal in Build and Sell:', JSON.stringify(perMode));
 
 console.log('flags:', JSON.stringify({ teachOnFirstOpen, teachGoneAfterHelp, noOldPetal, leafGone, settingsAskGone }));

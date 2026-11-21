@@ -851,7 +851,8 @@
         transform-origin: top;
         animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
       }
-      body[data-bud="on"] #account-menu-panel button {
+      body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-row button {
         min-height: 44px;
         padding: 10px 18px;
         border-radius: var(--radius-petal);
@@ -863,13 +864,10 @@
       }
       /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
          stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
-         panel is still drawn while it does (not tappable). A swap between two stems folds only the leaves. */
-      #account-menu-panel.bud-folding,
-      #account-menu-panel.bud-leaves-folding { display: flex; pointer-events: none; }
+         panel is still drawn while it does (not tappable). */
+      #account-menu-panel.bud-folding { display: flex; pointer-events: none; }
       body[data-bud="on"] #account-menu-panel.bud-folding button,
-      body[data-bud="on"] #account-menu-panel.bud-folding > .bud-pair,
-      body[data-bud="on"] #account-menu-panel.bud-leaves-folding button,
-      body[data-bud="on"] #account-menu-panel.bud-leaves-folding > .bud-pair {
+      body[data-bud="on"] #account-menu-panel.bud-folding > .bud-pair {
         animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both;
         animation-delay: 0s;
       }
@@ -880,9 +878,6 @@
          (already finished), so changing its direction would jump to the end instead of playing. */
       @keyframes bud-leaf-fold { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.6); } }
       @keyframes bud-stem-draw { from { transform: scaleY(1); } to { transform: scaleY(0); } }
-      /* The stem grows to a new menu's length instead of jumping (a swap between two stems). */
-      @property --stem-h { syntax: '<length>'; inherits: true; initial-value: 0px; }
-      #account-menu-panel.bud-swapped { transition: --stem-h var(--motion-grow) var(--ease-soft); }
       /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
       body[data-bud="on"] #account-menu-panel > button,
       body[data-bud="on"] #account-menu-panel > .bud-pair {
@@ -912,7 +907,8 @@
       body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
       body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
       body[data-bud="on"] #account-menu-panel > button,
-      body[data-bud="on"] #account-menu-panel .bud-pair button {
+      body[data-bud="on"] #account-menu-panel .bud-pair button,
+      body[data-bud="on"] #bud-row button {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -929,7 +925,8 @@
       /* #3761: the Person leaf's word is the account's name, which can be long: one line, cut with an
          ellipsis at the leaf's edge, not broken in the middle of a word ("higglehaven1" over "0"). A
          block rather than a column so the cut can be drawn. */
-      body[data-bud="on"] #account-menu-panel #account-auth-btn {
+      body[data-bud="on"] #account-menu-panel #account-auth-btn,
+      body[data-bud="on"] #bud-row #account-auth-btn {
         display: block;
         text-align: center;
         white-space: nowrap;
@@ -939,13 +936,17 @@
            the edge instead of running to it. */
         padding-inline: var(--space-xs);
       }
+      body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
-      body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
-      body[data-bud="on"] #account-menu-panel .bud-icon svg { display: block; }
+      body[data-bud="on"] #account-menu-panel .bud-icon,
+      body[data-bud="on"] #bud-row .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #account-menu-panel .bud-icon svg,
+      body[data-bud="on"] #bud-row .bud-icon svg { display: block; }
       /* A mark (unread notices, a friend request) sits on the leaf's corner. */
       body[data-bud="on"] #account-menu-panel button #notifications-badge,
       body[data-bud="on"] #account-menu-panel button #friends-badge,
-      body[data-bud="on"] #account-menu-panel button #dm-badge {
+      body[data-bud="on"] #account-menu-panel button #dm-badge,
+      body[data-bud="on"] #bud-row button #notifications-badge {
         position: absolute;
         top: var(--space-xs);
         right: var(--space-xs);
@@ -988,10 +989,28 @@
       body[data-bud-corner="bottom-right"] #bud-modes { --ring-flip: 1; }
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes,
       body[data-bud="on"][data-bud-ring] #bud-modes { display: block; }
+      /* #4025: the row of icons along the top, to the right of the head: the account, Notices, Settings, Help.
+         The same in every place. It is part of the flower: it opens with the petals (it is drawn whenever
+         the bud is open) and folds with them (while the ring is folding), staying put while the stem draws up. */
+      #bud-row {
+        display: none;
+        position: absolute;
+        top: -2px;
+        left: 148px;
+        width: min(236px, calc(100vw - 176px));
+        gap: var(--space-3xs);
+        justify-content: flex-start;
+      }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-row,
+      body[data-bud="on"][data-bud-ring="staged"] #bud-row,
+      body[data-bud="on"][data-bud-ring="folding"] #bud-row { display: flex; }
+      body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
+      body[data-bud="on"] #bud-row button[hidden] { display: none; }
+      body[data-bud-ring="staged"] #bud-row button { animation: none; }
+      body[data-bud-ring="folding"] #bud-row button { animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both; }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn,
-      body[data-bud="on"] #bud-modes .bud-menu-btn {
+      body[data-bud="on"] #bud-modes .mode-nav-btn {
         --petal-turn: calc(var(--ring-a) * 1deg + var(--ring-flip) * 180deg);
         position: absolute;
         box-sizing: border-box;
@@ -1015,8 +1034,7 @@
         animation: bud-grow var(--motion-grow) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
-      body[data-bud="on"] #bud-modes .mode-nav-label,
-      body[data-bud="on"] #bud-modes .bud-menu-btn > span {
+      body[data-bud="on"] #bud-modes .mode-nav-label {
         display: block;
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
@@ -1033,8 +1051,6 @@
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 6; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.04s; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.08s; }
-      /* #3760: the general menu is the fourth petal on the same arc. */
-      body[data-bud="on"] #bud-modes .bud-menu-btn { --ring-a: 96; animation-delay: 0.12s; }
       /* Which stem is open: the petal of the open menu is the lit one. */
       body[data-bud="on"] #bud-modes button[aria-expanded="true"],
       /* The chosen petal answers at once and stays lit while its mode loads (#3752). */
@@ -1046,12 +1062,9 @@
       }
       /* Held open while a mode loads: already out, so no motion on arrival. */
       body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="held"] #bud-modes .bud-menu-btn,
-      body[data-bud-ring="staged"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="staged"] #bud-modes .bud-menu-btn { animation: none; }
+      body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
       /* Folding back in: the reverse, a little faster, the last petal first. */
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="folding"] #bud-modes .bud-menu-btn {
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn {
         animation: bud-fold var(--motion-fold) var(--ease-fold) both;
       }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
@@ -1084,15 +1097,12 @@
         body[data-bud="on"] #account-menu-toggle,
         body[data-bud="on"] .bud-logo,
         body[data-bud="on"] #account-menu-panel button,
+        body[data-bud="on"] #bud-row button,
         body[data-bud="on"] #account-menu-panel::before { animation: none; }
-        body[data-bud="on"] #bud-modes .mode-nav-btn,
-        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear both; }
+        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear both; }
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="held"] #bud-modes .bud-menu-btn,
-        body[data-bud-ring="staged"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="staged"] #bud-modes .bud-menu-btn { animation: none; }
-        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
+        body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
+        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {
@@ -1192,6 +1202,7 @@
          slight dimming under it). Touch is unchanged: the hover rule only applies to a pointer that can hover. */
       body[data-bud="on"] #account-menu-toggle,
       body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-row button,
       body[data-bud="on"] #bud-modes .mode-nav-btn,
       body[data-bud="on"] #bud-note,
       .bud-leaf button,

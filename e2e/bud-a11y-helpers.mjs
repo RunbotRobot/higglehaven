@@ -27,7 +27,7 @@ export function setupBudWordHelpers(page) {
   // turned shapes, so their layout box is measured, not their bounding box.
   const tapTargetsUnder44 = () => page.evaluate(() => {
     const out = [];
-    for (const el of document.querySelectorAll('#account-menu-panel button, #bud-modes button')) {
+    for (const el of document.querySelectorAll('#account-menu-panel button, #bud-row button, #bud-modes button')) {
       if (el.hidden) continue;
       const style = getComputedStyle(el);
       if (style.display === 'none' || style.visibility === 'hidden') continue;

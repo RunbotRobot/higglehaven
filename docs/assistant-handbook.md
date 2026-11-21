@@ -58,7 +58,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 ### How do I sign up for an account?
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first row says "Log in / Sign up"; tap it.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first picture along the top says "Log in / Sign up"; tap it.
 2. Tap the "Sign up" tab.
 3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
 4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
@@ -215,7 +215,7 @@ motion, not the only way to move. Other people see the same.
 
 ### How do I change my password or log out?
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then tap their username (the first row) to open "Account".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then tap their username (the first picture along the top) to open "Account".
 2. To change the password, tap "Change password". Fill in "Current password" and "New password (8+ characters)" and tap "Change password" again. This signs them out of every other device, but keeps this one signed in.
 3. To log out, tap "Log out".
 
@@ -257,32 +257,33 @@ everything else.
 .mode-nav-btn[data-mode="shop"] | Shop
 .mode-nav-btn[data-mode="build"] | Build
 .mode-nav-btn[data-mode="sell"] | Sell
-#bud-petal-general-help | Help
+#bud-petal-row-help | Help
 ```
 
 ### How do I go between Shop, Build and Sell?
 
 1. Tap the round logo at the top left (the bud).
-2. Four petals grow out of it in an arc: "Shop", "Build", "Sell" and "Menu". The place you
-   are in is shaded green.
-3. Tap the place you want. To open the menu of the place you are in, tap its own petal; to open the
-   general menu (your name, Notices, Friends, My purchases, Settings and "?"), tap "Menu".
+2. Three petals grow out of it in an arc: "Shop", "Build" and "Sell". The place you
+   are in is shaded green. A row of four small pictures also opens along the top (your name,
+   Notices, Settings and "Help"), and the menu of the place you are in opens below the petals.
+3. Tap the place you want. Tapping the place you are already in does nothing more, because its menu
+   is already open.
 
 **You will see:** a petal for another place turns green at once and the petals stay out while that
 place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
-opens that place's own menu instead (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
-products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Chat" and "Nearby"), and only one menu is open at a time. The bud always
-opens on the general menu, and that menu is the same in all three places.
+a menu is open below them: the one for the place you are in (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
+products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Friends", "My purchases", "Chat" and "Nearby"). Each place has its own menu, and it is the same every time. The row along the top
+(your name, Notices, Settings and "Help") is the same in all three places.
 
 **If something goes wrong:**
 - The petals are not there: the bud is folded. Tap the round logo once.
-- A tool someone is looking for is not in the menu that opened: it lives under its own place's petal
-  (for example "Add item" is under "Build"), not in the general menu.
+- A tool someone is looking for is not in the menu that opened: it lives in its own place's menu
+  (for example "Add item" is in Build's menu, and "Friends" is in Shop's). Go to that place with its petal.
 - Tapping the round logo again, or tapping the world, folds everything away: that is expected.
 
 ```controls any
 .mode-nav-btn[data-mode="shop"] | Shop
-#bud-menu-general | Menu
+.mode-nav-btn[data-mode="build"] | Build
 ```
 
 ### How do I walk around and look around?
@@ -430,8 +431,8 @@ label:has(#verify-age-attest) | at least 18
 
 ### Where are the things I bought, and how do I rate a seller?
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"). A stem of leaves opens, with your name
-   at the top and "Notices", "Friends", "My purchases", "Settings" and "Help" below it.
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"). A row of pictures opens along the top
+   with your name, "Notices", "Settings" and "Help", and (in Shop) a stem of leaves opens below the petals with "Friends", "My purchases", "Chat" and "Nearby".
 2. Tap "My purchases".
 3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
    the seller or the product for that purchase. Once given, the rating shows under the purchase
@@ -510,8 +511,8 @@ the limit, the word "Orb limit" that stays until you have opened it and closed i
 
 ### How do I chat with people nearby?
 
-1. Tap the round logo at the top left (the bud), then tap the "Shop" petal (it opens Shop's own
-   menu; "Chat" is in it, not in the general menu), then tap "Chat". A small chat box opens
+1. Tap the round logo at the top left (the bud), then tap the "Shop" petal (Shop's own menu opens
+   with it; "Chat" is in it), then tap "Chat". A small chat box opens
    with a cross at its top right to close it.
 2. Type in the box that says "Say something nearby…" and tap "Send".
 3. People close to you see it. Their messages show in the same box.
@@ -570,7 +571,7 @@ To offer friendship to someone standing near you in Shop: tap their avatar, then
 
 To add someone who is not nearby:
 
-1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"), then "Friends".
+1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"), then "Friends" (it is in Shop's menu, so be in Shop first).
 2. Tap "+ Add friend". A small box asks for the friend's name. Type it exactly as
    their name is written, then tap "Save".
 3. They get your request. When they accept, they show in your list.
@@ -628,7 +629,7 @@ The message box starts one line tall and grows as you type, up to about five lin
   to the team.
 
 ```controls any
-#bud-petal-general-help | Help
+#bud-petal-row-help | Help
 #assistant-chat-input | Ask a question
 #assistant-chat-send | Send
 #assistant-chat-minimize | Minimise
@@ -651,7 +652,7 @@ The message box starts one line tall and grows as you type, up to about five lin
 **You will see:** the sheet goes away and you are standing on your own lándlet. The
 top left is the small round bud with the higglehaven logo: tap it and it unfolds.
 "Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
-are inside it: tap the Build petal to see them (the bud opens on the general menu, and each place keeps its own tools under its own petal).
+are inside it: tap the Build petal to see them (the bud opens on the menu of the place you are in, and each place keeps its own tools in its own menu).
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back

@@ -11,7 +11,7 @@ await page.waitForSelector('body[data-bud="on"]', { timeout: 30000 });
 
 async function openHelp() {
   await openAccountMenu(page);
-  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
+  await page.locator('#bud-row button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 }
 

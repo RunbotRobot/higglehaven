@@ -20,11 +20,13 @@
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
-//   menu                                  open the flower's general menu (does nothing if it is open)
+//   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
 //   petal:<shop|build|sell>               tap that mode's petal (opens the bud first if it is folded)
 //   leaf:<notices|friends|purchases|settings|help>
-//                                         open the menu if needed, then that leaf (help is the "?"
-//                                         petal of Shop and Build)
+//                                         open the flower if needed, then that leaf. Notices, settings
+//                                         and help are the top row, the same in every place; friends and
+//                                         purchases are Shop's menu, so in Build or Sell that step fails
+//                                         (go to Shop first, #4025)
 //   settings                              the same as leaf:settings
 //   land                                  land from flight. Every Shop arrival starts in flight 80 m
 //                                         up, looking down (docs/SPEC.md #1175), and walking

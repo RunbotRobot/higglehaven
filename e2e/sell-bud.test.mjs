@@ -28,27 +28,20 @@ console.log('at rest in Sell:', JSON.stringify(rest));
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded');
 await page.waitForTimeout(500);
-// #3760: the bud opens on the general menu ("?", Settings); Sell's own tool (My products) is in Sell's menu,
-// one tap on the Sell petal away, and only one of the two is open at a time.
-const generalOnly = {
-  help: await shown('#bud-petal-general-help'),
+// #4025: one tap opens Sell's own menu (My products, Add a product) and the top row ("?", Settings)
+// together; there is no menu to switch between.
+const openTogether = {
+  help: await shown('#bud-petal-row-help'),
   settings: await shown('#settings-btn'),
-  myProductsHidden: !(await shown('#bud-petal-sell-my-products')),
-};
-await page.click('#bud-modes .mode-nav-btn[data-mode="sell"]');
-await page.waitForTimeout(300);
-const sellMenuOnly = {
   myProducts: await shown('#bud-petal-sell-my-products'),
   addProduct: await shown('#bud-petal-sell-add-product'),
-  helpHidden: !(await shown('#bud-petal-general-help')),
-  settingsHidden: !(await shown('#settings-btn')),
 };
-console.log('general:', JSON.stringify(generalOnly), 'sell menu:', JSON.stringify(sellMenuOnly));
+console.log('open together:', JSON.stringify(openTogether));
 const open = {
-  myProducts: sellMenuOnly.myProducts && generalOnly.myProductsHidden && sellMenuOnly.helpHidden && sellMenuOnly.settingsHidden && sellMenuOnly.addProduct,
-  help: generalOnly.help,
+  myProducts: openTogether.myProducts && openTogether.addProduct,
+  help: openTogether.help,
   shopHelp: false,
-  settings: generalOnly.settings,
+  settings: openTogether.settings,
   shop: await shown('#bud-modes .mode-nav-btn[data-mode="shop"]'),
   build: await shown('#bud-modes .mode-nav-btn[data-mode="build"]'),
   sellItself: await shown('#bud-modes .mode-nav-btn[data-mode="sell"]'), // #3723: the ring shows all three modes, the current one marked
@@ -65,7 +58,7 @@ await page.waitForTimeout(300);
 
 // "?": a leaf, closed with Escape.
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-general-help');
+await page.click('#bud-petal-row-help');
 await page.waitForSelector('#bud-leaf-help');
 const leafTitle = await page.textContent('#bud-leaf-help h2');
 await page.keyboard.press('Escape');
