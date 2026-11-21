@@ -1,7 +1,7 @@
 // The flower (#3764, head chosen in #3754): a mock-up page, not the app. A phone screen drawn at
-// its real size; tap the head for four petals, the menu petal for its stem, your own mode's petal for that
-// mode's stem, another mode's petal to watch it light while the place "loads" and the flower fold. Nothing
-// here talks to the server. Classic script (the site's CSP allows scripts from this origin only).
+// its real size; tap the head and everything opens together (#4025): three petals, the stem of the place you
+// are in and the row of icons beside the head. Another place's petal lights while the place "loads"; the flower
+// stays out and shows that place's stem. Nothing here talks to the server. Classic script (the site's CSP allows scripts from this origin only).
 (function () {
   'use strict';
   var stage = document.getElementById('stage');
@@ -62,11 +62,10 @@
     petals.forEach(function (p) {
       p.classList.toggle('here', p.dataset.petal === state.mode);
       p.classList.toggle('lit', p.dataset.petal === state.lit);
-      // #4012: the petal whose stem is open stays marked (the menu petal for the menu's stem, a mode's own for its stem).
-      var openPetal = state.open === 'menu' || state.open === 'help' ? 'menu' : state.open === 'mode' ? state.mode : null;
-      p.classList.toggle('open', p.dataset.petal === openPetal);
+      // #4012: the petal of the place whose stem is open stays marked.
+      p.classList.toggle('open', state.open !== 'closed' && p.dataset.petal === state.mode);
     });
-    var shown = state.open === 'menu' || state.open === 'help' ? 'menu' : state.open === 'mode' ? state.mode : null;
+    var shown = state.open === 'closed' ? null : state.mode;
     var wasShown = Object.keys(stems).filter(function (name) { return stems[name].classList.contains('on'); });
     var swapping = shown !== null && wasShown.length > 0 && wasShown.indexOf(shown) === -1;
     // A stem was open and the flower is closing: the petals wait for it to fold (data-fold, flower.css).
@@ -114,15 +113,14 @@
 
   head.addEventListener('click', function () {
     if (state.loading) return;
-    setOpen(state.open === 'closed' ? 'petals' : 'closed');
+    setOpen(state.open === 'closed' ? 'open' : 'closed');
   });
 
   petals.forEach(function (p) {
     p.addEventListener('click', function () {
       if (state.loading) return;
       var which = p.dataset.petal;
-      if (which === 'menu') { setOpen('menu'); return; }
-      if (which === state.mode) { setOpen('mode'); return; }
+      if (which === state.mode) return; // the place you are in: its stem is already open, the petal only marks where you are
       // Another place: the petal lights, the screen "loads" with the flower held open, then it folds.
       state.lit = which;
       state.loading = true;
@@ -132,15 +130,22 @@
         state.mode = which;
         state.lit = null;
         state.loading = false;
-        state.open = 'closed';
+        state.open = 'open'; // the flower stays out and shows the new place's stem
         render();
       }, 1700);
     });
   });
 
+  Array.prototype.forEach.call(document.querySelectorAll('.top'), function (b) {
+    b.addEventListener('click', function () {
+      if (state.loading) return;
+      if (b.dataset.help) { setOpen(state.open === 'help' ? 'open' : 'help'); return; }
+      b.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }], { duration: 220 });
+    });
+  });
+
   Array.prototype.forEach.call(document.querySelectorAll('.leaf'), function (leaf) {
     leaf.addEventListener('click', function () {
-      if (leaf.dataset.help) { setOpen('help'); return; }
       leaf.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }], { duration: 220 });
     });
   });
@@ -149,11 +154,11 @@
     b.addEventListener('click', function () {
       if (state.loading) return;
       var j = b.dataset.jump;
-      setOpen(j === 'closed' ? 'closed' : j === 'petals' ? 'petals' : j === 'menu' ? 'menu' : j === 'mode' ? 'mode' : 'help');
+      setOpen(j === 'closed' ? 'closed' : j === 'open' ? 'open' : 'help');
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll('#modes .pick'), function (b) {
-    b.addEventListener('click', function () { if (state.loading) return; state.mode = b.dataset.mode; if (state.open === 'mode' || state.open === 'help') state.open = state.open === 'help' ? 'help' : 'mode'; render(); });
+    b.addEventListener('click', function () { if (state.loading) return; state.mode = b.dataset.mode; render(); });
   });
   window.addEventListener('resize', fitStage);
   fitStage();

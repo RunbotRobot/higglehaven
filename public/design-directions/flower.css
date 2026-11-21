@@ -48,7 +48,7 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 .stage[data-mode="build"] .head .ring { border-color: var(--yellow); }
 .stage[data-mode="sell"] .head .ring { border-color: #3a7a1f; }
 
-/* Four petals, joined to the head, unfolding from it. */
+/* Three petals, joined to the head, unfolding from it. */
 .petals { position: absolute; left: 0; top: 0; z-index: 1; filter: drop-shadow(0 4px 8px rgb(var(--ink-rgb) / 0.22)); }
 .petal {
   --turn: 0deg;
@@ -62,18 +62,25 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
   transition: transform .26s ease, opacity .2s ease;
   transition-delay: calc(var(--i) * 40ms);
 }
-.petal.general { background: linear-gradient(160deg, rgb(var(--panel-rgb)), rgb(var(--panel-rgb) / 0.92)); }
-/* #4012: the petals stay out while a stem is open, so the flower is whole: head, four petals, stem and leaves. */
-.stage[data-open="petals"] .petal, .stage[data-open="menu"] .petal, .stage[data-open="mode"] .petal, .stage[data-open="help"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: auto; }
+/* #4012, #4025: the petals stay out while the stem is open, so the flower is whole: head, three petals, the row, stem and leaves. */
+.stage[data-open="open"] .petal, .stage[data-open="help"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: auto; }
 /* Folding runs in the reverse order of unfolding: the leaves fold into the stem (about .3 s), the stem draws
    up into the head (.2 s), then the petals close. flower.js sets data-fold="staged" when a stem was open. */
 .stage[data-fold="staged"][data-open="closed"] .petal { transition-delay: calc(.5s + var(--i) * 40ms); }
+.stage[data-fold="staged"][data-open="closed"] .top { transition-delay: calc(.5s + var(--i) * 40ms); }
 .stage[data-loading="true"] .petal { transform: rotate(var(--turn)) translateX(26px) scale(1); opacity: 1; pointer-events: none; }
 .petal.here, .petal.lit, .petal.open { background: var(--brand-green); font-weight: 600; }
 .stage[data-loading="true"] .petal:not(.lit) { opacity: .55; }
 .petal .pin { position: absolute; left: 60px; top: 18px; transform: translate(-50%, -50%) rotate(calc(var(--turn) * -1)); display: flex; flex-direction: column; align-items: center; gap: 1px; pointer-events: none; }
 .ic { width: 20px; height: 20px; display: block; }
 .w { font-size: 10px; line-height: 1.1; font-weight: 600; letter-spacing: .01em; }
+
+/* The row beside the head: what belongs to no place, the same in every place (#4025). It grows with the petals. */
+.toprow { position: absolute; left: 138px; top: 3px; z-index: 1; }
+.top { position: absolute; top: 0; left: calc(var(--i) * 54px); width: 50px; height: 50px; padding: 0; border: 0; border-radius: 24px 5px 24px 5px; color: var(--ink); cursor: pointer; background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.97), rgb(var(--panel-rgb) / 0.94)); box-shadow: 0 4px 12px rgb(var(--ink-rgb) / 0.2); opacity: 0; transform: translateX(-20px) scale(0.3); transform-origin: 0 50%; pointer-events: none; transition: transform .26s ease, opacity .2s ease; transition-delay: calc(var(--i) * 40ms); }
+.top .lin { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 100%; }
+.stage[data-open="open"] .top, .stage[data-open="help"] .top, .stage[data-loading="true"] .top { opacity: 1; transform: none; pointer-events: auto; }
+.stage[data-loading="true"] .top { pointer-events: none; }
 
 /* The stem and its leaves: one stem at a time, leaves unfolding along it. */
 .stem[hidden], .help[hidden] { display: none; }
@@ -119,6 +126,6 @@ h3 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
 .costs li { margin: 2px 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .petal, .leaf, .stem-line path, .fog { transition: none; }
+  .petal, .top, .leaf, .stem-line path, .fog { transition: none; }
   .stage[data-loading="true"] .fog .bar span { animation: none; width: 100%; }
 }
