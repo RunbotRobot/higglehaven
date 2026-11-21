@@ -354,7 +354,19 @@ function layoutStem() {
   const host = panel();
   if (!host) return;
   if (host.classList.contains('bud-folding')) return; // #4012: the leaves are folding, so their boxes are not the stem's length
-  document.getElementById('bud-row')?.querySelectorAll('button').forEach(decorateLeaf);
+  const rowButtons = [...(document.getElementById('bud-row')?.querySelectorAll('button') || [])];
+  rowButtons.forEach(decorateLeaf);
+  // #4038: the row grows out of the head, left to right: each item knows its place in the row and how far it has to
+  // travel from the head's centre line (the animations in src/app.css read --row-i, --row-n and --row-pull).
+  const headBox = toggle()?.getBoundingClientRect();
+  const shownRow = rowButtons.filter((el) => !el.hidden);
+  shownRow.forEach((el, i) => {
+    el.style.setProperty('--row-i', String(i));
+    el.style.setProperty('--row-n', String(shownRow.length));
+    // Measured from the layout (offsetLeft), not from the box on screen, which is already moved by the animation.
+    const rowLeft = el.parentElement.getBoundingClientRect().left;
+    if (headBox && el.offsetWidth > 0) el.style.setProperty('--row-pull', `${Math.round(headBox.left + headBox.width / 2 - (rowLeft + el.offsetLeft + el.offsetWidth / 2))}px`);
+  });
   let index = 0;
   let first = null;
   let last = null;
