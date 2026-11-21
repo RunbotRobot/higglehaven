@@ -56,11 +56,11 @@ const open = {
   build: await shown('#bud-modes .mode-nav-btn[data-mode="build"]'),
   sell: await shown('#bud-modes .mode-nav-btn[data-mode="sell"]'),
   shopPetal: await shown('#bud-modes .mode-nav-btn[data-mode="shop"]'),
-  help: await shown('#bud-petal-general-help'),
+  help: await shown('#bud-petal-row-help'),
 };
 console.log('unfolded:', JSON.stringify(open));
 
-// #3723, #3752: the ring. Four petals (three places and Menu) of their own, the current one marked, each a turned shape
+// #3723, #3752: the ring. Three petals (the three places) of their own, the current one marked, each a turned shape
 // whose base is joined to the bud (a point just outside the bud, along its angle, lands on the
 // petal), 44px wide at the widest, apart from each other, inside the screen, and the column of
 // things you open starts below them. The word beside the bud steps aside while they are out.
@@ -72,7 +72,7 @@ const ring = await page.evaluate(() => {
   const centres = boxes.map((b) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }));
   const bud = r(document.getElementById('account-menu-toggle'));
   const hub = { x: bud.left + bud.width / 2, y: bud.top + bud.height / 2 };
-  const angles = [6, 36, 66]; // #3760: four petals now (the fourth, Menu, is at 96)
+  const angles = [6, 36, 66];
   const column = [...document.querySelectorAll('#account-menu-panel button')].filter((b) => b.offsetParent !== null).map((b) => r(b));
   const word = document.querySelector('#account-menu-toggle .bud-word');
   return {
@@ -113,7 +113,7 @@ const wordAfterOpen = await shown('#account-menu-toggle .bud-word');
 
 // A leaf: "?" (Help).
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-general-help');
+await page.click('#bud-petal-row-help');
 await page.waitForSelector('#bud-leaf-help');
 await page.waitForTimeout(500);
 const leaf = await box('#bud-leaf-help');
@@ -129,7 +129,7 @@ console.log('leaf:', JSON.stringify(leafInfo));
 await page.keyboard.press('Escape');
 const leafClosedByEscape = (await page.locator('#bud-leaf-help').count()) === 0;
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-general-help');
+await page.click('#bud-petal-row-help');
 await page.click('#bud-leaf-help .bud-leaf-close');
 const leafClosedByX = (await page.locator('#bud-leaf-help').count()) === 0;
 
@@ -182,7 +182,7 @@ const pass = rest.bud && rest.logo && !rest.gear && rest.word && !rest.wordmark 
   && ring.current.join() === 'shop' && ring.apart && ring.joined && ring.tipsHit && ring.wide && ring.labelsUpright
   && ring.inside && ring.columnBelow && ring.wordHidden
   && unfoldAnimations.length === 3 && unfoldAnimations.every((a) => a.includes('bud-grow'))
-  && ring.inColumn === 0 && ring.group === 'Places and menu'
+  && ring.inColumn === 0 && ring.group === 'Places'
   && afterPick.folded && afterPick.ringHidden && afterPick.heldLit && afterPick.foldedAfterHeld
   && sameModeTap.stayedOnSell === 'sell'
   && foldedByBud && foldedByEscape && !wordAfterOpen && !wordAfterReload

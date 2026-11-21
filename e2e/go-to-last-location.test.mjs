@@ -124,7 +124,7 @@ const buttonBackAfterMenuClosed = await lastLocationVisible()
 // #3762: a leaf (here Help) opens after the menu has folded; the button steps aside for it too
 // rather than showing through its top edge, and comes back when the leaf closes.
 await page.click('#account-menu-toggle');
-await page.click('#bud-petal-general-help');
+await page.click('#bud-petal-row-help');
 await page.waitForSelector('#bud-leaf-help', { timeout: 5000 });
 await page.waitForFunction(
   () => Number(getComputedStyle(document.getElementById('shop-last-location-btn')).opacity) < 0.05,

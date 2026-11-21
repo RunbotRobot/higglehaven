@@ -844,7 +844,7 @@ export async function openAccountMenu(page) {
 export async function openAssistantFromHelp(page) {
   await openAccountMenu(page);
   // The petal is registered once per mode and only the current mode's is drawn.
-  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
+  await page.locator('#bud-row button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#help-ask-assistant-btn', { state: 'visible', timeout: 5000 });
   await page.click('#help-ask-assistant-btn');
 }

@@ -13,7 +13,7 @@ await page.click('#account-menu-toggle');
 await page.waitForTimeout(700);
 cursors.petalBuild = await cursorOf('#bud-modes .mode-nav-btn[data-mode="build"]');
 cursors.settings = await cursorOf('#settings-btn');
-await page.click('#bud-petal-general-help');
+await page.click('#bud-petal-row-help');
 await page.waitForSelector('.help-row', { timeout: 5000 });
 cursors.helpRow = await cursorOf('.help-row');
 cursors.leafClose = await cursorOf('.bud-leaf-close');

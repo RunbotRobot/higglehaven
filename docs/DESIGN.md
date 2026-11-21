@@ -111,10 +111,6 @@ away, under Help. Under `prefers-reduced-motion` nothing animates.
 
 Not built yet; do not describe these to a person as if they exist:
 
-- **Four menus, one open at a time** (#3760): a general menu that never changes
-  and each mode's tools under that mode's petal, with a fourth petal for the menu.
-  Today the stem opened by the head holds both the general leaves and the current
-  mode's; the target is in `flower.html`.
 - **One help door** (#3762): a "Help" leaf (a question mark) holding how to move, how higglehaven
   works, the manuals for shopping, building and selling, and the way to an
   assistant.
@@ -491,25 +487,28 @@ petals; a leaf runs an action or opens a sheet (a soft sheet by the head, close
 control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
-- **Four menus, one open at a time (#3760, part of #3759).** Around the head are four
-  petals: Shop, Build, Sell and Menu. The bud opens on the general menu (Menu), which is
-  **the same in every mode**: the person, Notices, Friends, My Purchases, Settings and "?".
-  A place's own tools live under that place's petal: Build's (Add item, My Lándlets,
-  Levels, Undo and Redo, Tools, and the lándlet cap line), Sell's (My products, Add a
-  product, Payouts, Storefront, Orders) and Shop's (Chat, Nearby: the products within reach, nearest first, each a row that opens its card, for a screen reader on a phone, #3824). A place with nothing in its menu would have a petal that
-  opens no stem. A tap on a place you
-  are not in takes you there (the page reloads and the ring stays out); a tap on the place
-  you are in opens that place's menu in place of the general one; a tap on Menu brings the
-  general one back; the head, Escape or the world closes whichever is open. Every leaf in
-  the stem carries the menu it belongs to (`data-bud-menu`) and is drawn only while that
-  menu is open (`body[data-bud-menu]`, `src/ui/bud.js`: `showMenu`, `currentBudMenu`). The
-  rules are in `src/ui/budMenuRules.js`: the general menu's members are a fixed list, and
-  registering a place's tool into it is refused (an error in development and in tests,
-  logged and skipped in the shipped app), so adding a member to the general menu is a
-  deliberate edit of that list and of this paragraph, never an accident. The ring's four
-  petals sit 30 degrees apart (6, 36, 66 and 96 degrees); the stem starts below them.
+- **Three menus and one row (#4025, part of #3759; replaces #3760's four menus).** One tap on the head
+  opens everything together: the three petals (Shop, Build, Sell), the stem and leaves of the place the
+  person is in, and a row of icons along the top for what belongs to no place: the account, Notices,
+  Settings and Help (an Assistant leaf joins the row while a conversation is minimised). There is no Menu
+  petal. Each place has its own menu and it never changes with circumstance: Shop's (Friends, My purchases,
+  Chat, Nearby: the products within reach, nearest first, each a row that opens its card, for a screen
+  reader on a phone, #3824), Build's (Add item, My Lándlets, Levels, Undo and Redo, Tools, and the
+  lándlet cap line) and Sell's (My products, Add a product, Payouts, Storefront, Orders). The row is the
+  same in every place and is part of the flower: it grows with the petals and folds with them (the
+  leaves fold into the stem, the stem draws up, then the petals and the row close). A tap on a place you
+  are not in takes you there (the page reloads and the ring stays out); a tap on the place you are in
+  only marks where you are, since its menu is already open; the head, Escape or the world folds all of
+  it. At 390 px the row sits to the right of the head, above the lándlet's name card and the compass,
+  and the three do not cover each other. Every leaf in the stem carries the menu it belongs to
+  (`data-bud-menu`) and is drawn only while that menu is open (`body[data-bud-menu]`, which is always the
+  current place's); the row's buttons are in `#bud-row`. The rules are in `src/ui/budMenuRules.js`: the
+  row's members are a fixed list, and registering a place's tool into it is refused (an error in
+  development and in tests, logged and skipped in the shipped app), so adding a member to the row is a
+  deliberate edit of that list and of this paragraph, never an accident. The ring's three petals sit
+  30 degrees apart (6, 36 and 66 degrees); the stem starts below them.
 - `registerBudPetals(mode, [{ id, label, run }])`: one definition per menu
-  (`shop`, `build`, `sell`, and `general` for the general menu's own members). A mode with none has no bud, and keeps its old
+  (`shop`, `build`, `sell`, and `row` for the top row's own members). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
 - `addBudPetals(mode, [petal])` (#3690): adds petals to a mode without

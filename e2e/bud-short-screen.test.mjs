@@ -26,7 +26,7 @@ await openAccountMenu(page);
 await page.waitForTimeout(1200);
 const shop = await readMenu(page);
 console.log('Shop 844x390:', JSON.stringify({ ringBottom: shop.ringBottom, leaves: shop.leaves.map((l) => `${l.text}:${Math.round(l.top)}-${Math.round(l.bottom)}`) }));
-check(shop.leaves.length >= 5, `Shop's open menu has its leaves (${shop.leaves.length})`);
+check(shop.leaves.length >= 4, `Shop's open menu has its leaves (${shop.leaves.length})`);
 check(shop.leaves.every((l) => l.bottom <= shop.vh), `every leaf of the open Shop menu is on a 390px screen (lowest ends at ${Math.max(...shop.leaves.map((l) => l.bottom))})`);
 check(shop.leaves[0].top >= shop.ringBottom, `the first leaf starts below the ring (${shop.leaves[0].top} vs ${shop.ringBottom})`);
 check(shop.headBox && shop.headBox.bottom <= shop.leaves[0].top + 80 && shop.headBox.top >= 0, `the compass row stays where it was (${shop.headBox && Math.round(shop.headBox.top)}-${shop.headBox && Math.round(shop.headBox.bottom)})`);
