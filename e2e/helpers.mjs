@@ -438,6 +438,15 @@ export function budAware(page) {
   }
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
+    // #4025: Friends and My purchases are Shop's menu, so in Build or Sell their buttons are not drawn. A test
+    // whose subject is the friends or purchases panel (not the menu) opens it from there by pressing the
+    // button in the page; the menu tests (bud-menus) cover where the buttons are.
+    if ((selector === '#friends-btn' || selector === '#my-purchases-btn')
+      && !(await page.locator(selector).isVisible())
+      && (await page.evaluate(() => document.body.dataset.mode)) !== 'shop') {
+      await page.evaluate((sel) => document.querySelector(sel).click(), selector);
+      return;
+    }
     const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
     if (BUD_PETALS.has(selector) || menuOf || TOOL_CONTROLS.has(selector)) await settleBudFold(page);
     if ((BUD_PETALS.has(selector) || menuOf) && !(await page.locator(selector).isVisible())) {

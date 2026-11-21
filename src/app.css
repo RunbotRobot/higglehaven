@@ -943,7 +943,8 @@
       /* A mark (unread notices, a friend request) sits on the leaf's corner. */
       body[data-bud="on"] #account-menu-panel button #notifications-badge,
       body[data-bud="on"] #account-menu-panel button #friends-badge,
-      body[data-bud="on"] #account-menu-panel button #dm-badge {
+      body[data-bud="on"] #account-menu-panel button #dm-badge,
+      body[data-bud="on"] #bud-row button #notifications-badge {
         position: absolute;
         top: var(--space-xs);
         right: var(--space-xs);
@@ -1001,7 +1002,7 @@
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-row,
       body[data-bud="on"][data-bud-ring="staged"] #bud-row,
       body[data-bud="on"][data-bud-ring="folding"] #bud-row { display: flex; }
-      body[data-bud="on"] #bud-row button { flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
+      body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
       body[data-bud="on"] #bud-row button[hidden] { display: none; }
       body[data-bud-ring="staged"] #bud-row button { animation: none; }
       body[data-bud-ring="folding"] #bud-row button { animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both; }
