@@ -874,8 +874,12 @@
         white-space: nowrap;
         animation: bud-unfold var(--motion-open-leaf) var(--ease-bloom) both;
       }
-      /* The row forms with the petals, not with the leaves. */
-      body[data-bud="on"] #bud-row button { animation: bud-unfold var(--motion-open-petals) var(--ease-bloom) both; }
+      /* #4038: the row grows out of the head with the petals, left to right (src/ui/bud.js sets --row-i and the
+         distance each item travels, --row-pull), and folds back into it, the last item first. */
+      body[data-bud="on"] #bud-row button {
+        animation: bud-row-grow var(--motion-open-petals) var(--ease-soft) both;
+        animation-delay: calc(var(--row-i, 0) * var(--step-open-row));
+      }
       /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
          stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
          panel is still drawn while it does (not tappable). */
@@ -1013,7 +1017,7 @@
         position: absolute;
         top: -2px;
         left: 148px;
-        width: min(236px, calc(100vw - 176px));
+        width: min(248px, calc(100vw - 166px));
         gap: var(--space-3xs);
         justify-content: flex-start;
       }
@@ -1021,12 +1025,15 @@
       body[data-bud="on"][data-bud-ring="staged"] #bud-row,
       body[data-bud="on"][data-bud-ring="folding"] #bud-row { display: flex; }
       /* The words keep whole ("Settings" never breaks in two); the account's name is the one that gives way. */
-      body[data-bud="on"] #bud-row button:not(#account-auth-btn) { flex: 0 0 auto; min-width: 44px; padding-inline: var(--space-3xs); overflow-wrap: normal; word-break: keep-all; }
-      body[data-bud="on"] #bud-row #account-auth-btn { flex: 1 1 0; min-width: 0; }
+      body[data-bud="on"] #bud-row button:not(#account-auth-btn) { flex: 0 0 auto; min-width: 44px; padding-inline: 0; overflow-wrap: normal; word-break: keep-all; }
+      body[data-bud="on"] #bud-row #account-auth-btn { flex: 1 1 0; min-width: 0; max-width: 80px; }
       body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
       body[data-bud="on"] #bud-row button[hidden] { display: none; }
       body[data-bud-ring="staged"] #bud-row button { animation: none; }
-      body[data-bud-ring="folding"] #bud-row button { animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both; }
+      body[data-bud-ring="folding"] #bud-row button {
+        animation: bud-row-fold var(--motion-fold) var(--ease-fold) both;
+        animation-delay: calc((var(--row-n, 4) - 1 - var(--row-i, 0)) * var(--step-open-row));
+      }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
       body[data-bud="on"] #bud-modes .mode-nav-btn {
@@ -1110,6 +1117,8 @@
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
       @keyframes bud-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } }
+      @keyframes bud-row-grow { from { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } to { opacity: 1; transform: none; } }
+      @keyframes bud-row-fold { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } }
       @keyframes bud-fade { from { opacity: 0; } to { opacity: 1; } }
       @keyframes bud-stem-grow { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
       @media (prefers-reduced-motion: reduce) {

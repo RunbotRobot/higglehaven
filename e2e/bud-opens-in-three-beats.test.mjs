@@ -13,7 +13,7 @@ await page.waitForTimeout(1500);
 
 // The timing of every animation the opening starts, in ms from the press (delay included).
 const timings = async () => page.evaluate(() => document.getAnimations()
-  .filter((a) => /bud-grow|bud-unfold|bud-stem-grow/.test(a.animationName || ''))
+  .filter((a) => /bud-grow|bud-unfold|bud-stem-grow|bud-row-grow/.test(a.animationName || ''))
   .map((a) => {
     const t = a.effect.getComputedTiming();
     const el = a.effect.target;
@@ -32,6 +32,11 @@ const lastEnd = (k) => Math.max(...by(k).map((e) => e.end));
 check(firstStart('petal') <= 1 && firstStart('row') <= 1, 'the petals and the top row start at once');
 check(firstStart('stem') > firstStart('petal') && firstStart('stem') < lastEnd('petal'), 'the stem starts after the petals begin and before they are done (the beats overlap)');
 check(firstStart('leaf') > firstStart('stem') && firstStart('leaf') < lastEnd('stem'), 'the leaves start after the stem begins and before it is done');
+// #4038: the row items grow out of the head left to right, each from the head's centre line.
+const rowStarts = by('row').map((e) => e.start);
+check(rowStarts.length >= 3 && rowStarts.every((x, i) => i === 0 || x > rowStarts[i - 1]), `the row items grow one after another, left to right (${rowStarts})`);
+const pulls = await page.evaluate(() => [...document.querySelectorAll('#bud-row button')].filter((b) => !b.hidden).map((b) => parseFloat(b.style.getPropertyValue('--row-pull'))));
+check(pulls.length >= 3 && pulls.every((x) => x < 0) && pulls.every((x, i) => i === 0 || x < pulls[i - 1]), `each row item travels from the head's centre line, the further ones further (${pulls})`);
 const starts = by('leaf').map((e) => e.start).sort((a, b) => a - b);
 check(starts.every((s, i) => i === 0 || s > starts[i - 1]), 'the leaves unfurl one after another, top to bottom');
 const total = Math.max(...list.map((e) => e.end));
