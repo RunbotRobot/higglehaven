@@ -1653,13 +1653,14 @@ points for about 89 hours, roughly half of what the fleet was still using with e
 sessions working. Waking sessions less often does not slow them (a session with work
 goes from one merge straight to the next), so until 2026-11-23 21:00Z:
 
-- **Working: higglehaven2, 4, 6 and 12.** One task at a time, straight from one card
+- **Working: higglehaven4 and 6** (two, down from four, since 2026-11-21 12:30Z: the owner read 81% early
+  on Saturday, about four points ahead of the pace that reaches the reset). One task at a time, straight from one card
   to the next, and they are the ones who take owner feedback and bug-report cards.
   A card with status `queued` and an empty session is free, whoever wrote its
   note last: "Released by higglehavenN" means exactly that, and so does a note
   that lists what is left. (On 2026-11-19 several sessions stood down with "the
   free cards belong to other sessions" while a dozen such cards had work in them.)
-- **Resting: every other coding session (3, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16).**
+- **Resting: every other coding session (2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16).**
   Finish and merge what you already hold, release anything you will not finish
   (card `queued`, session empty, one line saying what is left), then claim nothing
   new. Your check-ins end at once: no queries, no notes.
