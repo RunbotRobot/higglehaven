@@ -837,20 +837,32 @@
         min-width: 0;
         align-items: flex-start;
       }
-      body[data-bud="on"] #account-menu-panel::before {
-        content: '';
+      /* #4026 (part of #3759): the stem is a plant's stem, green and thick, one curve with no corner: it leaves
+         the head's base on the head's own centre line, runs down, curves across to the leaves' line above the
+         first leaf and goes straight down between them (src/ui/bud.js draws the path from measured boxes). A pale
+         edge round the green holds it against grass, sand and sky (docs/DESIGN.md says by how much). */
+      #bud-stem {
         position: absolute;
-        /* #4016: from the head's middle (src/ui/bud.js measures --stem-rise), behind the petals, down to the last leaf. */
-        top: calc(-1 * var(--stem-rise, 0px));
-        height: calc(var(--stem-h, 0px) + var(--stem-rise, 0px));
-        left: var(--stem-x);
-        width: 4px;
-        margin-left: -2px;
-        border-radius: var(--radius-sm);
-        background: rgb(var(--ink-rgb) / 0.8);
-        transform-origin: top;
+        top: 0;
+        left: 0;
+        width: 1px;
+        height: 1px;
+        overflow: visible;
+        pointer-events: none;
+        display: none;
+        /* a hairline of ink outside the pale edge, so the stem also holds over pale ground and sky */
+        filter: drop-shadow(0 0 1px rgb(var(--ink-rgb) / 0.55));
+      }
+      body[data-bud="on"] #bud-stem { display: block; }
+      #bud-stem path {
+        fill: none;
+        stroke-linejoin: round;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 0;
         animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
       }
+      #bud-stem .bud-stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10px; }
+      #bud-stem .bud-stem-core { stroke: var(--brand-green); stroke-width: 6px; }
       body[data-bud="on"] #account-menu-panel button,
       body[data-bud="on"] #bud-row button {
         min-height: 44px;
@@ -871,13 +883,14 @@
         animation: bud-leaf-fold var(--motion-fold) var(--ease-fold) both;
         animation-delay: 0s;
       }
-      body[data-bud="on"] #account-menu-panel.bud-folding::before {
+      body[data-bud="on"] #account-menu-panel.bud-folding #bud-stem path {
         animation: bud-stem-draw var(--motion-fold) var(--ease-fold) var(--motion-fold) both;
       }
       /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
          (already finished), so changing its direction would jump to the end instead of playing. */
       @keyframes bud-leaf-fold { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.6); } }
-      @keyframes bud-stem-draw { from { transform: scaleY(1); } to { transform: scaleY(0); } }
+      /* The stem is drawn down from the head and drawn back up into it (stroke-dashoffset on a path of length 1). */
+      @keyframes bud-stem-draw { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 1; } }
       /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
       body[data-bud="on"] #account-menu-panel > button,
       body[data-bud="on"] #account-menu-panel > .bud-pair {
@@ -900,9 +913,10 @@
         position: absolute;
         top: 50%;
         width: 6px;
-        height: 4px;
-        margin-top: -2px;
-        background: rgb(var(--ink-rgb) / 0.8);
+        height: 6px;
+        margin-top: -3px;
+        background: var(--brand-green);
+        box-shadow: 0 0 0 2px rgb(var(--panel-rgb) / 0.95);
       }
       body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
       body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
@@ -1004,6 +1018,9 @@
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-row,
       body[data-bud="on"][data-bud-ring="staged"] #bud-row,
       body[data-bud="on"][data-bud-ring="folding"] #bud-row { display: flex; }
+      /* The words keep whole ("Settings" never breaks in two); the account's name is the one that gives way. */
+      body[data-bud="on"] #bud-row button:not(#account-auth-btn) { flex: 0 0 auto; min-width: 44px; padding-inline: var(--space-3xs); overflow-wrap: normal; word-break: keep-all; }
+      body[data-bud="on"] #bud-row #account-auth-btn { flex: 1 1 0; min-width: 0; }
       body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
       body[data-bud="on"] #bud-row button[hidden] { display: none; }
       body[data-bud-ring="staged"] #bud-row button { animation: none; }
@@ -1092,13 +1109,13 @@
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
       @keyframes bud-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } }
       @keyframes bud-fade { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes bud-stem-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+      @keyframes bud-stem-grow { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
         body[data-bud="on"] .bud-logo,
         body[data-bud="on"] #account-menu-panel button,
         body[data-bud="on"] #bud-row button,
-        body[data-bud="on"] #account-menu-panel::before { animation: none; }
+        #bud-stem path { animation: none; }
         body[data-bud="on"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear both; }
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
         body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }

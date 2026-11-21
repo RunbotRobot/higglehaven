@@ -168,7 +168,7 @@ function startFold() {
       if (document.body.getAttribute('data-bud-ring') === 'staged') foldRing(); // not if a mode began loading meanwhile
     };
     // The stem is the last thing to draw up, so its animation ending is the end of the two stages.
-    stagedListener = (event) => { if (event.target === host && event.animationName === 'bud-stem-draw') finish(); };
+    stagedListener = (event) => { if (event.animationName === 'bud-stem-draw' && event.target.closest?.('#bud-stem')) finish(); };
     host.addEventListener('animationend', stagedListener);
     stagedTimer = setTimeout(finish, STAGED_FALLBACK_MS);
     return;
@@ -356,6 +356,7 @@ function layoutStem() {
   if (host.classList.contains('bud-folding')) return; // #4012: the leaves are folding, so their boxes are not the stem's length
   document.getElementById('bud-row')?.querySelectorAll('button').forEach(decorateLeaf);
   let index = 0;
+  let first = null;
   let last = null;
   for (const el of host.children) {
     if (!el.matches('button, .bud-pair')) continue;
@@ -369,22 +370,54 @@ function layoutStem() {
     // then left, and so on; --leaf-i staggers the unfold from the stem's root outward.
     el.setAttribute('data-side', index % 2 === 0 ? 'right' : 'left');
     el.style.setProperty('--leaf-i', String(index));
+    first ||= el;
     last = el;
     index += 1;
   }
-  // The stem ends at the middle of the last leaf, so the notes under the leaves (the lándlet cap)
-  // are not struck through by it. Measured only while the panel is drawn.
-  const hostBox = host.getBoundingClientRect();
-  if (last && hostBox.height > 0) {
-    const box = last.getBoundingClientRect();
-    host.style.setProperty('--stem-h', `${Math.round(box.top + box.height / 2 - hostBox.top)}px`);
-    // #4016: the stem grows from the head, not from the panel (which starts below the petals): it is
-    // drawn up from the panel's top to the head's middle, behind the petals, so it shows between and
-    // below them and is joined to the flower; folding draws it up into the head.
-    const head = toggle()?.getBoundingClientRect();
-    const rise = head && head.height > 0 ? hostBox.top - (head.top + head.height / 2) : 0;
-    host.style.setProperty('--stem-rise', `${Math.max(0, Math.round(rise))}px`);
+  drawStem(host, first, last);
+}
+
+// #4026 (part of #3759): the stem is one curve with no corner. It leaves the head at the head's own centre
+// line, runs down, curves across to the leaves' line above the first leaf and goes straight down to the middle
+// of the last leaf (so the notes under the leaves, the lándlet cap, are not struck through). Drawn as two
+// paths of length 1 (a pale edge under a green core) so the unfold can draw it down from the head and the
+// fold draw it back up into it (stroke-dashoffset, src/app.css). Measured only while the panel is drawn.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function stemSvg(host) {
+  let svg = host.querySelector(':scope > #bud-stem');
+  if (!svg) {
+    svg = document.createElementNS(SVG_NS, 'svg');
+    svg.id = 'bud-stem';
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    for (const cls of ['bud-stem-edge', 'bud-stem-core']) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('class', cls);
+      path.setAttribute('pathLength', '1');
+      svg.appendChild(path);
+    }
+    host.prepend(svg);
   }
+  return svg;
+}
+
+function drawStem(host, first, last) {
+  const hostBox = host.getBoundingClientRect();
+  if (!first || !last || hostBox.height <= 0) return;
+  const head = toggle()?.getBoundingClientRect();
+  if (!head || head.height <= 0) return;
+  const stemX = parseFloat(getComputedStyle(host).getPropertyValue('--stem-x')) || 88;
+  const x0 = Math.round(head.left + head.width / 2 - hostBox.left); // the head's own centre line
+  const y0 = Math.round(head.top + head.height / 2 - hostBox.top); // under the head, so it comes out of its base
+  const firstTop = first.getBoundingClientRect().top - hostBox.top;
+  const lastMid = Math.round(last.getBoundingClientRect().top + last.getBoundingClientRect().height / 2 - hostBox.top);
+  // The curve takes the room above the first leaf (at most 56px); a shorter run still curves, just tighter.
+  const curve = Math.max(16, Math.min(56, firstTop - y0 - 24));
+  const y2 = Math.round(firstTop - 6); // where it is on the leaves' line
+  const y1 = y2 - curve;
+  const mid = (y1 + y2) / 2;
+  const d = `M ${x0} ${y0} L ${x0} ${y1} C ${x0} ${mid} ${stemX} ${mid} ${stemX} ${y2} L ${stemX} ${Math.max(y2 + 1, lastMid)}`;
+  for (const path of stemSvg(host).children) path.setAttribute('d', d);
 }
 
 let stemPending = false;

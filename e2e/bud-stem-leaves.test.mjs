@@ -34,17 +34,32 @@ async function inspect(label) {
         tap: buttons.map((b) => { const r = b.getBoundingClientRect(); return [r.width, r.height]; }),
       };
     });
-    const stem = getComputedStyle(panel, '::before');
+    // #4026: the stem is two paths in one svg (a pale edge under a green core), drawn from the head's own centre line.
+    const core = document.querySelector('#bud-stem .bud-stem-core');
+    const stemStyle = core ? getComputedStyle(core) : null;
     const overlaps = [];
     for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) if (overlap(rows[i].box, rows[j].box)) overlaps.push([rows[i].id, rows[j].id]);
-    // #4016: the stem's top edge is the panel's top less --stem-rise; it must reach the head (its middle, behind the petals).
     const head = document.getElementById('account-menu-toggle').getBoundingClientRect();
-    const stemTop = panel.getBoundingClientRect().top - parseFloat(stem.top ? getComputedStyle(panel).getPropertyValue('--stem-rise') || '0' : '0');
-    return { rows, overlaps, stemWidth: stem.width, stemContent: stem.content, vw: innerWidth, vh: innerHeight, stemTop, headMiddle: head.top + head.height / 2 };
+    const box = core ? core.getBoundingClientRect() : null;
+    const lastLeaf = rows[rows.length - 1].box;
+    return {
+      rows, overlaps, vw: innerWidth, vh: innerHeight,
+      stemWidth: stemStyle ? parseFloat(stemStyle.strokeWidth) : 0,
+      stemColor: stemStyle ? stemStyle.stroke : '',
+      stemTop: box ? box.top : -1,
+      stemLeft: box ? box.left : -1,
+      stemBottom: box ? box.bottom : -1,
+      stemRight: box ? box.right : -1,
+      headMiddle: head.top + head.height / 2,
+      headCentreX: head.left + head.width / 2,
+      lastMiddle: lastLeaf.top + lastLeaf.height / 2,
+      firstTop: rows[0].box.top,
+    };
   });
   console.log(`${label}:`, JSON.stringify(report.rows.map((r) => `${r.side}:${r.id}`)));
   check(report.rows.length >= 3, `${label}: the menu has leaves (${report.rows.length})`);
-  check(report.stemContent !== 'none' && parseFloat(report.stemWidth) >= 2, `${label}: a stem is drawn (${report.stemWidth})`);
+  check(report.stemWidth >= 6, `${label}: a stem is drawn, clearly thicker than a hairline (${report.stemWidth})`);
+  check(/^rgb\(108, 164, 46\)$/.test(report.stemColor), `${label}: the stem is the brand green (${report.stemColor})`);
   report.rows.forEach((row, i) => {
     check(row.side === (i % 2 === 0 ? 'right' : 'left'), `${label}: leaf ${row.id} alternates (${row.side} at ${i})`);
     check(row.icons.every((n) => n === 1), `${label}: ${row.id} has one icon (${row.icons})`);
@@ -54,7 +69,9 @@ async function inspect(label) {
     check(row.tap.every(([w, h]) => w >= 44 && h >= 44), `${label}: ${row.id} tap size ${JSON.stringify(row.tap)}`);
     check(row.box.left >= 0 && row.box.right <= report.vw && row.box.bottom <= report.vh, `${label}: ${row.id} is on the screen`);
   });
-  check(Math.abs(report.stemTop - report.headMiddle) <= 2, `${label}: the stem grows from the head (top ${report.stemTop}, head middle ${report.headMiddle})`);
+  check(Math.abs(report.stemTop - report.headMiddle) <= 2 && Math.abs(report.stemLeft - report.headCentreX) <= 2, `${label}: the stem starts on the head's own centre line (top ${report.stemTop}, left ${report.stemLeft}; head middle ${report.headMiddle}, centre ${report.headCentreX})`);
+  check(Math.abs(report.stemBottom - report.lastMiddle) <= 2, `${label}: the stem reaches the middle of the last leaf (${report.stemBottom} vs ${report.lastMiddle})`);
+  check(report.stemRight > report.stemLeft + 20 && report.stemTop < report.firstTop, `${label}: it curves across to the leaves' line above the first leaf`);
   check(report.overlaps.length === 0, `${label}: no two leaves overlap (${JSON.stringify(report.overlaps)})`);
   if (process.env.STILLS_DIR) await page.screenshot({ path: `${process.env.STILLS_DIR}/stem-${label}.png` });
   // Fold it again so the next mode starts from rest.
