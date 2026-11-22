@@ -35,6 +35,8 @@ check(stored, 'the Sell petal is there');
 await page.addInitScript(() => {
   window.__snapshotAtStart = sessionStorage.getItem('higglehaven.switchSnapshot');
 });
+// Hold the app's bundle back for a moment so the loading screen can be looked at (E2E_SHOT_DIR saves it).
+await page.route('**/assets/index-*.js', async (route) => { await new Promise((r) => setTimeout(r, 2500)); await route.continue(); });
 const [ , ] = await Promise.all([
   page.waitForEvent('domcontentloaded'),
   page.click('#bud-modes .mode-nav-btn[data-mode="sell"]'),
@@ -45,6 +47,7 @@ const warm = await page.evaluate(() => ({
   atStart: (window.__snapshotAtStart || '').length,
   left: sessionStorage.getItem('higglehaven.switchSnapshot'),
 }));
+if (process.env.E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SHOT_DIR}/mode-switch-keeps-world.png` });
 check(warm.atStart > 200, `the tap stored a snapshot (${warm.atStart} chars at the new page's start)`);
 check(warm.cls, 'the loading screen is marked as keeping the world');
 check(/^url\("data:image\/jpeg;base64,/.test(warm.bg), `the loading screen shows the snapshot (${String(warm.bg).slice(0, 40)})`);
