@@ -66,6 +66,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { findImplicitSets } from './implicitLodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -537,26 +538,57 @@ const lodFlipScratch = []; // positions of the items due to change version this 
 // member with versions to switch between, each with its bounding sphere, found once per change in the
 // landlet's object count (Shop items do not move). Members drawn by an instanced
 // batch (#3403) are members like any other: a bundle's bricks change detail together.
+// #4063: e2e-only switch for the grouping of loose placements, so a test of one placement's own stepping
+// (shop-batch-lod) can keep judging items one by one. Changing it makes every landlet work its sets out again.
+let implicitSetsEnabled = true;
+let implicitSetsVersion = 0;
+window.__testSetImplicitLodSets = (enabled) => {
+  implicitSetsEnabled = enabled !== false;
+  implicitSetsVersion += 1;
+};
+
 function lodSetsFor(entry) {
-  if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken) return entry.lodSets;
+  if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken
+    && entry.lodSetsVersion === implicitSetsVersion) return entry.lodSets;
   const byGroup = new Map();
+  const loose = [];
   for (const object of entry.objects) {
+    if (!hasLodTiers(object)) continue;
     const groupId = object.userData.groupId;
-    if (!groupId || !hasLodTiers(object)) continue;
+    object.userData.lodSetId = undefined;
+    if (!groupId) { loose.push(object); continue; }
     let members = byGroup.get(groupId);
     if (!members) byGroup.set(groupId, members = []);
     members.push(object);
   }
   const sets = new Map();
-  for (const [groupId, members] of byGroup) {
-    if (members.length < 2) continue; // a lone member is decided as a single item
+  const addSet = (setId, members) => {
     const sphere = setBoundingSphere(members.map((object) => ({
       x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object),
     })));
-    sets.set(groupId, { members, sphere, px: 0, near: false });
+    for (const object of members) object.userData.lodSetId = setId;
+    sets.set(setId, { members, sphere, px: 0, near: false });
+  };
+  for (const [groupId, members] of byGroup) {
+    if (members.length < 2) continue; // a lone member is decided as a single item
+    addSet(groupId, members);
   }
+  // #4063: loose placements that stand together (the same product, touching or a small gap apart) are a
+  // set for drawing too, so a wall the builder never bundled changes detail as one, exactly as the same
+  // wall bundled does. Nothing is stored or shown; this is worked out again whenever the landlet's
+  // objects change.
+  const looseItems = [];
+  const looseObjects = [];
+  for (const object of loose) {
+    const key = object.userData.template?.templateId;
+    if (!key) continue;
+    looseObjects.push(object);
+    looseItems.push({ key, x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object) });
+  }
+  (implicitSetsEnabled ? findImplicitSets(looseItems) : []).forEach((indices, n) => addSet(`auto:${n}`, indices.map((i) => looseObjects[i])));
   entry.lodSets = sets;
   entry.lodSetsObjectCount = entry.objects.length;
+  entry.lodSetsVersion = implicitSetsVersion;
   entry.lodSetsToken = entry.loadToken; // an unload and reload with the same count must not reuse stale members
   return sets;
 }
@@ -609,7 +641,7 @@ function updateInstanceLodTiers() {
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
-      const set = object.userData.groupId ? sets.get(object.userData.groupId) : undefined;
+      const set = object.userData.lodSetId ? sets.get(object.userData.lodSetId) : undefined;
       const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
       // #3443: beside the avatar is always the real model, outside the budget too.

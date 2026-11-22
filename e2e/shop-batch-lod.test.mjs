@@ -108,6 +108,9 @@ await page.reload();
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('body.shop-ready', { timeout: 30000 });
 await page.waitForTimeout(1000);
+// #4063: loose placements that stand together are one set for drawing now (shop-loose-wall-one-detail-decision);
+// this test is about one placement's own stepping, so it judges the dense wall item by item.
+await page.evaluate(() => window.__testSetImplicitLodSets(false));
 
 // A fresh Shop-mode spawn overwrites the avatar's position every frame until real navigation input
 // first arrives, which would undo every teleport below. Same release gesture other Shop e2es use.
