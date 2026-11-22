@@ -1216,7 +1216,7 @@ function updateShopFlight(dt) {
     }
   } else if (shopFlightState === 'flying') {
     // #3769: the view steers height. Looking up and moving forward climbs,
-    // looking down descends, moving back reverses, a level view or no move
+    // looking down descends (whichever way the avatar moves: #4068), a level view or no move
     // gesture holds height. The rate is the flight speed the horizontal move
     // uses, scaled by flightPitch.js's dead zone and ramp.
     if (!shopGoToLastLocationPhase && shopMoveY !== 0) {
