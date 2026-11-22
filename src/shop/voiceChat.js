@@ -26,6 +26,8 @@
 // sides can call addTrack/addTransceiver independently and let
 // onnegotiationneeded sort it out.
 import { currentAuthUser } from '../account/auth.js';
+import { announceNearbySpeech } from './speechCue.js';
+import { watchVoiceActivity, VOICE_AUDIBLE_GAIN } from './voiceActivity.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   fetchMyBuilder, sendVoiceSignal, fetchVoiceSignals, fetchVoiceIceConfig, sendVoiceReport,
@@ -332,6 +334,23 @@ function attachRemoteStream(builderId, entry, stream) {
   // reconcileFriendVoiceChannels's own gain-sync already does.
   entry.gainNode.gain.value = entry.channelOwnerBuilderId ? (mutedPeers.has(builderId) ? 0 : 1) : 0;
   entry.sourceNode.connect(entry.gainNode).connect(ctx.destination);
+  // #3556: who is speaking, said at their avatar: the same anonymous mark nearby chat uses, shown while
+  // this peer is speaking and is actually heard (not muted, not out of range).
+  entry.stopActivityWatch?.();
+  // Chrome gives a Web Audio graph built from a remote WebRTC stream silence until the same stream is
+  // also held by a media element, so a muted one holds it (sound still comes out of the gain graph above).
+  if (!entry.holdElement) {
+    entry.holdElement = document.createElement('audio');
+    entry.holdElement.muted = true;
+  }
+  entry.holdElement.srcObject = stream;
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  entry.sourceNode.connect(analyser); // read the stream before the gain, so a quiet distant voice is still measured
+  entry.stopActivityWatch = watchVoiceActivity(analyser, {
+    isAudible: () => !mutedPeers.has(builderId) && (entry.gainNode?.gain.value ?? 0) >= VOICE_AUDIBLE_GAIN,
+    onSpeaking: () => announceNearbySpeech(builderId),
+  });
 }
 
 // Smoothstep falloff from full volume at VOICE_FULL_VOLUME_RADIUS_M to
@@ -498,6 +517,8 @@ async function createPeer(builderId, channelOwnerBuilderId = null) {
 function teardownPeer(builderId) {
   const entry = peers.get(builderId);
   if (!entry) return;
+  entry.stopActivityWatch?.();
+  if (entry.holdElement) entry.holdElement.srcObject = null;
   entry.sourceNode?.disconnect();
   entry.gainNode?.disconnect();
   entry.pc.close();
