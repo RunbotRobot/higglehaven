@@ -257,6 +257,14 @@ const bSeesA = await waitForConnected(pageB, builderA.builderId);
 console.log('A\'s own view of its connection to B:', aSeesB);
 console.log('B\'s own view of its connection to A:', bSeesA);
 
+// #3556: who is speaking, said at their avatar. Chromium's fake microphone plays a loud repeating beep,
+// so A (listening, B one metre away) should see the anonymous speech mark over B's avatar.
+const speechCueSeen = await pageA.waitForFunction(
+  (builderId) => (window.__shopOtherAvatars ?? []).find((a) => a.builderId === builderId)?.hasSpeechCue === true,
+  builderB.builderId, { timeout: 15000 },
+).then(() => true, () => false);
+console.log('A sees the speech mark over B while B speaks on voice (should be true):', speechCueSeen);
+
 // #2819: per-shopper mute + report, exercised here on the same two
 // already-connected peers rather than paying for a second, separate
 // connection setup. Mute is a pure client-side gain override (never
@@ -347,6 +355,7 @@ const pass =
   mutePersistedForA &&
   mutePersistenceCleared &&
   reportedCorrectly &&
+  speechCueSeen &&
   bTornDownInA &&
   errors.length === 0;
 
