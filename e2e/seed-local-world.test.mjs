@@ -63,7 +63,7 @@ const { avatars } = await get('/builders/me/avatars', looker);
 check((avatars ?? []).some((a) => /Moss Walker/.test(JSON.stringify(a))), 'looker owns the avatar Moss Walker');
 const thread = await get('/assistant-chat/question', looker);
 check(!thread.error, `looker is ID-verified: the assistant route answers (${thread.error ?? 'ok'})`);
-const state = await get('/assistant-chat', looker);
+const state = await get('/assistant-chat/current', looker);
 check((state.history ?? []).some((m) => m.sender === 'assistant') && (state.history ?? []).some((m) => m.sender === 'shopper'), 'the assistant thread holds a question and its answer');
 const { notifications } = await get('/notifications', looker);
 check((notifications ?? []).length >= 2, 'looker has a notice and a friend request notice');
