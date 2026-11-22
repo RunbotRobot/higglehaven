@@ -37,6 +37,7 @@ import {
   Group,
   LinearFilter,
   LinearMipmapLinearFilter,
+  DoubleSide,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
@@ -47,6 +48,8 @@ import {
   CanvasTexture,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { ConvexHull } from 'three/addons/math/ConvexHull.js';
+import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
 import {
   boundaryEdgeCountSteps, countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps,
   MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION,
@@ -63,7 +66,18 @@ export const MID_MAX_TRIANGLES = 4000;
 // No single part of a mid model is cut below this many triangles, so a
 // multi-part model's small parts are not reduced to slivers.
 export const MID_MIN_TRIANGLES_PER_MESH = 12;
+// #4062: a mid version that does not still read as the model (src/tierFidelity.js: the silhouette from
+// the six axes) is thrown away and a gentler one is tried: this fraction of the triangles, then the next.
+// A model that fails every rung keeps its own geometry for mid. The target ceiling grows with each rung.
+export const MID_FRACTION_LADDER = [MID_TRIANGLE_FRACTION, 0.25, 0.5];
 export const MID_TEXTURE_MAX_SIZE = 256;
+// Directions the far fallback (the support hull) takes its extreme points in: the six axes, twelve
+// edges and eight corners of a box, so the hull has at most 26 points and about fifty triangles.
+const HULL_DIRECTIONS = (() => {
+  const dirs = [];
+  for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) if (x || y || z) dirs.push(new Vector3(x, y, z).normalize());
+  return dirs;
+})();
 
 // Far: a few dozen to about two hundred triangles for the whole model.
 export const FAR_TRIANGLE_FRACTION = 0.01;
@@ -343,10 +357,11 @@ function* downsizeMaterial(material, maxSize, getPixels, cache, makeImage) {
 
 // ---- Mid ----
 
-function* buildMid(model, meshes, options, getPixels) {
+function* buildMid(model, meshes, options, getPixels, rung = 0) {
   const makeImage = options.makeImage ?? canvasImageFromPixels;
   const total = meshes.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
-  const target = clamp(Math.round(total * MID_TRIANGLE_FRACTION), MID_MIN_TRIANGLES, MID_MAX_TRIANGLES);
+  const fraction = MID_FRACTION_LADDER[rung] ?? MID_TRIANGLE_FRACTION;
+  const target = clamp(Math.round(total * fraction), MID_MIN_TRIANGLES, MID_MAX_TRIANGLES * (rung + 1));
 
   const clone = model.clone(true);
   const cloneMeshes = collectMeshes(clone);
@@ -380,6 +395,135 @@ function* buildMid(model, meshes, options, getPixels) {
   // Nothing to shrink: the full model is the mid model. No copy to hold.
   if (!changed) return sharedModel(model);
   return { object: clone, sharesFullModel: false };
+}
+
+// ---- Fidelity (#4062) ----
+
+// The triangles of `object`'s visible meshes in the object's own root space, as the flat batches
+// src/tierFidelity.js compares. A mesh whose material is single-sided shows only its front faces.
+export function fidelityBatches(object) {
+  object.updateWorldMatrix(true, true);
+  const rootInverse = object.matrixWorld.clone().invert();
+  const matrix = new Matrix4();
+  const point = new Vector3();
+  const batches = [];
+  for (const mesh of collectMeshes(object)) {
+    if (mesh.visible === false) continue;
+    const geometry = mesh.geometry;
+    const position = geometry.attributes.position;
+    const index = geometry.index;
+    const count = index ? index.count : position.count;
+    matrix.multiplyMatrices(rootInverse, mesh.matrixWorld);
+    const mirrored = matrix.determinant() < 0;
+    const positions = new Float32Array(Math.floor(count / 3) * 9);
+    for (let t = 0; t + 2 < count; t += 3) {
+      for (let k = 0; k < 3; k++) {
+        // A mirrored transform flips the winding; undo it so "front" is what the viewer sees.
+        const corner = mirrored && k > 0 ? 3 - k : k;
+        const vertex = index ? index.getX(t + corner) : t + corner;
+        point.fromBufferAttribute(position, vertex).applyMatrix4(matrix);
+        const at = (t / 3) * 9 + k * 3;
+        positions[at] = point.x;
+        positions[at + 1] = point.y;
+        positions[at + 2] = point.z;
+      }
+    }
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    batches.push({ positions, doubleSided: materials.some((material) => material && material.side === DoubleSide) });
+  }
+  return batches;
+}
+
+function tierIsFaithful(fullBatches, object, tier) {
+  return isFaithful(silhouetteFidelity(fullBatches, fidelityBatches(object)), tier);
+}
+
+// A far version made of the model's own outline: the convex hull of its extreme points in 26 directions
+// (about fifty triangles), coloured from the model's own baked colours at those points. It covers
+// everything the model covers from any side, which is the thing a far version must do; it is used only
+// when the ordinary simplified far version failed the check, so a model that simplifies well never gets it.
+function buildHullFar(parts) {
+  const extremes = new Map();
+  for (const direction of HULL_DIRECTIONS) {
+    let best = null;
+    let bestValue = -Infinity;
+    const probe = new Vector3();
+    for (const part of parts) {
+      const position = part.geometry.attributes.position;
+      for (let i = 0; i < position.count; i++) {
+        probe.fromBufferAttribute(position, i);
+        const value = probe.dot(direction);
+        if (value > bestValue) {
+          bestValue = value;
+          best = { part, i };
+        }
+      }
+    }
+    if (best) extremes.set(`${parts.indexOf(best.part)}:${best.i}`, best);
+  }
+  const points = [];
+  const colorOf = new Map();
+  for (const { part, i } of extremes.values()) {
+    const position = part.geometry.attributes.position;
+    const color = part.geometry.attributes.color;
+    const vertex = new Vector3().fromBufferAttribute(position, i);
+    points.push(vertex);
+    colorOf.set(vertex, color ? new Color(color.getX(i), color.getY(i), color.getZ(i)) : new Color(FALLBACK_BASE_COLOR));
+  }
+  if (points.length < 4) return null;
+  let hull;
+  try {
+    hull = new ConvexHull().setFromPoints(points);
+  } catch (_) {
+    return null;
+  }
+  const positions = [];
+  const colors = [];
+  const nearestColor = (target) => {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const vertex of points) {
+      const distance = vertex.distanceToSquared(target);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = vertex;
+      }
+    }
+    return colorOf.get(best);
+  };
+  for (const face of hull.faces) {
+    const corners = [];
+    let edge = face.edge;
+    do {
+      corners.push(edge.head().point);
+      edge = edge.next;
+    } while (edge !== face.edge);
+    for (let i = 1; i + 1 < corners.length; i++) {
+      for (const corner of [corners[0], corners[i], corners[i + 1]]) {
+        positions.push(corner.x, corner.y, corner.z);
+        const color = nearestColor(corner);
+        colors.push(color.r, color.g, color.b);
+      }
+    }
+  }
+  if (positions.length < 9) return null;
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function farObject(geometry) {
+  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
+  const mesh = new Mesh(geometry, material);
+  mesh.name = 'far';
+  const group = new Group();
+  group.name = 'farTier';
+  group.add(mesh);
+  return { object: group, sharesFullModel: false };
 }
 
 // ---- Far ----
@@ -533,7 +677,7 @@ function fitBoundingBox(geometry, targetBox) {
   geometry.applyMatrix4(matrix);
 }
 
-function* buildFar(model, meshes, getPixels) {
+function* buildFar(model, meshes, getPixels, fullBatches) {
   const visible = meshes.filter((mesh) => mesh.visible !== false);
   if (visible.length === 0) return sharedModel(model);
 
@@ -586,13 +730,18 @@ function* buildFar(model, meshes, getPixels) {
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
 
-  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
-  const mesh = new Mesh(merged, material);
-  mesh.name = 'far';
-  const group = new Group();
-  group.name = 'farTier';
-  group.add(mesh);
-  return { object: group, sharesFullModel: false };
+  // #4062: a far version must still read as the model from every side. Single-sided drawing hid whatever
+  // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
+  // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
+  // by the model's own outline. null means not even that held: the caller uses a more detailed version.
+  const simplified = farObject(merged);
+  if (tierIsFaithful(fullBatches, simplified.object, 'far')) return simplified;
+  const hull = buildHullFar(parts);
+  if (hull) {
+    const outline = farObject(hull);
+    if (tierIsFaithful(fullBatches, outline.object, 'far')) return outline;
+  }
+  return null;
 }
 
 // ---- Public API ----
@@ -627,8 +776,18 @@ export function* modelTierSteps(model, options = {}) {
     return pixelCache.get(texture);
   };
 
-  const mid = yield* buildMid(model, meshes, options, getPixels);
-  const far = yield* buildFar(model, meshes, getPixels);
+  // #4062: every simpler version is checked against the full model (src/tierFidelity.js). A mid version
+  // that fails is retried gentler (MID_FRACTION_LADDER) and ends at the model's own geometry; a far version
+  // that fails falls back to the model's outline, then to the mid version.
+  const fullBatches = fidelityBatches(model);
+  let mid = null;
+  for (let rung = 0; rung < MID_FRACTION_LADDER.length && !mid; rung++) {
+    const candidate = yield* buildMid(model, meshes, options, getPixels, rung);
+    if (candidate.sharesFullModel || tierIsFaithful(fullBatches, candidate.object, 'mid')) mid = candidate;
+  }
+  if (!mid) mid = sharedModel(model);
+  let far = yield* buildFar(model, meshes, getPixels, fullBatches);
+  if (!far) far = mid.sharesFullModel ? sharedModel(model) : { object: mid.object.clone(true), sharesFullModel: false };
   return { mid, far, stats: { full, mid: triangleCountOf(mid.object), far: triangleCountOf(far.object) } };
 }
 
