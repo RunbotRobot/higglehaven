@@ -101,8 +101,13 @@ seller with a claimed lándlet (twelve items, a bundle, a published version), th
 sold out), an order not yet rated, a notice and a friend request waiting; `--name neighbor` is the
 other account. It refuses any address but this machine, is safe to run again (it adds nothing the
 second time; sign-in is limited to ten tries per fifteen minutes), makes `looker` an admin locally
-(the no-card purchase path needs it), and seeds no assistant thread (that needs an ID-verified
-account). `e2e/seed-local-world.test.mjs` runs it so it cannot rot.
+(the no-card purchase path needs it), and (#4043) sets both accounts ID-verified directly in the local
+D1 (`wrangler d1 execute --local`, no provider call; direct messages, voice between friends and the
+assistants are gated on it), gives `looker` an avatar to own besides the default ("Moss Walker", bought
+from `neighbor`) and a thread with one question and its answer (the question goes in through the real
+route and the answer is written into the table, since no assistant is on shift locally). Run
+`npm run build` before `wrangler dev`: it serves the last build, and an old one shows a look main has
+since changed. `e2e/seed-local-world.test.mjs` runs it so it cannot rot.
 
 **After a change of yours deploys, look at it on the live site at phone size
 before calling it done, and say in the PR or issue what you saw.**

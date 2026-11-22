@@ -9,6 +9,9 @@
 //   node scripts/live-site.mjs --name higglehaven10 --timing /api/credit-orbs mode:shop idle
 //   node scripts/live-site.mjs --url http://127.0.0.1:8787 --login local --name higglehaven10 idle shot
 //
+// Against a local server, run `npm run build` first: `wrangler dev` serves the files that last build made,
+// and an old one shows a look that main has since changed (#4039 was a false finding from exactly that).
+//
 // Steps (each `name` or `name:arg:arg`):
 //   walk:<forward|back|left|right>[:ms]   put a finger on the left half of the world and hold it
 //                                         dragged that way (default 1000 ms); moving is a
@@ -16,7 +19,8 @@
 //   aim:<up|down|left|right>[:ms]         the same from the right half (default 1000 ms): turns
 //                                         the camera, up and down are the pitch
 //   look:<dx>:<dy>                        drag the page by that many pixels
-//   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
+//   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
+//                                         `tap:text=Orders` works on a label too)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
@@ -459,7 +463,9 @@ async function waitForAppOpen() {
 }
 async function controlOrFail(selector, what) {
   await waitForAppOpen();
-  const control = page.locator(selector).first();
+  // #4043: the first VISIBLE match, not the first match: a hidden element earlier in the page that carries the
+  // same words (an empty-state hint quoting "Add a product") made `tap:text=Add a product` wait for nothing.
+  const control = page.locator(selector).filter({ visible: true }).first();
   try {
     await control.waitFor({ state: 'visible', timeout: CONTROL_WAIT_MS });
   } catch {
