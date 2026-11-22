@@ -18,7 +18,7 @@
   <button class="nav-item" data-panel="tax-education">Tax education content</button>
   <button class="nav-item" data-panel="purchases">Purchases (admin fallback)</button>
   <button class="nav-item" data-panel="flags">Trust &amp; Safety flags</button>
-  <button class="nav-item" data-panel="accounts">Account suspension</button>
+  <button class="nav-item" data-panel="accounts">Users &amp; suspension</button>
   <button class="nav-item" data-panel="fixtures">Test/Ops Fixtures</button>
   <div class="nav-title">Other admin pages</div>
   <a class="nav-item" href="/admin/control-room">Control Room <span class="ext-arrow">&#8599;</span></a>
@@ -249,14 +249,20 @@
   <section class="panel" id="panel-accounts">
     <p class="sub">Suspend/unsuspend an account, or check its current suspension status. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2299" target="_blank" rel="noopener">#2299</a> — the endpoints themselves landed with <a href="https://github.com/RunbotRobot/higglehaven/issues/1201" target="_blank" rel="noopener">#1201</a>.</p>
 
-    <h2>Find user</h2>
-    <p class="sub">Search by username or email before suspending, so you can confirm the right account from its own detail view first. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2757" target="_blank" rel="noopener">#2757</a>.</p>
+    <h2>Users</h2>
+    <p class="sub">Every account, with the fields you choose. Tap a heading to sort (again to reverse); filter any column from the filter row; search across everything with the box. The choice of columns, sort and filters is remembered in this browser. A row's name opens that account's detail and actions below. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/4060" target="_blank" rel="noopener">#4060</a>.</p>
     <p class="err" id="userSearchErr" hidden></p>
-    <div class="toolbar">
-      <input id="userSearchInput" placeholder="Username or email (partial match)" aria-label="Search by username or email" />
-      <button id="userSearchBtn">Search</button>
+    <div class="toolbar users-toolbar">
+      <input id="usersSearchInput" type="search" placeholder="Search every field" aria-label="Search every field of every user" />
+      <button class="secondary" id="usersColumnsBtn" aria-expanded="false" aria-controls="usersColumnChooser">Columns</button>
+      <button class="secondary" id="usersClearBtn">Clear filters</button>
+      <button class="secondary" id="usersResetBtn">Reset view</button>
+      <button class="secondary" id="usersRefreshBtn">Refresh</button>
     </div>
-    <div id="userSearchResultsWrap"></div>
+    <div id="usersColumnChooser" class="users-chooser" hidden></div>
+    <p class="sub" id="usersCountLine" role="status" aria-live="polite">Loading…</p>
+    <p class="err" id="usersCapLine" hidden></p>
+    <div class="users-scroll" id="usersTableWrap"></div>
     <div id="userDetailWrap"></div>
 
     <h2>Suspend account</h2>
@@ -363,5 +369,6 @@
 <script src="/admin-dashboard-5.js"></script>
 <script src="/admin-dashboard-6.js"></script>
 <script src="/admin-dashboard-7.js"></script>
+<script src="/admin-dashboard-8.js"></script>
 </body>
 </html>

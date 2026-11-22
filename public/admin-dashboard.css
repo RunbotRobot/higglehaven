@@ -122,3 +122,44 @@
   .fixtures-panel .grant-result { margin: 10px 0 0; font-size: 13px; }
   .fixtures-panel .grant-result.success { color: #3f6e1c; }
   .fixtures-panel .grant-result.error { color: #8a2a12; }
+
+  /* #4060: the Users table. Scrolls sideways on a phone with the username column held in place; nothing needs hover. */
+  .users-toolbar { flex-wrap: wrap; gap: 8px; }
+  .users-toolbar input[type="search"] { flex: 1 1 200px; min-width: 0; }
+  .users-chooser { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+  .users-chooser-groups { display: flex; flex-wrap: wrap; gap: 12px; }
+  .users-chooser fieldset { border: 1px solid #eef1e8; border-radius: 8px; padding: 6px 10px; min-width: 180px; }
+  .users-chooser legend { font-size: 12px; font-weight: 700; color: #4a5941; }
+  .users-check { display: block; padding: 5px 0; font-size: 13px; }
+  .users-check input { width: 18px; height: 18px; vertical-align: middle; }
+  .users-order { padding-left: 20px; font-size: 13px; }
+  .users-order li { padding: 3px 0; }
+  .users-move { min-width: 40px; min-height: 32px; margin-left: 6px; }
+  .users-scroll { overflow-x: auto; margin-bottom: 16px; border-radius: 12px; }
+  .users-table { margin-bottom: 0; width: max-content; min-width: 100%; }
+  .users-table th, .users-table td { white-space: nowrap; user-select: text; -webkit-user-select: text; }
+  .users-table td { padding: 12px 10px; }
+  .users-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .users-sort { all: unset; cursor: pointer; font: inherit; text-transform: inherit; letter-spacing: inherit; color: inherit; padding: 6px 2px; }
+  .users-sort:focus-visible, .users-open:focus-visible { outline: 2px solid #3f6e1c; outline-offset: 2px; }
+  .users-filter-row th { background: #f7f9f2; padding: 4px 6px; text-transform: none; letter-spacing: 0; }
+  .users-filter-row input, .users-filter-row select { width: 100%; min-width: 90px; font-size: 13px; padding: 5px 6px; box-sizing: border-box; }
+  .users-range { display: flex; gap: 4px; }
+  .users-range input { min-width: 70px; }
+  .users-table th:first-child, .users-table td:first-child { position: sticky; left: 0; z-index: 1; background: #fff; box-shadow: 1px 0 0 #dbe4d0; }
+  .users-table thead th:first-child { background: #eef3e6; }
+  .users-filter-row th:first-child { background: #f7f9f2; }
+  .users-open { cursor: pointer; color: #1d4e7a; font-weight: 600; text-decoration: underline; }
+
+  /* #4060: on a phone the sidebar is a strip of panel buttons across the top, so the panels get the whole width. */
+  @media (max-width: 720px) {
+    body { flex-direction: column; }
+    nav {
+      width: auto; flex: 0 0 auto; border-right: none; border-bottom: 1px solid #dbe4d0; padding: 10px 12px;
+      display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden;
+    }
+    nav h1 { display: none; }
+    nav .nav-title { display: none; }
+    nav button.nav-item, nav a.nav-item { width: auto; flex: 0 0 auto; white-space: nowrap; margin-bottom: 0; padding: 10px 12px; }
+    main { padding: 16px 12px; }
+  }

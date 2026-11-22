@@ -78,8 +78,10 @@ await page.waitForFunction(
 );
 
 // --- Find user -> a suspension's own Report button fills the form ---
-await page.fill('#userSearchInput', targetEmail);
-await page.click('#userSearchBtn');
+// #4060: the Users table replaced the search box; its search narrows the rows, a tap on the name opens the detail.
+await page.fill('#usersSearchInput', targetEmail);
+await page.waitForSelector('#usersTbody .users-open', { timeout: 10000 });
+await page.click('#usersTbody .users-open');
 await page.waitForSelector('.use-for-ncmec-btn', { timeout: 10000 });
 await page.click('.use-for-ncmec-btn');
 const filledSuspensionId = await page.inputValue('#ncmecReportForm input[name="suspensionId"]');
