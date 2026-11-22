@@ -145,7 +145,8 @@ const rows = await page.evaluate(() => [...document.querySelectorAll('#bud-leaf-
 console.log('rows:', JSON.stringify(rows));
 check(rows.length === 2, `the leaf lists both products (got ${rows.length})`);
 check(rows.every((r) => r.height >= 44), 'every row is at least 44px tall');
-check(rows.every((r) => /^(Here|\d+ m)$/.test(r.distance)), `each row says how far it is (got ${JSON.stringify(rows.map((r) => r.distance))})`);
+// #4044: how far AND which way, in plain words ("9 m, ahead and to the left"), no compass and no degrees.
+check(rows.every((r) => /^(Here|\d+ m)(, (ahead|behind|to the (left|right)|ahead and to the (left|right)|behind and to the (left|right)))?$/.test(r.distance)), `each row says how far it is and which way (got ${JSON.stringify(rows.map((r) => r.distance))})`);
 check(rows.map((r) => r.name).sort().join('|') === 'Card Crate|Card Crate Sold Out', `both products are named (got ${JSON.stringify(rows.map((r) => r.name))})`);
 const tree = await page.locator('#bud-leaf-nearby').ariaSnapshot();
 check(/button "Card Crate/.test(tree), `a screen reader reaches each product as a button by name (got ${JSON.stringify(tree)})`);
@@ -159,6 +160,16 @@ check(await page.evaluate(() => !document.getElementById('bud-leaf-nearby')), 't
 const opened = await page.evaluate(() => document.getElementById('product-card-name').textContent.trim());
 check(opened === pick, `the card that opened is the row's product (wanted ${pick}, got ${opened})`);
 check(await page.evaluate(() => document.activeElement.id === 'product-card'), 'the card has focus');
+// #4044: tapping a row turned the view to face the product (never moved the avatar), so the card is on screen.
+const turned = await page.evaluate(() => {
+  const r = document.getElementById('product-card').getBoundingClientRect();
+  return {
+    yaw: window.__shopCameraYaw, facing: window.__shopAvatarOrientation?.facingRad,
+    cardOnScreen: r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight,
+  };
+});
+check(turned.cardOnScreen, `the card of a product chosen from the leaf is on screen (${JSON.stringify(turned)})`);
+check(Math.abs(Math.atan2(Math.sin(turned.yaw - turned.facing), Math.cos(turned.yaw - turned.facing))) < 0.05, 'the avatar and the camera face the same way after the turn');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(500);
 

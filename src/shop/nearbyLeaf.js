@@ -31,7 +31,8 @@ function openNearbyLeaf() {
         name.textContent = choice.name;
         const distance = document.createElement('span');
         distance.className = 'bud-nearby-distance';
-        distance.textContent = choice.distance;
+        // #4044: how far and which way ("9 m, ahead and to the left").
+        distance.textContent = choice.direction ? `${choice.distance}, ${choice.direction}` : choice.distance;
         row.append(name, distance);
         row.addEventListener('click', () => {
           closeLeaf();

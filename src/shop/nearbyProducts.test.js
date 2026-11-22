@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, NEARBY_LIMIT } from './nearbyProducts.js';
+import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, directionWords, yawFacing, NEARBY_LIMIT } from './nearbyProducts.js';
 
 const items = [{ id: 'far', d: 30 }, { id: 'near', d: 2 }, { id: 'mid', d: 9 }, { id: 'tie', d: 9 }, { id: 'gone', d: NaN }];
 const dist = (i) => i.d;
@@ -49,5 +49,39 @@ describe('distanceWords', () => {
     expect(distanceWords(2.6)).toBe('3 m');
     expect(distanceWords(40)).toBe('40 m');
     expect(distanceWords(NaN)).toBe('');
+  });
+});
+
+describe('directionWords (#4044)', () => {
+  const ahead = { x: 0, y: 1 }; // yaw 0 faces +Y
+  it('says ahead, to a side and behind in plain words', () => {
+    expect(directionWords(ahead, { x: 0, y: 5 })).toBe('ahead');
+    expect(directionWords(ahead, { x: -5, y: 5 })).toBe('ahead and to the left');
+    expect(directionWords(ahead, { x: 5, y: 5 })).toBe('ahead and to the right');
+    expect(directionWords(ahead, { x: -5, y: 0 })).toBe('to the left');
+    expect(directionWords(ahead, { x: 5, y: 0 })).toBe('to the right');
+    expect(directionWords(ahead, { x: -5, y: -5 })).toBe('behind and to the left');
+    expect(directionWords(ahead, { x: 0, y: -5 })).toBe('behind');
+  });
+  it('reads from where the view faces, not from north', () => {
+    const west = { x: -1, y: 0 }; // yaw a quarter turn counter-clockwise
+    expect(directionWords(west, { x: -5, y: 0 })).toBe('ahead');
+    expect(directionWords(west, { x: 0, y: -5 })).toBe('to the left');
+  });
+  it('says nothing for a direction that is not a number', () => {
+    expect(directionWords(ahead, { x: NaN, y: 1 })).toBe('');
+  });
+});
+
+describe('yawFacing (#4044)', () => {
+  it('turns the view to face the point, with forward (-sin yaw, cos yaw)', () => {
+    for (const [dx, dy] of [[0, 5], [-5, 0], [3, -4], [7, 7]]) {
+      const yaw = yawFacing(dx, dy);
+      const fx = -Math.sin(yaw);
+      const fy = Math.cos(yaw);
+      const len = Math.hypot(dx, dy);
+      expect(fx).toBeCloseTo(dx / len, 6);
+      expect(fy).toBeCloseTo(dy / len, 6);
+    }
   });
 });
