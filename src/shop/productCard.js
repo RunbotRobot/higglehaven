@@ -27,7 +27,7 @@ import { meshDimensions } from '../world/models.js';
 import { createWorldCard } from '../ui/worldCard.js';
 import { productInfoParts, setShopTappedProduct, shopReviews } from './worldSprites.js';
 import { camera } from '../world/scene.js';
-import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, directionWords, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
+import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
@@ -203,7 +203,10 @@ export function closeProductCard() {
 const nearbyStatusEl = document.getElementById('shop-nearby-status');
 const scratchNearby = new THREE.Vector3();
 const scratchForward = new THREE.Vector3();
-const nearbyList = () => nearestProducts(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position));
+// #4049: one entry per product (a wall of one product is one entry, with a count), nearest first.
+const productKey = (review) => { const t = review.mesh.userData.template; return t?.templateId ?? t?.name ?? review; };
+const nearbyGroups = () => groupNearby(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position), productKey);
+const nearbyList = () => nearbyGroups().map((g) => g.item);
 
 // Opens one product's card the way a tap does, with the same focus and announcement as N.
 function showNearbyProduct(review, position, total) {
@@ -227,15 +230,16 @@ export function stepToNearbyProduct(direction = 1) {
 // The Nearby leaf (src/shop/nearbyLeaf.js): the same nearest-first products N steps through, as rows
 // a screen reader can reach by name. `choose()` opens that product's card.
 export function nearbyProductChoices() {
-  const list = nearbyList();
+  const groups = nearbyGroups();
+  const list = groups.map((g) => g.item);
   const forward = camera.getWorldDirection(scratchForward);
-  return list.map((review, at) => {
+  return groups.map(({ item: review, count }, at) => {
     const world = review.mesh.getWorldPosition(scratchNearby);
     const x = world.x;
     const y = world.y;
     const metres = world.distanceTo(camera.position);
     return {
-      name: productInfoParts(review.mesh.userData.template).name,
+      name: nameWithCount(productInfoParts(review.mesh.userData.template).name, count),
       distance: distanceWords(metres),
       // #4044: which way it is from where the person is looking (plain words, no compass).
       direction: directionWords({ x: forward.x, y: forward.y }, { x: x - camera.position.x, y: y - camera.position.y }),

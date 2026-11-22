@@ -77,3 +77,24 @@ export function directionWords(forward, to) {
 export function yawFacing(dx, dy) {
   return Math.atan2(-dx, dy);
 }
+
+// #4049 (part of #3539): a wall of one product fills the nearest eight with identical rows and hides
+// everything else around. One entry per product (by `keyOf`), standing for its nearest member, with how
+// many of that product are loaded, ordered nearest first and cut to `limit` products. An item with no
+// finite distance is left out, as in nearestProducts. Returns [{ item, count }].
+export function groupNearby(items, distanceOf, keyOf, limit = NEARBY_LIMIT) {
+  const nearest = nearestProducts(items, distanceOf, Infinity);
+  const groups = new Map();
+  for (const item of nearest) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { item, count: 1 });
+  }
+  return [...groups.values()].slice(0, limit);
+}
+
+// What a row says when several of one product are near: "Brick - Orange, 8 of them". One is just its name.
+export function nameWithCount(name, count) {
+  return count > 1 ? `${name}, ${count} of them` : name;
+}
