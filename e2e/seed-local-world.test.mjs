@@ -2,7 +2,8 @@
 // A seed nobody runs rots (scripts/seed-mockup-data.mjs stopped working when a digital good began to
 // need a model), so this runs it twice against the test server and reads back what it promised:
 // looker owns a lándlet with a dozen items, a bundle, a published version, three products (one sold
-// out), an order not yet rated and a notice; neighbor's friend request is waiting; the second run
+// out), an order not yet rated and a notice, an owned avatar, ID-verified accounts and an assistant
+// thread with one question and its answer (#4043); neighbor's friend request is waiting; the second run
 // changes nothing and says nothing was added.
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -26,7 +27,7 @@ check(first.status === 0, 'the first run succeeds');
 const second = runSeed();
 console.log(second.out);
 check(second.status === 0, 'the second run succeeds');
-const added = second.out.split('\n').filter((line) => /listed|Placed|claimed|saved the bundle|Published|bought|resized|friend request/.test(line));
+const added = second.out.split('\n').filter((line) => /listed|Placed|claimed|saved the bundle|Published|bought|resized|friend request|ID-verified|answered|avatar/.test(line));
 check(added.length === 0, `the second run adds nothing (${added.join(' | ') || 'nothing added'})`);
 
 async function signIn(name) {
@@ -57,7 +58,13 @@ const { templates } = await get(`/catalog?sellerId=${seller.sellerId}&limit=100`
 check((templates ?? []).length === 3, 'looker sells three products');
 check((templates ?? []).filter((t) => t.stockQuantity === 0).length === 1, 'exactly one of them is sold out');
 const { purchases } = await get('/purchases/mine', looker);
-check((purchases ?? []).length === 1, 'looker has one order');
+check((purchases ?? []).length === 2, `looker has two orders (${(purchases ?? []).length}): a planter and an avatar`);
+const { avatars } = await get('/builders/me/avatars', looker);
+check((avatars ?? []).some((a) => /Moss Walker/.test(JSON.stringify(a))), 'looker owns the avatar Moss Walker');
+const thread = await get('/assistant-chat/question', looker);
+check(!thread.error, `looker is ID-verified: the assistant route answers (${thread.error ?? 'ok'})`);
+const state = await get('/assistant-chat', looker);
+check((state.history ?? []).some((m) => m.sender === 'assistant') && (state.history ?? []).some((m) => m.sender === 'shopper'), 'the assistant thread holds a question and its answer');
 const { notifications } = await get('/notifications', looker);
 check((notifications ?? []).length >= 2, 'looker has a notice and a friend request notice');
 const { friendships } = await get('/friendships', looker);
