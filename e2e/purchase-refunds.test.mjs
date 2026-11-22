@@ -99,6 +99,9 @@ console.log('sale row text (should mention "A Refund Shopper" and "You earned"):
 // Refund it via its own row button — the actual moderation path a seller
 // (or, in the real product, customer service on their behalf) would use.
 await row().locator('.product-sale-row-refund-btn').click();
+// The refund is asked about first, in the app's own modal (nothing moves until it is confirmed).
+await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+await page.click('#confirm-modal-confirm-btn');
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.product-sale-row-refunded')).some((el) => el.textContent === 'Refunded'),
   null,
