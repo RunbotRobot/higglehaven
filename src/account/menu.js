@@ -226,7 +226,9 @@ async function renderNotifications() {
   updateNotificationActions();
   notificationsLoadMoreBtn.hidden = true;
   notificationsNextCursor = null;
-  if (!builderId) return;
+  // #4041: notices are the account's too: the dot on Notices is read in Shop (no builder identity there), so the
+  // leaf must be drawn there as well, not left on "Nothing new" under a dot.
+  if (!currentAuthUser) return;
   let page;
   try {
     page = await fetchNotifications();
@@ -276,7 +278,7 @@ notificationsBtn.addEventListener('click', () => {
 });
 notificationsCloseBtn.addEventListener('click', closeNotificationsModal);
 notificationsMarkAllBtn.addEventListener('click', async () => {
-  if (!builderId) return;
+  if (!currentAuthUser) return;
   notificationsMarkAllBtn.disabled = true;
   try {
     await markAllNotificationsRead();
@@ -292,7 +294,7 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
 // #3280: remove every notice that has already been read, after confirming in
 // the in-app modal (#3278). Unread notices are never removed; the modal says so.
 notificationsClearReadBtn.addEventListener('click', async () => {
-  if (!builderId) return;
+  if (!currentAuthUser) return;
   await confirmDestructive({
     title: 'Clear read notices?',
     message: 'This removes every notice you have already read. Unread notices stay.',
@@ -739,7 +741,10 @@ async function renderFriends() {
   friendsIncomingListEl.innerHTML = '';
   friendsOutgoingListEl.innerHTML = '';
   friendsAcceptedListEl.innerHTML = '';
-  if (!builderId) return;
+  // #4041: friends are the account's (user_id), not a builder's, so the list draws in Shop, which has no builder
+  // identity of its own, exactly as the dot and the note on the head (refreshFriendsBadge) already read them there.
+  // It used to stop here for a missing builder id and left the page's own "No friends yet" showing under a waiting request.
+  if (!currentAuthUser) return;
   let friendships;
   try {
     friendships = await fetchFriendships();
