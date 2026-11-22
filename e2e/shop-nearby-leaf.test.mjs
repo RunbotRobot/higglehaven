@@ -149,7 +149,7 @@ check(rows.length === 2, `the leaf lists both products (got ${rows.length})`);
 check(rows.every((r) => r.height >= 44), 'every row is at least 44px tall');
 // #4044: how far AND which way, in plain words ("9 m, ahead and to the left"), no compass and no degrees.
 check(rows.every((r) => /^(Here|\d+ m)(, (ahead|behind|to the (left|right)|ahead and to the (left|right)|behind and to the (left|right)))?$/.test(r.distance)), `each row says how far it is and which way (got ${JSON.stringify(rows.map((r) => r.distance))})`);
-check(rows.map((r) => r.name).sort().join('|') === 'Card Crate, 2 of them|Card Crate Sold Out', `both products are named once each, the repeated one with its count (#4049) (got ${JSON.stringify(rows.map((r) => r.name))})`);
+check(rows.map((r) => r.name).sort().join('|') === 'Card Crate Sold Out|Card Crate, 2 of them', `both products are named once each, the repeated one with its count (#4049) (got ${JSON.stringify(rows.map((r) => r.name))})`);
 const tree = await page.locator('#bud-leaf-nearby').ariaSnapshot();
 check(/button "Card Crate/.test(tree), `a screen reader reaches each product as a button by name (got ${JSON.stringify(tree)})`);
 
