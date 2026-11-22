@@ -81,6 +81,20 @@
          person who declines still has the Log in row. */
       body:has(#auth-modal.visible) #topbar-left,
       body:has(#auth-modal.visible) #mode-nav { visibility: hidden; }
+      /* #3873: a mode switch keeps the world the person was in on screen (public/bud-switch.js sets the image
+         from the snapshot the tap drew): stretched, under a pale fog veil, with the cold-open bud and
+         wordmark left out. The bar, the stage word and the tips are the signs of work; the lit petal is the
+         other. The veil is the brand's own pale green so it reads as fog, not a grey wash. */
+      html.switch-snapshot #loading-screen { background-size: cover; background-position: center; }
+      html.switch-snapshot #loading-screen::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: rgb(238 244 224 / 0.62);
+      }
+      html.switch-snapshot #loading-fog,
+      html.switch-snapshot #loading-bud,
+      html.switch-snapshot #loading-content img { display: none; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades

@@ -657,6 +657,7 @@ import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
+import { captureSwitchSnapshot } from './ui/switchSnapshot.js'; // #3873: the world kept on screen across a mode switch's reload
 import { beginBudModeSwitch } from './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
@@ -2189,6 +2190,9 @@ for (const btn of modeNavButtons) {
     sessionStorage.setItem(START_MODE_KEY, target);
     // #3752: the bud's ring stays out, the chosen petal lit, until the new mode is on screen.
     beginBudModeSwitch(target);
+    // #3873: the world the person is looking at, drawn small now (the canvas can only be read straight after a
+    // render, and the reload below must stay in this same tick), shown behind fog while the new mode loads.
+    captureSwitchSnapshot(renderer.domElement, () => renderer.render(scene, camera));
     location.reload();
   });
 }
