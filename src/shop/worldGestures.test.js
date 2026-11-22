@@ -122,7 +122,7 @@ describe('looking (the right half)', () => {
     expect(right.events.at(-1)[0]).toBe('look');
   });
 
-  it('two fingers are never a tap, whatever they do', () => {
+  it('two fingers that land at nearly the same moment are never a tap, whatever they do', () => {
     const { events, gestures } = rig();
     gestures.down(1, LEFT, 0, 0);
     gestures.down(2, RIGHT, 0, 5);
@@ -130,6 +130,87 @@ describe('looking (the right half)', () => {
     gestures.up(1, 60);
     gestures.down(3, LEFT, 0, 100);
     gestures.up(3, 150);
+    expect(events.some((e) => e[0] === 'double')).toBe(false);
+  });
+});
+
+describe('a double-tap while the other thumb is down (#4064)', () => {
+  // The right thumb double-taps while the left one walks (flying or on the ground), and the other way round.
+  function doubleTapWith(heldRole) {
+    const { events, gestures } = rig();
+    const heldX = heldRole === 'walk' ? LEFT : RIGHT;
+    const tapX = heldRole === 'walk' ? RIGHT : LEFT;
+    gestures.down(1, heldX, 300, 0);
+    gestures.move(1, heldX, 300 - FULL_DEFLECTION_PX); // the held thumb is dragging
+    const dragEvents = events.length;
+    gestures.down(2, tapX, 100, 1000);
+    gestures.up(2, 1060);
+    gestures.down(3, tapX, 102, 1150);
+    gestures.up(3, 1200);
+    return { events, gestures, dragEvents };
+  }
+
+  it('takes off or lands from the right thumb while the left thumb walks', () => {
+    const { events, dragEvents } = doubleTapWith('walk');
+    expect(events.filter((e) => e[0] === 'double')).toHaveLength(1);
+    expect(events.length).toBe(dragEvents + 1); // the walk is not interrupted: only the double-tap was added
+  });
+
+  it('takes off or lands from the left thumb while the right thumb looks', () => {
+    const { events, dragEvents } = doubleTapWith('look');
+    expect(events.filter((e) => e[0] === 'double')).toHaveLength(1);
+    expect(events.length).toBe(dragEvents + 1);
+  });
+
+  it('works when the other thumb is down but still, and the walk carries on after the taps', () => {
+    const { events, gestures } = rig();
+    gestures.down(1, LEFT, 300, 0);
+    gestures.down(2, RIGHT, 100, 1000);
+    gestures.up(2, 1050);
+    gestures.down(3, RIGHT, 100, 1150);
+    gestures.up(3, 1200);
+    expect(events.filter((e) => e[0] === 'double')).toHaveLength(1);
+    gestures.move(1, LEFT, 300 - FULL_DEFLECTION_PX);
+    expect(events.at(-1)).toEqual(['move', 0, -1]);
+  });
+
+  it('a thumb landing between the two taps does not cancel the double-tap', () => {
+    const { events, gestures } = rig();
+    gestures.down(2, RIGHT, 100, 1000);
+    gestures.up(2, 1050);
+    gestures.down(1, LEFT, 300, 1100); // the walking thumb lands between the taps
+    gestures.down(3, RIGHT, 100, 1200);
+    gestures.up(3, 1250);
+    expect(events.filter((e) => e[0] === 'double')).toHaveLength(1);
+  });
+
+  it('is still not a double-tap for a second finger on a half that already has one, a travelled finger, or a long hold', () => {
+    const { events, gestures } = rig();
+    gestures.down(1, RIGHT, 300, 0); // owns the right half
+    gestures.down(2, RIGHT + 20, 100, 1000); // a second finger on the same half: ignored
+    gestures.up(2, 1040);
+    gestures.down(3, RIGHT + 20, 100, 1100);
+    gestures.up(3, 1140);
+    expect(events.some((e) => e[0] === 'double')).toBe(false);
+    const held = rig();
+    held.gestures.down(1, LEFT, 300, 0);
+    held.gestures.down(2, RIGHT, 100, 1000);
+    held.gestures.up(2, 1000 + TAP_MAX_MS + 50); // too long
+    held.gestures.down(3, RIGHT, 100, 1500);
+    held.gestures.up(3, 1550);
+    expect(held.events.some((e) => e[0] === 'double')).toBe(false);
+  });
+
+  it('two fingers that land together on different halves are a fumble even if both lift quickly twice', () => {
+    const { events, gestures } = rig();
+    gestures.down(1, LEFT, 100, 0);
+    gestures.down(2, RIGHT, 100, 20);
+    gestures.up(1, 60);
+    gestures.up(2, 70);
+    gestures.down(3, LEFT, 100, 150);
+    gestures.down(4, RIGHT, 100, 170);
+    gestures.up(3, 200);
+    gestures.up(4, 210);
     expect(events.some((e) => e[0] === 'double')).toBe(false);
   });
 });
