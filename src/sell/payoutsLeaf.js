@@ -12,6 +12,10 @@
 //     each with a one-line reason, and the buttons stay in view at the foot of the leaf;
 //   - an account that is already complete shows its status, balance and Cash out first, and the
 //     form only when asked ("Update payout account").
+// #4042 (found by the job walk on #3887): the leaf answers the seller's first question first, what they are
+// owed (read from the server, even when it is $0.00), then what is needed to be paid, and the form is behind one
+// button in every state (it used to be the first screen for a seller who had not set up payouts, a request for
+// the last four digits of an SSN before any word about money). The same calls, fields and words as before.
 import { openLeaf } from '../ui/bud.js';
 import {
   fetchSellerStripeAccount, submitSellerStripeAccount, fetchSellerPayouts, requestSellerPayout,
@@ -202,33 +206,43 @@ function buildForm(account, onSubmitted) {
   return form;
 }
 
-// #454: only meaningful once an account exists to hold a balance against.
-function buildBalance() {
+// #4042: what is owed, first in the leaf, whether or not an account exists to be paid into: the server's own
+// figures (GET /api/sellers/me/payouts answers for any seller). Cash out only where there is an account.
+function buildOwed(account) {
   const block = el('div', 'payout-balance');
-  block.append(el('h3', 'payout-step-title', 'Balance'));
-  const note = el('div', 'payout-note', 'Loading…');
+  block.append(el('h3', 'payout-step-title', 'Owed to you'));
+  const total = el('p', 'payout-owed', 'Loading…');
+  total.setAttribute('role', 'status');
+  total.setAttribute('aria-live', 'polite');
+  block.append(total);
+  const note = el('div', 'payout-note');
   block.append(note);
-  const cashOutBtn = el('button', 'payout-btn payout-primary', 'Cash out');
-  cashOutBtn.type = 'button';
-  cashOutBtn.hidden = true;
-  block.append(cashOutBtn);
+  // Cash out exists only once there is an account to pay into.
+  const cashOutBtn = account.connected ? el('button', 'payout-btn payout-primary', 'Cash out') : null;
+  if (cashOutBtn) {
+    cashOutBtn.type = 'button';
+    cashOutBtn.hidden = true;
+    block.append(cashOutBtn);
+  }
 
   async function refresh() {
     try {
       const payouts = await fetchSellerPayouts();
+      total.textContent = `${formatPriceCents(payouts.availableCents + payouts.heldCents)} owed to you so far`;
       const parts = [`Available to cash out: ${formatPriceCents(payouts.availableCents)}`];
       if (payouts.heldCents > 0) parts.push(`Held: ${formatPriceCents(payouts.heldCents)}`);
       if (payouts.nextEligibleAt) parts.push(`Next eligible: ${new Date(payouts.nextEligibleAt).toLocaleDateString()}`);
       note.textContent = parts.join(' · ');
       note.classList.remove('error');
-      cashOutBtn.hidden = payouts.availableCents <= 0;
+      if (cashOutBtn) cashOutBtn.hidden = payouts.availableCents <= 0;
     } catch (err) {
-      note.textContent = err.message || 'Couldn\'t load your payout balance.';
+      total.textContent = '';
+      note.textContent = err.message || 'Couldn\'t load what you are owed.';
       note.classList.add('error');
     }
   }
 
-  cashOutBtn.addEventListener('click', async () => {
+  cashOutBtn?.addEventListener('click', async () => {
     cashOutBtn.disabled = true;
     showInlineActionStatus(block, '');
     try {
@@ -257,7 +271,6 @@ async function renderPayouts(body) {
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   accountBlock.append(status);
-  body.append(accountBlock);
 
   let account;
   try {
@@ -265,6 +278,7 @@ async function renderPayouts(body) {
     account = await fetchSellerStripeAccount({ refresh: consumeStripeReturnMarker() });
   } catch (err) {
     if (stale()) return;
+    body.append(accountBlock);
     status.textContent = err.message || 'Couldn\'t load your payout account status.';
     status.classList.add('error');
     return;
@@ -272,34 +286,33 @@ async function renderPayouts(body) {
   // The leaf was closed, or redrawn, during that wait.
   if (stale()) return;
 
+  // What is owed comes first, then what it takes to be paid, then the form behind one button.
+  const owed = buildOwed(account);
+  body.append(owed.block, accountBlock);
   status.textContent = describePayoutStatus(account);
   status.classList.remove('error');
   syncStripeStepPrompt(accountBlock, 'seller', account);
-
-  let balance = null;
-  if (account.connected) {
-    balance = buildBalance();
-    body.append(balance.block);
+  if (account.configured && !account.connected) {
+    // Why the details are asked, and who gets them (they go to the payment provider so money can be paid out).
+    accountBlock.append(el('p', 'payout-why', 'To pay you out, our payment provider needs a few details about you and your bank. They go straight to the provider, so your sales can be paid out.'));
   }
 
   const form = buildForm(account, () => { if (!stale()) void renderPayouts(body); });
-  // A complete account starts on its status and balance, with the form behind one button; one that
-  // still needs something starts on the form.
-  if (account.connected && account.status === 'complete') {
-    form.hidden = true;
-    const open = el('button', 'payout-btn', 'Change payout details');
-    open.type = 'button';
-    open.setAttribute('aria-expanded', 'false');
-    open.addEventListener('click', () => {
-      form.hidden = false;
-      open.hidden = true;
-      form.querySelector('input')?.focus({ preventScroll: true });
-    });
-    body.append(open);
-  }
-  body.append(form);
+  form.hidden = true;
+  const openLabel = account.connected && account.status === 'complete' ? 'Change payout details'
+    : account.connected ? 'Continue setup' : 'Set up payouts';
+  const open = el('button', 'payout-btn payout-open', openLabel);
+  open.type = 'button';
+  open.setAttribute('aria-expanded', 'false');
+  open.addEventListener('click', () => {
+    form.hidden = false;
+    open.hidden = true;
+    open.setAttribute('aria-expanded', 'true');
+    form.querySelector('input')?.focus({ preventScroll: true });
+  });
+  body.append(open, form);
 
-  if (balance) await balance.refresh();
+  await owed.refresh();
 }
 
 export function openPayoutsLeaf() {

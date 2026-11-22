@@ -824,6 +824,16 @@ export async function openPayoutsLeaf(page) {
   await page.waitForSelector('#bud-leaf-payouts', { timeout: 5000 });
 }
 
+// #4042: the payout form is behind one button in every state (the leaf opens on what is owed). A test that
+// is about the form opens the leaf and then presses that button.
+export async function openPayoutsForm(page) {
+  await openPayoutsLeaf(page);
+  await page.waitForSelector('#bud-leaf-payouts .payout-open, #bud-leaf-payouts .payout-form:not([hidden])', { timeout: 30000 });
+  const open = page.locator('#bud-leaf-payouts .payout-open');
+  if (await open.isVisible()) await open.click();
+  await page.waitForSelector('#bud-leaf-payouts .payout-form', { state: 'visible', timeout: 5000 });
+}
+
 // #3704 (6/6, slice 2): the shop name, Rename and Reset Profile are the bud's Storefront leaf, not
 // the Sell tab of Settings (which is gone).
 export async function openStorefrontLeaf(page) {
