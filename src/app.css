@@ -1181,6 +1181,8 @@
       .payout-balance[hidden], .payout-form[hidden], .payout-step[hidden], .payout-btn[hidden] { display: none; }
       .bud-leaf .payout-note { margin: 0; font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.8); }
       .bud-leaf .payout-note.error { color: var(--danger-text); }
+      /* #4042: what is owed, first in the leaf. */
+      .bud-leaf .payout-owed { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--ink); }
       .payout-form { display: flex; flex-direction: column; gap: var(--space-sm); }
       .payout-step { display: flex; flex-direction: column; gap: var(--space-sm); }
       .bud-leaf .payout-step-title { margin: 0; font-size: var(--text-md); font-weight: 600; }

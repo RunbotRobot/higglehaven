@@ -1107,12 +1107,12 @@ nobody owns and nothing uses is removed completely.
 ### Where do I set up payouts and tax forms?
 
 1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
-2. Tap "Payouts". The leaf that opens says whether a payout account is set up.
-3. "Set up payout account" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them. If an account already exists, "Change payout details" opens the same steps.
+2. Tap "Payouts". The leaf that opens says first what is owed to them so far (even when it is $0.00), then whether a payout account is set up.
+3. "Set up payouts" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them; the last step's button is "Set up payout account". If an account already exists, "Change payout details" (or "Continue setup", when the payment provider needs something more) opens the same steps.
 4. Tax forms and identity checks, where they are asked for, are filled in by you on
    those screens.
 
-**You will see:** the payout account's status at the top of the "Payouts" leaf.
+**You will see:** at the top of the "Payouts" leaf, how much is owed to them so far, then the payout account's status.
 
 **If something goes wrong:**
 - Anything about an amount, whether they are eligible, a payout that is late or
