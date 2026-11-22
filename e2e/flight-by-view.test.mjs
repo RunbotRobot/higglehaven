@@ -33,7 +33,7 @@ const z1 = await z();
 await walk(1000);
 check(Math.abs((await z()) - z1) < 0.05, 'a view inside the dead zone flies level');
 
-// Looking up and walking forward climbs, moving back reverses it.
+// Looking up and walking forward climbs. (Moving back no longer reverses it: height follows the view, #4068.)
 await pitch(0.5);
 const z2 = await z();
 await walk(1200);
@@ -46,6 +46,14 @@ await pitch(-0.5);
 await page.waitForTimeout(900);
 const tiltDown = await page.evaluate(() => window.__shopAvatarOrientation.pitchRad);
 check(tiltUpSettled > tiltDown + 0.2, `the body tips nose-up looking up and nose-down looking down (${tiltUpSettled.toFixed(2)} vs ${tiltDown.toFixed(2)} rad)`);
+
+// #4068: with the view pitched down, pulling back (the avatar turned toward the camera) must not gain height.
+const zBack0 = await z();
+await page.keyboard.down('KeyS');
+await page.waitForTimeout(1000);
+await page.keyboard.up('KeyS');
+const zBack1 = await z();
+check(zBack1 <= zBack0 + 0.05, `pulling back with the view pitched down does not gain height (${zBack0.toFixed(2)} -> ${zBack1.toFixed(2)})`);
 
 // The top of the sky: it levels off, stays, and says so once.
 await pitch(0.6);
