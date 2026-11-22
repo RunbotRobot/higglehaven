@@ -1281,6 +1281,31 @@ otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
 
+### `GET /api/auth/admin-users` (#4060)
+
+The Admin Dashboard's Users table (Accounts tab): every account in one `requireAdmin`-gated read, so the
+page can sort, filter, search and choose columns itself (the owner has a handful of accounts today; paging
+is its own issue when the count nears the cap). Never rate-limited, same as the other admin `GET`s.
+
+A fixed number of queries whatever the user count (the `users` rows with their one-to-one joins, then a
+dozen grouped counts joined in the Worker), capped at 1,000 users (most recent first). Returns:
+
+```json
+{
+  "columns": [{ "key", "label", "group", "kind": "text|bool|number|money|date|choice", "default": true, "title": "where the value comes from" }],
+  "limit": 1000, "total": 6, "truncated": false,
+  "users": [{ "userId", "username", "email", "kind": "Person|Fleet account|Assistant|Admin", "createdAt", "trustTier", "...": "one key per column" }]
+}
+```
+
+`columns` is the one list the page draws from (`worker/lib/admin-users-table.js`, `ADMIN_USER_COLUMNS`);
+money fields are cents. Never returned, in any form: `password_hash`, the tax id (only `taxIdOnFile`, yes or
+no), session tokens (only `sessionsOpen`), anything from a KYC form. `lastSeenAt` is the latest of builder
+activity, avatar presence and latest sign-in. `suspended` is an active, not lifted or escalated suspension.
+`truncated` is true when `total` exceeds the rows returned, and the page then says so on one line.
+`admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
+what it did, and a row's name opens the same detail).
+
 ### `GET /api/auth/admin-user-search?q=...` and `GET /api/auth/admin-user-detail?userId=...` (#2757)
 
 Back the Admin Dashboard's "Find user" workflow: `suspend-account` above
