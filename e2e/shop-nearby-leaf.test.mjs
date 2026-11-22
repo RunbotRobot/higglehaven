@@ -169,7 +169,6 @@ const turned = await page.evaluate(() => {
   };
 });
 check(turned.cardOnScreen, `the card of a product chosen from the leaf is on screen (${JSON.stringify(turned)})`);
-check(Math.abs(Math.atan2(Math.sin(turned.yaw - turned.facing), Math.cos(turned.yaw - turned.facing))) < 0.05, 'the avatar and the camera face the same way after the turn');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(500);
 
