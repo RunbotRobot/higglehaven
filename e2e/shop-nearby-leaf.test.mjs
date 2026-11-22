@@ -68,9 +68,11 @@ const batch = (await pageFetchJson('/api/instances/batch', json({
   instances: [
     { instanceId: FOR_SALE_ID, landletId: landlet.landletId, templateId: forSaleTemplate, x: 0, y: 0 },
     { instanceId: SOLD_OUT_ID, landletId: landlet.landletId, templateId: soldOutTemplate, x: 1.6, y: 0 },
+    // #4049: a second one of the same product, so the leaf has to show it once, with a count.
+    { instanceId: 'nearby-leaf-for-sale-two', landletId: landlet.landletId, templateId: forSaleTemplate, x: 0.8, y: 1.2 },
   ],
 }))).status;
-console.log('seeded two products:', batch);
+console.log('seeded two products and a second of one:', batch);
 
 // The page's catalog was fetched before these products existed.
 await page.reload();
@@ -147,18 +149,19 @@ check(rows.length === 2, `the leaf lists both products (got ${rows.length})`);
 check(rows.every((r) => r.height >= 44), 'every row is at least 44px tall');
 // #4044: how far AND which way, in plain words ("9 m, ahead and to the left"), no compass and no degrees.
 check(rows.every((r) => /^(Here|\d+ m)(, (ahead|behind|to the (left|right)|ahead and to the (left|right)|behind and to the (left|right)))?$/.test(r.distance)), `each row says how far it is and which way (got ${JSON.stringify(rows.map((r) => r.distance))})`);
-check(rows.map((r) => r.name).sort().join('|') === 'Card Crate|Card Crate Sold Out', `both products are named (got ${JSON.stringify(rows.map((r) => r.name))})`);
+check(rows.map((r) => r.name).sort().join('|') === 'Card Crate Sold Out|Card Crate, 2 of them', `both products are named once each, the repeated one with its count (#4049) (got ${JSON.stringify(rows.map((r) => r.name))})`);
 const tree = await page.locator('#bud-leaf-nearby').ariaSnapshot();
 check(/button "Card Crate/.test(tree), `a screen reader reaches each product as a button by name (got ${JSON.stringify(tree)})`);
 
 // Tap the second row: the leaf closes and that product's card opens with focus on it.
-const pick = rows[rows.length - 1].name;
+const pick = rows[rows.length - 1].name; // may carry ", N of them" (#4049)
+const pickName = pick.replace(/, \d+ of them$/, '');
 await page.locator('#bud-leaf-nearby .bud-nearby-row', { hasText: pick }).last().click();
 await page.waitForFunction(() => !document.getElementById('product-card').hidden, null, { timeout: 10000 });
 await page.waitForTimeout(600);
 check(await page.evaluate(() => !document.getElementById('bud-leaf-nearby')), 'tapping a row closes the leaf');
 const opened = await page.evaluate(() => document.getElementById('product-card-name').textContent.trim());
-check(opened === pick, `the card that opened is the row's product (wanted ${pick}, got ${opened})`);
+check(opened === pickName, `the card that opened is the row's product (wanted ${pickName}, got ${opened})`);
 check(await page.evaluate(() => document.activeElement.id === 'product-card'), 'the card has focus');
 // #4044: tapping a row turned the view to face the product (never moved the avatar), so the card is on screen.
 const turned = await page.evaluate(() => {
