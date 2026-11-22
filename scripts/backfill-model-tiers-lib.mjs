@@ -326,6 +326,8 @@ export function buildReplaceStatements(modelUrl, oldTiers, { midUrl, farUrl }) {
 
 // io is the same as for runBackfill, plus
 //   holeEdges(bytes)                          -> number of hole edges in a .glb
+//   fidelity(fullBytes, tierBytes, 'mid'|'far') -> true when the tier still reads as the model (#4062,
+//                                                 src/tierFidelity.js); optional, absent = not checked
 //   replaceTiers(modelUrl, oldTiers, newUrls) -> number of rows swapped
 export async function runRedoCracked({
   candidates, io, dryRun = false, limit = Infinity, maxTotalBytes = Infinity, log = () => {},
@@ -370,15 +372,19 @@ export async function runRedoCracked({
       const cracked = [];
       for (const pair of candidate.tiers) {
         let worst = 0;
-        for (const url of [pair.midUrl, pair.farUrl]) {
+        let unfaithful = false;
+        for (const [name, url] of [['mid', pair.midUrl], ['far', pair.farUrl]]) {
           if (!url) continue;
-          worst = Math.max(worst, await io.holeEdges(await io.readModel(modelUrlToKey(url))));
+          const tierBytes = await io.readModel(modelUrlToKey(url));
+          worst = Math.max(worst, await io.holeEdges(tierBytes));
+          // #4062: a tier that is whole but no longer the model (a far version that is a net) is redone too.
+          if (io.fidelity && !(await io.fidelity(full, tierBytes, name))) unfaithful = true;
         }
-        if (worst > allowed) cracked.push({ pair, worst });
+        if (worst > allowed || unfaithful) cracked.push({ pair, worst, unfaithful });
       }
       if (cracked.length === 0) {
         summary.sound += 1;
-        log(`sound  ${candidate.modelUrl} (no tier has more hole edges than the model's ${fullHoles})`);
+        log(`sound  ${candidate.modelUrl} (no tier has more hole edges than the model's ${fullHoles}, and each still reads as the model)`);
         continue;
       }
       const generated = await io.generateTiers(full);
@@ -401,7 +407,7 @@ export async function runRedoCracked({
         summary.nothingToStore += 1;
         log(`cleared ${candidate.modelUrl} (nothing crack-free to store; the viewer builds its own)`);
       } else {
-        log(`redone ${candidate.modelUrl} mid=${urls.midUrl ?? '-'} far=${urls.farUrl ?? '-'} (was ${cracked.map((c) => c.worst).join('/')} hole edges)`);
+        log(`redone ${candidate.modelUrl} mid=${urls.midUrl ?? '-'} far=${urls.farUrl ?? '-'} (was ${cracked.map((c) => `${c.worst} hole edges${c.unfaithful ? ', not the model' : ''}`).join('/')})`);
       }
       summary.redone += 1;
       summary.rowsRecorded += rows;
