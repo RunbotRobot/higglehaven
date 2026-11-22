@@ -55,3 +55,25 @@ export function distanceWords(metres) {
   const whole = Math.round(metres);
   return whole < 1 ? 'Here' : `${whole} m`;
 }
+
+// #4044 (part of #3539): which way a product is, in words, from where the shopper is looking. `forward`
+// and `to` are horizontal world vectors ({x, y}, Z-up): the way the camera faces, and the way to the
+// product. Positive is to the left (the world is turned counter-clockwise by a positive yaw). Plain words,
+// no compass and no degrees: "ahead", "ahead and to the left", "to the right", "behind and to the left".
+export function directionWords(forward, to) {
+  const angle = Math.atan2(forward.x * to.y - forward.y * to.x, forward.x * to.x + forward.y * to.y);
+  const deg = Math.abs(angle) * (180 / Math.PI);
+  if (!Number.isFinite(deg)) return '';
+  const side = angle > 0 ? 'left' : 'right';
+  if (deg < 25) return 'ahead';
+  if (deg < 70) return `ahead and to the ${side}`;
+  if (deg < 110) return `to the ${side}`;
+  if (deg < 155) return `behind and to the ${side}`;
+  return 'behind';
+}
+
+// The yaw that faces the world point (dx, dy) away from the shopper: yaw 0 faces +Y and a positive yaw
+// turns counter-clockwise, so forward is (-sin yaw, cos yaw). Used to turn the view toward a product.
+export function yawFacing(dx, dy) {
+  return Math.atan2(-dx, dy);
+}

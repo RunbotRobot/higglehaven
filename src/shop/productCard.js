@@ -27,7 +27,8 @@ import { meshDimensions } from '../world/models.js';
 import { createWorldCard } from '../ui/worldCard.js';
 import { productInfoParts, setShopTappedProduct, shopReviews } from './worldSprites.js';
 import { camera } from '../world/scene.js';
-import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
+import { nearestProducts, stepNearby, nearbyAnnouncement, distanceWords, directionWords, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
+import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { fetchSellerLabels } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -201,6 +202,7 @@ export function closeProductCard() {
 // Returns false when no product is near.
 const nearbyStatusEl = document.getElementById('shop-nearby-status');
 const scratchNearby = new THREE.Vector3();
+const scratchForward = new THREE.Vector3();
 const nearbyList = () => nearestProducts(shopReviews, (review) => review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position));
 
 // Opens one product's card the way a tap does, with the same focus and announcement as N.
@@ -226,11 +228,24 @@ export function stepToNearbyProduct(direction = 1) {
 // a screen reader can reach by name. `choose()` opens that product's card.
 export function nearbyProductChoices() {
   const list = nearbyList();
-  return list.map((review, at) => ({
-    name: productInfoParts(review.mesh.userData.template).name,
-    distance: distanceWords(review.mesh.getWorldPosition(scratchNearby).distanceTo(camera.position)),
-    choose: () => showNearbyProduct(review, at + 1, list.length),
-  }));
+  const forward = camera.getWorldDirection(scratchForward);
+  return list.map((review, at) => {
+    const world = review.mesh.getWorldPosition(scratchNearby);
+    const x = world.x;
+    const y = world.y;
+    const metres = world.distanceTo(camera.position);
+    return {
+      name: productInfoParts(review.mesh.userData.template).name,
+      distance: distanceWords(metres),
+      // #4044: which way it is from where the person is looking (plain words, no compass).
+      direction: directionWords({ x: forward.x, y: forward.y }, { x: x - camera.position.x, y: y - camera.position.y }),
+      // Turns the view to face it first (never moves the avatar), then opens the card where it now is.
+      choose: () => {
+        turnViewToward(x, y);
+        showNearbyProduct(review, at + 1, list.length);
+      },
+    };
+  });
 }
 
 // A shopper folding the card away themselves (the close button, Escape): the

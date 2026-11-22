@@ -105,6 +105,8 @@ import {
 // respect -- see that module's own header comment.
 import { pollNearbyChatIfNeeded } from './nearbyChat.js';
 import './nearbyLeaf.js'; // #3824: registers Shop's Nearby petal
+import { registerViewTurner } from './viewTurn.js';
+import { yawFacing } from './nearbyProducts.js';
 import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
@@ -941,6 +943,20 @@ function stopShopSpawnRotation() {
   shopSpawnRotating = false;
 }
 
+
+// #4044 (part of #3539): the Nearby leaf turns the view to face a product. Only ever a turn: the avatar's
+// position is never touched. Ends the hands-off spawn orbit first (the orbit uses the yaw as its angle),
+// the same as any other navigation input does.
+registerViewTurner((x, y) => {
+  if (!shopActive) return;
+  const dx = x - shopAvatarPosition.x;
+  const dy = y - shopAvatarPosition.y;
+  if (Math.hypot(dx, dy) < 1e-3) return;
+  stopShopSpawnRotationForNavigation();
+  shopYaw = yawFacing(dx, dy);
+  setShopAvatarFacing(shopYaw);
+  applyShopCameraOrientation();
+});
 
 // #1176: the navigation-input-specific wrapper around stopShopSpawnRotation
 // above — also starts the "Go to last location" button's own 5-second
