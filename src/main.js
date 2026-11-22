@@ -1421,6 +1421,16 @@ window.__testShopInstanceLodBand = (instanceId) => {
   }
   return null;
 };
+// #4063: the version the Shop tick has applied to an instance ('full', 'mid' or 'far'), for placements
+// drawn by an instanced batch too (the band hook above reads 'none' for those: they have no model of their
+// own). Null if the instance isn't currently loaded. Inert unless a test calls it.
+window.__testShopInstanceLodApplied = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (object) return object.userData.lodApplied ?? 'full';
+  }
+  return null;
+};
 // #3416: read-only test hook describing what an instance puts on screen right
 // now: the tier shown, whether its reduced versions are ready, the triangle
 // count of the meshes actually visible, and whether any visible mesh is a
