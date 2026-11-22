@@ -11,6 +11,7 @@ import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { createPurchaseRow } from './myPurchases.js';
 import { builderId, currentMode, currentLandletId } from '../world/state.js';
+import { isSentByMe } from './dmSide.js';
 import { currentAuthUser } from './auth.js';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
 import { setBudWord, clearBudWord } from '../ui/bud.js';
@@ -480,7 +481,7 @@ let dmNextCursor = null;
 
 function createDmRow(message) {
   const row = document.createElement('div');
-  row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
+  row.className = isSentByMe(message, dmOtherBuilderId) ? 'dm-row sent' : 'dm-row';
   const text = document.createElement('div');
   text.textContent = message.text;
   row.appendChild(text);
