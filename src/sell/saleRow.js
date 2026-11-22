@@ -6,6 +6,7 @@
 // (the leaf lists every product's sales together).
 import { markPurchaseShipped, refundPurchase } from '../api.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { formatPriceCents } from '../main.js';
 
 export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
@@ -89,16 +90,23 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
     refundBtn.type = 'button';
     refundBtn.textContent = 'Refund';
     refundBtn.addEventListener('click', async () => {
-      refundBtn.disabled = true;
       showInlineActionStatus(body, '');
-      try {
-        await refundPurchase(purchase.purchaseId);
-        await onChanged();
-      } catch (err) {
-        // #3249: in the row, not alert() (a suppressed dialog is silent).
-        showInlineActionStatus(body, err.message || 'Couldn\'t refund this purchase.');
-        refundBtn.disabled = false;
-      }
+      // Giving a buyer their money back cannot be taken back, so it is confirmed in the app's own modal (owner
+      // decision "A destructive action is confirmed in its own in-app modal"); a refusal shows in that modal.
+      const confirmed = await confirmDestructive({
+        title: 'Refund this order?',
+        message: `Refund ${purchase.buyerLabel || 'the buyer'} ${formatPriceCents(purchase.totalCents)} for ${purchase.productName || 'this order'}? This can't be undone.`,
+        confirmLabel: 'Refund',
+        returnFocusEl: refundBtn,
+        onConfirm: async () => {
+          try {
+            await refundPurchase(purchase.purchaseId);
+          } catch (err) {
+            throw new Error(err.message || 'Couldn\'t refund this purchase.');
+          }
+        },
+      });
+      if (confirmed) await onChanged();
     });
     saleRow.appendChild(refundBtn);
   }
