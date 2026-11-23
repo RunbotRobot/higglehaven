@@ -297,4 +297,3 @@ describe('mountShopAvatar: fog, not a stand-in (#4067)', () => {
     warn.mockRestore();
   });
 });
-
