@@ -1306,6 +1306,27 @@ activity, avatar presence and latest sign-in. `suspended` is an active, not lift
 `admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
 what it did, and a row's name opens the same detail).
 
+### `GET /api/auth/admin-landlet-search?q=...` (#4074)
+
+The Admin Dashboard's lándlet search (Landlet overrides): one `requireAdmin`-gated read that finds a lándlet
+by its name, its id or its owner's username. Not rate-limited, like the other admin `GET`s. `q` is up to 100
+characters; an empty one returns an empty list. It is split into words after lowercasing and treating any run
+of punctuation as one space, so `central-mosaic 2`, `central mosaic 2` and `central_mosaic_2` read the same.
+Every word has to match somewhere in the id, the name or the owner's username (a substring for letters; for
+a number, the same number whatever its leading zeros, or a longer number that starts with it, so `2` finds
+`central-mosaic-002`). Ranked: the exact id, then the exact name, then every word in the name, then in the
+id, then anywhere. Returns:
+
+```json
+{ "query": "central-mosaic 2", "total": 1, "shown": 1, "scanCapped": false,
+  "landlets": [{ "landletId": "central-mosaic-002", "name": "central-mosaic-002", "status": "claimed",
+                 "areaM2": 1000, "ownerBuilderId": "...", "ownerUsername": "runbot" }] }
+```
+
+At most 25 rows come back (`shown`), `total` is how many matched in what the database returned, and
+`scanCapped` is true when it stopped handing rows back before the end (500 rows when a word narrows the
+search, 2,000 when the query is only numbers), so `total` may then be higher. `403` for a non-admin.
+
 ### `GET /api/auth/admin-user-search?q=...` and `GET /api/auth/admin-user-detail?userId=...` (#2757)
 
 Back the Admin Dashboard's "Find user" workflow: `suspend-account` above
