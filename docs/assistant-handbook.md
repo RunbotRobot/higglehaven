@@ -487,9 +487,13 @@ the card does not offer it.
 ### What are the glowing orbs, and what if I hit the limit?
 
 1. Glowing orbs float around the world. Walk or fly into one to collect it.
-2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a moment
-   and goes by itself. Credits are free and are used when you make a model from a picture or a
-   description in Build.
+2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a few
+   seconds and goes by itself. Tap it while it shows to read what you collected: a free credit that turns a
+   short video into a 3D model for your lándlet, how many you have now, and where to use one (in Build, when
+   you add a product from a short video).
+   To ask an orb what it is without collecting it, tap it in the world: a card opens saying what an orb is,
+   that walking or flying into it collects it, and how many you can collect (for example "You can collect up
+   to 20 orbs every 15 minutes."). Tapping never collects an orb.
 3. There is a limit on how many you can collect in a short time. When you reach it, the word
    "Orb limit" shows beside the logo. Tap it to read how many you can collect and in how long you
    can collect more, for example "You can collect up to 20 orbs every 15 minutes. Try again in

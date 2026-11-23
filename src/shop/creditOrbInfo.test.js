@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest';
+import { creditOrbAboutText, creditOrbCollectedText } from './creditOrbInfo.js';
+import { rateLimitCapText, rateLimitNoticeText } from '../rateLimitNotice.js';
+
+describe('creditOrbCollectedText', () => {
+  it('says what was collected, how many are held, and where to use one', () => {
+    const text = creditOrbCollectedText(3);
+    expect(text).toContain('free credit');
+    expect(text).toContain('You have 3 now.');
+    expect(text).toContain('Build');
+  });
+  it('leaves the count out when the server did not say', () => {
+    expect(creditOrbCollectedText(null)).not.toMatch(/You have/);
+  });
+  it('uses the accented word and no internal vocabulary', () => {
+    for (const text of [creditOrbCollectedText(1), creditOrbAboutText({ limit: 20, windowSeconds: 900 })]) {
+      expect(text).toContain('lándlet');
+      expect(text).not.toMatch(/landlet|\bbud\b|flower|petal|leaf|modal|#\d/i);
+    }
+  });
+});
+
+describe('creditOrbAboutText', () => {
+  it('states the limit from the server numbers, never a copy of its own', () => {
+    expect(creditOrbAboutText({ limit: 20, windowSeconds: 900 })).toContain('You can collect up to 20 orbs every 15 minutes.');
+    expect(creditOrbAboutText({ limit: 5, windowSeconds: 120 })).toContain('up to 5 orbs every 2 minutes');
+  });
+  it('says only what an orb is and how to collect it while no numbers are known', () => {
+    const text = creditOrbAboutText(null);
+    expect(text).toContain('Walk or fly into it');
+    expect(text).not.toMatch(/up to/);
+  });
+});
+
+describe('rateLimitCapText', () => {
+  it('is the same sentence the limit notice starts with', () => {
+    const limit = { limit: 20, windowSeconds: 900, retryAfterSeconds: 400 };
+    expect(rateLimitNoticeText('orbs', limit).startsWith(rateLimitCapText('orbs', limit))).toBe(true);
+  });
+  it('is null without numbers', () => {
+    expect(rateLimitCapText('orbs', null)).toBeNull();
+    expect(rateLimitCapText('orbs', {})).toBeNull();
+  });
+});
