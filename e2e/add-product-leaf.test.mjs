@@ -51,17 +51,24 @@ check(m.content.left < 30, `the leaf grows from the bud's corner (left ${Math.ro
 check(m.content.bottom <= m.vh && m.content.top >= 0, 'the leaf is inside the screen');
 check(m.close.left + m.close.width / 2 > m.content.left + m.content.width * 0.75, 'the close control is upper right');
 check((await stepsShown()).file === false, 'the upload steps wait for the answer');
+check((await page.textContent('#add-product-upload-btn')).trim() === 'Create or upload my own model', 'the first answer reads Create or upload my own model');
 check(!(await page.locator('#upload-submit-btn').isVisible()), 'no Add product button shows while the leaf is still asking which way');
 
-// Upload my own model: the upload steps, a required field refused on its own step.
+// Create or upload my own model: the upload steps, a required field refused on its own step.
 await page.click('#add-product-upload-btn');
 await page.waitForSelector('#upload-step-file:not([hidden])', { timeout: 5000 });
+// #4078: the first answer reads Create before upload, and making a model from a video is the way offered first.
+check((await page.textContent('#upload-modal-title')).trim() === 'Create or upload a model', 'the steps are titled Create or upload a model');
+check(await page.locator('#upload-video-section').isVisible() && !(await page.locator('#upload-file-field-row').isVisible()), 'the video way is the first one shown, the file picker is not');
 await page.click('#upload-submit-btn');
 check((await status()) === 'Name is required.', `an empty name is refused on the first step (${await status()})`);
 await page.fill('#upload-name', 'Leaf Crate');
 await page.click('#upload-submit-btn');
 check((await status()).startsWith('Enter a price'), `an empty price is refused on the first step (${await status()})`);
 await page.fill('#upload-price', '3');
+await page.click('#upload-submit-btn');
+check(/^(Record|Choose) a video first\.$/.test(await status()), `a missing video is refused on the first step (${await status()})`);
+await page.click('#upload-mode-file-btn');
 await page.click('#upload-submit-btn');
 check((await status()).startsWith('Choose a .glb'), `a missing file is refused on the first step (${await status()})`);
 const s = await stepsShown();
