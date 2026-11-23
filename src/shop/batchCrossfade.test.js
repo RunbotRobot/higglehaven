@@ -148,6 +148,7 @@ describe('a batched placement changes version through a dissolve (#4062)', () =>
     expect(fades.inFlightCount).toBe(1);
     expect(state.dissolves).toHaveLength(1);
     state.now += BATCH_CROSSFADE_MS * 0.5; // part-way through: a late one must not appear half dissolved
+    fades.update();
     fades.move(batch, handles[3], BATCH_TIER_MID);
     expect(fades.inFlightCount).toBe(2);
     expect(state.dissolves).toHaveLength(2);
@@ -192,17 +193,116 @@ describe('a batched placement changes version through a dissolve (#4062)', () =>
     expect(reduced.state.reducedReads).toBe(2);
   });
 
-  it('settles a fade first when its placement changes again part way', () => {
+  it('lets one placement change again part way without popping the others in its cohort', () => {
     const { batch, handles } = makeBatch(4);
     const { fades, state } = makeFades();
-    fades.move(batch, handles[1], BATCH_TIER_MID);
+    for (const i of [0, 1, 2]) fades.move(batch, handles[i], BATCH_TIER_MID);
+    expect(state.dissolves).toHaveLength(1);
+    const outgoing = batch.root.children.find((c) => c.isInstancedMesh && !batch.meshes.includes(c)
+      && !batch.tiers.mid.meshes.includes(c) && !batch.tiers.far.meshes.includes(c));
+    const midSlot = (i) => handles[i].userData.batchSlot;
     state.now += 100;
-    fades.move(batch, handles[1], BATCH_TIER_FAR);
-    expect(state.dissolves[0].restored).toBe(true);
+    fades.update();
+    fades.move(batch, handles[1], BATCH_TIER_FAR); // the middle one reverses
+    // The cohort is still running with the other two, un-popped: their mid slots stay hidden, the
+    // dissolve is not restored, and the transient instances follow the swap-remove.
+    expect(state.dissolves[0].restored).toBe(false);
+    expect(handles[0].userData.batchFade).toBe(handles[2].userData.batchFade);
+    expect(handles[0].userData.batchFade).toBeDefined();
+    expect(drawnScale(batch.tiers.mid, midSlot(0))).toBe(0);
+    expect(drawnScale(batch.tiers.mid, midSlot(2))).toBe(0);
+    expect(outgoing.count).toBe(2);
+    expect(outgoing.userData.instanceHandles).toEqual([handles[0], handles[2]]);
+    const fullMatrix = new THREE.Matrix4();
+    handles[2].updateMatrix();
+    fullMatrix.multiplyMatrices(handles[2].matrix, batch.tiers.full.parts[0].matrix);
+    outgoing.getMatrixAt(1, m);
+    for (let k = 0; k < 16; k++) expect(m.elements[k]).toBeCloseTo(fullMatrix.elements[k], 5);
+    // The one that reversed is in the far set, fading on its own from its real mid matrix.
     expect(handles[1].userData.batchTier).toBe(BATCH_TIER_FAR);
-    expect(batchTierCounts(batch)).toEqual({ full: 3, mid: 0, far: 1 });
-    expect(fades.inFlightCount).toBe(1); // the new move fades on its own
+    expect(batchTierCounts(batch)).toEqual({ full: 1, mid: 2, far: 1 });
     expect(state.dissolves).toHaveLength(2);
+    expect(fades.inFlightCount).toBe(2);
+    state.now += BATCH_CROSSFADE_MS;
+    fades.update();
+    expect(fades.inFlightCount).toBe(0);
+    for (const handle of handles) expectRealMatrix(batch, handle);
+  });
+
+  it('settles a cohort whose last placement leaves it', () => {
+    const { batch, handles } = makeBatch(3);
+    const { fades, state } = makeFades();
+    fades.move(batch, handles[0], BATCH_TIER_MID);
+    state.now += 50;
+    fades.update();
+    fades.move(batch, handles[0], BATCH_TIER_FAR);
+    expect(state.dissolves[0].restored).toBe(true);
+    expect(fades.inFlightCount).toBe(1); // only the new fade
+    expect(fades.transientMeshCount).toBe(2);
+  });
+
+  it('keeps the transient meshes within the cap on draw calls', () => {
+    const { batch, handles } = makeBatch(6);
+    // One cohort full -> mid is two meshes (one part each); a cap of 2 allows only one cohort.
+    const { fades, state } = makeFades({ maxTransientMeshes: 2 });
+    fades.move(batch, handles[0], BATCH_TIER_MID);
+    expect(fades.transientMeshCount).toBe(2);
+    state.now += 10;
+    fades.update();
+    fades.move(batch, handles[1], BATCH_TIER_FAR); // a second cohort would be four meshes
+    expect(fades.inFlightCount).toBe(1);
+    expect(fades.transientMeshCount).toBe(2);
+    expectRealMatrix(batch, handles[1]); // swapped at once
+    state.now += BATCH_CROSSFADE_MS + 1;
+    fades.update();
+    expect(fades.transientMeshCount).toBe(0);
+  });
+
+  it('counts the hidden slot in the new set in the triangle ceiling', () => {
+    // far (12 triangles) -> mid (48): 12 + 48 = 60 without the hidden slot, 12 + 2 x 48 = 108 with it.
+    function inFar() {
+      const made = makeBatch(4);
+      makeFades().fades.move(made.batch, made.handles[0], BATCH_TIER_FAR, { instant: true });
+      return made;
+    }
+    const tight = inFar();
+    const under = makeFades({ maxTriangles: 100 });
+    under.fades.move(tight.batch, tight.handles[0], BATCH_TIER_MID);
+    expect(under.fades.inFlightCount).toBe(0);
+    const roomyBatch = inFar();
+    const roomy = makeFades({ maxTriangles: 120 });
+    roomy.fades.move(roomyBatch.batch, roomyBatch.handles[0], BATCH_TIER_MID);
+    expect(roomy.fades.inFlightCount).toBe(1);
+    expect(roomy.fades.trianglesInFlight).toBe(108);
+  });
+
+  it('starts at most one cohort per frame; the rest swap at once, and a later frame can start another', () => {
+    const { batch, handles } = makeBatch(6);
+    const { fades, state } = makeFades();
+    fades.move(batch, handles[0], BATCH_TIER_MID); // starts one (full -> mid)
+    fades.move(batch, handles[1], BATCH_TIER_FAR); // would start another (full -> far): not this frame
+    expect(fades.inFlightCount).toBe(1);
+    expectRealMatrix(batch, handles[1]);
+    fades.move(batch, handles[2], BATCH_TIER_MID); // joins the running one: costs no start
+    expect(fades.inFlightCount).toBe(1);
+    expect(handles[2].userData.batchFade).toBe(handles[0].userData.batchFade);
+    state.now += 10;
+    fades.update(); // the next frame
+    fades.move(batch, handles[3], BATCH_TIER_FAR);
+    expect(fades.inFlightCount).toBe(2);
+  });
+
+  it('swaps at once while the batch arrival dissolve is running, and fades after it', () => {
+    const { batch, handles } = makeBatch(4);
+    let arriving = true;
+    const { fades, state } = makeFades({ isArriving: () => arriving });
+    fades.move(batch, handles[0], BATCH_TIER_MID);
+    expect(fades.inFlightCount).toBe(0);
+    expect(state.dissolves).toHaveLength(0); // nothing cloned from the arrival's materials
+    expectRealMatrix(batch, handles[0]);
+    arriving = false;
+    fades.move(batch, handles[1], BATCH_TIER_MID);
+    expect(fades.inFlightCount).toBe(1);
   });
 
   it('keeps a hidden placement hidden when another placement leaves its set, and shows it at the end', () => {
@@ -232,6 +332,7 @@ describe('a batched placement changes version through a dissolve (#4062)', () =>
     expect(state.dissolves[0].restored).toBe(true);
     expect(batch.root.children.length).toBe(before);
 
+    fades.update();
     fades.move(batch, handles[1], BATCH_TIER_MID);
     batch.root.removeFromParent();
     fades.update();

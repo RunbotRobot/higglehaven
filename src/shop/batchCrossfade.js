@@ -24,17 +24,33 @@
 //     matrices are written into the slots the placements hold NOW.
 // A landlet at rest has no cohorts and costs one comparison per frame.
 //
-// Both versions draw while a cohort runs, so the work is bounded: a few cohorts at once, a ceiling on
-// the triangles of the two versions together, and the placements over the ceiling swap instantly as
-// they always did (the caller flips the biggest first, so those are the ones that get a fade). A
-// placement beside the avatar swaps instantly (`instant`), and so does everything for a person who
-// prefers reduced motion. Imports only three.js and the batch books, so it runs in the unit-test pool.
+// Both versions draw while a cohort runs, so the work is bounded, in the three things a fade costs:
+// COHORTS (at most four at once, and at most one started per frame, because starting one allocates
+// instance buffers, creates the transient meshes and clones the incoming materials), DRAW CALLS (at
+// most sixteen transient meshes alive at once: a cohort adds one per part of the old version and one
+// per part of the new one), and TRIANGLES (the old version, the new version, and the new set's hidden
+// slot, which still costs its vertex work, may not pass 1.2 million together). A placement over any
+// bound swaps instantly, as it always did; the caller flips the biggest first, so those are the ones
+// that get a fade. A placement beside the avatar swaps at once (`instant`), so does everything for a
+// person who prefers reduced motion, and so does a batch whose arrival dissolve (#3407) is still
+// running (`isArriving`), because both swap the materials under the batch's root.
+// A placement that changes again while it fades leaves its cohort (the others keep fading).
+// Known limits: a placement that joins a cohort after the first fifth of its fade starts a cohort of
+// its own, so no placement joins part-dissolved, but within a cohort the first and last to join are
+// up to a fifth of a fade apart; the dissolve covers the colour pass only, so shadows of both versions
+// are at full strength for the 0.4 s (shadows are the part of a version least often seen to differ);
+// and while a placement is hidden in its new set the set's bounding sphere includes the origin until
+// the fade ends (a little extra culling slack, never a missed draw).
+// Imports only three.js and the batch books, so it runs in the unit-test pool.
 import * as THREE from 'three';
 import { moveBatchHandle, resolveBatchTier } from './batchTiers.js';
 import { createArrivalDissolve } from './arrivalEffect.js';
 
 export const BATCH_CROSSFADE_MS = 400;
 export const BATCH_CROSSFADE_MAX_COHORTS = 4;
+export const BATCH_CROSSFADE_MAX_STARTS_PER_FRAME = 1;
+// Transient InstancedMeshes alive at once (each is a draw call while its fade runs).
+export const BATCH_CROSSFADE_MAX_TRANSIENT_MESHES = 16;
 // Triangles of the outgoing and incoming versions of everything fading at once (the same size as the
 // full-detail budget, src/shop/lodTier.js MAX_FULL_DETAIL_TRIANGLES).
 export const BATCH_CROSSFADE_MAX_TRIANGLES = 1_200_000;
@@ -65,6 +81,12 @@ function setTriangles(tier) {
   return tier.parts.reduce((sum, part) => sum + geometryTriangles(part.geometry), 0);
 }
 
+// What one fading placement adds to a frame: the old version, the new version, and the new set's own
+// slot for it (zero-scale, drawing nothing, but its vertices are still processed).
+function placementTriangles(fromTier, toTier) {
+  return setTriangles(fromTier) + 2 * setTriangles(toTier);
+}
+
 // A transient InstancedMesh like `source` (same geometry and material, same flags) with room for
 // `capacity` placements and none drawn yet.
 function transientMesh(source, geometry, material, capacity, handles) {
@@ -93,7 +115,10 @@ export function createBatchCrossfades({
   clock = () => performance.now(),
   durationMs = BATCH_CROSSFADE_MS,
   maxCohorts = BATCH_CROSSFADE_MAX_COHORTS,
+  maxStartsPerFrame = BATCH_CROSSFADE_MAX_STARTS_PER_FRAME,
+  maxTransientMeshes = BATCH_CROSSFADE_MAX_TRANSIENT_MESHES,
   maxTriangles = BATCH_CROSSFADE_MAX_TRIANGLES,
+  isArriving = () => false,
   reducedMotion = readReducedMotion,
   move = moveBatchHandle,
 } = {}) {
@@ -101,7 +126,9 @@ export function createBatchCrossfades({
   let reduced = false;
   let reducedReadMs = -Infinity;
   let trianglesInFlight = 0;
+  let transientMeshes = 0;
   let started = 0;
+  let startsLeft = maxStartsPerFrame;
 
   // matchMedia allocates a MediaQueryList per read, and a tick can move hundreds of placements:
   // read it at most once a second.
@@ -113,31 +140,41 @@ export function createBatchCrossfades({
     return reduced;
   }
 
-  function settle(cohort) {
-    if (!cohorts.delete(cohort)) return;
-    trianglesInFlight -= cohort.triangles;
-    const { toTier, members } = cohort;
-    // The new set's real matrices go back into the slots its placements hold now.
-    for (const handle of members) {
-      if (handle.userData.batchFade !== cohort) continue;
-      handle.userData.batchFade = undefined;
-      if (handle.userData.batchTier !== toTier.name) continue; // cannot happen: a move settles first
-      handle.updateMatrix();
-      const slot = handle.userData.batchSlot;
-      toTier.meshes.forEach((mesh, index) => {
-        const partMatrix = toTier.parts ? toTier.parts[index].matrix : null;
-        if (partMatrix) scratch.multiplyMatrices(handle.matrix, partMatrix);
-        else scratch.copy(handle.matrix);
-        mesh.setMatrixAt(slot, scratch);
-      });
-    }
-    for (const mesh of toTier.meshes) {
+  // The placement's real matrices in the slots it holds in its set now (a fade writes them hidden).
+  function writeReal(tier, handle) {
+    handle.updateMatrix();
+    const slot = handle.userData.batchSlot;
+    tier.meshes.forEach((mesh, index) => {
+      const partMatrix = tier.parts ? tier.parts[index].matrix : null;
+      if (partMatrix) scratch.multiplyMatrices(handle.matrix, partMatrix);
+      else scratch.copy(handle.matrix);
+      mesh.setMatrixAt(slot, scratch);
+    });
+  }
+
+  function boundsChanged(meshes) {
+    for (const mesh of meshes) {
       mesh.instanceMatrix.needsUpdate = true;
       // The bounds were taken while the fading placements were zero-scale: rebuild them from the real
       // matrices, or the set is culled and raycast (a tap) by stale bounds.
       mesh.boundingSphere = null;
       mesh.boundingBox = null;
     }
+  }
+
+  function settle(cohort) {
+    if (!cohorts.delete(cohort)) return;
+    trianglesInFlight -= cohort.triangles;
+    transientMeshes -= cohort.outgoing.length + cohort.incoming.length;
+    const { toTier, members } = cohort;
+    // The new set's real matrices go back into the slots its placements hold now.
+    for (const handle of members) {
+      if (handle.userData.batchFade !== cohort) continue;
+      handle.userData.batchFade = undefined;
+      if (handle.userData.batchTier !== toTier.name) continue; // a placement that left was detached first
+      writeReal(toTier, handle);
+    }
+    boundsChanged(toTier.meshes);
     cohort.dissolve.restore();
     for (const mesh of [...cohort.outgoing, ...cohort.incoming]) {
       cohort.batch.fadeMeshes?.delete(mesh);
@@ -148,9 +185,38 @@ export function createBatchCrossfades({
     members.length = 0;
   }
 
+  // One placement leaves its cohort (it changes version again part way): its real matrix goes back
+  // into its slot (the next fade reads it as the version it leaves), the last member of the cohort
+  // takes its instance in the transient meshes, and the rest keep fading.
+  function detach(cohort, handle) {
+    const { members, toTier } = cohort;
+    const k = members.indexOf(handle);
+    handle.userData.batchFade = undefined;
+    if (k < 0) return;
+    writeReal(toTier, handle);
+    boundsChanged(toTier.meshes);
+    const last = members.length - 1;
+    if (k !== last) {
+      for (const mesh of [...cohort.outgoing, ...cohort.incoming]) {
+        mesh.getMatrixAt(last, scratch);
+        mesh.setMatrixAt(k, scratch);
+      }
+      members[k] = members[last];
+    }
+    members.pop();
+    for (const mesh of [...cohort.outgoing, ...cohort.incoming]) grew(mesh, last);
+    cohort.triangles -= cohort.perPlacementTriangles;
+    trianglesInFlight -= cohort.perPlacementTriangles;
+    if (!members.length) settle(cohort); // nothing left in it to fade
+  }
+
   function startCohort(batch, fromTier, toTier, nowMs) {
     const root = batch.root;
     if (!root) return null;
+    const needed = fromTier.meshes.length + toTier.meshes.length;
+    if (startsLeft <= 0 || transientMeshes + needed > maxTransientMeshes) return null;
+    startsLeft--;
+    transientMeshes += needed;
     const capacity = Math.max(1, fromTier.live.length);
     const handles = [];
     const outgoing = fromTier.meshes.map((mesh) => transientMesh(mesh, mesh.geometry, mesh.material, capacity, handles));
@@ -169,7 +235,7 @@ export function createBatchCrossfades({
     const cohort = {
       batch, fromTier, toTier, members: handles, outgoing, incoming, incomingRoot, dissolve, capacity,
       startMs: nowMs, triangles: 0,
-      perPlacementTriangles: setTriangles(fromTier) + setTriangles(toTier),
+      perPlacementTriangles: placementTriangles(fromTier, toTier),
     };
     cohorts.add(cohort);
     started++;
@@ -184,6 +250,9 @@ export function createBatchCrossfades({
     get startedCount() {
       return started;
     },
+    get transientMeshCount() {
+      return transientMeshes;
+    },
     get trianglesInFlight() {
       return trianglesInFlight;
     },
@@ -192,15 +261,15 @@ export function createBatchCrossfades({
       const toName = resolveBatchTier(batch, wanted);
       const fromName = handle.userData.batchTier;
       if (toName === fromName) return toName;
-      // A placement that is still fading and changes again finishes its fade first (rare: the
-      // tiers have hysteresis).
+      // A placement that is still fading and changes again leaves its cohort; the others keep fading
+      // (rare: the tiers have hysteresis).
       const open = handle.userData.batchFade;
-      if (open) settle(open);
+      if (open) detach(open, handle);
 
       const nowMs = clock();
       const fromTier = batch.tiers[fromName];
       const toTier = batch.tiers[toName];
-      if (instant || !batch.root || prefersReduced(nowMs)) return move(batch, handle, toName);
+      if (instant || !batch.root || isArriving(batch) || prefersReduced(nowMs)) return move(batch, handle, toName);
 
       // Which cohort does it join? One of this batch, for this pair of sets, still at the start.
       let cohort = null;
@@ -211,7 +280,7 @@ export function createBatchCrossfades({
           break;
         }
       }
-      const perPlacement = cohort ? cohort.perPlacementTriangles : setTriangles(fromTier) + setTriangles(toTier);
+      const perPlacement = cohort ? cohort.perPlacementTriangles : placementTriangles(fromTier, toTier);
       if (trianglesInFlight + perPlacement > maxTriangles) return move(batch, handle, toName);
       if (!cohort) {
         if (cohorts.size >= maxCohorts) return move(batch, handle, toName);
@@ -254,9 +323,11 @@ export function createBatchCrossfades({
       for (const cohort of [...cohorts]) if (cohort.batch === batch) settle(cohort);
     },
     update() {
+      startsLeft = maxStartsPerFrame;
       if (!cohorts.size) return;
       const nowMs = clock();
-      for (const cohort of [...cohorts]) {
+      // A Set can be deleted from while it is iterated, so no copy is made.
+      for (const cohort of cohorts) {
         const level = (nowMs - cohort.startMs) / durationMs;
         // A batch whose root left the scene has nothing left to fade.
         if (level >= 1 || !cohort.batch.root?.parent) settle(cohort);

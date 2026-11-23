@@ -706,7 +706,11 @@ function updateInstanceLodTiers() {
 // #3494: the incoming version of a changing item dissolves in over the outgoing one.
 const tierCrossfades = createTierCrossfades();
 // #4062: the same for batched placements (src/shop/batchCrossfade.js).
-const batchCrossfades = createBatchCrossfades();
+// The arrival dissolve (#3407) and a cross-fade both swap the materials under a batch's root: no
+// cross-fade starts for a batch while its landlet's arrival is running.
+const batchCrossfades = createBatchCrossfades({
+  isArriving: (batch) => !!batch.arrivalRun && !batch.arrivalRun.settled(),
+});
 // A batch about to be unloaded settles its fades first.
 export function finishBatchCrossfades(batch) {
   batchCrossfades.finishBatch(batch);
@@ -718,7 +722,10 @@ export function settleAllBatchCrossfades() {
 }
 // e2e: how many batch fades are running, and how many are in all (a fade started).
 export function batchCrossfadeStats() {
-  return { inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount };
+  return {
+    inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount,
+    transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
+  };
 }
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
@@ -1707,6 +1714,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
+  batch.arrivalRun = run ?? null; // #4062: read by the batch cross-fades
   initBatchTiers(batch, source.parts);
   for (const handle of handles) {
     handle.userData.lodTier = TIER_FULL;

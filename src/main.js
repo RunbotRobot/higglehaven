@@ -1339,10 +1339,11 @@ window.__testSetShopSkyElapsedSeconds = (seconds) => {
 // and the renderer's live geometry and texture counts, so a test can tell a
 // landlet drawn as a few instanced meshes from one cloned mesh per item, and
 // can tell an unload released what the batches held.
-window.__testShopDrawStats = () => {
+window.__testShopDrawStats = (options) => {
   // #4062: a version change dissolves over about 0.4 s with both versions drawn; the figures here are
   // the settled frame (the sets the books say), so a test does not read the two versions at once.
-  settleAllBatchCrossfades();
+  // `{ settle: false }` reads the frame as it is, fades running.
+  if (options?.settle !== false) settleAllBatchCrossfades();
   renderer.render(scene, camera);
   let batches = 0;
   let instancedMeshes = 0;
