@@ -50,6 +50,7 @@ await page.click('#upload-mode-video-btn');
 const fileRowVisibleInitially = videoFirst && fileRowAfterSwitch;
 const videoSectionHiddenInitially = true;
 
+const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
 // #3585: the `hidden` attribute alone is not enough -- a `display:flex` author rule
 // on .field-with-tooltip used to outrank it, leaving the model-file picker on screen
 // beside the video picker. Check what a person can actually see.

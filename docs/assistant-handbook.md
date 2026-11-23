@@ -1006,7 +1006,7 @@ your "My products" list).
 ```controls sell
 #bud-petal-sell-add-product | Add a product
 #add-product-upload-btn | Create or upload my own model
-#upload-video-record-btn | Record
+#upload-video-input | video
 #upload-mode-file-btn | Upload a model file I already have
 #upload-mode-video-btn | Make a model from a video instead
 #upload-submit-btn | Add product
