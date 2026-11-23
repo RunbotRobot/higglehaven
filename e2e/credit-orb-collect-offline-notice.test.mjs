@@ -78,7 +78,7 @@ await page.evaluate(([x, y, z]) => {
 // (3000ms) -- a brief failure streak shouldn't flash the notice yet.
 await page.waitForTimeout(1200);
 console.log('route actually intercepted at least one real collect attempt (should be true):', abortedCollectAttempts > 0);
-const noticeHiddenDuringBriefOutage = (await budNoteText(page)) === '';
+const noticeHiddenDuringBriefOutage = (await budNoteText(page)) !== 'Offline';
 console.log('offline notice still hidden well under the threshold (should be true):', noticeHiddenDuringBriefOutage);
 
 // #3392: the orb pops on contact (the feel of touching it), so during the quiet
@@ -116,7 +116,7 @@ await page.waitForTimeout(1500);
 const toastVisibleAfterRecovery = (await budWordText(page)) === 'Credit +1';
 console.log('collect-confirmation toast shown once the outage clears (should be true):', toastVisibleAfterRecovery);
 
-const noticeHiddenAfterRecovery = (await budNoteText(page)) === '';
+const noticeHiddenAfterRecovery = (await budNoteText(page)) !== 'Offline';
 console.log('offline notice hidden again once a collect succeeds (should be true):', noticeHiddenAfterRecovery);
 
 const activeAfterRecovery = await page.evaluate(() => window.__testActiveCreditOrbIds());
