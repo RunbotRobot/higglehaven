@@ -43,6 +43,55 @@ describe('first-visit hints', () => {
   });
 });
 
+// #4080: every arrival starts in the air, so the first hint must not be about walking.
+describe('first-visit hints follow where the person is', () => {
+  function airHarness(flying) {
+    const log = { shown: [], marked: 0 };
+    const state = { flying };
+    const hints = createFirstVisitHints({
+      show: (t) => log.shown.push(t),
+      hide: () => {},
+      done: () => false,
+      markDone: () => { log.marked++; },
+      inFlight: () => state.flying,
+    });
+    return { hints, log, state };
+  }
+
+  it('teaches flying first when the person is in the air, then looking, then coming down', () => {
+    const { hints, log } = airHarness(true);
+    hints.start();
+    expect(log.shown).toEqual([FIRST_HINT_STEPS[0].airText]);
+    expect(log.shown[0]).not.toMatch(/walk/i);
+    hints.onGesture('walk');
+    hints.onGesture('look');
+    expect(log.shown.at(-1)).toBe(FIRST_HINT_STEPS[2].airText);
+    expect(log.shown.at(-1)).toMatch(/land/i);
+  });
+
+  it('changes the words on screen when the person lands, and never repeats a learned gesture', () => {
+    const { hints, log, state } = airHarness(true);
+    hints.start();
+    state.flying = false;
+    hints.refresh();
+    expect(log.shown).toEqual([FIRST_HINT_STEPS[0].airText, FIRST_HINT_STEPS[0].text]);
+    // A drag on the left half is one gesture whether flying or walking: done once, not taught twice.
+    state.flying = true;
+    hints.onGesture('walk');
+    state.flying = false;
+    hints.refresh();
+    expect(log.shown.at(-1)).toBe(FIRST_HINT_STEPS[1].text);
+  });
+
+  it('does not show a fresh line when nothing about the person changed', () => {
+    const { hints, log } = airHarness(true);
+    hints.start();
+    hints.refresh();
+    hints.refresh();
+    expect(log.shown).toHaveLength(1);
+  });
+});
+
 // #3657: an account that has been through the hints is not taught again on a new device.
 describe('first-visit hints remembered by the account', () => {
   function fakeStorage() {
