@@ -15,10 +15,17 @@ function waitText(rateLimit) {
   return `in about ${plural(Math.ceil(rateLimit.retryAfterSeconds / 60), 'minute')}`;
 }
 
+// #4072: the limit alone, with no wait ("You can collect up to 20 orbs every 15 minutes."), for a
+// card that explains the limit before anyone has reached it. Null when no numbers are known.
+export function rateLimitCapText(noun, rateLimit) {
+  if (!rateLimit || typeof rateLimit.limit !== 'number' || typeof rateLimit.windowSeconds !== 'number') return null;
+  return `You can collect up to ${rateLimit.limit} ${noun} every ${windowText(rateLimit)}.`;
+}
+
 // A notice about one specific thing, e.g. "orbs".
 export function rateLimitNoticeText(noun, rateLimit) {
   if (!rateLimit) return null;
-  return `You can collect up to ${rateLimit.limit} ${noun} every ${windowText(rateLimit)}. Try again ${waitText(rateLimit)}.`;
+  return `${rateLimitCapText(noun, rateLimit)} Try again ${waitText(rateLimit)}.`;
 }
 
 // #3275: the same decision for every other place a player can hit a limit.

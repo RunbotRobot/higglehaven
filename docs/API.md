@@ -1306,6 +1306,18 @@ activity, avatar presence and latest sign-in. `suspended` is an active, not lift
 `admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
 what it did, and a row's name opens the same detail).
 
+### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
+
+Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns
+`{ account: { userId, username, email, kind }, counts: { landletsClaimed, productsListed, ordersAsBuyer,
+ordersAsSeller, friends }, refusal, needsFleetTick }`; `refusal` is the plain-words reason the account
+cannot be deleted, or `null`. The POST takes `{ userId, confirmUsername, includeFleet? }`, runs the same
+`cascadeDeleteAccount` a person's own deletion runs, and answers `{ accountDeleted: true, userId }`.
+Refused with `409` and a reason: the caller's own account, any admin, an already deleted account, an
+account that still owns a lándlet, a fleet account or assistant unless `includeFleet` is `true`, and
+money still owed (the cascade's own guards). `400` when `confirmUsername` is not the exact username.
+Recorded in the admin action log as `delete_account` (username, email, kind and the counts) after it succeeds.
+
 ### `GET /api/auth/admin-landlet-search?q=...` (#4074)
 
 The Admin Dashboard's lándlet search (Landlet overrides): one `requireAdmin`-gated read that finds a lándlet

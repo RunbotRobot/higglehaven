@@ -31,18 +31,24 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
-await openAddProductLeaf(page);
+await openAddProductLeaf(page, 'video'); // #4078: the steps open on making a model from a video
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 
-// Before toggling: the manual file row is visible, the video row is not.
-const fileRowVisibleInitially = await page.isVisible('#upload-file-field-row');
-const videoSectionHiddenInitially = await page.evaluate(() => document.getElementById('upload-video-section').hidden);
-console.log('manual file row visible before toggling (should be true):', fileRowVisibleInitially);
-console.log('video section hidden before toggling (should be true):', videoSectionHiddenInitially);
+// Before toggling: the video way is the one on screen, the file row is not.
+const videoFirst = await page.isVisible('#upload-video-section') && !(await page.isVisible('#upload-file-field-row'));
+const recordLabelInitially = (await page.textContent('#upload-video-record-btn')).trim();
+console.log('video way shown first, file row hidden (should be true):', videoFirst);
+console.log('video button reads Record, or Choose a video where there is no camera (should be true):', ['Record', 'Choose a video'].includes(recordLabelInitially), recordLabelInitially);
 
 await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5'); // #3252: price is checked on this step
+
+// The quiet second way: a model file already in hand, and back again.
+await page.click('#upload-mode-file-btn');
+const fileRowAfterSwitch = await page.isVisible('#upload-file-field-row') && !(await page.isVisible('#upload-video-section'));
 await page.click('#upload-mode-video-btn');
+const fileRowVisibleInitially = videoFirst && fileRowAfterSwitch;
+const videoSectionHiddenInitially = true;
 
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
 // #3585: the `hidden` attribute alone is not enough -- a `display:flex` author rule
@@ -50,7 +56,7 @@ const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getEl
 // beside the video picker. Check what a person can actually see.
 const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden)
   && !(await page.isVisible('#upload-file-input')) && !(await page.isVisible('#upload-file-field-row'));
-const videoPickerVisibleAfterToggle = await page.isVisible('#upload-video-input');
+const videoPickerVisibleAfterToggle = await page.isVisible('#upload-video-record-btn');
 const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
 // #2442/#2521: a fresh builder starts with 0 video_generation_credits
 // (migrations/0127's own default) -- refreshUploadVideoCredits runs as part
@@ -78,6 +84,9 @@ console.log('submit button reads "Generate model" in video mode (should be true)
 console.log('video-credits line after toggling into video mode (should say 0 remaining and what to do, #2442/#3585):', videoCreditsTextAfterToggle);
 
 await page.setInputFiles('#upload-video-input', FIXTURE_PATH);
+const recordedLabel = (await page.textContent('#upload-video-record-btn')).trim();
+const chosenLine = (await page.textContent('#upload-video-chosen')).trim();
+console.log('after choosing a video the button reads Record again / Choose another video and the line says it is ready (should be true):', ['Record again', 'Choose another video'].includes(recordedLabel), chosenLine);
 await page.click('#upload-submit-btn');
 
 // extractVideoFrames (real decode + canvas draw of the real fixture) runs
@@ -130,7 +139,8 @@ console.log('unexpected page errors (should be empty):', unexpectedErrors);
 
 const pass = fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
   && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate model'
-  && videoPickerVisibleAfterToggle
+  && videoPickerVisibleAfterToggle && ['Record again', 'Choose another video'].includes(recordedLabel) && chosenLine.startsWith('Video ready:')
+  && ['Record', 'Choose a video'].includes(recordLabelInitially)
   && videoCreditsTextAfterToggle === '0 free model generations remaining. Collect a credit orb in the world to earn one.'
   && reachedTerminalStatus && submitReenabled && backToFileMode && unexpectedErrors.length === 0;
 await finish(browser, {

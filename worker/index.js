@@ -86,6 +86,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
@@ -3191,6 +3192,13 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4077: the admin dashboard's Delete account: a preview of what goes with it, then the same cascade a person's own deletion runs.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-delete-account-preview') {
+    return handleAdminDeleteAccountPreview(request, db, url);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
+    return handleAdminDeleteAccount(request, db);
   }
   // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {

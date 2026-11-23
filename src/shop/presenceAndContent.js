@@ -54,7 +54,7 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
-import { setBudWord, clearBudWord } from '../ui/bud.js';
+import { setBudWord, clearBudWord, openLeaf } from '../ui/bud.js';
 import { sayAtHead, clearSaying } from '../ui/headSaying.js';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
@@ -74,8 +74,9 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
+import { creditOrbAboutText, creditOrbCollectedText } from './creditOrbInfo.js';
 import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
 import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
@@ -205,11 +206,10 @@ const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
 const CREDIT_ORB_SHIMMER_SPEED_RAD_S = 3.2;
 const CREDIT_ORB_SHIMMER_MIN = 0.6;
 const CREDIT_ORB_SHIMMER_MAX = 1.8;
-// How long the "+1 free model-generation credit!" toast stays visible
-// after a successful collect, matching #shop-last-location-btn's own
-// opacity-transition show/auto-hide shape (see its CSS comment in
-// index.html) rather than a hard show/hide cutoff.
-const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
+// How long the "Credit +1" word stays beside the head after a successful collect, then goes by
+// itself (a success may fade). #4072: it is also a door to what was collected, so it stays long
+// enough to be read and tapped, not just glimpsed.
+const CREDIT_ORB_TOAST_VISIBLE_MS = 7000;
 // #2447: how long an unbroken streak of genuine network failures (fetch()
 // itself rejecting, never a real HTTP response -- see isNetworkError)
 // collecting any orb has to persist before this reads as "offline" rather
@@ -2188,10 +2188,48 @@ const ORB_LIMIT_KEY = 'orb-limit';
 const ORB_OFFLINE_KEY = 'orb-offline';
 const ORB_PROBLEM_KEY = 'orb-problem';
 let creditOrbToastHideTimer = null;
+// #4072: the word is a door ("anything the head announces is a door to it, one tap"). The leaf opens
+// with the builder's own count in it, read from the server just before; if that cannot be read the
+// sentence is said without it.
+async function openCreditOrbCollectedLeaf() {
+  let credits = null;
+  try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  openLeaf({
+    id: 'orb-collected',
+    title: 'Credit collected',
+    render: (body) => {
+      const p = document.createElement('p');
+      p.textContent = creditOrbCollectedText(credits);
+      body.appendChild(p);
+    },
+  });
+}
 function showCreditOrbToast() {
-  setBudWord(ORB_CREDIT_KEY, 'Credit +1', { label: 'You collected a free model-generation credit' });
+  setBudWord(ORB_CREDIT_KEY, 'Credit +1', {
+    open: () => { openCreditOrbCollectedLeaf(); },
+    label: 'You collected a free credit. Open for details.',
+  });
   clearTimeout(creditOrbToastHideTimer);
   creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+}
+// #4072: the meshes a tap can land on to ask what an orb is, and the answer. Tapping never
+// collects: collecting stays a touch of the avatar, felt at once (#3392).
+export function creditOrbMeshes() {
+  return shopCreditOrbs.map((orb) => orb.mesh);
+}
+// #4072: e2e-only, the same convention as the window.__test* hooks above (a real tap needs aiming at a pixel,
+// which this suite never automates): opens the card a tap on an orb opens.
+window.__testShowCreditOrbAbout = () => showCreditOrbAbout();
+export function showCreditOrbAbout() {
+  openLeaf({
+    id: 'orb-about',
+    title: 'Glowing orb',
+    render: (body) => {
+      const p = document.createElement('p');
+      p.textContent = creditOrbAboutText(creditOrbStanding);
+      body.appendChild(p);
+    },
+  });
 }
 function hideCreditOrbToast() {
   clearTimeout(creditOrbToastHideTimer);

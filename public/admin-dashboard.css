@@ -189,3 +189,10 @@
     nav button.nav-item, nav a.nav-item { width: auto; flex: 0 0 auto; white-space: nowrap; margin-bottom: 0; padding: 10px 12px; }
     main { padding: 16px 12px; }
   }
+
+/* #4077: the Delete account confirmation, in the page itself. */
+dialog.confirm-dialog { max-width: 28rem; border: 1px solid #8a2a12; border-radius: 12px; padding: 1.25rem; }
+dialog.confirm-dialog::backdrop { background: rgba(22, 36, 10, 0.45); }
+dialog.confirm-dialog label { display: block; margin: 0.75rem 0; }
+dialog.confirm-dialog input[type="text"] { display: block; width: 100%; margin-top: 0.25rem; }
+dialog.confirm-dialog .toolbar { justify-content: flex-end; }

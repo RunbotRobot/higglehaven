@@ -487,9 +487,13 @@ the card does not offer it.
 ### What are the glowing orbs, and what if I hit the limit?
 
 1. Glowing orbs float around the world. Walk or fly into one to collect it.
-2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a moment
-   and goes by itself. Credits are free and are used when you make a model from a picture or a
-   description in Build.
+2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a few
+   seconds and goes by itself. Tap it while it shows to read what you collected: a free credit that turns a
+   short video into a 3D model for your lándlet, how many you have now, and where to use one (in Build, when
+   you add a product from a short video).
+   To ask an orb what it is without collecting it, tap it in the world: a card opens saying what an orb is,
+   that walking or flying into it collects it, and how many you can collect (for example "You can collect up
+   to 20 orbs every 15 minutes."). Tapping never collects an orb.
 3. There is a limit on how many you can collect in a short time. When you reach it, the word
    "Orb limit" shows beside the logo. Tap it to read how many you can collect and in how long you
    can collect more, for example "You can collect up to 20 orbs every 15 minutes. Try again in
@@ -971,15 +975,18 @@ lándlets are shown here.
 ### How do I put my own product up for sale?
 
 1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product". A
-   small window opens under it and asks which way. Tap "Upload my own model". The
-   window is now called "Upload model".
+   small window opens under it and asks which way. Tap "Create or upload my own model". The
+   window is now called "Create or upload a model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
    in dollars, or 0 for a free product.
-3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
-   20MB. Tick "This is a digital good" only for things like an avatar or an art
-   file that is delivered, not placed.
-4. Tap "Add product". The app shrinks the model and shows a preview; this can take
-   a moment.
+3. Most people have no model of their product yet, so the window offers making one first: "Make a
+   model from a video". Tap "Record" (it reads "Choose a video" on a computer with no camera) and
+   film one well-lit object, walking slowly all the way around it. If you already have a model file,
+   tap "Upload a model file I already have" under it, and choose the .glb or .fbx file with
+   "Choose File" (up to 20MB). Tick "This is a digital good" only for things like an avatar or an
+   art file that is delivered, not placed.
+4. Tap "Generate model" for a video, or "Add product" for a file. The app shows a preview; this can
+   take a moment, and a video takes a couple of minutes.
 5. The window is now called "Confirm dimensions". Set the product's real size with
    "Width (X)", "Depth (Y)" and "Height (Z)" in metres; changing one changes the
    other two so the proportions stay the same.
@@ -989,12 +996,12 @@ lándlets are shown here.
 your "My products" list).
 
 **If something goes wrong:**
-- The window says "Name is required.", "Enter a price — use 0 for a free product."
-  or "Choose a .glb or .fbx file first." Fill in the one it names and tap "Add
-  Product" again. The app checks the price on this first step, not later.
-- You have no model file: tap "Or generate a model from a video instead" at the
-  bottom of the first step. It takes a short video of one object and uses one of
-  your video credits, which that part of the window shows. "Back to manual file upload" returns.
+- The window says "Name is required.", "Enter a price — use 0 for a free product.",
+  "Record a video first." or "Choose a .glb or .fbx file first." Fill in the one it names and
+  tap the button again. The app checks the price on this first step, not later.
+- You are on the file way and have no model file: tap "Make a model from a video instead" under
+  the file picker. It takes a short video of one object and uses one of your video credits, which
+  the video part of the window shows. "Upload a model file I already have" goes back to the file.
 - The window shows an error after "Add product" that is not one of those: ask the
   person to read it out, and offer to pass it to the team.
 - You already have a product with that name: the app asks you to confirm before it
@@ -1002,9 +1009,11 @@ your "My products" list).
 
 ```controls sell
 #bud-petal-sell-add-product | Add a product
-#add-product-upload-btn | Upload my own model
+#add-product-upload-btn | Create or upload my own model
+#upload-video-input | video
+#upload-mode-file-btn | Upload a model file I already have
+#upload-mode-video-btn | Make a model from a video instead
 #upload-submit-btn | Add product
-#upload-mode-video-btn | generate a model from a video
 ```
 
 ### How do I sell a product someone else already made?
