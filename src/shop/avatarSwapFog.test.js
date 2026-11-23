@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { avatarSwapLevels, beginAvatarSwapFog, AVATAR_SWAP_FOG_RISE_S, AVATAR_SWAP_TOTAL_S } from './avatarSwapFog.js';
+import { avatarSwapLevels, beginAvatarSwapFog, beginAvatarFogHold, AVATAR_SWAP_FOG_RISE_S, AVATAR_SWAP_FOG_CLEAR_S, AVATAR_SWAP_TOTAL_S } from './avatarSwapFog.js';
 
 function fakeFog() {
   const fog = { object: { position: { set: vi.fn() } }, setLevel: vi.fn(), dispose: vi.fn() };
@@ -65,5 +65,74 @@ describe('beginAvatarSwapFog (#3905)', () => {
     expect(fog.dispose).toHaveBeenCalledTimes(1);
     swap.cancel();
     expect(fog.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('beginAvatarFogHold (#4067)', () => {
+  const pos = { x: 1, y: 2, z: 3 };
+
+  it('rises, holds at the peak while nothing is known, and puts no body in place until resolved', () => {
+    const fog = fakeFog();
+    const hold = beginAvatarFogHold({ createFog: () => fog, parent: { add: vi.fn() }, getPosition: () => pos, nowMs: 0 });
+    expect(hold.step(AVATAR_SWAP_FOG_RISE_S * 500)).toBe(false);
+    expect(fog.setLevel.mock.calls.at(-1)[0]).toBeGreaterThan(0);
+    expect(hold.step(AVATAR_SWAP_FOG_RISE_S * 1000)).toBe(false);
+    expect(fog.setLevel.mock.calls.at(-1)[0]).toBe(1);
+    expect(hold.step(10_000)).toBe(false); // still holding, however long it takes
+    expect(fog.setLevel.mock.calls.at(-1)[0]).toBe(1);
+    expect(fog.dispose).not.toHaveBeenCalled();
+  });
+
+  it('follows the avatar while it waits', () => {
+    const fog = fakeFog();
+    const moving = { x: 0, y: 0, z: 0 };
+    const hold = beginAvatarFogHold({ createFog: () => fog, parent: { add: vi.fn() }, getPosition: () => moving, nowMs: 0 });
+    moving.x = 9;
+    hold.step(2000);
+    expect(fog.object.position.set).toHaveBeenLastCalledWith(9, 0, 0.2);
+  });
+
+  it('puts the right body in place at the peak once resolved, then thins the fog away', () => {
+    const fog = fakeFog();
+    const commit = vi.fn();
+    const hold = beginAvatarFogHold({ createFog: () => fog, parent: { add: vi.fn() }, getPosition: () => pos, nowMs: 0 });
+    hold.step(1000);
+    hold.resolve(commit);
+    const resolvedAt = performance.now();
+    expect(commit).not.toHaveBeenCalled(); // not until the next frame at the peak
+    hold.step(resolvedAt + 1);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(hold.step(resolvedAt + AVATAR_SWAP_FOG_CLEAR_S * 1000 + 5)).toBe(true);
+    expect(fog.dispose).toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolved before the fog has risen: the body waits for the peak', () => {
+    const fog = fakeFog();
+    const commit = vi.fn();
+    const hold = beginAvatarFogHold({ createFog: () => fog, parent: { add: vi.fn() }, getPosition: () => pos, nowMs: performance.now() });
+    hold.resolve(commit);
+    hold.step(performance.now() + 50); // 0.05 s in: the fog is still rising
+    expect(commit).not.toHaveBeenCalled();
+    hold.step(performance.now() + AVATAR_SWAP_FOG_RISE_S * 1000 + 10);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('with reduced motion (no fog) resolve puts the body in place at once', async () => {
+    const commit = vi.fn();
+    const hold = beginAvatarFogHold({ createFog: null, parent: {}, getPosition: () => pos, nowMs: 0, reducedMotion: true });
+    hold.resolve(commit);
+    expect(commit).toHaveBeenCalledTimes(1);
+    await hold.done;
+  });
+
+  it('a cancelled hold still runs a later commit, so a body is never lost', () => {
+    const fog = fakeFog();
+    const commit = vi.fn();
+    const hold = beginAvatarFogHold({ createFog: () => fog, parent: { add: vi.fn() }, getPosition: () => pos, nowMs: 0 });
+    hold.cancel();
+    expect(fog.dispose).toHaveBeenCalled();
+    hold.resolve(commit);
+    expect(commit).toHaveBeenCalledTimes(1);
   });
 });
