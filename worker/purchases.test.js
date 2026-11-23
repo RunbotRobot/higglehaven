@@ -1074,6 +1074,77 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(400);
   });
 
+  // #3946: the read-only quote the Buy tap asks, so the client knows whether
+  // the purchase will open a card sheet or complete on the spot.
+  describe('Purchase quote (#3946)', () => {
+    async function seedProduct(prefix, builder, seller, priceCents = 5000) {
+      await createGreenbeltLandletWithArea(`${prefix}-landlet`, 1000);
+      await claim(`${prefix}-landlet`, builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `${prefix}-template`, name: 'Quoted product', color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 }, priceCents, sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance(`${prefix}-instance`, `${prefix}-landlet`, `${prefix}-template`, builder);
+    }
+
+    it('says a card is not needed when the purchase would complete directly, and writes nothing', async () => {
+      const seller = await signupSeller('quote-direct-seller');
+      const builder = await signupAdmin('quote-direct-builder');
+      await seedProduct('quote-direct', builder, seller);
+      const quote = await api('/instances/quote-direct-instance/purchase-quote', builder.session());
+      expect(quote.response.status).toBe(200);
+      expect(quote.body).toMatchObject({ paysWithCard: false, unitPriceCents: 5000 });
+      const rows = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE product_name = ?').bind('Quoted product').first();
+      expect(rows.n).toBe(0);
+    });
+
+    it('says a card is needed when the purchase would create a PaymentIntent, without calling Stripe', async () => {
+      const seller = await signupSeller('quote-card-seller');
+      const builder = await signupAdmin('quote-card-builder');
+      await seedProduct('quote-card', builder, seller);
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_quote_card', stripe_onboarding_status = 'complete', stripe_updated_at = ? WHERE seller_id = ?
+      `).bind(new Date().toISOString(), seller.sellerId).run();
+      const originalFetch = globalThis.fetch;
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      const fetched = [];
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (String(url).includes('stripe.com')) { fetched.push(url); throw new Error('quote must not call Stripe'); }
+        return originalFetch(input, init);
+      };
+      try {
+        const quote = await api('/instances/quote-card-instance/purchase-quote', builder.session());
+        expect(quote.response.status).toBe(200);
+        expect(quote.body).toMatchObject({ paysWithCard: true, unitPriceCents: 5000 });
+      } finally {
+        globalThis.fetch = originalFetch;
+        env.STRIPE_SECRET_KEY = undefined;
+      }
+      expect(fetched).toEqual([]);
+    });
+
+    it('refuses what the purchase would refuse: sold out, a missing instance, a non-admin on the simulated path, no session', async () => {
+      const seller = await signupSeller('quote-refuse-seller');
+      const builder = await signupAdmin('quote-refuse-builder');
+      await seedProduct('quote-refuse', builder, seller);
+      const shopper = await signupBuilder('quote-refuse-shopper');
+      const nonAdmin = await api('/instances/quote-refuse-instance/purchase-quote', shopper.session());
+      expect(nonAdmin.response.status).toBe(403);
+      const missing = await api('/instances/quote-missing-instance/purchase-quote', builder.session());
+      expect(missing.response.status).toBe(404);
+      const anon = await api('/instances/quote-refuse-instance/purchase-quote');
+      expect([401, 403]).toContain(anon.response.status);
+      await env.DB.prepare('UPDATE catalog_templates SET stock_quantity = 0 WHERE template_id = ?').bind('quote-refuse-template').run();
+      const soldOut = await api('/instances/quote-refuse-instance/purchase-quote', builder.session());
+      expect(soldOut.response.status).toBe(400);
+    });
+  });
+
   // #453: real-money checkout for a seller who has fully completed Stripe
   // Connect onboarding (#452). This test suite never configures
   // STRIPE_SECRET_KEY (same dev-mode-friendly pattern as RESEND_API_KEY

@@ -446,7 +446,7 @@ export function loadTierScenes(template) {
 // object's own class actually defines (Mesh.prototype.raycast, or the
 // inert Object3D.prototype.raycast for a plain Group), without having to
 // know or store which one that was.
-function setLodChildHitTestable(child, hitTestable) {
+export function setLodChildHitTestable(child, hitTestable) {
   if (hitTestable) delete child.raycast;
   else child.raycast = () => false;
 }

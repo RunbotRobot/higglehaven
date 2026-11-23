@@ -43,10 +43,7 @@
     const statusBtn = document.getElementById('suspensionStatusBtn');
     const statusErr = document.getElementById('suspensionStatusErr');
     const statusResult = document.getElementById('suspensionStatusResult');
-    const userSearchInput = document.getElementById('userSearchInput');
-    const userSearchBtn = document.getElementById('userSearchBtn');
     const userSearchErr = document.getElementById('userSearchErr');
-    const userSearchResultsWrap = document.getElementById('userSearchResultsWrap');
     const userDetailWrap = document.getElementById('userDetailWrap');
     // #3040: admin-initiated NCMEC report record (POST/GET /api/ncmec-reports).
     const ncmecForm = document.getElementById('ncmecReportForm');
@@ -181,61 +178,9 @@
       }
     }
 
-    function renderUserSearchResults(users) {
-      if (!users.length) {
-        userSearchResultsWrap.innerHTML = '<p class="empty">No matching accounts.</p>';
-        return;
-      }
-      // Exactly one unambiguous match -- skip straight to its detail view
-      // instead of making the admin click through a one-row table.
-      if (users.length === 1) {
-        userSearchResultsWrap.innerHTML = '';
-        loadUserDetail(users[0].userId);
-        return;
-      }
-      const rows = users.map((u) => `
-        <tr>
-          <td>${escapeHtml(u.username)}</td>
-          <td>${escapeHtml(u.email)}</td>
-          <td>${escapeHtml(u.trustTier)}</td>
-          <td>${u.hasBuilderProfile ? 'Builder' : ''}${u.hasBuilderProfile && u.hasSellerProfile ? ', ' : ''}${u.hasSellerProfile ? 'Seller' : ''}${(!u.hasBuilderProfile && !u.hasSellerProfile) ? '—' : ''}</td>
-          <td>${u.hasActiveSuspension ? 'Suspended' : ''}</td>
-          <td><button class="secondary view-user-btn" data-user-id="${escapeHtml(u.userId)}">View</button></td>
-        </tr>
-      `).join('');
-      userSearchResultsWrap.innerHTML = `
-        <table>
-          <thead><tr><th>Username</th><th>Email</th><th>Trust tier</th><th>Profiles</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-      userSearchResultsWrap.querySelectorAll('.view-user-btn').forEach((btn) => {
-        btn.addEventListener('click', () => loadUserDetail(btn.dataset.userId));
-      });
-    }
-
-    async function searchUsers() {
-      clearMsg(userSearchErr);
-      const q = userSearchInput.value.trim();
-      if (!q) { showErr(userSearchErr, 'Enter a username or email to search for.'); return; }
-      userDetailWrap.innerHTML = '';
-      userSearchBtn.disabled = true;
-      userSearchResultsWrap.innerHTML = '<p class="empty">Searching…</p>';
-      try {
-        const body = await fetchJson('/api/auth/admin-user-search?q=' + encodeURIComponent(q));
-        renderUserSearchResults(body.users || []);
-      } catch (error) {
-        showErr(userSearchErr, error.message);
-        userSearchResultsWrap.innerHTML = '';
-      } finally {
-        userSearchBtn.disabled = false;
-      }
-    }
-
-    userSearchBtn.addEventListener('click', searchUsers);
-    userSearchInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); searchUsers(); }
-    });
+    // #4060: the users table (admin-dashboard-8.js) opens a row's detail through this.
+    window.__adminLoadUserDetail = loadUserDetail;
+    if (window.__adminUsersTableInit) window.__adminUsersTableInit();
 
     suspendForm.addEventListener('submit', async (e) => {
       e.preventDefault();

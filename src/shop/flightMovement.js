@@ -104,6 +104,10 @@ import {
 // self-contained leaf with no main.js/presenceAndContent.js legacy to
 // respect -- see that module's own header comment.
 import { pollNearbyChatIfNeeded } from './nearbyChat.js';
+import './nearbyLeaf.js'; // #3824: registers Shop's Nearby petal
+import { registerViewTurner } from './viewTurn.js';
+import { easedPitch, shouldLevelOnLanding, LANDING_LEVEL_PITCH, LANDING_LEVEL_EASE_S } from './landingLevel.js';
+import { yawFacing } from './nearbyProducts.js';
 import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
@@ -336,6 +340,9 @@ let shopYaw = 0;
 // beginShopStanding can reset to it without a second copy of the number.
 const SHOP_STANDING_PITCH = -0.12;
 let shopPitch = SHOP_STANDING_PITCH;
+// #4044: the ease that brings the view up to level after a landing (src/shop/landingLevel.js). null when
+// none is running; otherwise how long it has run and the pitch it started from.
+let shopLandingLevel = null;
 // The avatar's own facing (docs/SPEC.md §2) — deliberately separate from
 // shopYaw (the camera's look direction, right-stick-driven): the left
 // stick turns the avatar to face wherever it's actually walking, while the
@@ -941,6 +948,26 @@ function stopShopSpawnRotation() {
 }
 
 
+// #4044 (part of #3539): the Nearby leaf turns the view to face a product. Only ever a turn: the avatar's
+// position is never touched. Ends the hands-off spawn orbit first (the orbit uses the yaw as its angle),
+// the same as any other navigation input does.
+registerViewTurner((x, y) => {
+  if (!shopActive) return;
+  const dx = x - shopAvatarPosition.x;
+  const dy = y - shopAvatarPosition.y;
+  if (Math.hypot(dx, dy) < 1e-3) return;
+  stopShopSpawnRotationForNavigation();
+  shopYaw = yawFacing(dx, dy);
+  setShopAvatarFacing(shopYaw);
+  // #4044: on the ground the product is also brought into frame (its card sits on it), by bringing a view
+  // that looks down up to level. In flight the tap stays as it was: the pitch there is the climb.
+  if (shopFlightState === 'grounded' && shopPitch < LANDING_LEVEL_PITCH) {
+    shopPitch = LANDING_LEVEL_PITCH;
+    shopLandingLevel = null;
+  }
+  applyShopCameraOrientation();
+});
+
 // #1176: the navigation-input-specific wrapper around stopShopSpawnRotation
 // above — also starts the "Go to last location" button's own 5-second
 // auto-hide countdown, but only the first time (shopLastLocationHideTimerS
@@ -1184,10 +1211,12 @@ function updateShopFlight(dt) {
       // gated on movement input, so an unclamped landing would have stayed
       // outside the wall until the player's next move).
       shopFlightState = 'grounded';
+      // #4044: the view still points at the ground after the climb down; ease it up to level (pitch only).
+      if (shouldLevelOnLanding(shopPitch)) shopLandingLevel = { elapsedS: 0, fromPitch: shopPitch };
     }
   } else if (shopFlightState === 'flying') {
     // #3769: the view steers height. Looking up and moving forward climbs,
-    // looking down descends, moving back reverses, a level view or no move
+    // looking down descends (whichever way the avatar moves: #4068), a level view or no move
     // gesture holds height. The rate is the flight speed the horizontal move
     // uses, scaled by flightPitch.js's dead zone and ramp.
     if (!shopGoToLastLocationPhase && shopMoveY !== 0) {
@@ -1736,6 +1765,18 @@ export function updateShopMovementCore(now) {
     );
     applyShopCameraOrientation();
   }
+  // #4044: the landing ease. A held look control wins (the person's hand is on the view), and leaving the
+  // ground ends it. It only ever changes the pitch.
+  if (shopLandingLevel) {
+    if (shopLookX !== 0 || shopLookY !== 0 || shopFlightState !== 'grounded' || shopGoToLastLocationPhase) {
+      shopLandingLevel = null;
+    } else {
+      shopLandingLevel.elapsedS += dt;
+      shopPitch = easedPitch(shopLandingLevel.fromPitch, LANDING_LEVEL_PITCH, shopLandingLevel.elapsedS, LANDING_LEVEL_EASE_S);
+      applyShopCameraOrientation();
+      if (shopLandingLevel.elapsedS >= LANDING_LEVEL_EASE_S) shopLandingLevel = null;
+    }
+  }
 
   updateShopFlight(dt);
   const airborne = shopFlightState !== 'grounded';
@@ -1938,6 +1979,7 @@ export function updateShopMovementCore(now) {
   // read it, and the camera-lock-to-facing setting needs to confirm it
   // actually moves (or doesn't) relative to shopAvatarFacing.
   window.__shopCameraYaw = shopYaw;
+  window.__shopCameraPitch = shopPitch; // added for #4044 -- the landing ease: lets a test read the pitch after a landing
   // #1586: same reasoning as window.__shopAvatarOrientation just above —
   // the AFK sprite's own opacity is otherwise only checkable by eye.
   window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;

@@ -494,6 +494,19 @@ describe('redoing cracked tiers (#3527)', () => {
     }
   });
 
+  it('redoes a tier that has no holes but no longer reads as the model (#4062), and leaves it alone when it does', async () => {
+    const world = await makeTierWorld([{ name: 'net', fullHoles: 0, midHoles: 0, farHoles: 0 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const base = world.io(cleanTiers);
+    const calls = [];
+    const faithful = await runRedoCracked({ candidates, io: { ...base, fidelity: async (full, tier, name) => { calls.push(name); return true; } } });
+    expect(faithful).toMatchObject({ sound: 1, redone: 0 });
+    expect(calls.sort()).toEqual(['far', 'mid']);
+    const unfaithful = await runRedoCracked({ candidates, io: { ...base, fidelity: async (full, tier, name) => name !== 'far' } });
+    expect(unfaithful).toMatchObject({ sound: 0, redone: 1, failed: [] });
+    expect(world.rows[0].model_far_url).not.toBe(world.models.net.far);
+  });
+
   it('only swaps rows that still point at the old tiers, so a model replaced meanwhile is never overwritten', async () => {
     const world = await makeTierWorld([{ name: 'toilet', midHoles: 500 }]);
     const { candidates } = groupCrackCandidates(world.candidateRows());

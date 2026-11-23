@@ -88,7 +88,7 @@ line arriving, a voice peer in the list. On the live site `<name>` must be a fle
 
 **A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
 and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;
-`--throttle` is the slow-4G one for waits. Which figures to trust: the cloud machine's script side is
+`--throttle` is the slow-4G one for waits. `--server-timing` asks the worker, for the routes you name with `--timing`, how many D1 trips each made and how long they took (the report's `serverTimings`, medians), which separates the database from a busy page (#3464). Which figures to trust: the cloud machine's script side is
 far faster than a phone's and its GPU side (software GL) far slower, so under `--phone` trust long
 tasks, the longest script task and request timings; do not trust frame time or anything GPU-bound;
 for the GPU use triangles and draw calls per frame (`live-frame-cost.mjs`), which hold on any
@@ -101,8 +101,13 @@ seller with a claimed lándlet (twelve items, a bundle, a published version), th
 sold out), an order not yet rated, a notice and a friend request waiting; `--name neighbor` is the
 other account. It refuses any address but this machine, is safe to run again (it adds nothing the
 second time; sign-in is limited to ten tries per fifteen minutes), makes `looker` an admin locally
-(the no-card purchase path needs it), and seeds no assistant thread (that needs an ID-verified
-account). `e2e/seed-local-world.test.mjs` runs it so it cannot rot.
+(the no-card purchase path needs it), and (#4043) sets both accounts ID-verified directly in the local
+D1 (`wrangler d1 execute --local`, no provider call; direct messages, voice between friends and the
+assistants are gated on it), gives `looker` an avatar to own besides the default ("Moss Walker", bought
+from `neighbor`) and a thread with one question and its answer (the question goes in through the real
+route and the answer is written into the table, since no assistant is on shift locally). Run
+`npm run build` before `wrangler dev`: it serves the last build, and an old one shows a look main has
+since changed. `e2e/seed-local-world.test.mjs` runs it so it cannot rot.
 
 **After a change of yours deploys, look at it on the live site at phone size
 before calling it done, and say in the PR or issue what you saw.**
@@ -238,6 +243,28 @@ colliding with each other.
 If you don't already know your own session's name: call
 `mcp__Claude_Code_Remote__get_session` with no `session_id` (it
 describes the calling session) and read its `title`.
+
+**GitHub is reached with `gh api` now (2026-11-20).** The built-in GitHub
+tools this file names elsewhere (`issue_read`, `issue_write`, `list_issues`,
+`sub_issue_write`, `list_pull_requests`, and the ones for opening and merging
+a PR) were retired for the whole account that day; only
+`subscribe_pr_activity` is left. Wherever this file names one, use the REST
+call from the repo root instead. `gh pr`, `gh issue` and anything GraphQL are
+refused. With `R=repos/RunbotRobot/higglehaven`:
+
+```
+gh api $R/issues/N                                   # read (assignees, sub_issues_summary)
+gh api -X POST $R/issues/N/assignees -f 'assignees[]=RunbotRobot'   # claim, then re-read
+gh api -X POST $R/issues/N/comments -f body='...'    # comment
+gh api -X POST $R/issues -f title='...' -f body='...'            # file an issue
+gh api -X POST $R/pulls -f title='...' -f head=<branch> -f base=main -f body='...'
+gh api $R/commits/<sha>/check-runs                   # CI on a commit
+gh api -X PUT $R/pulls/N/merge -f merge_method=squash
+```
+
+Every session shares the one GitHub login, so `assignees` still cannot tell
+sessions apart: the Control Room card stays the claim that names you. A tool
+that is gone is not a reason to stop or to ask.
 
 The cycle, every time you're asked to make a change:
 
@@ -452,6 +479,29 @@ most likely to come up again.
   see if it passes this time." A second Ultra subscription is planned
   for roughly December 2026; the GitHub-concurrency question is
   revisited then, not before.
+
+- **Usage is paced to last the whole week; the model is not changed to
+  use up allowance.** (2026-11-19.) Half way through a week meant to use
+  double the allowance the fleet had used 54%, and at its speed would
+  still have run out two days before the reset, stopping the assistants
+  in the world and higglehaven1 with it. Asked whether to slow down or
+  run into the limit, the owner: "Yes, please try to pace our usage to
+  last up until the Monday reset... I'm not inclined to change the model
+  for the sake of reaching usage, unless we decide it's the right call
+  regardless of usage pacing." So higglehaven1 steers how many sessions
+  work so that the allowance reaches the reset, from the owner's usage
+  readings (it cannot see the percentage itself). Running out early is a
+  failure now that people in the world depend on the same allowance;
+  leaving a large share unused is one too. A model is chosen for what the
+  work needs, never to burn or to save allowance. This narrows the
+  decision above and the older note under "Continuing without a prompt"
+  that the owner would rather the fleet run into the limit than leave
+  capacity unused: close to the limit, yes; out before the reset, no.
+  From the same note: "It seems like my logic of the design work being
+  less test-intensive doesn't necessarily hold up. So while I do want to
+  continue on design work, we don't need to make it an exclusive theme
+  for either this or next week." A theme for a week is a lean, not a
+  fence.
 
 - **Owner items are surfaced in conversation, one at a time — never as
   an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
@@ -1207,6 +1257,56 @@ most likely to come up again.
   because an upload shown to every visitor needs the reporting and removal
   every other upload has.)
 
+  **The flower is one plant, whole and attached (2026-11-20, #3754, #4012).**
+  Three notes after a few days of use. The head: "I like option C for the
+  bud" (the solid green bud with the logo in cream; #3754). An open menu:
+  "I want the shop/build/sell/menu petals to stay visible when the menu
+  leaves appear. This maintains a fully expanded flower, instead of only
+  ever showing petals or leaves." And folding: "When the menu collapses in
+  the mockup, the leaves are still present after the stem has already gone.
+  Let's fine-tune the timing so that there's never a leaf floating in the air
+  with no stem." So opening adds to the flower and never swaps one part for
+  another: with a stem open, the head, the four petals, the stem and its
+  leaves are all on screen. And it folds in the reverse order it opened: a
+  leaf goes back into the stem before the stem draws up, and at no frame is
+  any part visible without the part it grows from. The principle, for
+  anything animated: a thing made of attached parts keeps them attached in
+  every frame, and a transition is checked as stills (`slow:0.1` and a
+  burst), not at full speed. (higglehaven1's reading, told to the owner:
+  still one stem at a time; with a stem open, another petal swaps to its
+  stem or takes you to its mode.)
+
+  **The flower has three menus and one row (2026-11-21, #4025, #4026, #4027).**
+  After a day with the whole flower: "Let's get rid of the Menu petal.
+  Clicking the bud will open the three petals with the three modes, and will
+  simultaneously expand the leaves. The menu that is visible should be
+  specific to the mode... This seems inconsistent with my previous statement
+  that I don't want menus to change what they show based on context. The
+  difference here is that these will be three separate submenus, not a single
+  menu that changes dynamically. Friends and My Purchases go in Shop." For
+  what belongs to no mode (the account, Notices, Settings, Help): "I think
+  these should expand to a row of icons on the top when the bud is pressed.
+  Creating three distinct submenus will enable us to have more buttons
+  available in each mode." On the stem: "too thin and too dark. It appears
+  black, and I'd like it to appear some shade of green. It should also connect
+  horizontally to the bud, not offset to the right... the stem can curve to
+  the left above the leaves and straighten upwards again to go to the bud." On
+  opening: "I want the menu to animate as growing out of the bud. The petals
+  form, then the stem extends down, then the leaves unfurl. We don't want the
+  animation to be long enough to be annoying for practical use, though." This
+  replaces the general-menu petal of 2026-11-18 and its "one of any of the
+  four": there are three petals, one tap on the bud opens everything, and the
+  leaves shown are those of the mode the person is in. The principles: the
+  rule against menus that change is a rule about predictability, so a fixed
+  menu for each place is fine and one menu that reshuffles itself is not; what
+  belongs to no place gets a fixed place of its own, not a share of every
+  menu; a fix made for an audit (the near-black stem of #4024, for contrast)
+  does not get to make a living thing look dead, so the contrast is met
+  another way; and an animation serves use, so it is short, never refuses a
+  tap, and can be interrupted. (higglehaven1's readings, told to the owner:
+  the petal of another mode takes you there; the petal of the mode you are in
+  is only marked; the opening takes about half a second.)
+
 - **A surface opens with its contents in it; an empty one reads as loss.**
   (2026-11-18, #3773.) "When I click the assistant button, the subsequent
   modal opens before the chat conversation has loaded, which initially
@@ -1550,25 +1650,34 @@ These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
 
-**Pace for the week of 2026-11-16: a normal usage week, so half the fleet rests
-(owner, 2026-11-19).** The doubled-usage week did not reach its pace. The owner:
-"Usage is still only at 54% for the week, even though it's now Thursday morning...
-Let's make this be a normal usage week and try again next week." At the fleet's
-speed the weekly allowance would run out on Saturday, two days before it resets,
-and that stops every session on the account, the assistants in the world included.
-Waking sessions less often did not slow them (a session with work goes from one
-merge straight to the next), so until 2026-11-23 21:00Z:
+**Pace for the week of 2026-11-16: usage has to last until the Monday reset, so
+most of the fleet rests (owner, 2026-11-19).** The doubled-usage week did not reach
+its pace, and the owner made it a normal week. At 65% on Thursday evening: "Yes,
+please try to pace our usage to last up until the Monday reset." That leaves 35
+points for about 89 hours, roughly half of what the fleet was still using with eight
+sessions working. Waking sessions less often does not slow them (a session with work
+goes from one merge straight to the next), so until 2026-11-23 21:00Z:
 
-- A session whose number is odd (higglehaven3, 5, 7, 9, 11, 13, 15) finishes and
-  merges what it already holds, releases anything it will not finish (card
-  `queued`, session empty, one line saying what is left), and then claims nothing
-  new. Its check-ins end at once: no queries, no notes.
-- Even-numbered sessions carry on as usual, one task at a time, and they are the
-  ones who take owner feedback and bug-report cards.
+- **Working: higglehaven4 and 6** (two, down from four, since 2026-11-21 12:30Z: the owner read 81% early
+  on Saturday, about four points ahead of the pace that reaches the reset). One task at a time, straight from one card
+  to the next, and they are the ones who take owner feedback and bug-report cards.
+  A card with status `queued` and an empty session is free, whoever wrote its
+  note last: "Released by higglehavenN" means exactly that, and so does a note
+  that lists what is left. (On 2026-11-19 several sessions stood down with "the
+  free cards belong to other sessions" while a dozen such cards had work in them.)
+- **Resting: every other coding session (2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16).**
+  Finish and merge what you already hold, release anything you will not finish
+  (card `queued`, session empty, one line saying what is left), then claim nothing
+  new. Your check-ins end at once: no queries, no notes.
+- The work is not interface-only any more (owner, same note: "while I do want to
+  continue on design work, we don't need to make it an exclusive theme for either
+  this or next week"): a working session takes the first free card whatever its
+  subject.
 - The two queries above apply only to the sessions that are working.
 
-higglehaven1 removes this paragraph when the week resets or if the owner asks for
-full speed. If it is still here after 2026-11-23 21:00Z, ignore it.
+higglehaven1 changes who works as the owner's usage readings come in, and removes
+this paragraph when the week resets. If it is still here after 2026-11-23 21:00Z,
+ignore it.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine

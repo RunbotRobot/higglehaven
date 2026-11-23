@@ -13,6 +13,17 @@ describe('check-leaf-parts (#3942)', () => {
       @media (max-width: 400px) { .c-btn { padding: 8px; border-radius: 99px; } }
       .f input { padding: 2px; border: 1px solid blue; }
     `;
-    expect(looks(css)).toEqual({ buttons: 2, fields: 1 });
+    expect(looks(css)).toEqual({ buttons: 2, fields: 1, rows: 0 });
+  });
+
+  it('counts a list row look once however many row classes share it (#3939)', () => {
+    const css = `
+      .a-row, .b-row { padding: 8px; background: #eee; border-radius: 6px; }
+      .c-row { padding: 4px; background: #ddd; border-radius: 6px; }
+      .c-row-info { padding: 1px; background: #ccc; border-radius: 2px; }
+      .c-row:hover { padding: 9px; background: #000; border-radius: 1px; }
+      .d-row { display: flex; }
+    `;
+    expect(looks(css).rows).toBe(2);
   });
 });

@@ -5,7 +5,7 @@
 // frozen published snapshot, not the builder's own further live edits —
 // plus Set Live (repoint without touching the editor) and Restore to
 // Editor (replace the live draft with an older snapshot).
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal, openEarlierVersions } from './helpers.mjs';
 
 const LABEL = 'Publish Suite Tester';
 
@@ -102,6 +102,7 @@ const activeVersionIdAfterSecondPublish = landletsAfterSecondPublish.find((l) =>
 
 // Set Live on the OLDER (Tree-only) version — should repoint activeVersionId
 // without touching the live draft (still 2 items).
+await openEarlierVersions(page); // #4019: only the newest version is on the first screen
 const olderRow = page.locator('.version-row').last(); // oldest listed last (newest-first)
 const olderRowSetLiveEnabled = await olderRow.locator('button', { hasText: 'Set live' }).isEnabled();
 await olderRow.locator('button', { hasText: 'Set live' }).click();
@@ -123,7 +124,8 @@ console.log('live draft still has 2 items after Set Live (editor untouched, shou
 // Restore to editor on that same older (Tree-only) version — this SHOULD
 // replace the live draft, unlike Set Live.
 await page.click('.settings-tab-btn[data-section="build"]'); // re-render after the reload-triggering click below is safer against a stale row
-await page.waitForTimeout(300);
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 20000 });
+await openEarlierVersions(page); // #4019: the tab was rebuilt, so the Earlier versions row is closed again
 const treeOnlyRow = page.locator('.version-row').filter({ hasText: '1 item' }).last();
 await treeOnlyRow.locator('button', { hasText: 'Restore to editor' }).click();
 await acceptConfirmModal(page); // #3278: in-app confirm modal

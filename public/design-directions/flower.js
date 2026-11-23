@@ -1,7 +1,7 @@
-// The flower (#3764, with the head options of #3754): a mock-up page, not the app. A phone screen drawn at
-// its real size; tap the head for four petals, the menu petal for its stem, your own mode's petal for that
-// mode's stem, another mode's petal to watch it light while the place "loads" and the flower fold. Nothing
-// here talks to the server. Classic script (the site's CSP allows scripts from this origin only).
+// The flower (#3764, head chosen in #3754): a mock-up page, not the app. A phone screen drawn at
+// its real size; tap the head and everything opens together (#4025): three petals, the stem of the place you
+// are in and the row of icons beside the head. Another place's petal lights while the place "loads"; the flower
+// stays out and shows that place's stem. Nothing here talks to the server. Classic script (the site's CSP allows scripts from this origin only).
 (function () {
   'use strict';
   var stage = document.getElementById('stage');
@@ -31,20 +31,32 @@
   Object.keys(stems).forEach(function (name) {
     var n = stems[name].querySelectorAll('.leaf').length;
     var path = stems[name].querySelector('path');
-    path.setAttribute('pathLength', '1');
-    path.setAttribute('d', 'M44 66 C 44 104, 112 84, 112 126 L 112 ' + (126 + n * PITCH));
+    // #4026: green, with a pale edge under it (a second path), from the head's own centre line, down, across to the
+    // leaves' line above the first leaf and straight down: one curve, no corner.
+    var d = 'M44 44 L 44 76 C 44 104, 112 84, 112 126 L 112 ' + (126 + n * PITCH);
+    var edge = path.cloneNode(false);
+    edge.setAttribute('class', 'stem-edge');
+    path.setAttribute('class', 'stem-core');
+    path.parentNode.insertBefore(edge, path);
+    [edge, path].forEach(function (p2) { p2.setAttribute('pathLength', '1'); p2.setAttribute('d', d); });
   });
 
-  function showStem(name, on) {
+  // #4012: folding runs in the reverse order of unfolding, and a stem that swaps for another waits for the
+  // first to fold (about .25 s: leaves .12 s, then the stem .12 s), so no leaf is ever drawn without the stem it
+  // grows from. #4027: opening is three overlapping beats in half a second.
+  var FOLD_MS = 260;
+  function showStem(name, on, after) {
     var el = stems[name];
     if (!el) return;
     window.clearTimeout(hideTimers[name]);
     if (on) {
       el.hidden = false;
-      window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { el.classList.add('on'); }); });
+      hideTimers[name] = window.setTimeout(function () {
+        window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { el.classList.add('on'); }); });
+      }, after ? FOLD_MS : 0);
     } else {
       el.classList.remove('on');
-      hideTimers[name] = window.setTimeout(function () { el.hidden = true; }, 520);
+      hideTimers[name] = window.setTimeout(function () { el.hidden = true; }, FOLD_MS);
     }
   }
 
@@ -57,9 +69,15 @@
     petals.forEach(function (p) {
       p.classList.toggle('here', p.dataset.petal === state.mode);
       p.classList.toggle('lit', p.dataset.petal === state.lit);
+      // #4012: the petal of the place whose stem is open stays marked.
+      p.classList.toggle('open', state.open !== 'closed' && p.dataset.petal === state.mode);
     });
-    var shown = state.open === 'menu' || state.open === 'help' ? 'menu' : state.open === 'mode' ? state.mode : null;
-    Object.keys(stems).forEach(function (name) { showStem(name, name === shown); });
+    var shown = state.open === 'closed' ? null : state.mode;
+    var wasShown = Object.keys(stems).filter(function (name) { return stems[name].classList.contains('on'); });
+    var swapping = shown !== null && wasShown.length > 0 && wasShown.indexOf(shown) === -1;
+    // A stem was open and the flower is closing: the petals wait for it to fold (data-fold, flower.css).
+    stage.dataset.fold = shown === null && wasShown.length > 0 ? 'staged' : 'plain';
+    Object.keys(stems).forEach(function (name) { showStem(name, name === shown, swapping); });
     helpEl.hidden = state.open !== 'help';
     Array.prototype.forEach.call(document.querySelectorAll('#modes .pick'), function (b) { b.setAttribute('aria-pressed', b.dataset.mode === state.mode ? 'true' : 'false'); });
     showCover();
@@ -102,15 +120,14 @@
 
   head.addEventListener('click', function () {
     if (state.loading) return;
-    setOpen(state.open === 'closed' ? 'petals' : 'closed');
+    setOpen(state.open === 'closed' ? 'open' : 'closed');
   });
 
   petals.forEach(function (p) {
     p.addEventListener('click', function () {
       if (state.loading) return;
       var which = p.dataset.petal;
-      if (which === 'menu') { setOpen('menu'); return; }
-      if (which === state.mode) { setOpen('mode'); return; }
+      if (which === state.mode) return; // the place you are in: its stem is already open, the petal only marks where you are
       // Another place: the petal lights, the screen "loads" with the flower held open, then it folds.
       state.lit = which;
       state.loading = true;
@@ -120,15 +137,22 @@
         state.mode = which;
         state.lit = null;
         state.loading = false;
-        state.open = 'closed';
+        state.open = 'open'; // the flower stays out and shows the new place's stem
         render();
       }, 1700);
     });
   });
 
+  Array.prototype.forEach.call(document.querySelectorAll('.top'), function (b) {
+    b.addEventListener('click', function () {
+      if (state.loading) return;
+      if (b.dataset.help) { setOpen(state.open === 'help' ? 'open' : 'help'); return; }
+      b.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }], { duration: 220 });
+    });
+  });
+
   Array.prototype.forEach.call(document.querySelectorAll('.leaf'), function (leaf) {
     leaf.addEventListener('click', function () {
-      if (leaf.dataset.help) { setOpen('help'); return; }
       leaf.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }], { duration: 220 });
     });
   });
@@ -137,20 +161,12 @@
     b.addEventListener('click', function () {
       if (state.loading) return;
       var j = b.dataset.jump;
-      setOpen(j === 'closed' ? 'closed' : j === 'petals' ? 'petals' : j === 'menu' ? 'menu' : j === 'mode' ? 'mode' : 'help');
+      setOpen(j === 'closed' ? 'closed' : j === 'open' ? 'open' : 'help');
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll('#modes .pick'), function (b) {
-    b.addEventListener('click', function () { if (state.loading) return; state.mode = b.dataset.mode; if (state.open === 'mode' || state.open === 'help') state.open = state.open === 'help' ? 'help' : 'mode'; render(); });
+    b.addEventListener('click', function () { if (state.loading) return; state.mode = b.dataset.mode; render(); });
   });
-  Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (b) {
-    b.addEventListener('click', function () {
-      Array.prototype.forEach.call(document.querySelectorAll('.head-art'), function (a) { a.hidden = a.dataset.head !== b.dataset.pick; });
-      Array.prototype.forEach.call(document.querySelectorAll('#head-picks .pick'), function (o) { o.setAttribute('aria-pressed', o === b ? 'true' : 'false'); });
-      showCover();
-    });
-  });
-
   window.addEventListener('resize', fitStage);
   fitStage();
   render();

@@ -10,7 +10,7 @@
 //   - its text can be selected;
 //   - "More" opens Rate this product and Return policy, and Return policy opens
 //     and closes without folding the card;
-//   - Buy asks for confirmation naming the price; cancelling starts no checkout
+//   - Buy asks the server first (#3946); a refusal is said at once, with no confirm and no sheet
 //     and leaves the card open (the real checkout itself is covered by
 //     purchase-checkout-real-stripe.test.mjs, which runs with Stripe keys);
 //   - tapping the neighbouring product moves the card to it, and an out-of-stock
@@ -236,14 +236,18 @@ await page.click('#refund-policy-close-btn');
 await page.waitForFunction(() => !document.getElementById('refund-policy-modal').classList.contains('visible'), null, { timeout: 5000 });
 check(await cardOpen(), 'closing the Return policy leaves the card open');
 
-// Buy asks first, naming the price; cancelling starts no checkout.
+// #3946: Buy asks the server first what the purchase will do. This product's seller has no real
+// payments set up and the shopper is not an admin, so the answer is a refusal: the reason comes up at
+// once in the notice, with no "Buy this item?" confirm and no payment sheet, and the card stays open.
+// (The refused quote is a 403 the browser logs; it is the expected answer here.)
 await page.click('#product-card-buy-btn');
-await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
-check(/\$5\.00/.test(await page.textContent('#confirm-modal-message')), 'Buy asks for confirmation, naming the price');
-await page.click('#confirm-modal-cancel-btn');
-await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
-check((await page.locator('#checkout-modal.visible').count()) === 0, 'cancelling the confirmation starts no checkout');
-check(await cardOpen(), 'cancelling the confirmation leaves the card open');
+await page.waitForSelector('#notice-modal.visible', { timeout: 10000 });
+check(/not yet available for purchase/.test(await page.textContent('#notice-modal-message')), 'Buy says why it cannot go ahead, before any confirmation');
+check((await page.locator('#confirm-modal.visible').count()) === 0, 'a refused purchase asks for no confirmation first');
+check((await page.locator('#checkout-modal.visible').count()) === 0, 'a refused purchase opens no payment sheet');
+await page.click('#notice-modal-close-btn');
+await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+check(await cardOpen(), 'closing the refusal leaves the card open');
 
 // Escape folds the card (and the tapped product's highlight goes with it).
 await page.keyboard.press('Escape');
@@ -343,4 +347,4 @@ await page.waitForTimeout(300);
 check(!(await cardOpen()), 'Escape folds the card opened by key');
 check(!(await focusInCard()), 'and focus is no longer inside it');
 
-await finish(browser, { pass: pass && errors.length === 0, label: '#3651: a tapped product\'s card blooms beside it, follows it, offers Buy only when it can, and folds away', errors });
+await finish(browser, { pass: pass && errors.every((e) => /status of 403/.test(String(e))), label: '#3651: a tapped product\'s card blooms beside it, follows it, offers Buy only when it can, and folds away', errors });

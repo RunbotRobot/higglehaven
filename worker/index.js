@@ -85,6 +85,7 @@ import {
 } from './lib/world-generation.js';
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
+import { handleAdminUsers } from './lib/admin-users-table.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -104,6 +105,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // that module's own header comment for what deliberately stayed here
 // instead (the lifecycle actions and sold-out-marker/self-dealing-review
 // siblings this leaf doesn't own).
+import { createD1Timing } from './lib/d1-timing.js';
 import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from './lib/purchase-creation.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
@@ -149,7 +151,7 @@ import {
 import {
   handleSignup, handleLogin, handleLogout, handleDeleteAccount, handleChangePassword, handleMe,
   handleVerifyEmail, handleRequestPasswordReset, handleResetPassword, handleResendVerification,
-  handleChangeEmail, handleAgeAttest, handleLoadingTips,
+  handleChangeEmail, handleAgeAttest, handleLoadingTips, handleFirstHints,
 } from './lib/auth-routes.js';
 // #2537: presence/friendships/direct-messages/notifications route handlers,
 // extracted into worker/lib/social.js -- see that module's own header
@@ -450,6 +452,16 @@ async function routeRequest(request, env, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
+    // #3464: opt-in only. A request that sends `x-server-timing: 1` is answered with how many D1
+    // trips it made and how long they took (Server-Timing); no one else gets a new header.
+    if (env.DB && request.headers.get('x-server-timing') === '1') {
+      const timing = createD1Timing();
+      const response = withSecurityHeaders(await routeRequest(request, { ...env, DB: timing.wrap(env.DB) }, ctx));
+      if (response.status === 101) return response;
+      const headers = new Headers(response.headers);
+      headers.set('server-timing', timing.header());
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }
     return withSecurityHeaders(await routeRequest(request, env, ctx));
   },
 
@@ -2830,6 +2842,8 @@ export function userFromRow(row) {
     taxFormCompletedAt: row.tax_form_completed_at,
     // #3763: null until the person chooses; true means the opening-screen tips are off.
     loadingTipsOff: row.loading_tips_off === null || row.loading_tips_off === undefined ? null : row.loading_tips_off === 1,
+    // #3657: true once the person has been through the first-visit hints (walk, look, fly).
+    firstHintsDone: row.first_hints_done === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3173,6 +3187,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-search') {
     return handleAdminUserSearch(request, db, url);
   }
+  // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
+    return handleAdminUsers(request, db);
+  }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-detail') {
     return handleAdminUserDetail(request, db, url);
   }
@@ -3190,6 +3208,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'PUT' && route.length === 2 && route[1] === 'loading-tips') {
     return handleLoadingTips(request, db);
+  }
+  if (request.method === 'PUT' && route.length === 2 && route[1] === 'first-hints') {
+    return handleFirstHints(request, db);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-verification-session') {
     return handleDiditVerificationSession(request, env, db);

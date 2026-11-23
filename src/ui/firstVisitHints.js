@@ -53,11 +53,25 @@ export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRS
   };
 }
 
+// #3657: an account that has been through the hints is not taught again on a new device. Copies
+// the account's "done" onto this device (never the other way round: an account with no opinion
+// leaves the device as it is), the same shape as adoptAccountLoadingTips.
+export function adoptAccountFirstHints(user, storage) {
+  if (!user || user.firstHintsDone !== true) return;
+  try {
+    (storage || localStorage).setItem(FIRST_HINTS_KEY, '1');
+  } catch { /* the hints may show again on this device; harmless */ }
+}
+
 function storageDone() {
   try { return localStorage.getItem(FIRST_HINTS_KEY) === '1'; } catch { return false; }
 }
 function storageMarkDone() {
   try { localStorage.setItem(FIRST_HINTS_KEY, '1'); } catch { /* the hints may show again; harmless */ }
+  // #3657: tell the account too, so another device does not replay them. Best effort (a visitor
+  // who is not signed in gets a 401 and the device alone remembers); loaded on demand so this
+  // module's unit test does not pull the API client in.
+  import('../api.js').then((api) => api.saveFirstHintsDone()).catch(() => {});
 }
 
 let el = null;

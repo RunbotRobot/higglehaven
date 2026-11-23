@@ -28,8 +28,7 @@ check(!(await shown('#add-item-btn')), 'Add item is not drawn over the world whi
 // Open the bud: Add item is a petal, with Shop and Sell beside the account rows.
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
-// #3760: the bud opens on the general menu; Add item is in Build's own menu, one tap on the Build petal away.
-check(!(await shown('#add-item-btn')), 'Add item is not in the general menu');
+// #4025: the bud opens on Build's own menu, so Add item is there at once.
 await openBudMenuOf(page, 'build');
 check(await shown('#add-item-btn'), 'Add item is a petal of the open bud');
 check((await page.textContent('#add-item-btn')).trim() === 'Add item', 'its words are "Add item"');

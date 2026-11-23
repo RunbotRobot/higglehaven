@@ -7,7 +7,7 @@
 // hook convention this codebase already uses for otherwise-unreachable 3D
 // scene state, e.g. window.__testProductScreenPositions), not DOM/pixel
 // inspection.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Low Stock Highlight Tester';
 const MATCHING_INSTANCE_ID = 'low-stock-highlight-matching-instance';
@@ -83,6 +83,7 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page); // #4019: Low stock is in the folded "Profile, lándlet cap and stock" row
 await page.waitForSelector('.low-stock-list', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelectorAll('.low-stock-row').length >= 2, undefined, { timeout: 10000 });
 
@@ -110,6 +111,7 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page); // #4019: Low stock is in the folded "Profile, lándlet cap and stock" row
 await page.waitForSelector('.low-stock-list', { timeout: 10000 });
 const reopenedQtyInput = page.locator('.low-stock-filter-input').first();
 const restoredValue = await reopenedQtyInput.inputValue();

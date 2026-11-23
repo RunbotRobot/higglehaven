@@ -16,8 +16,9 @@
 // --database <name>, --bucket <name>, --persist-to <dir> (with --local: use that
 // wrangler state directory instead of the default one).
 //
-// --redo-cracked (#3527): instead of products with no tiers, look at products
-// that HAVE them. Tiers made before #3528 can have holes along the model's UV
+// --redo-cracked (#3527, #4062): instead of products with no tiers, look at products
+// that HAVE them. A tier is also redone when it no longer reads as the model (its silhouette from the
+// six axes, src/tierFidelity.js), which is how the owner's brick wall turned into a net. Tiers made before #3528 can have holes along the model's UV
 // and normal seams; this counts the hole edges of each stored tier and of the
 // full model, and for a product whose tier has more it makes both tiers again
 // with the current code and swaps them in (only on rows still pointing at the
@@ -44,6 +45,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { glbBatches } from './glb-batches-lib.mjs';
+import { silhouetteFidelity, isFaithful } from '../src/tierFidelity.js';
 import {
   CANDIDATES_SQL, CRACKED_CANDIDATES_SQL, GLB_CONTENT_TYPE, buildRecordStatements, buildRecordedCountStatement, buildReplaceStatements, formatRedoSummary,
   formatSummary, groupCandidates, groupCrackCandidates, parseArgs, runBackfill, runRedoCracked,
@@ -135,6 +138,12 @@ async function main() {
     async holeEdges(bytes) {
       const target = await pageForGeneration();
       return target.evaluate((base64) => window.countHoleEdges(base64), Buffer.from(bytes).toString('base64'));
+    },
+    // #4062: pure maths on the .glb triangles (no browser needed), the same check the generator applies.
+    async fidelity(fullBytes, tierBytes, tier) {
+      const full = glbBatches(Buffer.from(fullBytes));
+      const parsed = glbBatches(Buffer.from(tierBytes));
+      return isFaithful(silhouetteFidelity(full.batches, parsed.batches), tier);
     },
     async replaceTiers(modelUrl, oldTiers, urls) {
       for (const statement of buildReplaceStatements(modelUrl, oldTiers, urls)) runSql(statement);

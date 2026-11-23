@@ -10,7 +10,7 @@
 // but delays *delivering* that response to the page until after Publish's
 // own, faster round trip has already rendered — the exact reordering the
 // issue describes.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, openEarlierVersions } from './helpers.mjs';
 
 const LABEL = 'Version History Race Tester';
 
@@ -102,6 +102,7 @@ await page.route(`**/api/landlets/${myLandlet.landletId}`, async (route) => {
 
 // Click "Set live" on the older (version 1) row — fires activateLandletVersion,
 // then a re-render whose GET /api/landlets/:id is the delayed one above.
+await openEarlierVersions(page); // #4019: only the newest version is on the first screen
 const olderRow = page.locator('.version-row').last(); // oldest listed last (newest-first)
 await olderRow.locator('button', { hasText: 'Set live' }).click();
 

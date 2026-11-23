@@ -90,7 +90,7 @@ Four things are built with:
 
 | thing | what it is for | size and shape | how it arrives and leaves | never |
 |---|---|---|---|---|
-| **the head** (the bud) | the only standing piece of interface; carries the higglehaven logo; the door to everything else | `--bud-size` (56px), round, `--shadow-bud`; upper-left corner, always; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes; wears one mark for anything unread and, when something is announced, a word that is itself a door (#3774) | carry a count, a second control, or text that stays after it has been learned |
+| **the head** (the bud) | the only standing piece of interface; carries the higglehaven logo; the door to everything else | `--bud-size` (56px), the solid green bud with the logo in cream (`public/bud-head.svg`, option C, #3754), shadow following its outline (`--filter-head`) with a thin pale edge so it holds on grass; upper-left corner, always | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes; wears one mark for anything unread and, when something is announced, a word that is itself a door (#3774) | carry a count, a second control, or text that stays after it has been learned |
 | **a petal** | where a person is: Shop, Build and Sell, in a half-ring at the head; each is a picture (shop front, hammer, price tag) with its word | at least 44px, `--radius-petal`, pale green; the current mode green with `aria-current`; shadow `--shadow-petal` | grows out of the head when it is tapped (0.24s in all, a few tens of ms apart), stays lit while another mode loads, folds back when that mode's first screen is up | be a thing you open (those are leaves), or sit apart from the head |
 | **a leaf** | a thing you open from the head's menu: You, Notices, Friends, Purchases, Settings, Help; in Build, Add item, Lándlets, Levels, Undo, Tools; in Sell, My products, Add product | an icon with its one word under it, 76px wide, `--radius-leaf`, `--shadow-leaf`; leaves alternate right and left of a stem set 88px in from the edge | the stem grows from the head and the leaves open in turn (about a third of a second in all); the same way back | open on top of another leaf, or leave a leaf without an icon in `src/ui/budIcons.js` |
 | **a card that blooms beside a thing** | a product's name, price and Buy, or the item selected in Build with its actions; where the thing is | `--radius-bloom`, a short stem down to the thing, one yellow petal (`--petal-yellow`) for Buy | scales up out of the thing over `--motion-bloom`; goes when the person walks on | hide the thing it is about |
@@ -111,15 +111,15 @@ away, under Help. Under `prefers-reduced-motion` nothing animates.
 
 Not built yet; do not describe these to a person as if they exist:
 
-- **Four menus, one open at a time** (#3760): a general menu that never changes
-  and each mode's tools under that mode's petal, with a fourth petal for the menu.
-  Today the stem opened by the head holds both the general leaves and the current
-  mode's; the target is in `flower.html`.
 - **One help door** (#3762): a "Help" leaf (a question mark) holding how to move, how higglehaven
   works, the manuals for shopping, building and selling, and the way to an
   assistant.
-- **The head's look** (#3754): five drawings are on `flower.html` for the owner to
-  choose from; until then the head is the pale circle with the logo.
+- **The head's look** (#3754): the owner chose option C on 2026-11-20, the solid
+  green bud with the logo in cream. It is the head in the app (`public/bud-head.svg`),
+  and `flower.html` keeps only that drawing; the pale circle with the square logo tile
+  is retired. Known cost: cream on `#6ca42e` is about 2.7 to 1, a little under the 3 to 1
+  that a graphic wants, and the logo is large and the word "Menu" sits beside it; the
+  unread dot sits on the bud's shoulder, ringed in white.
 - **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
   menu in lettering the builder chooses from a set.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
@@ -283,6 +283,9 @@ Soft shapes: a pill or a circle before a rectangle with corners.
 | `--shadow-petal` | 0 4px 14px, ink at 20% | a petal |
 | `--shadow-leaf` | 0 8px 26px, ink at 20% | a leaf and a card that blooms |
 | `--shadow-breath` | 0 6px 18px ink at 18%, and a 5px white ring at 35% | the bud's breath at its fullest |
+| `--filter-head` | a thin pale edge and a drop shadow 0 4px 8px, ink at 25% | the head's shadow, following the bud's outline (#3754) |
+| `--filter-head-breath` | `--filter-head` with the shadow deeper and a soft white glow | the head's breath at its fullest |
+| `--filter-head-pulse` | `--filter-head` with a spring-green glow | the head's pulse until it is first opened, and while an assistant window opens |
 | `--filter-petals` | drop shadow 0 4px 8px, ink at 20% | one shadow for the ring's three petals together (a filter, so a clip-path cannot cut it off) |
 | `--glow-teach` | 4px spring-green ring at 35% | the "?" icon while the bud teaches |
 | `--glow-pulse` | 8px spring-green ring at 35% | the bud's pulse until it is first opened |
@@ -326,6 +329,8 @@ be selected and there is no Copy button; an icon is a picture of the thing with
 its word beside it; a leaf does not change what it does when it changes how it
 looks. A row, field or button that is not one of these five is either an
 exception named on #3933 or the next thing to bring onto them.
+`npm test` holds the count of distinct row looks at one (`scripts/leaf-parts-baseline.json`,
+#3939): a new `-row` class joins the shared row rule in `src/app.css` and keeps only its layout.
 
 ## Motion
 
@@ -343,6 +348,11 @@ exception named on #3933 or the next thing to bring onto them.
 | `--motion-fold` | 0.2s | a part folding back into its parent: the petals into the head, the note |
 | `--ease-fold` | ease-in | the curve for folding back: it gathers speed as it goes |
 | `--motion-reduced` | 0.15s | the plain fade that replaces growing and folding under `prefers-reduced-motion` (nothing grows, nothing drifts) |
+| `--motion-open-petals` | 0.2s | the petals and the top row forming out of the head (0 to 0.2 s; the petals 0.03 s apart) |
+| `--step-open-row` | 0.03s | the top row growing out of the head with the petals, each item 0.03 s after the one to its left (folding: the last first); each item travels from the head's centre line to its place |
+| `--motion-open-stem` / `--delay-open-stem` | 0.25s / 0.1s | the stem drawing down from the head (0.1 to 0.35 s), overlapping the petals |
+| `--motion-open-leaf` / `--delay-open-leaves` / `--step-open-leaf` | 0.2s / 0.22s / 0.02s | the leaves unfurling from the stem, top to bottom, each 0.02 s after the one above (done by 0.5 s) |
+| `--motion-fold-leaf` | 0.12s | on folding, a leaf going into the stem, then the stem drawing up into the head (each 0.12 s), then the petals and the row (`--motion-fold`); about 0.5 s in all |
 
 The world's own motion (fog that resolves into a thing, drift) lives in the
 scene code, not in CSS; see "Things arrive in the world through fog" in AGENTS.md.
@@ -371,7 +381,7 @@ auction), no blame ("invalid", "you must", "error").
 - **higgles** is lowercase, plural, and starts a sentence only when it has to.
 - A **product** is something for sale. An **item** is a product placed on a lándlet in Build. Do not use
   one for the other.
-- The **menu** opens from the round logo at the top left. A person never reads "bud", "flower",
+- The **menu** opens from the logo bud at the top left. A person never reads "bud", "flower",
   "petal", "leaf", "stem" or "modal": those are our words for how it is built. Name a thing by what it
   opens ("Notices", "Orders") and a window by what is in it. (Checked.)
 - A **username** is a person; a **shop name** is a shop. "Profile" only where a reset or a delete needs
@@ -416,9 +426,8 @@ browser dialog (#3889; the table of what existed is in the first comment on that
 
 - **(a) At the thing it is about.** A card says it about its own product; the Build selection status
   sits under the item it is about; a reversal plays where the thing was (the orb's grey puff).
-  Planned, not built yet: the purchase result, which carries a one-time delivery link and so has to
-  be read and kept, is said on the product card it came from, with the link in selectable text, and
-  stays until the person closes the card.
+  Built: a purchase is confirmed on the product card it came from ("Yours now.", with a burst of
+  confetti at the product, #3945). Not built: the one-time delivery link (see "Stays a notice" below).
 - **(b) In the leaf or the modal, by the control that was used.** `showInlineActionStatus`
   (`src/ui/inlineActionStatus.js`) or the sheet's own status line. A confirmation of something done in
   a leaf ("Report sent") belongs here, not over the world.
@@ -434,11 +443,34 @@ server's reply, never a copy of them in the client. Two words at once do not sta
 latest is worn, and the earlier one shows again when it is read. Remove the old message in the same
 change that moves it ("One model, not a hybrid").
 
-**Still on the old notice modal** (`showNotice`, `src/ui/noticeModal.js`): about two dozen call sites in
-Shop checkout, avatar and animation equipping, nearby chat and voice reports, Build's metadata
-modals and save failures, and the shared picker. They are being moved onto (a) and (b) one mode at a
-time; do not copy the modal for new messages.
+**Stays a notice modal** (`showNotice`, `src/ui/noticeModal.js`). The rule of thumb: a message stays a
+modal only when nothing on the screen could carry it *and* it has to be read before the person goes
+on. That means one of three things: it is not the result of a tap on a control (a sign-in, an emailed
+link), it says work may be lost so it has to wait to be closed ("No silent loss"; a line that the next
+action overwrites is how a loss goes unnoticed), or it is shown once and the person must be able to
+select it. Anything else is (a), (b) or (c), and a new message never copies the modal. The callers
+that stay, checked against the code on 2026-11-20 (#3889):
 
+- **Account suspension** (`src/account/auth.js`): shown once on sign-in, not tied to a tap, no
+  control to sit beside; it can be read again from the Account menu.
+- **"Delivery confirmed" and "Couldn't confirm delivery"** (`src/main.js`): opened from an emailed
+  link by someone who may have no account and no panel, who cannot look the result up afterwards.
+- **"Note already removed"** (`src/main.js`): the result of a tap on a sign in the world; there is no
+  panel row to carry it.
+- **"Blocked"** (`src/blocks.js`, how to unblock): follows a block made from the friends list or a
+  message, and what it says leaves the panel it was made in.
+- **The delivery link after a purchase** (`src/shop/productCheckout.js`, "Purchase complete"): shown
+  only once, so it is a sheet the buyer can select from (#3249); the confirmation itself is on the
+  card.
+- **Build's save and placement failures** (`tellBuilder` in `src/build/scene.js`, fifteen uses):
+  they arrive after the gesture, from a background save, often for several items at once, and say
+  work may not survive a reload or was taken off the builder's lándlet.
+
+Not yet moved, and not decided to stay: the purchase refusal ("Purchase didn't go through",
+`src/shop/productCheckout.js`). It involves money, so moving it is its own careful change. Also
+`tellBuilder`'s few results of a tap (placed or restored counts) could be a line on the toolbar; they
+are rare and name a count, not a control. Equipping an avatar or animation, nearby-chat and voice
+reports, Build's metadata modals and the shared picker have already moved onto (a) and (b).
 ## Never
 
 - A heavy or dark panel, a black or near-black surface, a thick border.
@@ -460,25 +492,28 @@ petals; a leaf runs an action or opens a sheet (a soft sheet by the head, close
 control upper right, one at a time). Everything else is done
 by touching the world. The module is `src/ui/bud.js`:
 
-- **Four menus, one open at a time (#3760, part of #3759).** Around the head are four
-  petals: Shop, Build, Sell and Menu. The bud opens on the general menu (Menu), which is
-  **the same in every mode**: the person, Notices, Friends, My Purchases, Settings and "?".
-  A place's own tools live under that place's petal: Build's (Add item, My Lándlets,
-  Levels, Undo and Redo, Tools, and the lándlet cap line), Sell's (My products, Add a
-  product, Payouts, Storefront, Orders) and Shop's (Chat). A place with nothing in its menu would have a petal that
-  opens no stem. A tap on a place you
-  are not in takes you there (the page reloads and the ring stays out); a tap on the place
-  you are in opens that place's menu in place of the general one; a tap on Menu brings the
-  general one back; the head, Escape or the world closes whichever is open. Every leaf in
-  the stem carries the menu it belongs to (`data-bud-menu`) and is drawn only while that
-  menu is open (`body[data-bud-menu]`, `src/ui/bud.js`: `showMenu`, `currentBudMenu`). The
-  rules are in `src/ui/budMenuRules.js`: the general menu's members are a fixed list, and
-  registering a place's tool into it is refused (an error in development and in tests,
-  logged and skipped in the shipped app), so adding a member to the general menu is a
-  deliberate edit of that list and of this paragraph, never an accident. The ring's four
-  petals sit 30 degrees apart (6, 36, 66 and 96 degrees); the stem starts below them.
+- **Three menus and one row (#4025, part of #3759; replaces #3760's four menus).** One tap on the head
+  opens everything together: the three petals (Shop, Build, Sell), the stem and leaves of the place the
+  person is in, and a row of icons along the top for what belongs to no place: the account, Notices,
+  Settings and Help (an Assistant leaf joins the row while a conversation is minimised). There is no Menu
+  petal. Each place has its own menu and it never changes with circumstance: Shop's (Friends, My purchases,
+  Chat, Nearby: the products within reach, nearest first, each a row that opens its card, for a screen
+  reader on a phone, #3824), Build's (Add item, My Lándlets, Levels, Undo and Redo, Tools, and the
+  lándlet cap line) and Sell's (My products, Add a product, Payouts, Storefront, Orders). The row is the
+  same in every place and is part of the flower: it grows with the petals and folds with them (the
+  leaves fold into the stem, the stem draws up, then the petals and the row close). A tap on a place you
+  are not in takes you there (the page reloads and the ring stays out); a tap on the place you are in
+  only marks where you are, since its menu is already open; the head, Escape or the world folds all of
+  it. At 390 px the row sits to the right of the head, above the lándlet's name card and the compass,
+  and the three do not cover each other. Every leaf in the stem carries the menu it belongs to
+  (`data-bud-menu`) and is drawn only while that menu is open (`body[data-bud-menu]`, which is always the
+  current place's); the row's buttons are in `#bud-row`. The rules are in `src/ui/budMenuRules.js`: the
+  row's members are a fixed list, and registering a place's tool into it is refused (an error in
+  development and in tests, logged and skipped in the shipped app), so adding a member to the row is a
+  deliberate edit of that list and of this paragraph, never an accident. The ring's three petals sit
+  30 degrees apart (6, 36 and 66 degrees); the stem starts below them.
 - `registerBudPetals(mode, [{ id, label, run }])`: one definition per menu
-  (`shop`, `build`, `sell`, and `general` for the general menu's own members). A mode with none has no bud, and keeps its old
+  (`shop`, `build`, `sell`, and `row` for the top row's own members). A mode with none has no bud, and keeps its old
   controls until its own leaf. `body[data-mode]` says which mode is showing and
   `body[data-bud]` is `on` when that mode has the bud.
 - `addBudPetals(mode, [petal])` (#3690): adds petals to a mode without
@@ -525,6 +560,15 @@ by touching the world. The module is `src/ui/bud.js`:
   dimming scrim, so the world shows around it; it stays inside the screen and scrolls
   inside itself. A panel that moves into the bud takes this look, not a full-screen
   dialog.
+- The Build tab of Settings keeps its first screen for what a builder does often (#4019, which
+  reverses the part of #3652 that put the username, lándlet cap and low stock there): Publish and
+  the newest version are on top. Everything else is a closed `<details>` row below, using the
+  same `.settings-account-fold` look: "Earlier versions" (inside Version history, drawn only once
+  there is an earlier one), "Higgles and auctions", and "Profile, lándlet cap and stock"
+  (username with Rename and Reset profile, lándlet cap, low stock, sold-out markers). A row
+  starts closed each time Settings opens and stays as the person left it while that Settings is
+  open (a rename redraws the tab). The Build tab had been 86% of a phone screen; the measured
+  figure after this change is owed from a look at 390x844.
 - The three modes are a petal group of their own, a half-ring at the bud's corner (#3723,
   #3752): Shop, Build and Sell are `.mode-nav-btn` buttons in `#bud-modes`, the same three in
   every mode with the current one green and `aria-current`. Each is a petal: a button turned to
@@ -556,9 +600,20 @@ by touching the world. The module is `src/ui/bud.js`:
   colour; a leaf with no icon there gets a plain leaf and a console warning, so a new leaf cannot
   ship as words only. src/ui/bud.js places the stem by walking the *visible* leaves (never
   :nth-child) and again whenever one is added, shown, hidden or has its text replaced. The stem
-  grows from the top and the leaves open in turn (about a third of a second in all); under
+  grows from the head and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.
+- **The stem is a plant's stem (#4026).** Green (`--brand-green`, the head's own green), 6px with a 2px pale
+  edge on each side (10px in all) and a hairline of ink outside that, one continuous curve with no corner:
+  it leaves the head on the head's own centre line, runs down, curves across to the leaves' line above the
+  first leaf and goes straight down to the middle of the last leaf (`#bud-stem`, an svg that
+  src/ui/bud.js draws from the measured boxes). It is drawn down from the head as the menu opens and drawn
+  back up into it as it folds. The leaves' connectors take the same green and weight. Contrast of the whole
+  stem against the ground behind it (WCAG ratio, `--panel-rgb` edge over each ground): grass 3.4, near-water
+  3.2, upland 2.6, alpine 2.5, sky 1.5 for the edge alone, and the ink hairline lifts the pale grounds
+  further; the green core on its own against the pale edge is 2.5. This is the trade the owner made on
+  2026-11-21 (a stem that reads as green and not black, over the near-black of #4024); it is below the 3:1 of
+  #3818 on upland, alpine and sky, which the pale edge and the hairline carry.
 - The three mode petals of the ring (#3761) are a picture first with their one small word under it, like every
   leaf: a shop front, a hammer and a price tag, drawn in the same line weight (src/ui/budIcons.js, by the
   petal's `data-mode`). The picture sits in the petal's upright label, so it stays upright with the word

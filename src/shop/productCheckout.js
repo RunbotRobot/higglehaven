@@ -33,7 +33,7 @@ import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import {
   createProductReview,
-  purchaseInstance, clearPurchaseIdempotencyKey, finalizePurchase,
+  purchaseInstance, getPurchaseQuote, clearPurchaseIdempotencyKey, finalizePurchase,
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
@@ -202,7 +202,8 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutPayBtn.disabled = true;
     checkoutCancelBtn.disabled = false;
     // #3116: a previous checkout may have left the retry label/lock behind.
-    if (!checkoutPayBtn.dataset.defaultLabel) checkoutPayBtn.dataset.defaultLabel = checkoutPayBtn.textContent;
+    // #3946: Pay names the amount, since this sheet is now the one place the buyer says yes.
+    checkoutPayBtn.dataset.defaultLabel = `Pay ${formatPriceCents(totalCents)}`;
     checkoutPayBtn.textContent = checkoutPayBtn.dataset.defaultLabel;
     checkoutChargedAwaitingFinalize = false;
     checkoutProgressEl.hidden = true;
@@ -327,24 +328,33 @@ export async function handleShopProductBuyClick() {
   // model -- same belt-and-suspenders relationship priceCents == null
   // already has with its own .visible toggle.
   if (isTestModel) return;
-  // #659: a one-line mention right at the moment of buying, alongside the
-  // full Return policy button this same tapped product already surfaces
-  // (#product-card-return-policy-btn) -- a plain sentence, the fact
-  // worth knowing before saying yes.
-  // #3278: its own in-app modal, not window.confirm(): a browser that
-  // suppresses native dialogs answers false at once, so Buy did nothing and
-  // said nothing (the same failure Sell > Manage Delete had, #3249).
-  const confirmed = await confirmDestructive({
-    title: 'Buy this item?',
-    message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return policy.)`,
-    confirmLabel: 'Buy',
-    variant: 'primary',
-    returnFocusEl: productCardBuyButton(),
-  });
-  if (!confirmed) return;
   productCardBuyButton().disabled = true;
   const instanceId = review.mesh.userData.instanceId;
   try {
+    // #3946: ask first what this purchase will do, without doing it. A purchase that takes a card
+    // opens the one payment sheet (price, refund line, card field, Pay), so Pay is the one yes;
+    // anything else keeps the one-tap confirm below. A refusal surfaces here, before any sheet.
+    const quote = await getPurchaseQuote(instanceId);
+    if (!quote.paysWithCard) {
+      // #659: a one-line mention right at the moment of buying, alongside the
+      // full Return policy button this same tapped product already surfaces
+      // (#product-card-return-policy-btn) -- a plain sentence, the fact
+      // worth knowing before saying yes.
+      // #3278: its own in-app modal, not window.confirm(): a browser that
+      // suppresses native dialogs answers false at once, so Buy did nothing and
+      // said nothing (the same failure Sell > Manage Delete had, #3249).
+      // The card's Buy button is live again while the confirm is open, so focus can return to it.
+      productCardBuyButton().disabled = false;
+      const confirmed = await confirmDestructive({
+        title: 'Buy this item?',
+        message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return policy.)`,
+        confirmLabel: 'Buy',
+        variant: 'primary',
+        returnFocusEl: productCardBuyButton(),
+      });
+      if (!confirmed) return;
+      productCardBuyButton().disabled = true;
+    }
     const result = await purchaseInstance(instanceId);
     if (result.requiresPayment) {
       const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });

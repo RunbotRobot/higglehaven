@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCaseBreaks, findVoiceBreaks, findWorkerVoiceBreaks } from './check-copy-voice.mjs';
+import { findLabelNameBreaks, findCaseBreaks, findVoiceBreaks, findWorkerVoiceBreaks } from './check-copy-voice.mjs';
 
 // #3888: only the pure part is tested; main() reads the real repo and is run by `pretest`.
 const row = (text, area = 'Sell') => ({ file: 'src/sell/x.js', line: 1, kind: 'js', text, area });
@@ -56,5 +56,18 @@ describe('findCaseBreaks', () => {
 
   it('lets an allowed label through', () => {
     expect(findCaseBreaks([row('e.g. Brick')])).toEqual([]);
+  });
+});
+
+describe('findLabelNameBreaks', () => {
+  const src = (source) => [{ file: 'src/x.js', source }];
+  it('passes a name that holds the visible word, and glyph-only controls', () => {
+    expect(findLabelNameBreaks(src('<button aria-label="Close settings">Close</button>'))).toEqual([]);
+    expect(findLabelNameBreaks(src('<button aria-label="Close">&times;</button>'))).toEqual([]);
+    expect(findLabelNameBreaks(src("b.textContent = 'Send';\nb.setAttribute('aria-label', 'Send message');"))).toEqual([]);
+  });
+  it('flags a name that leaves the visible word out', () => {
+    expect(findLabelNameBreaks(src('<button class="x" aria-label="Dismiss">Close</button>'))[0]).toMatchObject({ line: 1, word: 'label in name' });
+    expect(findLabelNameBreaks(src("b.textContent = 'Buy';\nb.setAttribute('title', 'Purchase');"))).toHaveLength(1);
   });
 });

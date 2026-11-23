@@ -29,6 +29,7 @@ function declMap(body) {
 export function looks(css) {
   const buttons = new Set();
   const fields = new Set();
+  const rows = new Set(); // added for #3939: a list row is one look, so a new row class joins the shared rule
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m;
   const text = stripComments(css);
@@ -43,8 +44,12 @@ export function looks(css) {
     if (/\binput\b|\bselect\b|\btextarea\b|-control\b/.test(selector) && d.has('border')) {
       fields.add(key(['padding', 'border', 'background', 'border-radius', 'font']));
     }
+    // a list row: a selector whose last class ends in -row and that sets its own fill and shape
+    if (/-row$/.test(selector.split(',').pop().trim()) && d.has('background') && d.has('border-radius') && d.has('padding')) {
+      rows.add(key(['padding', 'background', 'border-radius']));
+    }
   }
-  return { buttons: buttons.size, fields: fields.size };
+  return { buttons: buttons.size, fields: fields.size, rows: rows.size };
 }
 
 const baselinePath = path.join(root, 'scripts', 'leaf-parts-baseline.json');
@@ -54,7 +59,7 @@ function main() {
   const now = looks(css);
   const base = JSON.parse(readFileSync(baselinePath, 'utf8'));
   let failed = false;
-  for (const kind of ['buttons', 'fields']) {
+  for (const kind of ['buttons', 'fields', 'rows']) {
     if (now[kind] > base[kind]) {
       console.error(`check-leaf-parts: ${kind} grew from ${base[kind]} to ${now[kind]} looks. Use the named part from docs/DESIGN.md "Inside a leaf" instead of a new look.`);
       failed = true;
@@ -64,7 +69,7 @@ function main() {
     }
   }
   if (failed) process.exit(1);
-  console.log(`check-leaf-parts: ${now.buttons} button looks, ${now.fields} field looks (at the baseline)`);
+  console.log(`check-leaf-parts: ${now.buttons} button looks, ${now.fields} field looks, ${now.rows} row looks (at the baseline)`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) main();

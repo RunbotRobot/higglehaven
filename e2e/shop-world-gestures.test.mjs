@@ -109,4 +109,35 @@ await doubleTap();
 await wait(400);
 check(!(await flying()), 'another double-tap lands');
 
+// #4064: a double-tap takes off and lands while the other thumb is walking. The left thumb stays down
+// and dragging; the right thumb double-taps (its own two taps, well after the left finger landed).
+// (touchEnd lists the points that are released, so it names the right finger only.)
+const rightDoubleTapWhileLeftHeld = (left) => Promise.all([
+  touch('touchStart', [left, { id: 2, x: 300, y: 300 }]),
+  touch('touchEnd', [{ id: 2, x: 300, y: 300 }]),
+  touch('touchStart', [left, { id: 2, x: 302, y: 301 }]),
+  touch('touchEnd', [{ id: 2, x: 302, y: 301 }]),
+]);
+const heldLeft = { id: 1, x: 100, y: 520 };
+await touch('touchStart', [{ id: 1, x: 100, y: 600 }]);
+await touch('touchMove', [{ id: 1, x: 100, y: 560 }]);
+await touch('touchMove', [heldLeft]);
+await wait(400);
+const wasFlying = await flying();
+await rightDoubleTapWhileLeftHeld(heldLeft);
+await wait(500);
+check((await flying()) !== wasFlying, 'a double-tap with the right thumb toggles flight while the left thumb is walking');
+const midWalk = await pos();
+await wait(600);
+const laterWalk = await pos();
+check(Math.hypot(laterWalk.x - midWalk.x, laterWalk.y - midWalk.y) > 0.3 || Math.abs(laterWalk.z - midWalk.z) > 0.3,
+  'the left thumb keeps walking through the take-off or landing');
+await wait(1500);
+await rightDoubleTapWhileLeftHeld(heldLeft);
+await wait(500);
+check((await flying()) === wasFlying, 'and the next double-tap with the right thumb switches back, still walking');
+await touch('touchEnd', []);
+await wait(300);
+check((await page.evaluate(() => window.__testWorldGestureFingers())) === 0, 'every finger is released after the double-taps');
+
 await finish(browser, { pass: pass && errors.length === 0, label: '#3650, #3749: left half walks, right half looks (alone and together), a double-tap flies, no sticks or fly button', errors });

@@ -12,6 +12,8 @@ import {
   simplifyToTarget,
 } from './modelTiers.js';
 import { boundaryEdgeCountSteps, countTriangles } from './geometrySimplify.js';
+import { fidelityBatches } from './modelTiers.js';
+import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
 
 // ---- Fixtures: procedural stand-ins for real uploads ----
 
@@ -43,6 +45,29 @@ function material(hex) {
 function brick() {
   const group = new THREE.Group();
   group.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), material(0xaa3322)));
+  return group;
+}
+
+// #4062: a noisy, open scan of a brick (the owner's "Brick - Orange": a thousand-triangle scan with
+// jittered vertices, no closed surface and some faces missing), drawn double-sided. Simplified the
+// ordinary way its far version was a net covering a fraction of itself.
+function noisyOpenScan() {
+  let seed = 4062;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  const box = new THREE.BoxGeometry(2, 1, 1, 16, 8, 8);
+  const position = box.attributes.position;
+  for (let i = 0; i < position.count; i++) {
+    position.setXYZ(i, position.getX(i) + (random() - 0.5) * 0.05, position.getY(i) + (random() - 0.5) * 0.05, position.getZ(i) + (random() - 0.5) * 0.05);
+  }
+  const index = Array.from(box.index.array);
+  const kept = [];
+  for (let t = 0; t < index.length; t += 3) if (random() > 0.12) kept.push(index[t], index[t + 1], index[t + 2]);
+  box.setIndex(kept);
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0xcc6a2a, side: THREE.DoubleSide })));
   return group;
 }
 
@@ -237,6 +262,31 @@ const FIXTURES = {
   denseScan,
   multiMesh,
 };
+
+describe('every simpler version still reads as the model (#4062)', () => {
+  it.each(['noisyOpenScan', 'brick', 'chair', 'multiMesh'])('%s: mid and far pass the silhouette check against the full model', (name) => {
+    const model = ({ noisyOpenScan, brick, chair, multiMesh })[name]();
+    const { mid, far, stats } = buildModelTiersSync(model);
+    const full = fidelityBatches(model);
+    expect(isFaithful(silhouetteFidelity(full, fidelityBatches(mid.object)), 'mid')).toBe(true);
+    expect(isFaithful(silhouetteFidelity(full, fidelityBatches(far.object)), 'far')).toBe(true);
+    expect(stats.far).toBeGreaterThan(0);
+  });
+
+  it('a noisy open scan gets a far version no heavier than the far limit and a mid version lighter than the full model', () => {
+    const { stats } = buildModelTiersSync(noisyOpenScan());
+    expect(stats.far).toBeLessThanOrEqual(FAR_MAX_TRIANGLES);
+    expect(stats.mid).toBeLessThanOrEqual(stats.full);
+  });
+
+  it('draws the far version from both sides, so nothing the simplifier left facing away disappears', () => {
+    const { far } = buildModelTiersSync(chair());
+    const meshes = [];
+    far.object.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    expect(meshes.length).toBeGreaterThan(0);
+    for (const mesh of meshes) expect(mesh.material.side).toBe(THREE.DoubleSide);
+  });
+});
 
 describe('buildModelTiersSync', () => {
   it('leaves a small model as itself for mid and keeps its own geometry for far', () => {

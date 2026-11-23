@@ -30,7 +30,7 @@
 // Paste) write its button label directly.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
-import { showNotice } from '../ui/noticeModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import { generateConceptImage, searchCatalogBySimilarity, fetchBundles, fetchSharedBundles, updateBundle, deleteBundle } from '../api.js';
 import {
@@ -469,6 +469,7 @@ export function renderBundlePicker() {
         const result = await promptBundleName({ title: 'Rename this bundle', initialName: bundle.name });
         if (!result || result.name === bundle.name) return;
         const { name: next } = result;
+        showInlineActionStatus(tile, '');
         renameBtn.disabled = true;
         const myLoadToken = ++bundlePickerLoadToken;
         try {
@@ -488,15 +489,9 @@ export function renderBundlePicker() {
           renderBundlePicker();
         } catch (err) {
           renameBtn.disabled = false;
-          // #3359: an in-app notice (a browser can suppress alert() and drop
-          // the refusal without a trace); stays until dismissed, text selectable.
-          await showNotice({
-            title: 'Couldn\'t rename this bundle',
-            message: err.message || 'Couldn\'t rename this bundle.',
-            returnFocusEl: renameBtn,
-            restoreModalEl: catalogPickerEl,
-            restoreCloseFn: closeCatalogPicker,
-          });
+          // #3889 (shape b): said on the tile the tap was on, kept and
+          // selectable until the next try (was a notice modal, #3359).
+          showInlineActionStatus(tile, err.message || 'Couldn\'t rename this bundle.');
         }
       });
       tile.appendChild(renameBtn);
@@ -516,6 +511,7 @@ export function renderBundlePicker() {
       shareToggleBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
         shareToggleBtn.disabled = true;
+        showInlineActionStatus(tile, '');
         const myLoadToken = ++bundlePickerLoadToken;
         try {
           const updated = await updateBundle(bundle.bundleId, { shared: !bundle.shared });
@@ -531,13 +527,7 @@ export function renderBundlePicker() {
           renderBundlePicker();
         } catch (err) {
           shareToggleBtn.disabled = false;
-          await showNotice({
-            title: 'Couldn\'t update sharing',
-            message: err.message || 'Couldn\'t update this bundle\'s sharing.',
-            returnFocusEl: shareToggleBtn,
-            restoreModalEl: catalogPickerEl,
-            restoreCloseFn: closeCatalogPicker,
-          });
+          showInlineActionStatus(tile, err.message || 'Couldn\'t update this bundle\'s sharing.'); // #3889 shape b
         }
       });
       tile.appendChild(shareToggleBtn);

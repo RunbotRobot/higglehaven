@@ -43,6 +43,10 @@ await page.waitForTimeout(300);
 const selectionText = await page.textContent('#item-card-name');
 const looseBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('status:', selectionText, '| boxes with three loose items selected (should be 3):', looseBoxes.length);
+// #3996: however many loose items are selected, their boxes are drawn as two batches (outline + fill),
+// not two objects each. Three loose items: two draw objects in all.
+const looseObjects = await page.evaluate(() => window.__testSelectionDrawObjects());
+console.log('draw objects for three loose boxes (should be 2):', looseObjects);
 
 await page.click('#group-item');
 await page.waitForTimeout(700);
@@ -50,6 +54,8 @@ await page.waitForTimeout(700);
 // No re-selecting: the selection itself is now one bundle, drawn as one box.
 const groupedBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('boxes right after Group (should be 1):', groupedBoxes.length);
+const groupedObjects = await page.evaluate(() => window.__testSelectionDrawObjects());
+console.log('draw objects for the one bundle box (should be 2):', groupedObjects);
 
 // Move the bundle: leave multi-select (keeping the selection), then nudge it up and check the
 // single box follows.
@@ -67,11 +73,16 @@ await page.click('#ungroup-item');
 await page.waitForTimeout(700);
 const ungroupedBoxes = await page.evaluate(() => window.__testSelectionBoxes());
 console.log('boxes after Ungroup (should be 3):', ungroupedBoxes.length);
+const ungroupedObjects = await page.evaluate(() => window.__testSelectionDrawObjects());
+console.log('draw objects after Ungroup (should be 2):', ungroupedObjects);
 
 const pass =
   positions.length === 3 &&
   selectionText.includes('3 items selected') &&
   looseBoxes.length === 3 &&
+  looseObjects === 2 &&
+  groupedObjects === 2 &&
+  ungroupedObjects === 2 &&
   groupedBoxes.length === 1 &&
   dragged === true &&
   beforeMove.length === 1 &&

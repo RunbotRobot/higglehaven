@@ -16,7 +16,7 @@
 // idiom e2e/saved-layouts-load-more.test.mjs already uses for a response
 // shape otherwise unreachable in this environment) -- everything else under
 // test (the actual DOM rebuild behavior) is the real, unmodified app code.
-import { launchPage, chooseIdentity, openPayoutsLeaf, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openPayoutsLeaf, openPayoutsForm, finish } from './helpers.mjs';
 
 const LABEL = 'Seller Stripe Onboarding Refresh Tester';
 
@@ -70,8 +70,7 @@ await page.route('**/api/sellers/me/payouts', async (route) => {
 
 // #3704: the payout account is the bud's Payouts leaf now, not Settings > Sell; the form is two
 // short steps (About you, then Where you live and Your bank).
-await openPayoutsLeaf(page);
-await page.waitForSelector('#bud-leaf-payouts .payout-form', { timeout: 30000 });
+await openPayoutsForm(page);
 const leaf = page.locator('#bud-leaf-payouts');
 const submitBtn = leaf.locator('button', { hasText: 'Set up payout account' });
 // Anchored on the "Cash out" button itself: the not-configured-yet status text ("Stripe payouts

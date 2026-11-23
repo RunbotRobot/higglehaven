@@ -507,6 +507,19 @@ boolean (`400` otherwise); `true` hides the tips. Returns `{ "user": { ... } }`;
 `GET /api/auth/me` or logs in, so the opening screen (which draws before
 anything is signed in) honours it on the next open.
 
+### `PUT /api/auth/first-hints`
+
+```json
+{ "done": true }
+```
+
+Session-gated (`401` without one), rate-limited per account. Saves that the
+account has been through the first-visit hints (walk, look, fly; #3657) so
+another device does not replay them: `done` must be `true` (`400` otherwise) and
+it is never cleared. Returns `{ "user": { ... } }`; `user.firstHintsDone` is
+`false` until then, then `true`. The browser copies a `true` onto its own
+storage when it reads `GET /api/auth/me` or logs in.
+
 Every builder-owned or seller-owned mutation (claiming a landlet, placing
 an instance, creating a product, etc. — see "Builders"/"Sellers" sections
 below) requires the session's account to have both `ageAttestedAt` set and
@@ -578,7 +591,7 @@ re-verification period configured.
 { "email": "ada@example.com", "password": "correct horse battery staple" }
 ```
 
-`401` with an identical, generic "Invalid email or password" message
+`401` with an identical, generic "That email or password isn't right. Try again." message
 whether the email doesn't exist or the password is wrong — telling the two
 apart would let an attacker enumerate which emails have accounts here.
 The unknown-email path also burns the same PBKDF2 cost a real password
@@ -656,7 +669,7 @@ could satisfy it. `deleted_at` is stamped for any other code that needs to
 recognize a deleted row (e.g. #1147's disconnection pass) — note this is
 just a marker, not itself what blocks login: once the real email is gone
 from the row, a login attempt against it already gets the same generic
-"Invalid email or password" response issued for any other email that was
+"That email or password isn't right. Try again." response issued for any other email that was
 never registered. Every session for the account is deleted in the same
 atomic batch (`db.batch`, mirroring `reset-password`'s own "sign out every
 device" reasoning above) as the builder/seller deletion and the `users`
@@ -1267,6 +1280,31 @@ suspension, or
 otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
+
+### `GET /api/auth/admin-users` (#4060)
+
+The Admin Dashboard's Users table (Accounts tab): every account in one `requireAdmin`-gated read, so the
+page can sort, filter, search and choose columns itself (the owner has a handful of accounts today; paging
+is its own issue when the count nears the cap). Never rate-limited, same as the other admin `GET`s.
+
+A fixed number of queries whatever the user count (the `users` rows with their one-to-one joins, then a
+dozen grouped counts joined in the Worker), capped at 1,000 users (most recent first). Returns:
+
+```json
+{
+  "columns": [{ "key", "label", "group", "kind": "text|bool|number|money|date|choice", "default": true, "title": "where the value comes from" }],
+  "limit": 1000, "total": 6, "truncated": false,
+  "users": [{ "userId", "username", "email", "kind": "Person|Fleet account|Assistant|Admin", "createdAt", "trustTier", "...": "one key per column" }]
+}
+```
+
+`columns` is the one list the page draws from (`worker/lib/admin-users-table.js`, `ADMIN_USER_COLUMNS`);
+money fields are cents. Never returned, in any form: `password_hash`, the tax id (only `taxIdOnFile`, yes or
+no), session tokens (only `sessionsOpen`), anything from a KYC form. `lastSeenAt` is the latest of builder
+activity, avatar presence and latest sign-in. `suspended` is an active, not lifted or escalated suspension.
+`truncated` is true when `total` exceeds the rows returned, and the page then says so on one line.
+`admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
+what it did, and a row's name opens the same detail).
 
 ### `GET /api/auth/admin-user-search?q=...` and `GET /api/auth/admin-user-detail?userId=...` (#2757)
 
@@ -2500,6 +2538,32 @@ either of those as an explicit open question, not yet resolved.
   "stripePayoutId": "po_..."
 }
 ```
+
+### `Server-Timing` for D1, on request (#3464)
+
+Any request that sends `x-server-timing: 1` is answered with a `Server-Timing`
+header of the form `d1;dur=<ms>;desc="<n> trips"`: how many D1 statements the
+request ran (a batch counts once) and the summed time spent waiting on them
+(statements run together add up to more than the request's own wall time). It
+changes nothing else about the response, and a request without the header gets
+no `Server-Timing` at all. `scripts/live-site.mjs --server-timing` sends it for
+the same-origin API calls and reports medians per timed route.
+
+### `GET /api/instances/:id/purchase-quote` (#3946)
+
+What Buy would do for this signed-in, verified account, without doing it.
+Runs the same checks as `POST /api/instances/:id/purchase` (not for sale, sold
+out, suspended seller or lándlet owner, a seller without real payments for a
+non-admin, a fleet account while payments are live) through one shared
+function, so it refuses with the same status and code, and answers:
+
+```json
+{ "paysWithCard": true, "unitPriceCents": 5000, "stockQuantity": null }
+```
+
+`paysWithCard` is true exactly when the purchase would create a PaymentIntent.
+It creates nothing, charges nothing and never calls Stripe. Rate-limited
+separately from the purchase itself.
 
 ### Mark purchase shipped
 
@@ -10376,7 +10440,10 @@ against one budget per client IP.
   `users.is_fleet` and the username, never from anything a client sends. The
   Shop draws such an avatar with a collared shirt and a tag reading the name and
   the word "assistant". Nearby chat and the voice roster stay unlabeled for
-  every sender, assistants included.
+  every sender, assistants included. (#3556: who just spoke in nearby chat is
+  shown as a nameless speech mark over that avatar for a few seconds
+  (`src/shop/speechCue.js`), only for a line that arrives while the Chat leaf is
+  open; it carries no name, alias or id, and a muted sender raises none.)
 - **Assistant shifts (#3449).** An assistant session has no browser, so it keeps
   itself on shift with `POST /api/assistant/heartbeat` (body `{ busy?: boolean }`;
   omitted keeps the last value; rate limited to 60 a minute). Only an assistant
@@ -11379,7 +11446,7 @@ Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
 #1619 (sub-issue of #1616 — "In-app video-to-3D model generation", docs/SPEC.md):
 backend async job handling for turning a seller's walkaround-video stills
-into a real, placeable `.glb` model, via [Tripo3D](https://developers.tripo3d.com/)'s
+into a real, placeable `.glb` model, via [Tripo3D](https://developers.tripo3d.ai/)'s (the international platform, `https://openapi.tripo3d.ai/v3`: dollar prices, paid through Stripe; the China site, `developers.tripo3d.com`, has its own separate keys and is not used, #4079)
 V3 multiview-to-model API. The frontend is responsible for extracting a
 handful of still frames from the seller's recorded video client-side (no
 provider #1617's own research evaluated accepts raw video directly, and
@@ -11518,10 +11585,10 @@ in this file: `TRIPO_API_KEY`/`TRIPO_WEBHOOK_SECRET` are Worker secrets never
 configured in local dev or the automated test suite, so a real Tripo call is
 never attempted during tests — covered up to the `503` these endpoints
 return when unconfigured, not beyond it. The exact Tripo request/response
-field names above come from https://developers.tripo3d.com/ (not
+field names above come from https://developers.tripo3d.ai/ (checked against its docs for the upload, task and webhook shapes on 2026-11-23; not
 independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
-deployment.
+deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
 
 ### Frontend wiring (#1620)
 

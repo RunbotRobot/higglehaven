@@ -18,7 +18,7 @@
 // behavior at that exact moment. The query param does, and it's exactly
 // the value the fix (clearing builderId in the delete handler) is
 // responsible for keeping correct.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, acceptConfirmModal, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Delete Builder Suite Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -49,6 +49,7 @@ console.log('builderId the Auction section used before delete:', originalBuilder
 // #1149 renamed this button from "Delete account" (never true -- it only
 // ever reset this profile, not the login) to "Reset profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
+await openBuildMoreFold(page); // #4019: the username row is folded
 await page.click('#settings-section button:has-text("Reset profile")');
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 const deleteStatus = await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });

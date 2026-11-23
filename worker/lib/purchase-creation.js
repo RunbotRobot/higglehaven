@@ -100,32 +100,22 @@ const PURCHASE_RATE_LIMIT_MAX = 30;
 // by builder_id like PURCHASE_RATE_LIMIT_MAX above.
 const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
 
-// Exported: worker/index.js's own top-level dispatcher routes
-// POST /api/instances/:id/purchase here.
 // #3237: how stale a stored 'complete' Stripe status may be at checkout before it is re-read.
 const STRIPE_STATUS_MAX_AGE_MS = 60 * 60 * 1000;
 
-export async function handleInstancePurchase(request, env, instanceId) {
-  const db = env.DB;
-  // N44 (owner, 2026-09-12): shopping/purchasing — real-money or simulated —
-  // now requires the same age-attestation + credit-card-or-ID gate Build/Sell
-  // already enforce ("restrict minors from using any part of the
-  // application"), so this is no longer the unauthenticated endpoint the
-  // comments elsewhere in this file describe; keyed by the resolved
-  // account, not client IP, once a session is required, same as every
-  // other session-gated rate limit in this file.
-  const user = await requireVerifiedSession(request, db);
-  await checkRateLimit(db, `purchase:${user.user_id}`, PURCHASE_RATE_LIMIT_MAX);
-  // #680: needed to credit avatar-category purchases to the actual buyer
-  // (see owned_avatars' own migration comment on why `purchases` itself
-  // has nothing to derive that from) — every account already has one
-  // (getOrCreateBuilderForUser, "every user is automatically a builder"),
-  // so this never fails for a session that already passed requireVerifiedSession.
-  const buyerBuilder = await getOrCreateBuilderForUser(db, user);
+// Everything that decides whether this buyer may buy this instance and which
+// way it is paid, shared by the purchase itself and by the read-only quote
+// (#3946) so the two cannot disagree: the quote says `paysWithCard` only when
+// the purchase would then create a PaymentIntent. Throws the same refusals
+// either way and writes nothing.
+// `beforeRouting` runs after the product checks and before the seller checks,
+// where the purchase reads its body, so a malformed body is refused at the same
+// point it always was.
+async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = null) {
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-  if (!instance) return json({ error: 'Instance not found' }, 404);
+  if (!instance) throw new HttpError('Instance not found', 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
-  if (!template) return json({ error: 'Catalog template not found' }, 404);
+  if (!template) throw new HttpError('Catalog template not found', 404);
   if (template.price_cents == null) {
     throw new HttpError('This product has no price set and cannot be purchased', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
@@ -169,22 +159,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
     throw new HttpError('This listing is temporarily unavailable — its lándlet owner is suspended', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
 
-  // quantity/buyerLabel are both genuinely optional, and this endpoint has
-  // no other required fields, so a missing or empty body is just "buy one"
-  // rather than an error — read it directly instead of through the shared
-  // readJson (which rejects a missing content-type/body).
-  let input = {};
-  const contentType = request.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const text = await request.text();
-    if (text) {
-      try {
-        input = JSON.parse(text);
-      } catch {
-        throw new HttpError('Request body is not valid JSON', 400);
-      }
-    }
-  }
+  if (beforeRouting) await beforeRouting();
 
   // #453: a product whose seller has fully completed Stripe Connect
   // onboarding (#452) checks out with real money instead of this
@@ -247,7 +222,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
     if (user.is_fleet === 1 && stripeIsLive(env)) {
       throw new HttpError('Purchases are not available for this account while payments are live.', 403);
     }
-    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
+    return { instance, template, landlet, seller, paysWithCard: true };
   }
   // #653 (owner, 2026-09-11): "real-world shoppers should not be able to
   // purchase from dev sellers" — any seller who hasn't (yet) fully
@@ -262,6 +237,65 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // which is no longer possible.
   if (!user.is_admin) {
     throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
+  }
+  return { instance, template, landlet, seller, paysWithCard: false };
+}
+
+// GET /api/instances/:id/purchase-quote (#3946): what Buy would do, without
+// doing it. The client opens one payment sheet when `paysWithCard` is true and
+// keeps the one-tap confirm otherwise; nothing is created or charged here.
+export async function handleInstancePurchaseQuote(request, env, instanceId) {
+  const db = env.DB;
+  const user = await requireVerifiedSession(request, db);
+  await checkRateLimit(db, `purchase-quote:${user.user_id}`, PURCHASE_RATE_LIMIT_MAX);
+  const { template, paysWithCard } = await resolvePurchaseTarget(env, db, user, instanceId);
+  return json({
+    paysWithCard,
+    unitPriceCents: template.price_cents,
+    stockQuantity: template.stock_quantity ?? null,
+  });
+}
+
+// Exported: worker/index.js's own top-level dispatcher routes
+// POST /api/instances/:id/purchase here.
+export async function handleInstancePurchase(request, env, instanceId) {
+  const db = env.DB;
+  // N44 (owner, 2026-09-12): shopping/purchasing — real-money or simulated —
+  // now requires the same age-attestation + credit-card-or-ID gate Build/Sell
+  // already enforce ("restrict minors from using any part of the
+  // application"), so this is no longer the unauthenticated endpoint the
+  // comments elsewhere in this file describe; keyed by the resolved
+  // account, not client IP, once a session is required, same as every
+  // other session-gated rate limit in this file.
+  const user = await requireVerifiedSession(request, db);
+  await checkRateLimit(db, `purchase:${user.user_id}`, PURCHASE_RATE_LIMIT_MAX);
+  // #680: needed to credit avatar-category purchases to the actual buyer
+  // (see owned_avatars' own migration comment on why `purchases` itself
+  // has nothing to derive that from) — every account already has one
+  // (getOrCreateBuilderForUser, "every user is automatically a builder"),
+  // so this never fails for a session that already passed requireVerifiedSession.
+  const buyerBuilder = await getOrCreateBuilderForUser(db, user);
+  let input = {};
+  const { instance, template, landlet, seller, paysWithCard } = await resolvePurchaseTarget(env, db, user, instanceId, async () => {
+    // quantity/buyerLabel are both genuinely optional, and this endpoint has
+    // no other required fields, so a missing or empty body is just "buy one"
+    // rather than an error — read it directly instead of through the shared
+    // readJson (which rejects a missing content-type/body).
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const text = await request.text();
+      if (text) {
+        try {
+          input = JSON.parse(text);
+        } catch {
+          throw new HttpError('Request body is not valid JSON', 400);
+        }
+      }
+    }
+  });
+
+  if (paysWithCard) {
+    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
   // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
   // direct D1 access the way worker/commerce.test.js's own mark-shipped/

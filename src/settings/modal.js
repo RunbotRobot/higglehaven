@@ -40,7 +40,7 @@ import {
 import { sellerModalEl, renderActiveSellerView } from '../sell/mode.js';
 import { trimUnitLabelEls } from '../main.js';
 import { renderShopSettingsSection } from '../shop/mode.js';
-import { renderBuildSettingsSection } from '../build/scene.js';
+import { renderBuildSettingsSection, resetBuildSettingsFolds } from '../build/scene.js';
 
 // Settings: local, per-device display preferences — nothing here is ever
 // sent to the server (see settings.js). Four sections exist as fixed tabs
@@ -711,6 +711,8 @@ export function openSettingsModal() {
   } else if (currentMode === 'sell' && activeSettingsTab === 'sell') {
     activeSettingsTab = 'general';
   }
+  // #4019: the Build tab's "Profile, lándlet cap and stock" row starts closed each time Settings opens.
+  resetBuildSettingsFolds();
   renderSettingsSection();
   settingsModalEl.classList.add('visible');
   openModalA11y(settingsModalEl, closeSettingsModal);

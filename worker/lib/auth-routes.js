@@ -269,7 +269,9 @@ export async function handleLogin(request, db, url) {
   const password = typeof input.password === 'string' ? input.password : '';
 
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
+  // #3888: said in the voice of docs/DESIGN.md ("how we say no"), the same words for every case so
+  // nothing says which part was wrong or whether the address has an account.
+  const invalidCredentials = () => new HttpError("That email or password isn't right. Try again.", 401);
   if (!row) {
     await verifyPassword(password, dummyPasswordHash());
     throw invalidCredentials();
@@ -428,6 +430,25 @@ export async function handleLoadingTips(request, db) {
     UPDATE users SET loading_tips_off = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE user_id = ?
   `).bind(input.off ? 1 : 0, user.user_id).run();
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
+  return json({ user: userFromRow(updated) });
+}
+
+// #3657: the account remembers that the first-visit hints (walk, look, fly) have
+// been done, so another device does not replay them. Only `done: true` is
+// accepted and it is never cleared: a person who has been through the hints has.
+const FIRST_HINTS_RATE_LIMIT_MAX = 20;
+
+export async function handleFirstHints(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `first-hints:${user.user_id}`, FIRST_HINTS_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  if (input.done !== true) throw new HttpError('done must be true.', 400);
+  await db.prepare(`
+    UPDATE users SET first_hints_done = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ? AND (first_hints_done IS NULL OR first_hints_done != 1)
+  `).bind(user.user_id).run();
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
   if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });

@@ -27,6 +27,10 @@ export const DOUBLE_TAP_MS = 320;
 export const DOUBLE_TAP_DISTANCE_PX = 48;
 // A touch held longer than this is not a tap (so not half of a double-tap).
 export const TAP_MAX_MS = 350;
+// Two fingers that land this close together in time are a fumble (a hand set down on the screen),
+// not two thumbs doing two jobs: neither is a tap. A finger landing later, while the other thumb is
+// walking or looking, is the double-tap that takes off or lands (#4064).
+export const SIMULTANEOUS_LANDING_MS = 60;
 
 const clampUnit = (value) => Math.max(-1, Math.min(1, value));
 
@@ -43,7 +47,7 @@ export function deflection(dx, dy) {
 // finger lifts or returns to its start), onDoubleTap(), and splitX(), the x (in the same
 // units as the pointer positions) that divides the screen: left of it walks, right looks.
 export function createWorldGestures(handlers) {
-  const fingers = new Map(); // id -> { x0, y0, role, active, alone, downAt }
+  const fingers = new Map(); // id -> { x0, y0, role, active, fumble, downAt }
   let lastTap = null; // { x, y, at } of the last finished tap
 
   const roleHolder = (role) => [...fingers.values()].find((finger) => finger.role === role);
@@ -62,11 +66,17 @@ export function createWorldGestures(handlers) {
     // The half it landed on decides the job; a second finger on a half that already has
     // one does nothing (it is not a walker's helper and not a tap).
     const wanted = forcedRole || (x < handlers.splitX() ? 'walk' : 'look');
-    const finger = { x0: x, y0: y, role: roleHolder(wanted) ? 'ignored' : wanted, active: false, alone: fingers.size === 0 && !forcedRole, downAt: now };
-    if (fingers.size > 0) {
-      // Two fingers are never a tap, whatever they do.
-      for (const other of fingers.values()) other.alone = false;
-      lastTap = null;
+    // A mouse never taps (a double-click is not "fly"), so it starts as a fumble.
+    const finger = { x0: x, y0: y, role: roleHolder(wanted) ? 'ignored' : wanted, active: false, fumble: Boolean(forcedRole), downAt: now };
+    // "a gesture means the same thing every time, by where it starts, never by what another finger is
+    // doing" (AGENTS.md, the bud, 2026-11-18): a double-tap takes off or lands whether or not the other
+    // thumb is down. The one thing that is not a tap is two fingers landing at nearly the same moment.
+    for (const other of fingers.values()) {
+      if (now - other.downAt <= SIMULTANEOUS_LANDING_MS) {
+        other.fumble = true;
+        finger.fumble = true;
+        lastTap = null;
+      }
     }
     fingers.set(id, finger);
   }
@@ -89,8 +99,8 @@ export function createWorldGestures(handlers) {
     if (finger.active) {
       if (finger.role === 'walk') handlers.onMove(0, 0);
       else handlers.onLook(0, 0);
-    } else if (finger.role !== 'ignored' && finger.alone) {
-      // A finger that went down and up without travelling, and without company: a tap.
+    } else if (finger.role !== 'ignored' && !finger.fumble) {
+      // A finger that went down and up without travelling, and not as one of two that landed together: a tap.
       const px = x ?? finger.x0;
       const py = y ?? finger.y0;
       const quick = now - finger.downAt <= TAP_MAX_MS;

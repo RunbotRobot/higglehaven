@@ -4,11 +4,10 @@
 // its name announced; Shift+N steps back. Pure ordering lives here, so it can be unit-tested; the
 // key wiring is in flightMovement.js and the card and announcement in productCard.js.
 //
-// Why a key and not a "Nearby" leaf in the bud menu: the menu is the same in every mode (a Shop-only
-// row would change it under a person), and a list over the world is exactly the permanent control
-// the interface is trying not to be. Tapping stays the way for everyone who can; N is the way when
-// they cannot. When Shop gets its own submenu under its petal, a Nearby list can join it there
-// (the same function orders it).
+// Two ways in, neither standing on the world: the N key, and a "Nearby" leaf under Shop's own petal
+// (src/shop/nearbyLeaf.js, for a screen reader on a phone, where there is no key): the same ordering
+// and the same card. The general menu is not touched (a Shop-only row there would change it under a
+// person), and nothing is drawn until the leaf is opened. Tapping stays the way for everyone who can.
 
 // How many of the nearest products the key cycles through: enough to reach what is around, few
 // enough that a full turn is quick.
@@ -46,3 +45,56 @@ export function nearbyAnnouncement(name, position, total) {
 }
 
 export const NO_NEARBY_PRODUCTS = 'No products nearby';
+
+// What the Nearby leaf says when nothing is within reach.
+export const NEARBY_LEAF_EMPTY = 'No products within reach. Walk closer to a lándlet to see what is near.';
+
+// How far a product is, in words a row can carry: whole metres, "Here" under one.
+export function distanceWords(metres) {
+  if (!Number.isFinite(metres)) return '';
+  const whole = Math.round(metres);
+  return whole < 1 ? 'Here' : `${whole} m`;
+}
+
+// #4044 (part of #3539): which way a product is, in words, from where the shopper is looking. `forward`
+// and `to` are horizontal world vectors ({x, y}, Z-up): the way the camera faces, and the way to the
+// product. Positive is to the left (the world is turned counter-clockwise by a positive yaw). Plain words,
+// no compass and no degrees: "ahead", "ahead and to the left", "to the right", "behind and to the left".
+export function directionWords(forward, to) {
+  const angle = Math.atan2(forward.x * to.y - forward.y * to.x, forward.x * to.x + forward.y * to.y);
+  const deg = Math.abs(angle) * (180 / Math.PI);
+  if (!Number.isFinite(deg)) return '';
+  const side = angle > 0 ? 'left' : 'right';
+  if (deg < 25) return 'ahead';
+  if (deg < 70) return `ahead and to the ${side}`;
+  if (deg < 110) return `to the ${side}`;
+  if (deg < 155) return `behind and to the ${side}`;
+  return 'behind';
+}
+
+// The yaw that faces the world point (dx, dy) away from the shopper: yaw 0 faces +Y and a positive yaw
+// turns counter-clockwise, so forward is (-sin yaw, cos yaw). Used to turn the view toward a product.
+export function yawFacing(dx, dy) {
+  return Math.atan2(-dx, dy);
+}
+
+// #4049 (part of #3539): a wall of one product fills the nearest eight with identical rows and hides
+// everything else around. One entry per product (by `keyOf`), standing for its nearest member, with how
+// many of that product are loaded, ordered nearest first and cut to `limit` products. An item with no
+// finite distance is left out, as in nearestProducts. Returns [{ item, count }].
+export function groupNearby(items, distanceOf, keyOf, limit = NEARBY_LIMIT) {
+  const nearest = nearestProducts(items, distanceOf, Infinity);
+  const groups = new Map();
+  for (const item of nearest) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { item, count: 1 });
+  }
+  return [...groups.values()].slice(0, limit);
+}
+
+// What a row says when several of one product are near: "Brick - Orange, 8 of them". One is just its name.
+export function nameWithCount(name, count) {
+  return count > 1 ? `${name}, ${count} of them` : name;
+}

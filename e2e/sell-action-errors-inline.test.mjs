@@ -69,10 +69,14 @@ check(/Shipping could not be recorded/.test(await row().locator('.product-sale-r
 check(await row().locator('.product-sale-row-ship-btn').isEnabled(), 'Mark shipped usable again');
 
 await row().locator('.product-sale-row-refund-btn').click();
-await page.waitForSelector('.product-sale-row-body > .inline-action-status:not([hidden])', { timeout: 5000 });
-check(/already been paid out/.test(await row().locator('.product-sale-row-body > .inline-action-status').innerText()), 'refund failure shown in the row');
+// The refund is asked about in the app's own modal; the server's refusal is shown there, and nothing is silent.
+await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+check(/Refund .* for /.test(await page.locator('#confirm-modal-message').innerText()), 'the modal names the buyer, the amount and the product');
+await page.click('#confirm-modal-confirm-btn');
+await page.waitForFunction(() => /already been paid out/.test(document.getElementById('confirm-modal-status')?.textContent || ''), null, { timeout: 5000 });
+check(true, 'refund failure shown in the modal');
+await page.click('#confirm-modal-cancel-btn');
 check(await row().locator('.product-sale-row-refund-btn').isEnabled(), 'Refund usable again');
-check(await row().locator('.product-sale-row-body > .inline-action-status').getAttribute('role') === 'status', 'message is a status live region');
 
 check(nativeDialogs === 0, `no native dialog was opened (opened ${nativeDialogs})`);
 

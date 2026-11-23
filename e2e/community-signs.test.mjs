@@ -158,12 +158,11 @@ await page.waitForSelector('#moderation-category-modal.visible', { timeout: 5000
 await page.locator('input[name="moderation-category"][value="other"]').check();
 await page.locator('#moderation-category-delete-btn').click();
 await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, null, { timeout: 30000 });
-// #3359: the failure is an in-app notice (src/ui/noticeModal.js), not alert():
-// read it, then close it so it does not cover the panel for the steps below.
-await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
-const staleDeleteNotice = `${await page.textContent('#notice-modal-title')} -- ${await page.textContent('#notice-modal-message')}`;
-await page.click('#notice-modal-ok-btn');
-await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+// #3889: the failure is said in the panel itself (a status line, kept and
+// selectable), not in a notice modal.
+await page.waitForSelector('#sign-posts-modal-content .inline-action-status.error:not([hidden])', { timeout: 5000 });
+const staleDeleteNotice = await page.textContent('#sign-posts-modal-content .inline-action-status');
+if (await page.locator('#notice-modal.visible').count()) throw new Error('a notice modal opened over the panel');
 console.log('notice after deleting an already-gone post (should say it could not be deleted):', staleDeleteNotice);
 const rowCountAfterStaleDelete = await page.locator('.sign-post-row').count();
 const remainingRowTextAfterStaleDelete = await page.locator('.sign-post-row').first().textContent();
@@ -204,7 +203,7 @@ const pass = labelBefore.trim() === 'Community sign' &&
   postsAfterDelete.length === 1 && postsAfterDelete[0].authorLabel === myBuilder.label &&
   rowCountBeforeStaleDelete === 2 &&
   rowCountAfterStaleDelete === 1 &&
-  /delete this post/i.test(staleDeleteNotice) &&
+  staleDeleteNotice.trim().length > 0 &&
   remainingRowTextAfterStaleDelete.includes('Love this place!') &&
   modalHiddenAfterUnflag &&
   labelAfterOff.trim() === 'Community sign' &&

@@ -75,7 +75,7 @@ import {
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
-import { planSelectionBoxes } from './selectionBoxes.js';
+import { planSelectionBoxes, writeBoxEdges, BOX_EDGE_VERTICES, BOX_EDGE_FLOATS, batchCapacity } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
@@ -85,7 +85,9 @@ import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
 import { anglesFromQuaternion, formatRotationReadout, quaternionFromAngles, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
 import { nudgeVector, nudgeStepMeters, heightAboveFloor, NUDGE_DIRECTIONS } from './nudge.js';
+import { createBuildBatching } from './batching.js';
 import { createBuildLod } from './lod.js';
+import { createBuildArrival } from './arrival.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -1423,6 +1425,9 @@ async function replaceMeshWithCrop(mesh, crop) {
 // bootstrap() has long since filled it in.
 export const productMeshes = [];
 
+// #4003: true until bootstrap has added the lándlet's first batch of items (markBuildSceneReady).
+let buildFirstLoad = true;
+
 export async function addInstanceToScene(instance) {
   const object = await createMeshForInstance(instance);
   if (!object) return null;
@@ -1433,6 +1438,7 @@ export async function addInstanceToScene(instance) {
   // included.
   landletElevationGroup.add(object);
   productMeshes.push(object);
+  if (buildFirstLoad) buildLod.holdNew(object); // #4003: undrawn until the next pass has judged it
   adoptVersion(instance); // #1062: a mesh built from a server instance starts at that version
   // #1950: covers every way a new mesh can appear -- bootstrap()'s initial
   // batch, placing a fresh item from the catalog, and undo/redo recreating
@@ -2078,6 +2084,7 @@ function deleteInstance(mesh, { sync = true, persist = true } = {}) {
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
+  buildBatching.releaseNow(mesh); // #3929: its instance stops drawing it at once, not at the next tick
   instanceVersions.delete(instanceId); // #1062: a removed instance has no version to protect
   // #1950: unlike selectionOutlines (cleared by the caller via
   // clearSelection() before every delete path), the low-stock highlight
@@ -2567,8 +2574,17 @@ let lastReconcileAt = 0;
 // main.js calls this once Build mode's initial instances have all loaded; a
 // focus event during bootstrap would otherwise reconcile an empty scene and
 // race the initial load into duplicates.
+// #4003: Build's arrival fog and dissolves go with the scene (mode switch away from Build).
+export function disposeBuildArrival() {
+  buildArrival.dispose();
+}
+
 export function markBuildSceneReady() {
   buildSceneReady = true;
+  // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
+  // pass, before the next frame, judges all of them against the entering budget.
+  buildLod.update(performance.now(), true);
+  buildFirstLoad = false;
 }
 
 // Never reconcile over work this tab hasn't finished saving: an action in
@@ -3305,7 +3321,16 @@ const pointerNdc = new THREE.Vector2();
 // (replace vs. add/remove) rather than needing two entirely separate
 // selection systems. The move/rotate gizmos can only ever attach to one
 // object, so they're only shown when the set holds exactly one.
-export const selectedMeshes = new Set();
+// #3929: tells the draw-call batching (src/build/batching.js) the moment an item is selected, so a drag
+// starts on the item's own object and the batch stops drawing it in the same step.
+class SelectionSet extends Set {
+  add(mesh) {
+    super.add(mesh);
+    this.onAdd?.(mesh);
+    return this;
+  }
+}
+export const selectedMeshes = new SelectionSet();
 export let multiSelectMode = false;
 
 // #1945: an adjustable-size brush, shown only while multi-select is on,
@@ -3393,6 +3418,73 @@ export function removeSelectionOutline(mesh) {
   selectionOutlines.delete(mesh);
 }
 
+// #3996: the loose items' boxes, drawn as one line mesh (every box's twelve edges) and one
+// instanced mesh (every box's translucent fill). Built on first use, grown by doubling.
+let looseSelectionBatch = null;
+const looseFillMatrix = new THREE.Matrix4();
+
+function buildLooseSelectionBatch(capacity) {
+  const positions = new THREE.BufferAttribute(new Float32Array(capacity * BOX_EDGE_FLOATS), 3);
+  positions.setUsage(THREE.DynamicDrawUsage);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', positions);
+  const outline = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: SELECTION_OUTLINE_COLOR, toneMapped: false }));
+  outline.frustumCulled = false;
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: SELECTION_OUTLINE_COLOR, transparent: true, opacity: SELECTION_FILL_OPACITY, depthWrite: false,
+  });
+  const fill = new THREE.InstancedMesh(selectionFillGeometry, fillMaterial, capacity);
+  fill.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  fill.frustumCulled = false;
+  fill.count = 0;
+  scene.add(outline);
+  scene.add(fill);
+  return { capacity, outline, fill };
+}
+
+function disposeLooseSelectionBatch(batch) {
+  scene.remove(batch.outline);
+  scene.remove(batch.fill);
+  batch.outline.geometry.dispose();
+  batch.outline.material.dispose();
+  batch.fill.material.dispose();
+  batch.fill.dispose();
+}
+
+function syncLooseSelectionBatch(boxes) {
+  const count = boxes.length;
+  if (count === 0) {
+    if (looseSelectionBatch) {
+      looseSelectionBatch.outline.visible = false;
+      looseSelectionBatch.fill.visible = false;
+    }
+    return;
+  }
+  const capacity = batchCapacity(count, looseSelectionBatch?.capacity ?? 0);
+  if (!looseSelectionBatch || capacity !== looseSelectionBatch.capacity) {
+    if (looseSelectionBatch) disposeLooseSelectionBatch(looseSelectionBatch);
+    looseSelectionBatch = buildLooseSelectionBatch(capacity);
+  }
+  const { outline, fill } = looseSelectionBatch;
+  const positions = outline.geometry.getAttribute('position');
+  const array = positions.array;
+  for (let i = 0; i < count; i += 1) {
+    const { min, max } = boxes[i];
+    writeBoxEdges(array, i * BOX_EDGE_FLOATS, min.x, min.y, min.z, max.x, max.y, max.z);
+    const sx = (max.x - min.x) * SELECTION_FILL_PADDING;
+    const sy = (max.y - min.y) * SELECTION_FILL_PADDING;
+    const sz = (max.z - min.z) * SELECTION_FILL_PADDING;
+    looseFillMatrix.set(sx, 0, 0, (min.x + max.x) / 2, 0, sy, 0, (min.y + max.y) / 2, 0, 0, sz, (min.z + max.z) / 2, 0, 0, 0, 1);
+    fill.setMatrixAt(i, looseFillMatrix);
+  }
+  positions.needsUpdate = true;
+  outline.geometry.setDrawRange(0, count * BOX_EDGE_VERTICES);
+  fill.count = count;
+  fill.instanceMatrix.needsUpdate = true;
+  outline.visible = true;
+  fill.visible = true;
+}
+
 function createSelectionBox() {
   // Box3Helper reads its own mutable `box`, so one helper follows a whole
   // bundle's union bounds with no per-member geometry (BoxHelper, one per
@@ -3409,7 +3501,7 @@ function createSelectionBox() {
   const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
   fill.frustumCulled = false;
   scene.add(fill);
-  return { helper, fill };
+  return { helper, fill, box: helper.box };
 }
 
 function disposeSelectionBox(entry) {
@@ -3434,31 +3526,40 @@ function updateSelectionBoxes() {
   }
   const plan = planSelectionBoxes(visibleMeshes);
   const live = new Set();
+  const looseBoxes = [];
   for (const { key, members } of plan) {
     live.add(key);
+    // #3996: a bundle keeps its own drawn box; every loose item's box goes into the two shared
+    // batches below, so a big selection costs two draws, not two per item.
+    const isBundle = typeof key === 'string';
     let entry = selectionBoxes.get(key);
     if (!entry) {
-      entry = createSelectionBox();
+      entry = isBundle ? createSelectionBox() : { box: new THREE.Box3() };
       selectionBoxes.set(key, entry);
     }
-    const unionBox = entry.helper.box;
+    const unionBox = entry.box;
     unionBox.makeEmpty();
     for (const member of members) {
       scratchBox.setFromObject(member);
       unionBox.union(scratchBox);
     }
-    unionBox.getSize(scratchBoxSize);
-    unionBox.getCenter(scratchBoxCenter);
-    entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
-    entry.fill.position.copy(scratchBoxCenter);
+    if (isBundle) {
+      unionBox.getSize(scratchBoxSize);
+      unionBox.getCenter(scratchBoxCenter);
+      entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+      entry.fill.position.copy(scratchBoxCenter);
+    } else {
+      looseBoxes.push(unionBox);
+    }
   }
+  syncLooseSelectionBatch(looseBoxes);
   for (const [key, entry] of selectionBoxes) {
     if (live.has(key)) continue;
-    disposeSelectionBox(entry);
+    if (entry.helper) disposeSelectionBox(entry);
     selectionBoxes.delete(key);
   }
   selectionBounds.makeEmpty();
-  for (const { helper } of selectionBoxes.values()) selectionBounds.union(helper.box);
+  for (const { box } of selectionBoxes.values()) selectionBounds.union(box);
 }
 
 // #3324: test-only hook (the window.__test* convention used throughout this
@@ -3467,10 +3568,19 @@ function updateSelectionBoxes() {
 // members are selected.
 window.__testSelectionBoxes = () => {
   updateSelectionBoxes();
-  return [...selectionBoxes.values()].map(({ helper }) => ({
-    min: [helper.box.min.x, helper.box.min.y, helper.box.min.z],
-    max: [helper.box.max.x, helper.box.max.y, helper.box.max.z],
+  return [...selectionBoxes.values()].map(({ box }) => ({
+    min: [box.min.x, box.min.y, box.min.z],
+    max: [box.max.x, box.max.y, box.max.z],
   }));
+};
+// #3996: how many objects the selection puts in the scene (each is a draw call), so an e2e can
+// assert that a big selection of loose items costs two, not two per item.
+window.__testSelectionDrawObjects = () => {
+  updateSelectionBoxes();
+  let objects = 0;
+  for (const entry of selectionBoxes.values()) if (entry.helper) objects += 2;
+  if (looseSelectionBatch?.outline.visible) objects += 2;
+  return objects;
 };
 
 // #1950 (sub-issue of #1947): a second, independent highlight for placed
@@ -5039,12 +5149,22 @@ function applyEdgePanWhileDraggingProduct() {
 // registers null (see enterSellMode).
 // #3929: Build's level of detail (src/build/lod.js): the same apparent-size and triangle rules Shop
 // uses, with the selected items and those around the orbit target always shown as themselves.
-const buildLod = createBuildLod({ camera, target: controls.target, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh) });
+// #3929: identical items the builder is not working on are drawn by one instanced mesh per part
+// (src/build/batching.js); every item's own object stays in the scene and is what a tap selects.
+const buildBatching = createBuildBatching({ scene, isSelected: (mesh) => selectedMeshes.has(mesh) });
+selectedMeshes.onAdd = (mesh) => buildBatching.releaseNow(mesh);
+// #4003: items let in on the first load resolve out of fog (src/build/arrival.js).
+const buildArrival = createBuildArrival({ parent: landletElevationGroup, anchor: () => ({ x: controls.target.x, y: controls.target.y }) });
+const buildLod = createBuildLod({ camera, target: controls.target, arrival: buildArrival, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
+window.__testBuildBatchCounts = () => buildBatching.counts();
+window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
+window.__testBuildArrivingCount = () => buildArrival.arrivingCount(); // e2e: items still dissolving in (not batched yet)
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
+window.__testBuildRenderedCalls = () => renderer.info.render.calls; // the last frame's draw calls (#3929)
 window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
 
 export function buildModeFrameUpdate(now) {
@@ -5065,6 +5185,7 @@ export function buildModeFrameUpdate(now) {
   applyEdgePanWhileDraggingProduct();
   controls.update();
   buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
+  buildArrival.update(); // #4003: fog and dissolve of the items just let in; nothing when none
   updateCameraDebug(now);
   // A selected item's box must track it live while the translate/rotate
   // gizmo drags it, so the boxes are recomputed here every frame rather than
@@ -5146,7 +5267,7 @@ async function renderLandCapField() {
   status.className = 'settings-empty-note';
   status.textContent = 'Loading…';
   field.appendChild(status);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
   try {
     // ownedAreaM2 comes straight from the builder object now (#312) —
     // the backend's own recomputeLandCap already sums every owned
@@ -5201,6 +5322,8 @@ function renderBuilderIdentityField() {
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
     onRenamed: (id, label) => { setShopBuilderLabel(id, label); },
+    // #4019: the username sits in the "Profile, lándlet cap and stock" row.
+    container: moreFoldEl,
   });
 }
 
@@ -5440,25 +5563,47 @@ async function renderRedeemHigglesField() {
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
 // #3652: Redeem Higgles, Sell your lándlet and Active Auctions are occasional money matters, so they
-// sit behind one closed row and the Build tab's first screen holds what a builder checks often
-// (username, lándlet cap, low-stock). The fold is made first, so fields that load later go either
-// into it or in front of it, whatever order their requests come back in.
+// sit behind one closed row. #4019: the rest of what a builder rarely touches (username and reset,
+// lándlet cap, low stock, sold-out markers) sits behind a second closed row, and Version history shows
+// only its latest version with the earlier ones folded, so the tab's first screen is Publish and the
+// live version (the tall tab covered 86% of a phone screen with all of it open). The folds are made
+// first, so fields that load later go into them, whatever order their requests come back in.
 let higglesFoldEl = null;
 const higglesHost = () => higglesFoldEl || settingsSectionEl;
-function appendBeforeHigglesFold(el) {
+let moreFoldEl = null;
+// Whether the "Profile, lándlet cap and stock" row is open, kept across the redraws one open Settings
+// makes (a rename redraws the tab and must not shut the row it was made in); each time Settings opens
+// the row starts closed again (resetBuildSettingsFolds).
+let buildMoreFoldOpen = false;
+export function resetBuildSettingsFolds() { buildMoreFoldOpen = false; }
+function appendToMoreFold(el) {
+  if (moreFoldEl && moreFoldEl.parentNode === settingsSectionEl) moreFoldEl.appendChild(el);
+  else settingsSectionEl.appendChild(el);
+}
+// Publish, Version history and Saved layouts sit above both closed rows.
+function appendAboveFolds(el) {
   if (higglesFoldEl && higglesFoldEl.parentNode === settingsSectionEl) settingsSectionEl.insertBefore(el, higglesFoldEl);
   else settingsSectionEl.appendChild(el);
 }
 
 export function renderBuildSettingsSection() {
-  renderBuilderIdentityField();
   const fold = document.createElement('details');
-  fold.className = 'settings-account-fold';
+  fold.className = 'settings-account-fold settings-higgles-fold';
   const foldSummary = document.createElement('summary');
   foldSummary.textContent = 'Higgles and auctions';
   fold.appendChild(foldSummary);
   settingsSectionEl.appendChild(fold);
   higglesFoldEl = fold;
+  const moreFold = document.createElement('details');
+  moreFold.className = 'settings-account-fold settings-more-fold';
+  const moreSummary = document.createElement('summary');
+  moreSummary.textContent = 'Profile, lándlet cap and stock';
+  moreFold.appendChild(moreSummary);
+  moreFold.open = buildMoreFoldOpen;
+  moreFold.addEventListener('toggle', () => { buildMoreFoldOpen = moreFold.open; });
+  settingsSectionEl.appendChild(moreFold);
+  moreFoldEl = moreFold;
+  renderBuilderIdentityField();
   renderLandCapField();
   renderRedeemHigglesField();
   renderAuctionSection();
@@ -5468,7 +5613,7 @@ export function renderBuildSettingsSection() {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
     note.textContent = 'Enter Build mode on a claimed lándlet to publish or manage versions.';
-    settingsSectionEl.appendChild(note);
+    settingsSectionEl.insertBefore(note, fold);
     return;
   }
   const landletId = currentLandletId;
@@ -5491,7 +5636,7 @@ export function renderBuildSettingsSection() {
   publishStatus.id = 'build-publish-status';
   publishStatus.className = 'settings-empty-note';
   publishField.appendChild(publishStatus);
-  settingsSectionEl.appendChild(publishField);
+  appendAboveFolds(publishField);
 
   const historyField = document.createElement('div');
   historyField.className = 'settings-field';
@@ -5501,13 +5646,28 @@ export function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  // #4019: only the newest version is on the first screen; the earlier ones (and Load more) are in a
+  // closed row below it, drawn only once there is an earlier version to show.
+  const earlierFold = document.createElement('details');
+  earlierFold.className = 'settings-account-fold settings-earlier-versions';
+  earlierFold.hidden = true;
+  const earlierSummary = document.createElement('summary');
+  earlierSummary.textContent = 'Earlier versions';
+  earlierFold.appendChild(earlierSummary);
+  const earlierList = document.createElement('div');
+  earlierList.className = 'version-list';
+  earlierFold.appendChild(earlierList);
   const historyLoadMoreBtn = document.createElement('button');
   historyLoadMoreBtn.type = 'button';
   historyLoadMoreBtn.className = 'version-action-btn';
   historyLoadMoreBtn.textContent = 'Load more';
   historyLoadMoreBtn.hidden = true;
-  historyField.appendChild(historyLoadMoreBtn);
-  settingsSectionEl.appendChild(historyField);
+  earlierFold.appendChild(historyLoadMoreBtn);
+  historyField.appendChild(earlierFold);
+  const syncEarlierFold = () => {
+    earlierFold.hidden = !earlierList.querySelector('.version-row') && !versionHistoryNextCursor;
+  };
+  appendAboveFolds(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
   // (#633) land here — reusing Version History's own .settings-field/
@@ -5533,7 +5693,7 @@ export function renderBuildSettingsSection() {
   savedLayoutsLoadMoreBtn.textContent = 'Load more';
   savedLayoutsLoadMoreBtn.hidden = true;
   savedLayoutsField.appendChild(savedLayoutsLoadMoreBtn);
-  settingsSectionEl.appendChild(savedLayoutsField);
+  appendAboveFolds(savedLayoutsField);
 
   let savedLayoutsLoadToken = 0;
   // The cursor for whatever page comes after the ones currently rendered —
@@ -5666,6 +5826,8 @@ export function renderBuildSettingsSection() {
   let versionHistoryActiveVersionId = null;
 
   function appendVersionRow(version, activeVersionId) {
+    // The newest version is the first row drawn; every later one goes in the Earlier versions row.
+    const target = historyList.querySelector('.version-row') ? earlierList : historyList;
     const row = document.createElement('div');
     row.className = 'version-row';
 
@@ -5763,14 +5925,16 @@ export function renderBuildSettingsSection() {
     actions.appendChild(restoreBtn);
 
     row.appendChild(actions);
-    historyList.appendChild(row);
+    target.appendChild(row);
   }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    earlierList.innerHTML = '';
     historyLoadMoreBtn.hidden = true;
     versionHistoryNextCursor = null;
+    syncEarlierFold();
     let versions;
     let activeVersionId;
     let nextCursor;
@@ -5798,6 +5962,7 @@ export function renderBuildSettingsSection() {
     versionHistoryNextCursor = nextCursor;
     versionHistoryActiveVersionId = activeVersionId;
     historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    syncEarlierFold();
   }
 
   historyLoadMoreBtn.addEventListener('click', async () => {
@@ -5809,6 +5974,7 @@ export function renderBuildSettingsSection() {
       for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
       versionHistoryNextCursor = nextCursor;
       historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+      syncEarlierFold();
     } catch (err) {
       console.warn('Could not load more versions:', err);
     } finally {
@@ -6364,7 +6530,7 @@ async function renderLowStockSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
 
   // A days-remaining threshold only ever excludes a row that actually has a
   // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
@@ -6472,7 +6638,7 @@ async function renderSoldOutMarkersSection() {
   const empty = document.createElement('div');
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
-  appendBeforeHigglesFold(field);
+  appendToMoreFold(field);
 
   toggle.addEventListener('change', () => {
     setShowSoldOutMarkers(toggle.checked);

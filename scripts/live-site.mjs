@@ -9,6 +9,9 @@
 //   node scripts/live-site.mjs --name higglehaven10 --timing /api/credit-orbs mode:shop idle
 //   node scripts/live-site.mjs --url http://127.0.0.1:8787 --login local --name higglehaven10 idle shot
 //
+// Against a local server, run `npm run build` first: `wrangler dev` serves the files that last build made,
+// and an old one shows a look that main has since changed (#4039 was a false finding from exactly that).
+//
 // Steps (each `name` or `name:arg:arg`):
 //   walk:<forward|back|left|right>[:ms]   put a finger on the left half of the world and hold it
 //                                         dragged that way (default 1000 ms); moving is a
@@ -16,15 +19,18 @@
 //   aim:<up|down|left|right>[:ms]         the same from the right half (default 1000 ms): turns
 //                                         the camera, up and down are the pitch
 //   look:<dx>:<dy>                        drag the page by that many pixels
-//   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
+//   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
+//                                         `tap:text=Orders` works on a label too)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
-//   menu                                  open the flower's general menu (does nothing if it is open)
+//   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
 //   petal:<shop|build|sell>               tap that mode's petal (opens the bud first if it is folded)
 //   leaf:<notices|friends|purchases|settings|help>
-//                                         open the menu if needed, then that leaf (help is the "?"
-//                                         petal of Shop and Build)
+//                                         open the flower if needed, then that leaf. Notices, settings
+//                                         and help are the top row, the same in every place; friends and
+//                                         purchases are Shop's menu, so in Build or Sell that step fails
+//                                         (go to Shop first, #4025)
 //   settings                              the same as leaf:settings
 //   land                                  land from flight. Every Shop arrival starts in flight 80 m
 //                                         up, looking down (docs/SPEC.md #1175), and walking
@@ -42,6 +48,13 @@
 //   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
+//   lap                                   like stats, then count afresh: the figures since the last lap
+//   budget:<metric>:<limit>               fail the run (exit 2) when the figures since the last lap (or
+//                                         the start) pass the limit; metric is longtask (longest long
+//                                         task, ms), longtasks (how many) or frame (longest frame, ms:
+//                                         software GL, see --phone). The report's step carries the value
+//                                         and the limit, so a PR can say "within budget" with a number.
+//                                         The run goes on after an over-budget step.
 //   pos                                   where the avatar stands now, and which mode and flags the page is in
 //   peer:join                             (with --with) the second page's avatar walks up beside this one
 //   peer:say:<text> / peer:shot[:name] / peer:pos   the second page speaks in nearby chat / is photographed / reports where it stands
@@ -53,6 +66,7 @@
 // session's name), --desktop (1280x800 instead of phone), --size WxH (a touch screen of that size,
 // e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
+// --server-timing (asks the worker how many D1 trips each timed route made and how long they took, #3464; report's `serverTimings`),
 // --throttle (CPU 4x slower, 150 ms round trip, 1.6/0.75 Mbps: a slow phone, #3736),
 // --phone (CPU 4x slower, 40 ms, 20/5 Mbps: a phone on home wifi, so a frame or a long task means a
 // phone; the report's `profile` says which figures to trust, #3935),
@@ -67,7 +81,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, LEAF_BUTTONS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage, profileFor, applyProfile, parseServerTiming, summariseServerTimings, evaluateBudget,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -106,6 +120,10 @@ const context = await browser.newContext({
   hasTouch: device.hasTouch,
 });
 const page = await context.newPage();
+if (options.serverTiming) {
+  // Same-origin API calls only (a cross-origin one would need a CORS preflight for the new header).
+  await context.route(`${baseUrl}/api/**`, (route) => route.continue({ headers: { ...route.request().headers(), 'x-server-timing': '1' } }));
+}
 const mainPage = page;
 
 const result = { url: baseUrl, name: options.name, device: options.size ? `touch ${options.size.width}x${options.size.height}` : options.desktop ? 'desktop' : 'phone', screenshots: [], consoleErrors: [], failedRequests: [], timings: {}, steps: [] };
@@ -117,6 +135,7 @@ if (profile) {
   result.throttle = profile; // kept for #3736's readers; `profile` is the one that names which ran
 }
 const timingSamples = new Map();
+const serverTimingSamples = new Map();
 page.on('pageerror', (error) => result.consoleErrors.push(error.message));
 page.on('console', (message) => {
   if (message.type() === 'error') result.consoleErrors.push(message.text());
@@ -133,6 +152,13 @@ page.on('requestfinished', async (request) => {
   const key = `${request.method()} ${routeOf(url)}`;
   if (!timingSamples.has(key)) timingSamples.set(key, []);
   timingSamples.get(key).push(duration);
+  if (options.serverTiming) {
+    const served = parseServerTiming((await request.response())?.headers()['server-timing']);
+    if (served) {
+      if (!serverTimingSamples.has(key)) serverTimingSamples.set(key, []);
+      serverTimingSamples.get(key).push(served);
+    }
+  }
 });
 
 async function signIn(ctx = context, name = options.name) {
@@ -437,7 +463,9 @@ async function waitForAppOpen() {
 }
 async function controlOrFail(selector, what) {
   await waitForAppOpen();
-  const control = page.locator(selector).first();
+  // #4043: the first VISIBLE match, not the first match: a hidden element earlier in the page that carries the
+  // same words (an empty-state hint quoting "Add a product") made `tap:text=Add a product` wait for nothing.
+  const control = page.locator(selector).filter({ visible: true }).first();
   try {
     await control.waitFor({ state: 'visible', timeout: CONTROL_WAIT_MS });
   } catch {
@@ -640,6 +668,11 @@ async function runStepAction(step, index) {
       await page.evaluate(() => window.__frameMonitor?.reset()).catch(() => {});
       return lap;
     }
+    case 'budget': {
+      // #3935: the figures since the last lap (or the start) against a stated limit; the run goes on either way.
+      const [metric, limit] = step.args;
+      return evaluateBudget(metric, limit, await frameStats());
+    }
     case 'pos':
       return page.evaluate(() => ({
         avatar: window.__testShopAvatarPosition?.() ?? null,
@@ -762,6 +795,12 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
+      if (step.command === 'budget') {
+        // An over-budget step fails the run (exit 2) but does not stop the steps after it, so one run can hold several phases to account.
+        if (!value.within) console.error(`live-site: ${value.line}`);
+        result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
+        continue;
+      }
       result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
@@ -773,6 +812,10 @@ try {
   }
   result.frame = await frameStats();
   for (const [key, samples] of timingSamples) result.timings[key] = summarizeTimings(samples);
+  if (options.serverTiming) {
+    result.serverTimings = {};
+    for (const [key, samples] of serverTimingSamples) result.serverTimings[key] = summariseServerTimings(samples);
+  }
 } finally {
   await browser.close();
 }

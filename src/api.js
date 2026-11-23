@@ -201,6 +201,18 @@ export async function saveLoadingTipsPreference(off) {
   return user;
 }
 
+// #3657: the account remembers that the first-visit hints are done, so another
+// device does not replay them. Best effort: the device already remembers on its
+// own, and a signed-out visitor simply gets a 401 the caller ignores.
+export async function saveFirstHintsDone() {
+  const { user } = await requestJson('/auth/first-hints', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ done: true }),
+  });
+  return user;
+}
+
 export async function ageAttest() {
   const { user } = await requestJson('/auth/age-attest', {
     method: 'POST',
@@ -1895,6 +1907,12 @@ function purchaseIdempotencyKey(instanceId) {
 // colliding with this completed one.
 export function clearPurchaseIdempotencyKey(instanceId) {
   try { localStorage.removeItem(purchaseIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
+}
+
+// #3946: what Buy would do, read-only: `paysWithCard` says whether the purchase
+// opens a card payment or completes on the spot. Creates and charges nothing.
+export async function getPurchaseQuote(instanceId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
 }
 
 export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {

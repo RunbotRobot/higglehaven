@@ -18,7 +18,7 @@
 // test doesn't need) -- the first chunk's 100 items still hit the real
 // server and really commit, so what's under test (whether the frontend
 // correctly accounts for that real partial success) is exercised for real.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin, captureNotices } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin } from './helpers.mjs';
 
 const LABEL = 'Saved Layout Chunk Retry Tester';
 const LEVEL_HEIGHT_M = 10;
@@ -151,12 +151,12 @@ await page.route('**/api/instances/batch', async (route) => {
   await route.continue();
 });
 
-await captureNotices(page); // #3359: the paste result is an in-app notice now (installed on the preview page itself)
 await page.click('#layout-preview-paste-btn');
 // #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
 // -- null arg, 60000ms real timeout.
 await page.waitForFunction(() => document.getElementById('layout-preview-paste-btn') && !document.getElementById('layout-preview-paste-btn').disabled, null, { timeout: 60000 });
-const lastAlertMessage = (await page.evaluate(() => window.__alerts ?? [])).at(-1) ?? null;
+// #3889: the paste result is a status line in the preview toolbar now.
+const lastAlertMessage = await page.textContent('#layout-preview-toolbar .inline-action-status');
 console.log('notice shown after the partial failure:', lastAlertMessage);
 const alertMentionsPartialSuccess = Boolean(lastAlertMessage) && lastAlertMessage.includes('100') && lastAlertMessage.includes('1 failed');
 

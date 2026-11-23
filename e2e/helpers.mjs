@@ -394,6 +394,7 @@ export function budMenuOf(selector) {
 }
 // Open the bud and then the stem of `menu` ('build' or 'sell'): the ring petal of the place the page is in.
 export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
+  await settleBudFold(page);
   if (!(await page.locator('#account-menu-panel.expanded').count())) {
     if (await page.locator('.bud-leaf-close').count()) await click('.bud-leaf-close');
     await click('#account-menu-toggle');
@@ -412,6 +413,11 @@ const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste
 // #3693: Community sign, Community calendar and Backup chain sit in the item card's More, so they
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
+// #4012: for a moment after the bud closes its panel is still drawn, folding (not tappable). A test that
+// judges a petal visible then would click it as it goes, so the helpers below wait for the fold to finish.
+export async function settleBudFold(page) {
+  await page.waitForFunction(() => !document.getElementById('account-menu-panel')?.classList.contains('bud-folding'), null, { timeout: 3000 }).catch(() => {});
+}
 export function budAware(page) {
   // #3702: a product's per-row settings are folded under "More settings". Whenever an action is stuck waiting
   // (a setting that is not drawn yet) and a closed More settings control is on screen, open it and let the action
@@ -432,7 +438,17 @@ export function budAware(page) {
   }
   const click = page.click.bind(page);
   page.click = async (selector, options) => {
+    // #4025: Friends and My purchases are Shop's menu, so in Build or Sell their buttons are not drawn. A test
+    // whose subject is the friends or purchases panel (not the menu) opens it from there by pressing the
+    // button in the page; the menu tests (bud-menus) cover where the buttons are.
+    if ((selector === '#friends-btn' || selector === '#my-purchases-btn')
+      && !(await page.locator(selector).isVisible())
+      && (await page.evaluate(() => document.body.dataset.mode)) !== 'shop') {
+      await page.evaluate((sel) => document.querySelector(sel).click(), selector);
+      return;
+    }
     const menuOf = typeof selector === 'string' ? budMenuOf(selector) : null;
+    if (BUD_PETALS.has(selector) || menuOf || TOOL_CONTROLS.has(selector)) await settleBudFold(page);
     if ((BUD_PETALS.has(selector) || menuOf) && !(await page.locator(selector).isVisible())) {
       // #3690: an open leaf (Levels) sits over the bud and swallows the tap on it; put it away first.
       await openBudMenuOf(page, menuOf, click);
@@ -744,8 +760,9 @@ async function clickModeButton(page, mode) {
   if (await page.evaluate(() => document.body.dataset.mode) === mode) return false;
   const nav = page.locator(`.mode-nav-btn[data-mode="${mode}"]`);
   // #3752: the petals are still drawn for the short fold after the bud closes (Escape, a leaf opening);
-  // judging them visible then and clicking would land as they vanish. Let the fold finish first.
-  await page.waitForFunction(() => document.body.dataset.budRing !== 'folding', null, { timeout: 5000 }).catch(() => {});
+  // judging them visible then and clicking would land as they vanish. Let the fold finish first. #4012:
+  // the fold has stages now (leaves, then the stem, with the petals held out: "staged", then "folding").
+  await page.waitForFunction(() => !['folding', 'staged'].includes(document.body.dataset.budRing), null, { timeout: 5000 }).catch(() => {});
   if (!(await nav.isVisible())) await openAccountMenu(page);
   await nav.click();
   return true;
@@ -807,6 +824,16 @@ export async function openPayoutsLeaf(page) {
   await page.waitForSelector('#bud-leaf-payouts', { timeout: 5000 });
 }
 
+// #4042: the payout form is behind one button in every state (the leaf opens on what is owed). A test that
+// is about the form opens the leaf and then presses that button.
+export async function openPayoutsForm(page) {
+  await openPayoutsLeaf(page);
+  await page.waitForSelector('#bud-leaf-payouts .payout-open, #bud-leaf-payouts .payout-form:not([hidden])', { timeout: 30000 });
+  const open = page.locator('#bud-leaf-payouts .payout-open');
+  if (await open.isVisible()) await open.click();
+  await page.waitForSelector('#bud-leaf-payouts .payout-form', { state: 'visible', timeout: 5000 });
+}
+
 // #3704 (6/6, slice 2): the shop name, Rename and Reset Profile are the bud's Storefront leaf, not
 // the Sell tab of Settings (which is gone).
 export async function openStorefrontLeaf(page) {
@@ -822,6 +849,7 @@ export async function openAccountMenu(page) {
   // already open must not be toggled shut. So: skip if open, and re-click once if the first
   // click did not open it.
   const isOpen = () => page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded') === true);
+  await settleBudFold(page);
   if (await isOpen()) return;
   await page.click('#account-menu-toggle');
   if (!(await page.waitForSelector('#account-menu-panel.expanded', { timeout: 3000 }).then(() => true, () => false))) {
@@ -835,7 +863,7 @@ export async function openAccountMenu(page) {
 export async function openAssistantFromHelp(page) {
   await openAccountMenu(page);
   // The petal is registered once per mode and only the current mode's is drawn.
-  await page.locator('#account-menu-panel button:visible', { hasText: /^Help$/ }).first().click();
+  await page.locator('#bud-row button:visible', { hasText: /^Help$/ }).first().click();
   await page.waitForSelector('#help-ask-assistant-btn', { state: 'visible', timeout: 5000 });
   await page.click('#help-ask-assistant-btn');
 }
@@ -854,6 +882,7 @@ export async function openLevelMenu(page) {
 // there while the bud is open (and only drawn once there is something to undo or redo).
 // Opens the bud when it is closed, then clicks the control inside it.
 export async function budClick(page, selector) {
+  await settleBudFold(page);
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!open) await openAccountMenu(page);
   // #3760: a place's tool is in that place's own menu, so on a page the budAware wrapper was not put on
@@ -1040,4 +1069,16 @@ export async function readSaying(page, key) {
 }
 export async function closeSaying(page, key) {
   await page.click(`#bud-leaf-saying-${key} .bud-leaf-close`);
+}
+
+// #4019: the Build tab keeps the username, lándlet cap, low stock and sold-out markers in one closed
+// "Profile, lándlet cap and stock" row, and the earlier versions in a closed "Earlier versions" row.
+// Open them before looking at (not just clicking) something inside; the row is drawn as soon as the tab is.
+export async function openBuildMoreFold(page) {
+  await page.waitForSelector('.settings-more-fold', { state: 'attached', timeout: 10000 });
+  await page.evaluate(() => document.querySelector('.settings-more-fold')?.setAttribute('open', ''));
+}
+export async function openEarlierVersions(page) {
+  await page.waitForSelector('.settings-earlier-versions:not([hidden])', { state: 'attached', timeout: 10000 });
+  await page.evaluate(() => document.querySelectorAll('.settings-earlier-versions').forEach((el) => el.setAttribute('open', '')));
 }

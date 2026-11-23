@@ -81,6 +81,20 @@
          person who declines still has the Log in row. */
       body:has(#auth-modal.visible) #topbar-left,
       body:has(#auth-modal.visible) #mode-nav { visibility: hidden; }
+      /* #3873: a mode switch keeps the world the person was in on screen (public/bud-switch.js sets the image
+         from the snapshot the tap drew): stretched, under a pale fog veil, with the cold-open bud and
+         wordmark left out. The bar, the stage word and the tips are the signs of work; the lit petal is the
+         other. The veil is the brand's own pale green so it reads as fog, not a grey wash. */
+      html.switch-snapshot #loading-screen { background-size: cover; background-position: center; }
+      html.switch-snapshot #loading-screen::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: rgb(238 244 224 / 0.62);
+      }
+      html.switch-snapshot #loading-fog,
+      html.switch-snapshot #loading-bud,
+      html.switch-snapshot #loading-content img { display: none; }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
         /* #3442: the splash now sits above the Shop HUD, so while it fades
@@ -380,6 +394,12 @@
       #layout-preview-toolbar.visible {
         display: flex;
       }
+      /* #3889: a paste refusal is said on its own row of the toolbar, selectable. */
+      #layout-preview-toolbar .inline-action-status {
+        flex-basis: 100%;
+        text-align: center;
+        user-select: text;
+      }
       #layout-preview-back-btn,
       #layout-preview-paste-btn {
         border: none;
@@ -587,7 +607,8 @@
          through it; the hint waits while the window is open. */
       body:has(#assistant-chat-panel:not([hidden])) #world-hint,
       body:has(.bud-leaf) #world-hint,
-      body:has(.world-card:not([hidden])) #world-hint { visibility: hidden; } /* #3913: a leaf, or a card blooming beside a product (#3702: the hint was drawn over the card's buttons), has the person's attention */
+      body:has([role="dialog"].visible) #world-hint,
+      body:has(.world-card:not([hidden])) #world-hint { visibility: hidden; } /* #3913: a leaf, or a card blooming beside a product (#3702: the hint was drawn over the card's buttons), has the person's attention; Friends, Settings, Notices and the other leaves are dialogs, not .bud-leaf (#3544) */
       #world-hint.visible {
         opacity: 1;
         pointer-events: auto;
@@ -737,15 +758,22 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgb(var(--white-rgb) / 0.5);
-        box-shadow: var(--shadow-card);
-        animation: bud-breathe var(--motion-breath) ease-in-out infinite;
+        /* #3754 (the owner chose option C): the head is the solid green bud with the logo in cream
+           (public/bud-head.svg), so there is no backing disc: the picture's shadow follows the
+           bud's own outline, and breathing and pulsing animate that shadow on the picture
+           (bud-head-breathe/-pulse). */
+        background: transparent;
+        border: 0;
+        box-shadow: none;
       }
-      body[data-bud="on"] #account-menu-toggle.active {
-        background: rgb(var(--white-rgb) / 0.8);
-        animation: none;
+      body[data-bud="on"] .bud-logo {
+        display: block;
+        width: 100%;
+        height: 100%;
+        filter: var(--filter-head);
+        animation: bud-head-breathe var(--motion-breath) ease-in-out infinite;
       }
-      body[data-bud="on"] .bud-logo { display: block; border-radius: var(--radius-md); }
+      body[data-bud="on"] #account-menu-toggle.active .bud-logo { animation: none; }
       body[data-bud="on"][data-bud-new] .bud-word,
       body[data-bud="on"][data-bud-word] .bud-word {
         display: block;
@@ -792,8 +820,8 @@
       /* #3723: the first-visit word steps aside while the bud is open, where the mode petals now
          fan out over its right edge. */
       body[data-bud="on"] #account-menu-toggle.active .bud-word { display: none; }
-      body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) {
-        animation: bud-pulse 1.6s ease-in-out infinite;
+      body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) .bud-logo {
+        animation: bud-head-pulse 1.6s ease-in-out infinite;
       }
       /* #3762: on the first open ever, the "?" leaf pulses so the instructions are found. */
       body[data-bud="on"][data-bud-teach-help] #account-menu-panel .bud-icon[data-icon="help"] {
@@ -823,20 +851,34 @@
         min-width: 0;
         align-items: flex-start;
       }
-      body[data-bud="on"] #account-menu-panel::before {
-        content: '';
+      /* #4026 (part of #3759): the stem is a plant's stem, green and thick, one curve with no corner: it leaves
+         the head's base on the head's own centre line, runs down, curves across to the leaves' line above the
+         first leaf and goes straight down between them (src/ui/bud.js draws the path from measured boxes). A pale
+         edge round the green holds it against grass, sand and sky (docs/DESIGN.md says by how much). */
+      #bud-stem {
         position: absolute;
         top: 0;
-        height: var(--stem-h, 0px);
-        left: var(--stem-x);
-        width: 4px;
-        margin-left: -2px;
-        border-radius: var(--radius-sm);
-        background: rgb(var(--ink-rgb) / 0.55);
-        transform-origin: top;
-        animation: bud-stem-grow var(--motion-petal) var(--ease-bloom) both;
+        left: 0;
+        width: 1px;
+        height: 1px;
+        overflow: visible;
+        pointer-events: none;
+        display: none;
+        /* a hairline of ink outside the pale edge, so the stem also holds over pale ground and sky */
+        filter: drop-shadow(0 0 1px rgb(var(--ink-rgb) / 0.55));
       }
-      body[data-bud="on"] #account-menu-panel button {
+      body[data-bud="on"] #bud-stem { display: block; }
+      #bud-stem path {
+        fill: none;
+        stroke-linejoin: round;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 0;
+        animation: bud-stem-grow var(--motion-open-stem) var(--ease-bloom) var(--delay-open-stem) both;
+      }
+      #bud-stem .bud-stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10px; }
+      #bud-stem .bud-stem-core { stroke: var(--brand-green); stroke-width: 6px; }
+      body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-row button {
         min-height: 44px;
         padding: 10px 18px;
         border-radius: var(--radius-petal);
@@ -844,8 +886,31 @@
         box-shadow: var(--shadow-petal);
         font-size: var(--text-md);
         white-space: nowrap;
-        animation: bud-unfold var(--motion-grow) var(--ease-bloom) both;
+        animation: bud-unfold var(--motion-open-leaf) var(--ease-bloom) both;
       }
+      /* #4038: the row grows out of the head with the petals, left to right (src/ui/bud.js sets --row-i and the
+         distance each item travels, --row-pull), and folds back into it, the last item first. */
+      body[data-bud="on"] #bud-row button {
+        animation: bud-row-grow var(--motion-open-petals) var(--ease-soft) both;
+        animation-delay: calc(var(--row-i, 0) * var(--step-open-row));
+      }
+      /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
+         stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
+         panel is still drawn while it does (not tappable). */
+      #account-menu-panel.bud-folding { display: flex; pointer-events: none; }
+      body[data-bud="on"] #account-menu-panel.bud-folding button,
+      body[data-bud="on"] #account-menu-panel.bud-folding > .bud-pair {
+        animation: bud-leaf-fold var(--motion-fold-leaf) var(--ease-fold) both;
+        animation-delay: 0s;
+      }
+      body[data-bud="on"] #account-menu-panel.bud-folding #bud-stem path {
+        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-fold) var(--motion-fold-leaf) both;
+      }
+      /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
+         (already finished), so changing its direction would jump to the end instead of playing. */
+      @keyframes bud-leaf-fold { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.6); } }
+      /* The stem is drawn down from the head and drawn back up into it (stroke-dashoffset on a path of length 1). */
+      @keyframes bud-stem-draw { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 1; } }
       /* A leaf: the icon large, its word small under it, joined to the stem by a short stalk. */
       body[data-bud="on"] #account-menu-panel > button,
       body[data-bud="on"] #account-menu-panel > .bud-pair {
@@ -853,7 +918,7 @@
         box-sizing: border-box;
         width: var(--leaf-w);
         margin-bottom: -22px;
-        animation-delay: calc(var(--leaf-i, 0) * 0.018s);
+        animation-delay: calc(var(--delay-open-leaves) + var(--leaf-i, 0) * var(--step-open-leaf));
       }
       body[data-bud="on"] #account-menu-panel > .bud-pair { width: 88px; gap: 0; }
       body[data-bud="on"] #account-menu-panel [data-side="right"] { margin-left: calc(var(--stem-x) + 4px); transform-origin: left center; }
@@ -868,14 +933,16 @@
         position: absolute;
         top: 50%;
         width: 6px;
-        height: 4px;
-        margin-top: -2px;
-        background: rgb(var(--ink-rgb) / 0.55);
+        height: 6px;
+        margin-top: -3px;
+        background: var(--brand-green);
+        box-shadow: 0 0 0 2px rgb(var(--panel-rgb) / 0.95);
       }
       body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
       body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
       body[data-bud="on"] #account-menu-panel > button,
-      body[data-bud="on"] #account-menu-panel .bud-pair button {
+      body[data-bud="on"] #account-menu-panel .bud-pair button,
+      body[data-bud="on"] #bud-row button {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -892,7 +959,8 @@
       /* #3761: the Person leaf's word is the account's name, which can be long: one line, cut with an
          ellipsis at the leaf's edge, not broken in the middle of a word ("higglehaven1" over "0"). A
          block rather than a column so the cut can be drawn. */
-      body[data-bud="on"] #account-menu-panel #account-auth-btn {
+      body[data-bud="on"] #account-menu-panel #account-auth-btn,
+      body[data-bud="on"] #bud-row #account-auth-btn {
         display: block;
         text-align: center;
         white-space: nowrap;
@@ -902,13 +970,17 @@
            the edge instead of running to it. */
         padding-inline: var(--space-xs);
       }
+      body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
       body[data-bud="on"] #account-menu-panel #account-auth-btn .bud-icon { margin: 0 auto var(--space-3xs); width: max-content; }
-      body[data-bud="on"] #account-menu-panel .bud-icon { display: block; line-height: 0; color: var(--ink); }
-      body[data-bud="on"] #account-menu-panel .bud-icon svg { display: block; }
+      body[data-bud="on"] #account-menu-panel .bud-icon,
+      body[data-bud="on"] #bud-row .bud-icon { display: block; line-height: 0; color: var(--ink); }
+      body[data-bud="on"] #account-menu-panel .bud-icon svg,
+      body[data-bud="on"] #bud-row .bud-icon svg { display: block; }
       /* A mark (unread notices, a friend request) sits on the leaf's corner. */
       body[data-bud="on"] #account-menu-panel button #notifications-badge,
       body[data-bud="on"] #account-menu-panel button #friends-badge,
-      body[data-bud="on"] #account-menu-panel button #dm-badge {
+      body[data-bud="on"] #account-menu-panel button #dm-badge,
+      body[data-bud="on"] #bud-row button #notifications-badge {
         position: absolute;
         top: var(--space-xs);
         right: var(--space-xs);
@@ -951,10 +1023,34 @@
       body[data-bud-corner="bottom-right"] #bud-modes { --ring-flip: 1; }
       body[data-bud="on"] #account-menu-panel.expanded ~ #bud-modes,
       body[data-bud="on"][data-bud-ring] #bud-modes { display: block; }
+      /* #4025: the row of icons along the top, to the right of the head: the account, Notices, Settings, Help.
+         The same in every place. It is part of the flower: it opens with the petals (it is drawn whenever
+         the bud is open) and folds with them (while the ring is folding), staying put while the stem draws up. */
+      #bud-row {
+        display: none;
+        position: absolute;
+        top: -2px;
+        left: 148px;
+        width: min(248px, calc(100vw - 166px));
+        gap: var(--space-3xs);
+        justify-content: flex-start;
+      }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-row,
+      body[data-bud="on"][data-bud-ring="staged"] #bud-row,
+      body[data-bud="on"][data-bud-ring="folding"] #bud-row { display: flex; }
+      /* The words keep whole ("Settings" never breaks in two); the account's name is the one that gives way. */
+      body[data-bud="on"] #bud-row button:not(#account-auth-btn) { flex: 0 0 auto; min-width: 44px; padding-inline: 0; overflow-wrap: normal; word-break: keep-all; }
+      body[data-bud="on"] #bud-row #account-auth-btn { flex: 1 1 0; min-width: 0; max-width: 80px; }
+      body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
+      body[data-bud="on"] #bud-row button[hidden] { display: none; }
+      body[data-bud-ring="staged"] #bud-row button { animation: none; }
+      body[data-bud-ring="folding"] #bud-row button {
+        animation: bud-row-fold var(--motion-fold) var(--ease-fold) both;
+        animation-delay: calc((var(--row-n, 4) - 1 - var(--row-i, 0)) * var(--step-open-row));
+      }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn,
-      body[data-bud="on"] #bud-modes .bud-menu-btn {
+      body[data-bud="on"] #bud-modes .mode-nav-btn {
         --petal-turn: calc(var(--ring-a) * 1deg + var(--ring-flip) * 180deg);
         position: absolute;
         box-sizing: border-box;
@@ -975,11 +1071,10 @@
         text-align: center;
         transform-origin: 0 22px;
         transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2));
-        animation: bud-grow var(--motion-grow) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
+        animation: bud-grow var(--motion-open-petals) var(--ease-soft) both; /* a petal travels out from the head, so it takes the plain curve: an overshoot would lift it off the head (#3876) */
       }
       /* The word stays upright however the petal is turned, and sits where the petal is wide. */
-      body[data-bud="on"] #bud-modes .mode-nav-label,
-      body[data-bud="on"] #bud-modes .bud-menu-btn > span {
+      body[data-bud="on"] #bud-modes .mode-nav-label {
         display: block;
         margin-left: 30px;
         transform: rotate(calc(var(--petal-turn) * -1));
@@ -994,10 +1089,8 @@
       body[data-bud="on"] #bud-modes .bud-icon { display: block; line-height: 0; color: var(--ink); }
       body[data-bud="on"] #bud-modes .bud-icon svg { display: block; width: 20px; height: 20px; }
       body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="shop"] { --ring-a: 6; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.04s; }
-      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.08s; }
-      /* #3760: the general menu is the fourth petal on the same arc. */
-      body[data-bud="on"] #bud-modes .bud-menu-btn { --ring-a: 96; animation-delay: 0.12s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="build"] { --ring-a: 36; animation-delay: 0.03s; }
+      body[data-bud="on"] #bud-modes .mode-nav-btn[data-mode="sell"] { --ring-a: 66; animation-delay: 0.06s; }
       /* Which stem is open: the petal of the open menu is the lit one. */
       body[data-bud="on"] #bud-modes button[aria-expanded="true"],
       /* The chosen petal answers at once and stays lit while its mode loads (#3752). */
@@ -1009,14 +1102,13 @@
       }
       /* Held open while a mode loads: already out, so no motion on arrival. */
       body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
+      body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
       /* Folding back in: the reverse, a little faster, the last petal first. */
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
-      body[data-bud-ring="folding"] #bud-modes .bud-menu-btn {
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn {
         animation: bud-fold var(--motion-fold) var(--ease-fold) both;
       }
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.08s; }
-      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.04s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.06s; }
+      body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.03s; }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="sell"] { animation-delay: 0s; }
       /* The petals cover the word beside the bud and the Sell pager while they are out. */
       body:has(#account-menu-panel.expanded) .bud-word,
@@ -1032,23 +1124,27 @@
       .bud-pair button:disabled { opacity: 0.4; }
       /* The breath is a glow, not a scale: a button that moves is hard to tap and cannot be clicked by a test. */
       @keyframes bud-breathe { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--shadow-breath); } }
+      @keyframes bud-head-breathe { 0%, 100% { filter: var(--filter-head); } 50% { filter: var(--filter-head-breath); } }
+      @keyframes bud-head-pulse { 0%, 100% { filter: var(--filter-head); } 50% { filter: var(--filter-head-pulse); } }
       @keyframes bud-pulse { 0%, 100% { box-shadow: var(--shadow-card); } 50% { box-shadow: var(--glow-pulse); } }
       @keyframes bud-unfold { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
       @keyframes bud-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } }
+      @keyframes bud-row-grow { from { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } to { opacity: 1; transform: none; } }
+      @keyframes bud-row-fold { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } }
       @keyframes bud-fade { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes bud-stem-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+      @keyframes bud-stem-grow { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
       @media (prefers-reduced-motion: reduce) {
         body[data-bud="on"] #account-menu-toggle,
+        body[data-bud="on"] .bud-logo,
         body[data-bud="on"] #account-menu-panel button,
-        body[data-bud="on"] #account-menu-panel::before { animation: none; }
-        body[data-bud="on"] #bud-modes .mode-nav-btn,
-        body[data-bud="on"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear both; }
+        body[data-bud="on"] #bud-row button,
+        #bud-stem path { animation: none; }
+        body[data-bud="on"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear both; }
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="held"] #bud-modes .bud-menu-btn { animation: none; }
-        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn,
-        body[data-bud-ring="folding"] #bud-modes .bud-menu-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
+        body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
+        body[data-bud-ring="folding"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {
@@ -1099,22 +1195,25 @@
       .payout-balance[hidden], .payout-form[hidden], .payout-step[hidden], .payout-btn[hidden] { display: none; }
       .bud-leaf .payout-note { margin: 0; font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.8); }
       .bud-leaf .payout-note.error { color: var(--danger-text); }
+      /* #4042: what is owed, first in the leaf. */
+      .bud-leaf .payout-owed { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--ink); }
       .payout-form { display: flex; flex-direction: column; gap: var(--space-sm); }
       .payout-step { display: flex; flex-direction: column; gap: var(--space-sm); }
       .bud-leaf .payout-step-title { margin: 0; font-size: var(--text-md); font-weight: 600; }
       .bud-leaf .payout-why { margin: 0; font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.7); }
       .payout-field { display: flex; flex-direction: column; gap: var(--space-3xs); min-width: 0; }
       .payout-label { font-size: var(--text-xs); color: rgb(var(--ink-rgb) / 0.75); }
+      /* #3940: the payout fields are the one field look (DESIGN.md, "Inside a leaf"). Look only. */
       .payout-field input {
         width: 100%;
         box-sizing: border-box;
         min-height: 44px;
-        padding: var(--space-xs) var(--space-md);
-        border: none;
+        padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
-        color: var(--ink);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: rgb(var(--ink-rgb) / var(--alpha-faint));
+        color: var(--pill-text);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       .payout-dob { display: flex; flex-direction: column; gap: var(--space-3xs); }
       .payout-dob-row, .payout-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm); }
@@ -1130,22 +1229,24 @@
         padding: var(--space-sm) var(--space-lg) var(--space-lg);
         background: linear-gradient(to top, rgb(var(--panel-rgb) / 0.98) 70%, rgb(var(--panel-rgb) / 0));
       }
+      /* #3940: Back and Change are the quiet button, Next, Update and Cash out the primary button. */
       .payout-btn {
         min-height: 44px;
-        padding: 0 var(--space-2xl);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        padding: var(--space-xs) var(--space-lg);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         border-radius: var(--radius-pill);
         background: transparent;
         color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
-      .payout-btn.payout-primary { flex: 1 1 auto; background: rgb(var(--ink-rgb) / 0.88); border-color: transparent; color: rgb(var(--white-rgb)); }
+      .payout-btn.payout-primary { flex: 1 1 auto; padding: var(--space-sm) var(--space-2xl); border: none; background: var(--brand-green); color: var(--ink); }
       .payout-btn:disabled { opacity: 0.5; }
 
       /* #3819: with a mouse, everything the head offers shows it can be clicked (the pointer, and a
          slight dimming under it). Touch is unchanged: the hover rule only applies to a pointer that can hover. */
       body[data-bud="on"] #account-menu-toggle,
       body[data-bud="on"] #account-menu-panel button,
+      body[data-bud="on"] #bud-row button,
       body[data-bud="on"] #bud-modes .mode-nav-btn,
       body[data-bud="on"] #bud-note,
       .bud-leaf button,
@@ -1191,12 +1292,13 @@
       body[data-bud-mark] #account-menu-toggle::after {
         content: '';
         position: absolute;
-        top: 2px;
-        right: 4px;
-        width: 9px;
-        height: 9px;
+        top: 11px;
+        right: 7px;
+        width: 10px;
+        height: 10px;
         border-radius: var(--radius-round);
         background: var(--danger-bright);
+        box-shadow: var(--ring-badge); /* #3754: the dot sits on the green bud's shoulder, ringed in white so it reads on green */
       }
       /* A small dot on the collapsed toggle summarizing "something in here
          needs your attention" — pure CSS (:has(), already relied on
@@ -1214,6 +1316,16 @@
         height: 7px;
         border-radius: var(--radius-round);
         background: var(--danger-bright);
+      }
+      /* #3754: on the green bud the same dot sits on its shoulder, ringed in white. */
+      body[data-bud="on"] #account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after,
+      body[data-bud="on"] #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after,
+      body[data-bud="on"] #account-menu:has(#dm-badge:not([hidden])) #account-menu-toggle::after {
+        top: 11px;
+        right: 7px;
+        width: 10px;
+        height: 10px;
+        box-shadow: var(--ring-badge);
       }
       #account-menu-panel {
         display: none;
@@ -1762,7 +1874,7 @@
          the window is shown with its conversation in it: the head breathes, the "?" row says so, and
          the cursor is a wait cursor over the world (the assistant in the world has no control to mark). */
       body.assistant-opening { cursor: progress; }
-      body.assistant-opening #account-menu-toggle { animation: bud-pulse 1.1s ease-in-out infinite; }
+      body.assistant-opening #account-menu-toggle .bud-logo { animation: bud-head-pulse 1.1s ease-in-out infinite; }
       #help-ask-assistant-btn[aria-busy="true"] { opacity: 0.7; }
       #assistant-chat-form {
         display: flex;
@@ -1851,6 +1963,26 @@
       }
       .bud-voice-row #shop-voice-btn { position: static; }
       .bud-voice-words { font: var(--text-md)/var(--leading-tight) var(--font-sans); }
+      /* #3824: the Nearby leaf's list, one row (DESIGN.md "a row") per product within reach, each the
+         whole row a button so a screen reader reaches it by name and a finger hits 44px. */
+      .bud-nearby-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-sm); }
+      .bud-nearby-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+        width: 100%;
+        min-height: 44px;
+        padding: var(--space-md) var(--space-lg);
+        border: none;
+        border-radius: var(--radius-md);
+        background: var(--fill-row);
+        color: var(--ink);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        text-align: start;
+      }
+      .bud-nearby-name { font-weight: var(--weight-semibold); min-width: 0; overflow-wrap: anywhere; }
+      .bud-nearby-distance { flex-shrink: 0; font-size: var(--text-xs); color: rgb(var(--ink-rgb) / var(--alpha-soft)); }
       .bud-leaf #shop-voice-peers-panel.open {
         display: block;
       }
@@ -1924,12 +2056,14 @@
         border-bottom: 14px solid rgb(var(--ink-rgb) / 0.85);
         transform-origin: 4px 14px;
       }
+      /* #3942: Undo and Redo are quiet buttons (DESIGN.md, "Inside a leaf"). */
       #undo-redo-panel button {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #undo-redo-panel button:disabled {
@@ -2299,17 +2433,21 @@
       #level-nav button:disabled {
         opacity: 0.35;
       }
+      /* #3942: the Levels leaf's actions are quiet buttons (DESIGN.md, "Inside a leaf"); the one that
+         removes a level reads in --danger-text and is confirmed in its own modal. */
       #level-build-btn, #level-dig-btn, #level-remove-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #level-remove-btn {
-        background: var(--danger);
-        color: var(--white);
+        border: 1px solid rgb(var(--danger-rgb) / 0.5);
+        background: none;
+        color: var(--danger-text);
       }
       #level-status:not(:empty) {
         font-size: var(--text-sm);
@@ -2343,19 +2481,21 @@
       #catalog-picker.strip {
         width: min(calc(100vw - 16px), 360px);
         max-height: none;
-        padding: 40px var(--space-md) var(--space-md);
+        /* #3942: room for All items, which is now 44px tall at the top. */
+        padding: 56px var(--space-md) var(--space-md);
       }
       #catalog-picker.strip #catalog-all-items-btn {
         display: block;
         position: absolute;
         top: 8px;
         right: 52px;
-        min-height: 32px;
-        padding: 0 var(--space-lg);
+        /* #3942: All items is a quiet button (DESIGN.md, "Inside a leaf"). */
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: transparent;
-        color: var(--pill-text);
+        color: var(--ink);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #catalog-picker.strip #catalog-mode-tabs,
@@ -2766,14 +2906,16 @@
         font-size: var(--text-md);
         line-height: 1;
       }
+      /* #3942: the Tools leaf's toggles and Paste are quiet buttons; a toggle that is on fills green. */
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         align-self: flex-start;
       }
@@ -2970,13 +3112,30 @@
         font-size: var(--text-xs);
         color: rgb(var(--ink-rgb) / 0.6);
       }
+      /* #3940: the wizard's fields are the one field look (DESIGN.md, "Inside a leaf"): 16px text so a
+         phone does not zoom on focus, and a 44px target. */
       #upload-modal-content input[type='text'] {
+        min-height: 44px;
+        box-sizing: border-box;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
+      }
+      /* #3940: the file picker's own button (the browser's grey "Choose File") is the quiet button
+         (DESIGN.md, "Inside a leaf"): the line at --alpha-line, ink text, 44px to hit. */
+      #upload-file-input::file-selector-button,
+      #upload-video-input::file-selector-button {
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
+        margin-right: var(--space-sm);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       /* #1602: a small "?" button that reveals a popup of explanatory text
          next to the control it describes, instead of that text sitting
@@ -2995,6 +3154,15 @@
         font: var(--text-2xs)/var(--leading-none) var(--font-sans);
         cursor: pointer;
         padding: 0;
+        position: relative;
+      }
+      /* #3940: the mark stays 18 px, but a thumb needs about 40: an invisible ring around it takes
+         the tap, so the small "?" is as easy to hit as any button. */
+      .info-tooltip-btn::after {
+        content: '';
+        position: absolute;
+        inset: -11px;
+        border-radius: var(--radius-round);
       }
       /* #3585: a help note, not a paragraph inside the form -- one or two
          short lines set off by a thin rule, so it reads as a note beside the
@@ -3038,13 +3206,16 @@
         align-items: center;
         gap: 8px !important;
       }
+      /* #3940: the one field look. */
       #upload-digital-good-disclaimer-select {
+        min-height: 44px;
+        box-sizing: border-box;
         padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       #upload-status {
         font-size: var(--text-sm);
@@ -3121,13 +3292,15 @@
         flex: 1;
       }
       .upload-dimension-input {
-        width: 5.5em;
-        padding: var(--space-xs) var(--space-sm);
+        width: 6.5em;
+        min-height: 44px;
+        box-sizing: border-box;
+        padding: var(--space-sm) var(--space-md);
         border-radius: var(--radius-md);
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
       }
       #upload-modal-actions {
         display: flex;
@@ -3816,6 +3989,12 @@
       #checkout-summary {
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* #3946: the refund line sits with the price, in the same quiet size as the summary. */
+      #checkout-refund-note {
+        margin: 0;
+        font-size: var(--text-sm);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       #checkout-card-element {
         padding: var(--space-md);
@@ -4940,9 +5119,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-2xs);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .version-row-info {
         font-size: var(--text-xs);
@@ -4969,9 +5145,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-xs);
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .auction-row-info {
         font-size: var(--text-xs);
@@ -5072,11 +5245,6 @@
         gap: var(--space-md);
         max-height: 260px;
         overflow-y: auto;
-      }
-      .low-stock-row {
-        padding: var(--space-sm) var(--space-md);
-        border-radius: var(--radius-md);
-        background: rgb(var(--ink-rgb) / 0.08);
       }
       .low-stock-row[hidden] {
         display: none;
@@ -5363,6 +5531,8 @@
         font-weight: var(--weight-semibold);
         overflow-wrap: anywhere;
       }
+      /* #4002: the trust-tier line (Credit-card verified) reads like the email-verified line above it. */
+      #auth-account-trust-tier,
       #auth-account-verified {
         font-size: var(--text-xs);
         color: rgb(var(--ink-rgb) / 0.65);
@@ -5402,6 +5572,9 @@
       #auth-logged-in[hidden] {
         display: none;
       }
+      /* #4002: Change email and Verify with government ID are the same quiet button as their siblings. */
+      #auth-change-email-btn,
+      #auth-verify-id-btn,
       #auth-resend-verify-btn,
       #auth-logout-btn,
       #auth-change-password-btn,
@@ -5485,7 +5658,7 @@
          text (docs/DESIGN.md, "Inside a leaf"); each row's own rule below keeps only its layout. */
       .notification-row, .my-purchase-row, .sign-post-row, .calendar-event-row, .backup-chain-row,
       .pending-restoration-row, .friend-row, .dm-row, .seller-row, .product-review-row, .seller-feedback-row,
-      .product-sale-row, .sold-out-marker-row {
+      .product-sale-row, .sold-out-marker-row, .version-row, .auction-row, .low-stock-row {
         padding: var(--space-md) var(--space-lg);
         border-radius: var(--radius-md);
         background: var(--fill-row);
@@ -5772,6 +5945,12 @@
         flex-direction: column;
         gap: var(--space-sm);
       }
+      /* #3939: the leaf is a column with a gap, so an empty status line or list would add a gap of nothing
+         each (five of them made about 60px of blank space in an empty leaf). */
+      #friends-status:empty,
+      #friends-incoming-list:empty, #friends-outgoing-list:empty, #friends-accepted-list:empty, #friends-blocked-list:empty {
+        display: none;
+      }
       /* #1205: a lightweight 2D top-down view of every accepted friend's
          claimed lándlet — deliberately a plain canvas, not the claim
          flyover's WebGL scene (see drawFriendsMap's own comment in
@@ -5856,7 +6035,13 @@
       /* #3140: the DM header's Block control. */
       #dm-block-btn {
         align-self: flex-start;
-        background: var(--danger);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--danger-rgb) / 0.5);
+        background: none;
+        color: var(--danger-text);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       #dm-status {
         font-size: var(--text-sm);
@@ -5902,13 +6087,15 @@
         color: var(--pill-text);
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
+      /* The one thing this leaf is for: the primary button (DESIGN.md, "Inside a leaf"). */
       #dm-send-btn {
-        padding: var(--space-xs) var(--space-lg);
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        background: var(--brand-green);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
       #dm-send-btn:disabled {
         opacity: 0.5;
@@ -5918,24 +6105,27 @@
          it sits above #dm-list rather than below it. */
       #dm-load-more-btn {
         align-self: center;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: rgb(var(--ink-rgb) / 0.1);
-        color: var(--pill-text);
-        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
       }
       #dm-load-more-btn:disabled {
         opacity: 0.5;
       }
       .friend-row {
         display: flex;
+        flex-wrap: wrap; /* #4053: four buttons beside the name left it no room at 390 px */
         align-items: flex-start;
         justify-content: space-between;
-        gap: var(--space-md);
+        gap: var(--space-xs) var(--space-md);
       }
       .friend-row-body {
         min-width: 0;
+        flex: 1 1 9rem;
       }
       .friend-row-label {
         font-weight: var(--weight-semibold);
@@ -5946,8 +6136,8 @@
         color: rgb(var(--ink-rgb) / 0.6);
       }
       .friend-row-actions {
-        flex-shrink: 0;
         display: flex;
+        flex-wrap: wrap;
         gap: var(--space-xs);
       }
       .friend-row-actions button {
@@ -6954,14 +7144,16 @@
         font-size: var(--text-2xs);
         color: var(--pill-text-soft);
       }
+      /* #3940: Refund is a quiet button that reads as destructive (DESIGN.md, "Inside a leaf"). */
       .product-sale-row-refund-btn {
         flex-shrink: 0;
+        min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
-        background: var(--danger);
-        color: var(--white);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--danger-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       .product-sale-row-refund-btn:disabled {
         opacity: 0.5;
@@ -7100,6 +7292,7 @@
         color: rgb(var(--ink-rgb) / 0.85);
       }
       #claim-confirm-btn {
+        min-height: 44px;
         padding: var(--space-sm) var(--space-2xl);
         border-radius: var(--radius-pill);
         border: none;
@@ -7124,13 +7317,15 @@
         justify-content: space-between;
         gap: var(--space-sm);
       }
+      /* #3942: Refresh is a quiet button (DESIGN.md, "Inside a leaf"), 44px to hit. */
       #claim-modal-actions button {
-        padding: var(--space-sm) var(--space-2xl);
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
         border-radius: var(--radius-pill);
-        border: none;
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
       }
       /* #3874: on a phone turned on its side (390px tall or less) the map's square box was squeezed by the
          column to a strip a few pixels high, so a new builder could not choose a lándlet. The sheet

@@ -25,13 +25,29 @@ describe('flight by view pitch (#3769)', () => {
       last = f;
     }
   });
-  it('moving back reverses it and hovering holds height', () => {
+  it('hovering holds height, and a stick pushed past full counts as full', () => {
     const up = 25 * (Math.PI / 180);
     expect(verticalRateM_S(up, 1, 10)).toBeGreaterThan(0);
-    expect(verticalRateM_S(up, -1, 10)).toBeLessThan(0);
     expect(verticalRateM_S(up, 0, 10)).toBe(0);
     expect(verticalRateM_S(-up, 1, 10)).toBeLessThan(0);
     expect(verticalRateM_S(up, 5, 10)).toBeCloseTo(verticalRateM_S(up, 1, 10));
+  });
+  // #4068: with the view straight down and the avatar facing the camera (the stick pulled back), height
+  // went UP. Height follows the view's pitch and the push alone, whichever way the avatar moves.
+  it('a view pitched down never gains height, and a view pitched up never loses it, in any direction', () => {
+    const down = -Math.PI / 2;
+    const up = Math.PI / 2;
+    for (const stick of [1, 0.4, -0.4, -1]) { // forward, gently forward, gently back, back
+      expect(verticalRateM_S(down, stick, 10)).toBeLessThan(0);
+      expect(verticalRateM_S(up, stick, 10)).toBeGreaterThan(0);
+    }
+    expect(verticalRateM_S(down, 0, 10)).toBeCloseTo(0); // sideways alone (no forward part) neither gains nor loses
+    expect(verticalRateM_S(up, 0, 10)).toBeCloseTo(0);
+    expect(verticalRateM_S(0, -1, 10)).toBeCloseTo(0); // a level view flies level either way
+  });
+  it('pulling back at the same pitch descends as fast as pushing forward', () => {
+    const down = -25 * (Math.PI / 180);
+    expect(verticalRateM_S(down, -1, 10)).toBeCloseTo(verticalRateM_S(down, 1, 10));
   });
   it('the body tips with the view inside a small range', () => {
     expect(bodyTiltOffsetRad(0)).toBe(0);

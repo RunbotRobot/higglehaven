@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   apparentSizePx, nextTier, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
-  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst,
+  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -241,5 +241,48 @@ describe('largestFirst', () => {
     expect(largestFirst([2, 0, 1], items)).toEqual([2, 0, 1]);
     expect(largestFirst([], items)).toEqual([]);
     expect(largestFirst([1], items)).toEqual([1]);
+  });
+});
+
+// #4003: entering a heavy lándlet. The measured case: 1,650 bricks of 5,120 triangles (8,448,000) plus
+// 40 mixed items, all drawn from their full model until their versions attach.
+describe('holdBackUnready', () => {
+  const BRICK = 5120;
+  const wall = (count) => Array.from({ length: count }, (_, i) => ({ tris: BRICK, dist: i, sticky: false }));
+
+  it('lets in the nearest items up to the triangle budget and holds the rest', () => {
+    const items = wall(1650);
+    const held = holdBackUnready(items);
+    const drawn = items.filter((_, i) => !held[i]);
+    const drawnTriangles = drawn.reduce((sum, item) => sum + item.tris, 0);
+    expect(drawnTriangles).toBeLessThanOrEqual(MAX_FULL_DETAIL_TRIANGLES);
+    expect(drawn.length).toBe(Math.floor(MAX_FULL_DETAIL_TRIANGLES / BRICK)); // 234
+    // The nearest are the ones drawn, never a far one in front of a near one.
+    held.forEach((isHeld, i) => { if (!isHeld) expect(i).toBeLessThan(drawn.length); });
+    // From 8,448,000 triangles in the first frame to at most the budget.
+    expect(items.reduce((sum, item) => sum + item.tris, 0)).toBe(8_448_000);
+    expect(drawnTriangles).toBeLessThan(items.length * BRICK * 0.15);
+  });
+
+  it('draws everything when it fits, and never holds an item of unknown size', () => {
+    expect(holdBackUnready(wall(100))).toEqual(Array(100).fill(false));
+    expect(holdBackUnready([{ tris: 0, dist: 1 }, { tris: undefined, dist: 2 }])).toEqual([false, false]);
+  });
+
+  it('always lets in the nearest item, even one bigger than the budget', () => {
+    expect(holdBackUnready([{ tris: 5_000_000, dist: 1 }, { tris: 10, dist: 2 }])).toEqual([false, true]);
+  });
+
+  it('keeps an item that is already drawn drawn, and counts it against the budget first', () => {
+    const items = wall(300);
+    items[299].sticky = true; // far away but already on screen
+    const held = holdBackUnready(items);
+    expect(held[299]).toBe(false);
+    const drawn = items.filter((_, i) => !held[i]).reduce((sum, item) => sum + item.tris, 0);
+    expect(drawn).toBeLessThanOrEqual(MAX_FULL_DETAIL_TRIANGLES);
+  });
+
+  it('is empty for no items', () => {
+    expect(holdBackUnready([])).toEqual([]);
   });
 });

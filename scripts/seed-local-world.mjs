@@ -25,6 +25,7 @@
 //   npx wrangler dev --local --ip 127.0.0.1 --port 8787     # needs .dev.vars with
 //        ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret (the same fixture the e2e suite uses)
 //   node scripts/seed-local-world.mjs [--url http://127.0.0.1:8787]
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,9 +65,27 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
     return { name, cookie, builderId: builder.builderId };
   }
 
+  // #4043: a few rows cannot be reached through the API (the adult-only gate is a trust tier that only a
+  // provider sets), so they are written straight into this machine's own D1 with wrangler's --local. The
+  // seed only ever runs against this machine (seed-local-world-lib.mjs refuses any other address), so this
+  // cannot reach a live database.
+  function localSql(statement) {
+    const out = execFileSync('npx', ['wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--json', '--command', statement], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return JSON.parse(out)[0]?.results ?? [];
+  }
+
   const looker = await account('looker');
   const neighbor = await account('neighbor');
   log(`Accounts ready: ${looker.name}, ${neighbor.name}.`);
+
+  // ---- ID-verified, the way a provider's approval would leave them ----
+  // Direct messages, voice between friends and the assistants are gated on it (docs/API.md); no provider
+  // is called, the tier is set directly.
+  const unverified = localSql("SELECT username FROM users WHERE username IN ('looker', 'neighbor') AND trust_tier != 'id_verified'");
+  if (unverified.length > 0) {
+    localSql("UPDATE users SET trust_tier = 'id_verified' WHERE username IN ('looker', 'neighbor')");
+    log('looker and neighbor are ID-verified.');
+  }
 
   // ---- A claimed lándlet for each ----
   // Admin only to make room when none is free (the same escape hatch the e2e helpers use).
@@ -135,6 +154,9 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
   const theirs = await ensureProducts(neighbor, [
     { name: 'Terracotta Planter', model: 'planter.glb', category: 'garden', color: '#c0653a', dimensions: { width: 0.5, depth: 0.5, height: 0.5 }, priceCents: 2400 },
     { name: 'Rustic Storage Crate', model: 'crate.glb', category: 'furniture', subcategory: 'storage', color: '#a0522d', dimensions: { width: 0.8, depth: 0.6, height: 0.6 }, priceCents: 3500 },
+    // #4043: an avatar for looker to own besides the default (the model is a stand-in; what a look needs is
+    // an owned avatar to wear and take off, and the picker's second row).
+    { name: 'Moss Walker', model: 'crate.glb', category: 'avatar', color: '#6ca42e', dimensions: { width: 0.8, depth: 0.6, height: 0.6 }, priceCents: 500 },
   ]);
 
   // ---- A dozen items placed on looker's lándlet, one bundle, published ----
@@ -182,6 +204,18 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
     log('looker bought a Terracotta Planter (an order not yet rated).');
   }
 
+  // ---- An avatar looker owns besides the default (bought through the same no-card path) ----
+  const avatarRows = (await must('GET', '/builders/me/avatars', looker.cookie)).data.avatars ?? [];
+  if (!avatarRows.some((a) => a.name === 'Moss Walker' || a.templateId === theirs['Moss Walker'].templateId)) {
+    const theirPlaced = (await must('GET', `/instances?landletId=${neighbor.landletId}`, neighbor.cookie)).data.instances ?? [];
+    let instance = theirPlaced.find((i) => i.templateId === theirs['Moss Walker'].templateId);
+    if (!instance) {
+      instance = (await must('POST', '/instances', neighbor.cookie, { landletId: neighbor.landletId, templateId: theirs['Moss Walker'].templateId, x: 2, y: 1, z: 0 })).data.instance;
+    }
+    await must('POST', `/instances/${instance.instanceId}/purchase`, looker.cookie, { quantity: 1 });
+    log('looker bought the avatar "Moss Walker".');
+  }
+
   // ---- A notice: a seller changes the size of a product looker has placed ----
   if (theirs['Terracotta Planter'].dimensions.width === 0.5) {
     await must('PATCH', `/catalog/${theirs['Terracotta Planter'].templateId}`, neighbor.cookie, { dimensions: { width: 0.6, depth: 0.6, height: 0.6 } });
@@ -195,13 +229,19 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
     log('neighbor sent looker a friend request.');
   }
 
-  // ---- A question left for an assistant (none is on shift locally, so it waits in line) ----
-  // Needs an ID-verified account (the adult-only gate), which a local account is not: that refusal is
-  // the expected answer here, so the thread is left out and the look it was for still needs another way.
-  const asked = (await must('GET', '/assistant-chat/question', looker.cookie)).data.question;
-  if (!asked) {
+  // ---- A thread with an assistant: one question and its answer (#4043) ----
+  // looker is ID-verified above, so the question goes in through the real route; none is on shift locally,
+  // so the answer is written straight into the table the way an assistant's reply leaves it. No assistant
+  // session is involved and nothing here touches the live assistants.
+  const [{ n: questionCount } = { n: 0 }] = localSql("SELECT COUNT(*) AS n FROM assistant_questions WHERE shopper_user_id = (SELECT user_id FROM users WHERE username = 'looker')");
+  if (questionCount === 0) {
     const left = await call('POST', '/assistant-chat/question', looker.cookie, { text: 'How do I move a placed item?' });
-    log(left.ok ? 'looker left a question for an assistant.' : `No assistant thread seeded (${left.status}: ${left.data.error}).`);
+    if (left.ok) {
+      localSql("UPDATE assistant_questions SET status = 'answered', answer_text = 'In Build, tap the item, then drag the yellow handle to move it. Undo is in the Build menu if you change your mind.', answered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE shopper_user_id = (SELECT user_id FROM users WHERE username = 'looker') AND status = 'waiting'");
+      log('looker left a question for an assistant, and it was answered.');
+    } else {
+      log(`No assistant thread seeded (${left.status}: ${left.data.error}).`);
+    }
   }
 
   return { looker, neighbor, landletId, call, must, repoRoot, readFile, log };

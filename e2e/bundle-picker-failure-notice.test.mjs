@@ -43,14 +43,13 @@ await page.route('**/api/bundles/*', async (route) => {
 
 async function expectNoticeAfter(clickAction, label) {
   await clickAction();
-  await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
-  const message = await page.textContent('#notice-modal-message');
-  const title = await page.textContent('#notice-modal-title');
-  console.log(`${label}: notice title/message:`, title, '|', message);
-  await page.click('#notice-modal-ok-btn');
-  await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+  // #3889: the refusal is a status line on the tile, not a notice modal.
+  await page.waitForSelector('.bundle-tile .inline-action-status.error:not([hidden])', { timeout: 5000 });
+  const message = await page.textContent('.bundle-tile .inline-action-status');
+  console.log(`${label}: status line:`, message);
+  const noticeOpen = await page.locator('#notice-modal.visible').count();
   const pickerStillOpen = await page.locator('#catalog-picker.visible').count();
-  return { showsReason: message.includes(REASON), pickerStillOpen: pickerStillOpen === 1 };
+  return { showsReason: message.includes(REASON) && noticeOpen === 0, pickerStillOpen: pickerStillOpen === 1 };
 }
 
 const share = await expectNoticeAfter(() => page.locator('.bundle-tile-share').first().click(), 'share toggle');
