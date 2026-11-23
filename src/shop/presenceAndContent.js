@@ -81,12 +81,13 @@ import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
-  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
+  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, isTemporarilyFailed,
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
@@ -1085,13 +1086,24 @@ export async function pollNearbyPresenceIfNeeded(now) {
       // driven client-side from the movement observed between polls (#3230,
       // #3777: see stepOtherAvatarMotion).
       const group = new THREE.Group();
-      const defaultAvatar = createShopAvatar();
-      const body = defaultAvatar.group;
+      // #4067: someone who wears a model is never drawn as the default body while it loads ("never
+      // replaced by a stand-in", "things arrive through fog"): nothing stands there but soft fog until
+      // their own body is ready. The default body is drawn only for someone who wears it, or when the
+      // model cannot be had (failed, or over the distinct-models cap), see reconcileOtherAvatarBodies.
+      const waitsForModel = !avatar.assistant && !!normalizeEquippedAvatar(avatar.equippedAvatar)
+        && !isTemporarilyFailed(otherAvatarModelFailedAt, normalizeEquippedAvatar(avatar.equippedAvatar).templateId, now);
+      const defaultAvatar = waitsForModel ? null : createShopAvatar();
+      const body = defaultAvatar ? defaultAvatar.group : new THREE.Group();
       group.add(body);
+      group.position.set(avatar.x, avatar.y, avatar.z);
       scene.add(group);
       entry = {
         group,
         body,
+        // #4067: the fog that stands in for a body still loading; null once it is in place.
+        modelWait: waitsForModel
+          ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
+          : null,
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
         motion: defaultOtherAvatarMotion(defaultAvatar),
@@ -1218,7 +1230,7 @@ function reconcileOtherAvatarBodies(now) {
           // A previous custom model may still be showing (the builder switched
           // avatars and the new one failed): never leave the old one up as if
           // it were current.
-          if (entry.bodyTemplateId !== null) {
+          if (entry.bodyTemplateId !== null || entry.modelWait) {
             const defaultAvatar = createShopAvatar();
             installOtherAvatarBody(entry, defaultAvatar.group, null, defaultAvatar);
           }
@@ -1229,6 +1241,13 @@ function reconcileOtherAvatarBodies(now) {
 }
 
 function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4067: the real body is in place, so the fog thins away over it; a default body put in instead
+  // (the model cannot be had) ends the wait at once.
+  if (templateId !== null) entry.modelWait?.ready(performance.now());
+  else {
+    entry.modelWait?.cancel();
+    entry.modelWait = null;
+  }
   entry.group.remove(entry.body);
   disposeOtherAvatarClips(entry); // the mixer was bound to the body being removed
   disposeObject3D(entry.body);
@@ -1437,6 +1456,8 @@ setNearbySpeechHandler((builderId) => {
 });
 
 function releaseOtherAvatarEntry(entry) {
+  entry.modelWait?.cancel();
+  entry.modelWait = null;
   entry.speechCue?.dispose();
   entry.speechCue = null;
   entry.transition?.cancel();
@@ -1469,6 +1490,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
 }
@@ -1533,6 +1555,7 @@ export function updateOtherShopAvatars(now) {
     // #3777: a body with no clips of its own walks too, instead of gliding.
     if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
+    if (entry.modelWait && entry.modelWait.step(now)) entry.modelWait = null; // #4067
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
     if (entry.transition && entry.transition.step(now)) {

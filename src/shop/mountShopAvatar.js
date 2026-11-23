@@ -38,6 +38,9 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     // this browser, whether the person wears 'custom' or 'default', so someone who wears the default is
     // shown it at once instead of waiting in fog for an answer that is almost always "the default".
     beginAvatarFogHold = null, readWornHint = () => null, writeWornHint = () => {},
+    // #4067: optional. Called once when the worn model cannot be loaded and the default body is what is left, so
+    // the person is told in plain words (src/shop/avatarLoadNotice.js) rather than left with a console line.
+    onModelFailed = () => {},
   } = deps;
 
   // #3905 (leaf of #3873, the mode-switch wait): the world no longer waits for the equipped avatar. The
@@ -125,6 +128,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     } catch (err) {
       // A failure is not a stand-in: the default body is what is left, and the failure is logged.
       console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
+      onModelFailed();
       await new Promise((resolve) => finish(() => { showDefault(); resolve(); }));
       return;
     }

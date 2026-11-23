@@ -39,6 +39,7 @@
 // claim/flow.js's own header comment already documents for an analogous
 // pair of modules.
 import * as THREE from 'three';
+import { sayAvatarDidNotLoad } from './avatarLoadNotice.js';
 import { loadModelInstance, computeSkeletonSignature, loadModelAnimations } from '../world/models.js';
 import { scene } from '../world/scene.js';
 import { currentMode } from '../world/state.js';
@@ -445,6 +446,7 @@ export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {
       nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation, clipRoles);
     } catch (err) {
       console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
+      sayAvatarDidNotLoad(); // #4067: said once, in plain words
       nextAvatar = createShopAvatar();
     }
   } else {
