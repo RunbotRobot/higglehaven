@@ -1370,6 +1370,50 @@ most likely to come up again.
   to their correction: a tip is not made to wait for a tap, because a
   required close would lengthen every open.)
 
+- **The system may group things for its own efficiency, invisibly; what a
+  builder sees and can do never changes.** (2026-11-22, #4063.) A loose
+  brick wall drew worse than a bundled one beside it, because a bundle
+  changes detail as one set and loose items each chose alone. The owner:
+  "We had planned at one point on internally creating bundles for rendering
+  efficiency, even when the builder had not bundled the items and would not
+  see that they were bundled. The brick wall seems an ideal candidate to
+  create a behind-the-scenes bundle for loading and rendering purposes." So
+  items that stand together are loaded and drawn as one set whether or not
+  the builder bundled them, and nothing about that grouping reaches Build:
+  no selection box, no new item, nothing to undo. An optimisation is the
+  system's business; a bundle is the builder's. The same line holds for any
+  later one (merged meshes, shared textures, far-view sets).
+
+- **A person never sees a stand-in for their own avatar.** (2026-11-22,
+  #4067.) "When I load shop, the standard avatar is visible momentarily
+  before my green garbed delivery man replaces it." Until the worn avatar
+  is ready the place it will stand shows fog and it resolves out of that
+  ("Things arrive in the world through fog"); the default body is drawn
+  only for someone who wears it. This is "Everything built is always shown
+  as itself" applied to the person.
+
+- **Clean-up of live data is done by the owner's own tap in the admin
+  dashboard, through a tool built for it; no session does it by hand.**
+  (2026-11-23, #4075, #4077.) Asked to clear the test accounts and return
+  four lándlets to the greenbelt, higglehaven1 did not run SQL and asked for
+  two tools instead: a Make greenbelt button and a Delete account action,
+  each behind an in-app confirmation that names what goes, each written to
+  the admin log. The owner agreed and named what stays. Deleting accounts or
+  releasing lándlets on the live site is never a session's action, typed yes
+  or not: the fleet builds the control and the owner uses it. Regenerating
+  derived files (the model versions of #4062) is different, and still needs
+  the yes typed in chat.
+
+- **An admin tool is built for today's size, and says when that stops being
+  true.** (2026-11-22, #4060.) Asking for a table of users, the owner: "For
+  now, we have only a half dozen users, mostly test users. So the data can
+  easily be grabbed in its entirety for now. As the user base grows, it will
+  require more complex loading and pagination. I leave it up to you whether
+  to do the more complex build now or later." It was built the simple way,
+  live the same morning. For the owner's own tools, ship what today's data
+  needs and leave a note at the place that will break, naming the size at
+  which it must change; do not build paging for six rows.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -1650,33 +1694,27 @@ These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
 
-**Pace for the week of 2026-11-16: usage has to last until the Monday reset, so
-most of the fleet rests (owner, 2026-11-19).** The doubled-usage week did not reach
-its pace, and the owner made it a normal week. At 65% on Thursday evening: "Yes,
-please try to pace our usage to last up until the Monday reset." That leaves 35
-points for about 89 hours, roughly half of what the fleet was still using with eight
-sessions working. Waking sessions less often does not slow them (a session with work
-goes from one merge straight to the next), so until 2026-11-23 21:00Z:
+**Pace for the week of 2026-11-23: a normal week, so four sessions work and the
+rest stay off their timers (higglehaven1, 2026-11-23).** Last week showed what the
+allowance holds: at 98% seven hours before the reset the assistants in the world
+were close to stopping. Measured over that week, higglehaven1, Juniper and the
+owner's own conversation use a little under half of a week between them, and each
+working session about one point every fourteen hours. That leaves room for about
+four. Until 2026-11-30 21:00Z:
 
-- **Working: higglehaven4 and 6** (two, down from four, since 2026-11-21 12:30Z: the owner read 81% early
-  on Saturday, about four points ahead of the pace that reaches the reset). One task at a time, straight from one card
-  to the next, and they are the ones who take owner feedback and bug-report cards.
-  A card with status `queued` and an empty session is free, whoever wrote its
-  note last: "Released by higglehavenN" means exactly that, and so does a note
-  that lists what is left. (On 2026-11-19 several sessions stood down with "the
-  free cards belong to other sessions" while a dozen such cards had work in them.)
-- **Resting: every other coding session (2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16).**
-  Finish and merge what you already hold, release anything you will not finish
-  (card `queued`, session empty, one line saying what is left), then claim nothing
-  new. Your check-ins end at once: no queries, no notes.
-- The work is not interface-only any more (owner, same note: "while I do want to
-  continue on design work, we don't need to make it an exclusive theme for either
-  this or next week"): a working session takes the first free card whatever its
-  subject.
+- **Working: higglehaven2, 3, 6 and 12**, on hourly check-ins. One task at a time,
+  straight from one card to the next; they take owner feedback and bug-report cards
+  first. A card with status `queued` and an empty session is free, whoever wrote its
+  note last.
+- **Resting: every other coding session (4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16).**
+  Finish and merge what you hold from the burst after the reset, release anything
+  you will not finish (card `queued`, session empty, one line saying what is left),
+  then claim nothing new. Your timers are off; higglehaven1 wakes a named session
+  when a card needs one.
 - The two queries above apply only to the sessions that are working.
 
-higglehaven1 changes who works as the owner's usage readings come in, and removes
-this paragraph when the week resets. If it is still here after 2026-11-23 21:00Z,
+higglehaven1 changes who works as the owner's usage readings come in, and replaces
+this paragraph when the week resets. If it is still here after 2026-11-30 21:00Z,
 ignore it.
 
 To make that automatic rather than something you have to be re-prompted
