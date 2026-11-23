@@ -588,6 +588,21 @@ describe('Video-to-3D job creation (#1619)', () => {
     }
   });
 
+  // #4076: the client reads this to say video-to-model is off before anything is recorded.
+  it('#4076: GET /builders/me says whether video-to-model is available', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-available-flag');
+    const cookie = { cookie: `hh_session=${builder.sessionToken}` };
+    const on = await (await SELF.fetch('https://example.com/api/builders/me', { headers: cookie })).json();
+    expect(on.builder.videoGenerationAvailable).toBe(true);
+    env.TRIPO_API_KEY = undefined;
+    try {
+      const off = await (await SELF.fetch('https://example.com/api/builders/me', { headers: cookie })).json();
+      expect(off.builder.videoGenerationAvailable).toBe(false);
+    } finally {
+      env.TRIPO_API_KEY = 'test-tripo-api-key';
+    }
+  });
+
   // #1886 (piece 1 -- making the failure loud, not the still-open retry/
   // cost policy, which stays owner-judgment): the billed tripoRequest call
   // can succeed and still have its result lost if persisting task_id then

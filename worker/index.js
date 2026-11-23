@@ -96,7 +96,7 @@ import { checkSchemaDrift } from './lib/schema-drift.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
-  expireStaleVideoGenerationJobs,
+  expireStaleVideoGenerationJobs, tripoConfigured,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
 import { handleAssistant } from './lib/assistant-shift.js';
@@ -584,9 +584,13 @@ export default {
     }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
-    ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
-      console.error('spawnCreditOrbIfDue failed', error);
-    }));
+    // #4076: an orb hands out a free video-to-model credit, so none spawns while the provider is not connected
+    // (a credit nobody can use would be a prize that cannot be spent). Orbs already in the world stay.
+    if (tripoConfigured(env)) {
+      ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
+        console.error('spawnCreditOrbIfDue failed', error);
+      }));
+    }
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -1258,7 +1262,7 @@ async function handleBuilders(request, env, db, route, url) {
   // but so a reader hits "my own profile" before the generic CRUD story —
   // see handleMyBuilder's own comment for why this exists at all.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
-    return handleMyBuilder(request, db);
+    return handleMyBuilder(request, db, tripoConfigured(env));
   }
 
   // #624 (sub-issue of #349/#324): builder-side Stripe Connect onboarding,

@@ -995,6 +995,9 @@ your "My products" list).
 - You have no model file: tap "Or generate a model from a video instead" at the
   bottom of the first step. It takes a short video of one object and uses one of
   your video credits, which that part of the window shows. "Back to manual file upload" returns.
+  While turning a video into a model is not switched on, that button is not there and the
+  window says "Turning a video into a model is not switched on yet." Tell the person it is
+  not available yet and that uploading a model file still works.
 - The window shows an error after "Add product" that is not one of those: ask the
   person to read it out, and offer to pass it to the team.
 - You already have a product with that name: the app asks you to confirm before it

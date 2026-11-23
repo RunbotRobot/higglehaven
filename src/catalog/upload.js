@@ -315,12 +315,28 @@ async function refreshUploadVideoCredits() {
 // force-collapsed here rather than relying on hiding the row above it to
 // also hide the popup -- video mode's own hint lives inside
 // uploadVideoSectionEl and so is already covered by that toggle alone.
+// #4076: whether the Worker has the video-to-model provider connected; read from the builder profile when
+// the modal opens. While it is off the entry point says so (one sentence) and nothing is offered to record.
+let videoGenerationAvailable = true;
+const uploadVideoOffNoteEl = document.getElementById('upload-video-off-note');
+async function refreshVideoGenerationAvailability() {
+  try {
+    const { videoGenerationAvailable: available } = await fetchMyBuilder();
+    videoGenerationAvailable = available !== false;
+  } catch (err) {
+    videoGenerationAvailable = true; // a failed look never blocks the feature: the server still decides
+  }
+  if (!videoGenerationAvailable && uploadFileMode === 'video') setUploadFileMode('file');
+  else setUploadFileMode(uploadFileMode);
+}
 function setUploadFileMode(mode) {
+  if (mode === 'video' && !videoGenerationAvailable) mode = 'file';
   uploadFileMode = mode;
+  uploadVideoOffNoteEl.hidden = videoGenerationAvailable || mode !== 'file';
   uploadFileFieldRowEl.hidden = mode !== 'file';
   uploadHintEl.hidden = true;
   uploadHintBtn.setAttribute('aria-expanded', 'false');
-  uploadModeVideoBtn.hidden = mode !== 'file';
+  uploadModeVideoBtn.hidden = mode !== 'file' || !videoGenerationAvailable;
   uploadVideoSectionEl.hidden = mode !== 'video';
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate model' : 'Add product';
   // #2442: refreshed every time video mode is (re-)entered, not just once
@@ -382,6 +398,7 @@ function openUploadModal() {
   uploadSubmitBtn.disabled = false;
   uploadOpenedOverSeller = sellerModalEl.classList.contains('visible');
   resetUploadModalToFileStep();
+  refreshVideoGenerationAvailability();
   uploadModalEl.classList.add('visible');
   openModalA11y(uploadModalEl, closeUploadModal);
 }
@@ -1005,6 +1022,13 @@ async function handleUploadVideoStep() {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     // #1954: err.message is player copy for a coded server error; keep the server's own text in the log for diagnosis.
     console.error('Video-to-3D generation failed:', err, err.serverMessage || '');
+    // #4076: the provider went away after the video was chosen. Nothing was charged and the chosen video is still
+    // in the field, so say both instead of "try again later".
+    if (err.code === 'service_unavailable') {
+      setUploadStatus("Turning a video into a model isn't available right now. Your free generation was not used, and your video is still here to try again.", true);
+      uploadSubmitBtn.disabled = false;
+      return;
+    }
     // #2440: previously a generic "Something went wrong starting video generation."
     setUploadStatus(err.message || "Couldn't start turning that video into a 3D model. Try again in a moment.", true);
     uploadSubmitBtn.disabled = false;
