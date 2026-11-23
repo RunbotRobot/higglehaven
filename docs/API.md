@@ -11446,7 +11446,7 @@ Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
 #1619 (sub-issue of #1616 — "In-app video-to-3D model generation", docs/SPEC.md):
 backend async job handling for turning a seller's walkaround-video stills
-into a real, placeable `.glb` model, via [Tripo3D](https://developers.tripo3d.com/)'s
+into a real, placeable `.glb` model, via [Tripo3D](https://developers.tripo3d.ai/)'s (the international platform, `https://openapi.tripo3d.ai/v3`: dollar prices, paid through Stripe; the China site, `developers.tripo3d.com`, has its own separate keys and is not used, #4079)
 V3 multiview-to-model API. The frontend is responsible for extracting a
 handful of still frames from the seller's recorded video client-side (no
 provider #1617's own research evaluated accepts raw video directly, and
@@ -11585,10 +11585,10 @@ in this file: `TRIPO_API_KEY`/`TRIPO_WEBHOOK_SECRET` are Worker secrets never
 configured in local dev or the automated test suite, so a real Tripo call is
 never attempted during tests — covered up to the `503` these endpoints
 return when unconfigured, not beyond it. The exact Tripo request/response
-field names above come from https://developers.tripo3d.com/ (not
+field names above come from https://developers.tripo3d.ai/ (checked against its docs for the upload, task and webhook shapes on 2026-11-23; not
 independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
-deployment.
+deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
 
 ### Frontend wiring (#1620)
 

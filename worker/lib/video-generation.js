@@ -37,12 +37,20 @@ function tripoConfigured(env) {
   return !!env.TRIPO_API_KEY;
 }
 
-// Tripo's V3 API (https://developers.tripo3d.com/) — plain
+// Tripo's V3 API (https://developers.tripo3d.ai/) — plain
 // bearer-token auth and a JSON body for task-creation/status calls.
+//
+// #4079: Tripo runs two developer platforms with the same API shape. This is the
+// INTERNATIONAL one (developers.tripo3d.ai, priced in US dollars, paid through Stripe);
+// the other, developers.tripo3d.com, is the China site (yuan, Alipay). A key is made on
+// one platform and works only against that platform's host, and the owner buys on the
+// international one, so this host is that one. If the account ever moves to the China
+// site, this is the one constant to change.
+export const TRIPO_API_BASE = 'https://openapi.tripo3d.ai/v3';
 // File upload (tripoUploadFile below) is the one call that needs a
 // multipart body instead, so it doesn't go through this helper.
 async function tripoRequest(env, method, path, body) {
-  const response = await fetch(`https://openapi.tripo3d.com/v3/${path}`, {
+  const response = await fetch(`${TRIPO_API_BASE}/${path}`, {
     method,
     headers: { authorization: `Bearer ${env.TRIPO_API_KEY}`, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
@@ -61,7 +69,7 @@ async function tripoRequest(env, method, path, body) {
 async function tripoUploadFile(env, bytes, filename, contentType) {
   const form = new FormData();
   form.append('file', new Blob([bytes], { type: contentType }), filename);
-  const response = await fetch('https://openapi.tripo3d.com/v3/files', {
+  const response = await fetch(`${TRIPO_API_BASE}/files`, {
     method: 'POST',
     headers: { authorization: `Bearer ${env.TRIPO_API_KEY}` },
     body: form,
@@ -83,6 +91,10 @@ async function tripoUploadFile(env, bytes, filename, contentType) {
 // cost out from under this integration. v3.0-20250812 is docs' own
 // "stable" tier as of #1617's research; the "latest" v3.1 tier is newer
 // and less proven.
+// What a model costs, from the international platform's price list (2026-11-23, #4079): the H series,
+// "Multiview to 3D", standard texture (texture defaults to on), no add-ons, is 30 credits, and 1 credit
+// is $0.01, so $0.30 a model. Turning texture off or choosing another version changes that; either is
+// the owner's call, not a code detail.
 const TRIPO_MODEL_VERSION = 'v3.0-20250812';
 
 // A real (non-trivial) per-call cost -- ~$0.20-0.30/generation per #1617's
@@ -274,7 +286,7 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
   return { modelUrl: `/uploads/${key}`, sizeBytes: bytes.byteLength };
 }
 
-// Tripo's own task statuses (https://developers.tripo3d.com/): 'success'
+// Tripo's own task statuses (https://developers.tripo3d.ai/en/docs/task-query): 'success'
 // means the output is ready to fetch; 'failed'/'cancelled'/'banned'/
 // 'expired' are all terminal failures (banned = input violated content
 // policy, expired = output no longer available) -- recorded as 'failed'
@@ -653,7 +665,7 @@ export async function handleVideoGenerationJobStatus(request, env, db, jobId) {
 }
 
 // Tripo signs each webhook delivery with an HMAC-SHA256 of
-// `${t}.${rawBody}` (https://developers.tripo3d.com/en/docs/webhooks),
+// `${t}.${rawBody}` (https://developers.tripo3d.ai/en/docs/webhooks: the `Tripo-Webhook-Signature: t=<unix>,v1=<hex>` header, HMAC-SHA256 over `{t}.{raw body}`, the 5-minute tolerance; checked against the docs on 2026-11-23, #4079),
 // keyed by a webhook-specific secret -- verified here via a constant-time
 // hex comparison (timingSafeEqual, already used elsewhere in this file
 // for password/token/Didit-signature checks), never a plain ===. Reads
