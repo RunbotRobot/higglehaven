@@ -211,6 +211,12 @@ const far = await stats();
 console.log('26 m away:', JSON.stringify(far.batchTiers), 'triangles', far.triangles);
 check(settled, `at 26 m every placement leaves the full model (${JSON.stringify(far.batchTiers)})`);
 check(sum(far.batchTiers) === COUNT, `the sets always sum to the placements (${sum(far.batchTiers)})`);
+// #4062: the change of version at 26 m dissolved (a batch has no children of its own to dissolve between, so it
+// is one cohort of transient meshes); the draw stats above settle any fade still running, so the counts are the sets'.
+const crossfades = await page.evaluate(() => window.__testShopBatchCrossfades());
+console.log('batch version fades started:', crossfades.started, 'still running after the stats:', crossfades.inFlight);
+check(crossfades.started > 0, `leaving the full model at 26 m dissolved at least one cohort of placements (${crossfades.started} started)`);
+check(crossfades.inFlight === 0, 'and none is left running once the stats settle them');
 // Whole-frame counts, not minus the baseline: the baseline was taken looking at other scenery.
 check(far.triangles < near.triangles * 0.25, `at 26 m the frame draws under a quarter of the triangles (${far.triangles} against ${near.triangles})`);
 

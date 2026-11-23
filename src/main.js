@@ -283,6 +283,7 @@ import {
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
   shopOtherAvatars, assistantFromHit, assistantGroups, otherPersonGroups, personFromHit, personForBuilderId,
+  settleAllBatchCrossfades, batchCrossfadeStats,
 } from './shop/presenceAndContent.js';
 // #3555: tapping another person in the Shop world offers friendship.
 import { confirmAndOfferFriendship } from './friends.js';
@@ -1339,6 +1340,9 @@ window.__testSetShopSkyElapsedSeconds = (seconds) => {
 // landlet drawn as a few instanced meshes from one cloned mesh per item, and
 // can tell an unload released what the batches held.
 window.__testShopDrawStats = () => {
+  // #4062: a version change dissolves over about 0.4 s with both versions drawn; the figures here are
+  // the settled frame (the sets the books say), so a test does not read the two versions at once.
+  settleAllBatchCrossfades();
   renderer.render(scene, camera);
   let batches = 0;
   let instancedMeshes = 0;
@@ -1362,6 +1366,8 @@ window.__testShopDrawStats = () => {
     geometries: memory.geometries, textures: memory.textures,
   };
 };
+// #4062: e2e-only. Whether a batch version change has dissolved (a fade is running) and how many have.
+window.__testShopBatchCrossfades = () => batchCrossfadeStats();
 // #3404: e2e-only. Where a loaded placement is on screen (client pixels) and
 // whether it is in front of the camera, so a test can tap exactly on it; and
 // which placement the last tap resolved to.
@@ -1638,6 +1644,8 @@ renderer.domElement.addEventListener('click', (event) => {
     // #3403: a batch's placements may be drawn from its mid or far set, whose meshes a tap can hit too.
     for (const batch of entry.batches) {
       for (const tier of Object.values(batch.tiers ?? { full: { meshes: batch.meshes } })) tapTargets.push(...tier.meshes);
+      // #4062: a placement changing version is drawn by transient meshes while it dissolves.
+      if (batch.fadeMeshes) tapTargets.push(...batch.fadeMeshes);
     }
   }
   const hits = raycaster.intersectObjects(tapTargets, true);

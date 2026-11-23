@@ -95,7 +95,7 @@ import { settingsSectionEl } from '../settings/modal.js';
 import { updateShopSky, currentShopSkyTimeS } from './sky.js';
 import {
   shopLandlets, pickShopSpawnLocation, setShopBuilderLabels, updateShopLandletInfo,
-  resetShopCurrentLandletEntry, accountMenuLandletInfoEl, isAccountSessionEnding,
+  resetShopCurrentLandletEntry, accountMenuLandletInfoEl, isAccountSessionEnding, finishBatchCrossfades,
 } from './presenceAndContent.js';
 import {
   shopSigns, shopCalendars, shopReviews,
@@ -278,6 +278,7 @@ export function unloadShopLandletInstances(entry) {
   // instance buffers and the model clone that owns the materials are released
   // like everything else, a few at a time inside the frame budget.
   for (const batch of entry.batches) {
+    finishBatchCrossfades(batch); // #4062: nothing is left dissolving, cloned or hidden
     entry.group.remove(batch.root);
     worldWorkQueue.enqueue(() => {
       for (const mesh of batch.meshes) mesh.dispose();

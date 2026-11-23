@@ -60,10 +60,11 @@ import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { createTierCrossfades } from './tierCrossfade.js';
+import { createBatchCrossfades } from './batchCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
+import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { findImplicitSets } from './implicitLodSets.js';
@@ -693,9 +694,10 @@ function updateInstanceLodTiers() {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
     object.userData.lodApplied = tier;
-    // #3403: a batched placement changes version by moving between the batch's instanced sets (an
-    // instant swap: the batch has no per-item children to dissolve between).
-    if (object.userData.batch) moveBatchHandle(object.userData.batch, object, tier);
+    // #3403: a batched placement changes version by moving between the batch's instanced sets.
+    // #4062: the ones that change dissolve from the old version to the new (a few at a time), except
+    // beside the avatar, where the real model is wanted at once.
+    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier, { instant: lodItemsScratch[i].protected });
     else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
@@ -703,6 +705,21 @@ function updateInstanceLodTiers() {
 }
 // #3494: the incoming version of a changing item dissolves in over the outgoing one.
 const tierCrossfades = createTierCrossfades();
+// #4062: the same for batched placements (src/shop/batchCrossfade.js).
+const batchCrossfades = createBatchCrossfades();
+// A batch about to be unloaded settles its fades first.
+export function finishBatchCrossfades(batch) {
+  batchCrossfades.finishBatch(batch);
+}
+// e2e-only (main.js's draw stats): settle every running fade, so a frame counts the sets the books
+// say and not the two versions both drawn for the length of a dissolve.
+export function settleAllBatchCrossfades() {
+  batchCrossfades.finishAll();
+}
+// e2e: how many batch fades are running, and how many are in all (a fade started).
+export function batchCrossfadeStats() {
+  return { inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount };
+}
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
 // True if the given world point falls inside this landlet's own footprint
@@ -1813,6 +1830,7 @@ export function updateShopArrivals() {
   // #3479: far models dissolving in (a no-op when none are).
   shopFarView?.tick();
   tierCrossfades.update(); // #3494
+  batchCrossfades.update(); // #4062
 }
 
 // Diagnostics for the e2e (and a bug report): what the latest arrival did.
