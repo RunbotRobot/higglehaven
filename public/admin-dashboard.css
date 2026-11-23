@@ -38,6 +38,16 @@
      room.html already both follow. */
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
   .toolbar[hidden] { display: none; }
+  /* #4074: the lándlet search's list of matches; one row is a button that loads that lándlet. */
+  #landletLookupInput { flex: 1 1 220px; max-width: 360px; }
+  .landlet-search-results { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .landlet-search-results[hidden] { display: none; }
+  .landlet-search-row {
+    display: grid; grid-template-columns: minmax(120px, 1.2fr) 1fr 1fr 0.7fr 0.7fr; gap: 8px; text-align: left;
+    background: #fff; color: #16240a; font-weight: 400; border-color: #c7d3bd;
+  }
+  .landlet-search-row:hover:not(:disabled) { background: #eef5e6; }
+  @media (max-width: 640px) { .landlet-search-row { grid-template-columns: 1fr 1fr; } }
   input, button {
     font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
     background: #fff; color: #16240a;

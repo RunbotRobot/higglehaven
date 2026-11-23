@@ -89,21 +89,75 @@
     // across three call sites instead of one.
     let landletLookupToken = 0;
 
+    // #4074: "Look up" first tries the text as an exact id, exactly as before; when that finds nothing it
+    // searches by name, id or owner. One match loads straight away, several are listed to choose from.
+    const searchResultsEl = document.getElementById('landletSearchResults');
+    const searchNoteEl = document.getElementById('landletSearchNote');
+    function clearSearchResults() {
+      searchResultsEl.hidden = true;
+      searchResultsEl.innerHTML = '';
+      searchNoteEl.hidden = true;
+      searchNoteEl.textContent = '';
+    }
+
+    async function loadLandletById(landletId, myToken) {
+      const body = await apiFetch('/api/landlets/' + encodeURIComponent(landletId));
+      if (myToken !== landletLookupToken) return;
+      renderLandlet(body.landlet);
+    }
+
+    function renderSearchResults(result) {
+      searchResultsEl.innerHTML = result.landlets.map((l) => `
+        <button type="button" class="landlet-search-row" data-landlet-id="${escapeHtml(l.landletId)}">
+          <span class="mono">${escapeHtml(l.landletId)}</span>
+          <span>${escapeHtml(l.name)}</span>
+          <span>${escapeHtml(l.ownerUsername || (l.status === 'claimed' ? 'owner unknown' : 'unowned'))}</span>
+          <span>${escapeHtml(l.status)}</span>
+          <span>${escapeHtml(Math.round(l.areaM2))} m²</span>
+        </button>`).join('');
+      searchResultsEl.hidden = false;
+      searchNoteEl.hidden = false;
+      searchNoteEl.textContent = result.total > result.shown
+        ? 'Showing ' + result.shown + ' of ' + result.total + (result.scanCapped ? '+' : '') + ' — type more to narrow it.'
+        : result.total + (result.total === 1 ? ' lándlet' : ' lándlets') + ' found. Choose one to load it.';
+    }
+
     async function lookupLandlet() {
       clearError();
-      const landletId = lookupInput.value.trim();
-      if (!landletId) return;
+      clearSearchResults();
+      const query = lookupInput.value.trim();
+      if (!query) return;
       const myLandletLookupToken = ++landletLookupToken;
       try {
-        const body = await apiFetch('/api/landlets/' + encodeURIComponent(landletId));
+        await loadLandletById(query, myLandletLookupToken);
+        return;
+      } catch (idError) {
         if (myLandletLookupToken !== landletLookupToken) return;
-        renderLandlet(body.landlet);
-      } catch (error) {
+        try {
+          const result = await apiFetch('/api/auth/admin-landlet-search?q=' + encodeURIComponent(query));
+          if (myLandletLookupToken !== landletLookupToken) return;
+          if (result.landlets.length === 1) {
+            await loadLandletById(result.landlets[0].landletId, myLandletLookupToken);
+            return;
+          }
+          if (result.landlets.length > 1) {
+            detailWrap.hidden = true;
+            renderSearchResults(result);
+            return;
+          }
+        } catch (_) { /* the search is a convenience; the id lookup's own message below is the honest one */ }
         if (myLandletLookupToken !== landletLookupToken) return;
         detailWrap.hidden = true;
-        showError(error.message);
+        showError(idError.message);
       }
     }
+
+    searchResultsEl.addEventListener('click', (e) => {
+      const row = e.target.closest('.landlet-search-row');
+      if (!row) return;
+      lookupInput.value = row.dataset.landletId;
+      lookupLandlet();
+    });
 
     async function forceComplete() {
       if (!currentLandlet) return;
