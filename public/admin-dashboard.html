@@ -264,6 +264,20 @@
     <p class="err" id="usersCapLine" hidden></p>
     <div class="users-scroll" id="usersTableWrap"></div>
     <div id="userDetailWrap"></div>
+    <!-- #4077: Delete account is confirmed in its own in-app dialog, never a browser dialog. -->
+    <dialog id="deleteAccountDialog" class="confirm-dialog" aria-labelledby="deleteAccountTitle">
+      <form method="dialog" id="deleteAccountForm">
+        <h3 id="deleteAccountTitle">Delete account</h3>
+        <div id="deleteAccountBody"></div>
+        <label id="deleteAccountFleetRow" hidden><input type="checkbox" id="deleteAccountFleetTick" /> This is a fleet account or assistant. Delete it anyway.</label>
+        <label>Type the username to confirm <input type="text" id="deleteAccountTyped" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+        <p class="err" id="deleteAccountErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="deleteAccountCancel">Cancel</button>
+          <button type="submit" class="danger" id="deleteAccountConfirm" disabled>Delete account</button>
+        </div>
+      </form>
+    </dialog>
 
     <h2>Suspend account</h2>
     <p class="err" id="suspendErr" hidden></p>
