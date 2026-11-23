@@ -323,9 +323,10 @@ animation you have applied (see the avatar entry below) replaces that motion.
 1. You start each visit in the air. To come down, double-tap the world: two quick
    taps in the same place. It works while your other thumb is walking or looking,
    so you do not have to stop first. On a keyboard, press T once instead.
-2. While you are flying, you go where the view points. To climb, drag on the
-   right half of the screen to look up, and drag on the left half to walk
-   forward. To descend, look down and walk forward. A level view flies level,
+2. While you are flying, you go where the view points.
+   Drag on the left half of the screen to fly forward. To climb, drag on the
+   right half of the screen to look up and fly forward. To descend, look down
+   and fly forward. A level view flies level,
    and when you stop walking you hold your height. On a keyboard, R looks up and
    F looks down.
 3. Walk and look by dragging, as usual.
