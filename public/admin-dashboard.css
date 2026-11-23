@@ -38,6 +38,16 @@
      room.html already both follow. */
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
   .toolbar[hidden] { display: none; }
+  /* #4074: the lándlet search's list of matches; one row is a button that loads that lándlet. */
+  #landletLookupInput { flex: 1 1 220px; max-width: 360px; }
+  .landlet-search-results { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .landlet-search-results[hidden] { display: none; }
+  .landlet-search-row {
+    display: grid; grid-template-columns: minmax(120px, 1.2fr) 1fr 1fr 0.7fr 0.7fr; gap: 8px; text-align: left;
+    background: #fff; color: #16240a; font-weight: 400; border-color: #c7d3bd;
+  }
+  .landlet-search-row:hover:not(:disabled) { background: #eef5e6; }
+  @media (max-width: 640px) { .landlet-search-row { grid-template-columns: 1fr 1fr; } }
   input, button {
     font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
     background: #fff; color: #16240a;
@@ -136,16 +146,32 @@
   .users-order li { padding: 3px 0; }
   .users-move { min-width: 40px; min-height: 32px; margin-left: 6px; }
   .users-scroll { overflow-x: auto; margin-bottom: 16px; border-radius: 12px; }
-  .users-table { margin-bottom: 0; width: max-content; min-width: 100%; }
-  .users-table th, .users-table td { white-space: nowrap; user-select: text; -webkit-user-select: text; }
-  .users-table td { padding: 12px 10px; }
+  /* #4073: fixed layout, each column a set width from its kind (the script sets the table's and each <col>'s
+     width, and the owner drags a heading's right edge to change it). A value that does not fit is cut with an
+     ellipsis and shown in full in the cell's title; it stays selectable. */
+  .users-table { margin-bottom: 0; table-layout: fixed; width: auto; min-width: 0; border-collapse: separate; border-spacing: 0; }
+  .users-table th, .users-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: text; -webkit-user-select: text; }
+  .users-table td { padding: 12px 12px; }
+  /* A clear rule between neighbouring columns in the heading, the filter row and the body. */
+  .users-table th, .users-table td { border-right: 1px solid #cfdac3; }
+  .users-table th:last-child, .users-table td:last-child { border-right: 0; }
+  .users-table thead tr:first-child th { position: relative; padding-left: 12px; padding-right: 16px; }
+  .users-table thead tr:first-child th:first-child { position: sticky; }
+  .users-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 14px; cursor: col-resize; touch-action: none; z-index: 2; }
+  .users-resize::after { content: ''; position: absolute; top: 25%; bottom: 25%; right: 5px; width: 3px; border-radius: 2px; background: #b8c8a8; }
+  .users-resize:hover::after, .users-resize.dragging::after, .users-resize:focus-visible::after { background: #3f6e1c; }
+  .users-resize:focus-visible { outline: 2px solid #3f6e1c; outline-offset: -2px; }
+  @media (pointer: coarse) { .users-resize { width: 28px; } .users-resize::after { right: 12px; } }
+  .users-bulk { display: flex; gap: 6px; margin: 4px 0 6px; }
+  .users-bulk button { min-height: 32px; padding: 4px 10px; font-size: 12px; }
+  .users-bulk-all { margin: 0 0 10px; }
   .users-num { text-align: right; font-variant-numeric: tabular-nums; }
   .users-sort { all: unset; cursor: pointer; font: inherit; text-transform: inherit; letter-spacing: inherit; color: inherit; padding: 6px 2px; }
   .users-sort:focus-visible, .users-open:focus-visible { outline: 2px solid #3f6e1c; outline-offset: 2px; }
   .users-filter-row th { background: #f7f9f2; padding: 4px 6px; text-transform: none; letter-spacing: 0; }
-  .users-filter-row input, .users-filter-row select { width: 100%; min-width: 90px; font-size: 13px; padding: 5px 6px; box-sizing: border-box; }
+  .users-filter-row input, .users-filter-row select { width: 100%; min-width: 0; font-size: 13px; padding: 5px 6px; box-sizing: border-box; }
   .users-range { display: flex; gap: 4px; }
-  .users-range input { min-width: 70px; }
+  .users-range input { min-width: 0; flex: 1 1 0; }
   .users-table th:first-child, .users-table td:first-child { position: sticky; left: 0; z-index: 1; background: #fff; box-shadow: 1px 0 0 #dbe4d0; }
   .users-table thead th:first-child { background: #eef3e6; }
   .users-filter-row th:first-child { background: #f7f9f2; }

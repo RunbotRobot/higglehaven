@@ -86,6 +86,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -3190,6 +3191,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {
+    return handleAdminLandletSearch(request, db, url);
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-detail') {
     return handleAdminUserDetail(request, db, url);
