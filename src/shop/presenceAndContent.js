@@ -65,7 +65,7 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { findImplicitSets } from './implicitLodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -567,7 +567,10 @@ function lodSetsFor(entry) {
       x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object),
     })));
     for (const object of members) object.userData.lodSetId = setId;
-    sets.set(setId, { members, sphere, px: 0, near: false });
+    // #4089: the biggest member, for a set too costly to be judged whole (setApparentPx).
+    let maxMemberRadiusM = 0;
+    for (const object of members) maxMemberRadiusM = Math.max(maxMemberRadiusM, lodRadiusM(object));
+    sets.set(setId, { members, sphere, maxMemberRadiusM, px: 0, near: false });
   };
   for (const [groupId, members] of byGroup) {
     if (members.length < 2) continue; // a lone member is decided as a single item
@@ -627,17 +630,28 @@ function updateInstanceLodTiers() {
       const dx = entry.group.position.x + sphere.x - camera.position.x;
       const dy = entry.group.position.y + sphere.y - camera.position.y;
       const dz = entry.group.position.z + sphere.z - camera.position.z;
-      set.px = apparentSizePx(sphere.radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
       // The protection has its own hysteresis (enter at 10 m, leave past 13 m),
       // judged from last tick's answer.
       const wasNear = set.near;
       set.near = false;
+      // #4089: one pass over the members also finds the nearest one and what the set costs whole.
+      let nearestSquared = Infinity;
+      let fullTriangles = 0;
       for (const member of set.members) {
-        if (isNearFullDetail(horizontalDistanceM(
+        if (!set.near && isNearFullDetail(horizontalDistanceM(
           entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
           shopAvatarPosition.x, shopAvatarPosition.y,
-        ), wasNear)) { set.near = true; break; }
+        ), wasNear)) set.near = true;
+        const mx = entry.group.position.x + member.position.x - camera.position.x;
+        const my = entry.group.position.y + member.position.y - camera.position.y;
+        const mz = entry.group.position.z + member.position.z - camera.position.z;
+        nearestSquared = Math.min(nearestSquared, mx * mx + my * my + mz * mz);
+        fullTriangles += fullTrianglesOf(member);
       }
+      set.px = setApparentPx({
+        sphere, centerDistanceM: Math.hypot(dx, dy, dz), maxMemberRadiusM: set.maxMemberRadiusM,
+        nearestMemberDistanceM: Math.sqrt(nearestSquared), fullTriangles,
+      }, camera.fov, window.innerHeight);
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
