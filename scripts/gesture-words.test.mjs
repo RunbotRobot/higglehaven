@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import handbook from '../docs/assistant-handbook.md?raw';
 import { parseHandbook } from './assistant-handbook-lib.mjs';
-import { GESTURE_HANDBOOK, WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from '../src/ui/gestureWords.js';
+import { GESTURE_HANDBOOK, WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS, AIR_MOVE_WORDS, LAND_WORDS, KEY_AIR_MOVE_WORDS, KEY_LAND_WORDS } from '../src/ui/gestureWords.js';
 import { FIRST_HINT_STEPS, FIRST_HINT_STEPS_KEYBOARD } from '../src/ui/firstVisitHints.js';
 import { LOADING_TIPS, tipText } from '../src/ui/loadingTips.js';
 
@@ -21,6 +21,12 @@ describe('gesture words', () => {
     expect(FIRST_HINT_STEPS.map((s) => s.text)).toEqual([WALK_WORDS, LOOK_WORDS, FLY_WORDS]);
     expect(LOADING_TIPS[0].text.startsWith(WALK_WORDS)).toBe(true);
     expect(LOADING_TIPS[1].text.startsWith(FLY_WORDS)).toBe(true);
+  });
+  it('the first hints in the air do not name walking, and come from the shared words (#4080)', () => {
+    expect(FIRST_HINT_STEPS.map((s) => s.airText)).toEqual([AIR_MOVE_WORDS, undefined, LAND_WORDS]);
+    expect(FIRST_HINT_STEPS_KEYBOARD.map((s) => s.airText)).toEqual([KEY_AIR_MOVE_WORDS, undefined, KEY_LAND_WORDS]);
+    expect(AIR_MOVE_WORDS).not.toMatch(/walk/i);
+    expect(KEY_AIR_MOVE_WORDS).not.toMatch(/walk/i);
   });
   it('the friendship tap is taught in the opening tips, from the same words (#3555)', () => {
     const tip = LOADING_TIPS.find((candidate) => candidate.text.startsWith(FRIEND_WORDS));

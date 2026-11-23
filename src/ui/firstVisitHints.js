@@ -8,25 +8,32 @@
 // browser page to load, which would pull the whole world into this one's unit test).
 const WORLD_GESTURE_EVENT = 'higglehaven:world-gesture';
 
-import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS } from './gestureWords.js';
+import {
+  WALK_WORDS, LOOK_WORDS, FLY_WORDS, LAND_WORDS, AIR_MOVE_WORDS,
+  KEY_WALK_WORDS, KEY_LOOK_WORDS, KEY_FLY_WORDS, KEY_LAND_WORDS, KEY_AIR_MOVE_WORDS,
+} from './gestureWords.js';
 
 export const FIRST_HINTS_KEY = 'higglehaven.firstHints.done';
+// #4080: `text` is for a person on the ground, `airText` for one in the air (every arrival starts
+// in the air). The kind is the gesture, not the verb: a drag on the left half moves you in either
+// state, and the double-tap both takes off and lands, so a gesture learned in one state is not
+// taught again in the other.
 export const FIRST_HINT_STEPS = [
-  { kind: 'walk', text: WALK_WORDS },
+  { kind: 'walk', text: WALK_WORDS, airText: AIR_MOVE_WORDS },
   { kind: 'look', text: LOOK_WORDS },
-  { kind: 'fly', text: FLY_WORDS },
+  { kind: 'fly', text: FLY_WORDS, airText: LAND_WORDS },
 ];
 // #3832: a computer with a mouse and a keyboard is taught the same three things in its own words.
 export const FIRST_HINT_STEPS_KEYBOARD = [
-  { kind: 'walk', text: KEY_WALK_WORDS },
+  { kind: 'walk', text: KEY_WALK_WORDS, airText: KEY_AIR_MOVE_WORDS },
   { kind: 'look', text: KEY_LOOK_WORDS },
-  { kind: 'fly', text: KEY_FLY_WORDS },
+  { kind: 'fly', text: KEY_FLY_WORDS, airText: KEY_LAND_WORDS },
 ];
 
-export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRST_HINT_STEPS }) {
+export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRST_HINT_STEPS, inFlight = () => false }) {
   let index = 0;
   let started = false;
-  let shownIndex = -1;
+  let shownText = null;
   const seen = new Set();
   function advance() {
     while (index < steps.length && seen.has(steps[index].kind)) index++;
@@ -35,8 +42,10 @@ export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRS
       markDone();
       return;
     }
-    if (shownIndex !== index) show(steps[index].text);
-    shownIndex = index;
+    const step = steps[index];
+    const text = inFlight() && step.airText ? step.airText : step.text;
+    if (shownText !== text) show(text);
+    shownText = text;
   }
   return {
     start() {
@@ -47,6 +56,10 @@ export function createFirstVisitHints({ show, hide, done, markDone, steps = FIRS
     },
     onGesture(kind) {
       seen.add(kind);
+      if (started && index < steps.length) advance();
+    },
+    // #4080: the person took off or landed; the hint on screen says what fits where they are now.
+    refresh() {
       if (started && index < steps.length) advance();
     },
     stepIndex: () => index,
@@ -105,7 +118,10 @@ export function startFirstVisitHints() {
     hide: () => ensureEl().classList.remove('visible'),
     done: storageDone,
     markDone: storageMarkDone,
+    inFlight: () => document.body.classList.contains('shop-flying'),
   });
+  // #4080: take off or land and the hint on screen follows (the flag is the one flightMovement.js sets).
+  new MutationObserver(() => hints.refresh()).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   window.addEventListener(WORLD_GESTURE_EVENT, (event) => hints.onGesture(event.detail?.kind));
   if (storageDone()) return hints;
   // Wait for the world: the loading screen, and any sign-in card, come first.

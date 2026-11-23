@@ -22,6 +22,14 @@ const hintVisibility = () => page.evaluate(() => {
 const shown = await page.waitForSelector('#world-hint.visible', { timeout: 20000 }).then(() => true, () => false);
 check(shown, 'the walk hint is showing before any leaf is open');
 check((await hintVisibility()) === 'visible', `the hint is drawn with no leaf open (${await hintVisibility()})`);
+// #4080: every arrival starts in the air, so the first words a person reads must not be about walking.
+const first = await page.evaluate(() => ({
+  text: document.getElementById('world-hint')?.textContent ?? '',
+  flying: document.body.classList.contains('shop-flying'),
+}));
+console.log('first hint on arrival:', JSON.stringify(first));
+check(first.flying, 'the arrival starts in the air');
+check(/fly/i.test(first.text) && !/walk/i.test(first.text), `the first hint is about flying, not walking (${first.text})`);
 
 await openAccountMenu(page);
 for (const [button, dialog, closeBtn] of [
