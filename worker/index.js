@@ -87,6 +87,7 @@ import {
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
+import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -3198,6 +3199,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
     return handleAdminDeleteAccount(request, db);
+  }
+  // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {
+    return handleAdminLandletSearch(request, db, url);
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-detail') {
     return handleAdminUserDetail(request, db, url);
