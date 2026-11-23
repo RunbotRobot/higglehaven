@@ -73,11 +73,11 @@ beforeAll(async () => {
 
   globalThis.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
-    if (url === 'https://openapi.tripo3d.com/v3/files') {
+    if (url === 'https://openapi.tripo3d.ai/v3/files') {
       createCallCount += 1;
       return new Response(JSON.stringify({ code: 0, data: { file_token: `token-${createCallCount}` } }), { status: 200 });
     }
-    if (url === 'https://openapi.tripo3d.com/v3/generation/multiview-to-model') {
+    if (url === 'https://openapi.tripo3d.ai/v3/generation/multiview-to-model') {
       const body = JSON.parse(init.body);
       if (!body.inputs || body.inputs.length < 2) {
         return new Response(JSON.stringify({ code: 1, message: 'at least 2 views required' }), { status: 400 });
@@ -88,8 +88,8 @@ beforeAll(async () => {
       // creates many jobs across many tests.
       return new Response(JSON.stringify({ code: 0, data: { task_id: `task-${taskCounter}` } }), { status: 200 });
     }
-    if (url.startsWith('https://openapi.tripo3d.com/v3/tasks/')) {
-      const taskId = url.slice('https://openapi.tripo3d.com/v3/tasks/'.length);
+    if (url.startsWith('https://openapi.tripo3d.ai/v3/tasks/')) {
+      const taskId = url.slice('https://openapi.tripo3d.ai/v3/tasks/'.length);
       if (nextTaskStatus === 'success') {
         return new Response(JSON.stringify({
           code: 0,
@@ -698,7 +698,7 @@ describe('video_generation_credits (#1993)', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (url === 'https://openapi.tripo3d.com/v3/files') {
+      if (url === 'https://openapi.tripo3d.ai/v3/files') {
         return new Response(JSON.stringify({ code: 1, message: 'simulated upload failure' }), { status: 500 });
       }
       return originalFetch(input, init);
