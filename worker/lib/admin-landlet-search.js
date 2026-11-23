@@ -1,7 +1,7 @@
 // #4074: the admin dashboard finds a lándlet by its name, its id or its owner's username, not only by
 // pasting an exact id. One admin-only read, bounded: a few alphabetic words become SQL substring tests
 // (so the database does the narrowing), then the Worker ranks what came back and applies the numeric
-// words itself, because "central-mosaic 2" has to find "central-mosaic-002".
+// words itself, because "north ridge 2" has to find "north-ridge-002".
 import { json } from './http.js';
 import { requireAdmin } from './auth.js';
 
