@@ -160,6 +160,19 @@
         <p class="hint" id="landletForceCompleteNote" hidden></p>
       </div>
 
+      <div id="landletGreenbeltWrap">
+        <h3>Make greenbelt</h3>
+        <p class="hint" id="landletGreenbeltHint">Returns this claimed landlet to the greenbelt so anyone can claim it. Everything built there is kept in the owner's saved layouts, and they are told.</p>
+        <button id="landletGreenbeltBtn" disabled>Make greenbelt</button>
+        <div id="landletGreenbeltModal" class="edit-wrap conflict" role="alertdialog" aria-modal="true" aria-labelledby="landletGreenbeltModalTitle" hidden>
+          <h3 id="landletGreenbeltModalTitle">Make this landlet greenbelt?</h3>
+          <p id="landletGreenbeltModalBody"></p>
+          <p class="err" id="landletGreenbeltModalErr" hidden></p>
+          <button id="landletGreenbeltConfirmBtn">Make greenbelt</button>
+          <button class="secondary" id="landletGreenbeltCancelBtn">Cancel</button>
+        </div>
+      </div>
+
       <div id="landletReassignWrap" hidden>
         <h3>Reassign owner</h3>
         <p class="hint">Moves this claimed landlet directly to a different builder, bypassing the normal claim/auction flow.</p>

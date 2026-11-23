@@ -75,7 +75,42 @@
       reassignWrap.hidden = landlet.status !== 'claimed';
       auctionConflictWrap.hidden = true;
       reassignTargetInput.value = '';
+      renderGreenbelt(landlet);
     }
+
+    // #4075: Make greenbelt. The button is disabled, with its reason, when there is nothing to release.
+    const greenbeltBtn = document.getElementById('landletGreenbeltBtn');
+    const greenbeltHint = document.getElementById('landletGreenbeltHint');
+    const greenbeltModal = document.getElementById('landletGreenbeltModal');
+    const greenbeltModalErr = document.getElementById('landletGreenbeltModalErr');
+    const GREENBELT_HINT = greenbeltHint.textContent;
+    function renderGreenbelt(landlet) {
+      const claimed = landlet.status === 'claimed' && landlet.ownerBuilderId;
+      greenbeltBtn.disabled = !claimed;
+      greenbeltHint.textContent = claimed ? GREENBELT_HINT
+        : (landlet.status === 'greenbelt' ? 'This landlet is already greenbelt.' : 'Only a claimed landlet can be made greenbelt.');
+      greenbeltModal.hidden = true;
+    }
+    greenbeltBtn.addEventListener('click', () => {
+      if (!currentLandlet) return;
+      document.getElementById('landletGreenbeltModalBody').textContent = 'Landlet ' + currentLandlet.landletId
+        + ' (owner ' + currentLandlet.ownerBuilderId + ') goes back to the greenbelt. Everything the owner built there is moved into their saved layouts, '
+        + 'its published versions and levels are cleared, and the owner gets a notice. Anyone can then claim it. This is written to the admin log.';
+      greenbeltModalErr.hidden = true;
+      greenbeltModal.hidden = false;
+      document.getElementById('landletGreenbeltConfirmBtn').focus();
+    });
+    document.getElementById('landletGreenbeltCancelBtn').addEventListener('click', () => { greenbeltModal.hidden = true; });
+    document.getElementById('landletGreenbeltConfirmBtn').addEventListener('click', async () => {
+      if (!currentLandlet) return;
+      try {
+        const body = await apiFetch('/api/landlets/' + encodeURIComponent(currentLandlet.landletId) + '/make-greenbelt', { method: 'POST', body: '{}' });
+        renderLandlet(body.landlet);
+      } catch (error) {
+        greenbeltModalErr.textContent = error.message;
+        greenbeltModalErr.hidden = false;
+      }
+    });
 
     // #2062/#2072: lookupLandlet() and forceComplete()/reassign() below all
     // race each other -- a lookup, a force-complete, and a reassign-owner
