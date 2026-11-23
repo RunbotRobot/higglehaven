@@ -418,7 +418,7 @@
         <!-- #3703: the one leaf a seller starts from (the bud's Add a product petal). It asks
              the one question first; each answer carries on in the place it always has. -->
         <div id="upload-step-choose" hidden>
-          <button id="add-product-upload-btn" type="button" class="add-product-choice">Upload my own model</button>
+          <button id="add-product-upload-btn" type="button" class="add-product-choice">Create or upload my own model</button>
           <button id="add-product-sell-too-btn" type="button" class="add-product-choice">Sell one that is already here</button>
         </div>
         <div id="upload-step-file" hidden>
@@ -444,7 +444,19 @@
               <option value="avatar-model">Avatar model</option>
             </select>
           </label>
-          <div id="upload-file-field-row" class="field-with-tooltip">
+          <!-- #4078: making a model from a video comes first (most sellers have no model of their
+               product yet); uploading a file they already have is the quieter second way. The
+               two are one at a time: setUploadFileMode in src/catalog/upload.js. -->
+          <div id="upload-video-section">
+            <div id="upload-video-title">Make a model from a video</div>
+            <div id="upload-video-credits"></div>
+            <p id="upload-video-intro">Walk slowly all the way around one well-lit object with your camera. It takes a couple of minutes.</p>
+            <button id="upload-video-record-btn" type="button">Record</button>
+            <input id="upload-video-input" class="visually-hidden" type="file" accept="video/*" capture="environment" tabindex="-1" aria-label="Video of the object" />
+            <div id="upload-video-chosen" role="status"></div>
+            <button id="upload-mode-file-btn" type="button" class="auth-link-btn">Upload a model file I already have</button>
+          </div>
+          <div id="upload-file-field-row" class="field-with-tooltip" hidden>
             <label id="upload-file-label">
               .glb or .fbx file
               <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
@@ -454,23 +466,9 @@
           <div id="upload-hint" class="info-tooltip-popup" hidden>
             Up to 20MB. We shrink it for you, and a .fbx is converted to .glb in your browser first.
           </div>
-          <button id="upload-mode-video-btn" type="button" class="auth-link-btn">
-            &#128249; Or generate a model from a video instead
+          <button id="upload-mode-video-btn" type="button" class="auth-link-btn" hidden>
+            Make a model from a video instead
           </button>
-          <div id="upload-video-section" hidden>
-            <div id="upload-video-credits"></div>
-            <div class="field-with-tooltip">
-              <label id="upload-video-label">
-                Short video of the object
-                <input id="upload-video-input" type="file" accept="video/*" capture="environment" />
-              </label>
-              <button id="upload-video-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-video-hint" aria-label="More info about video generation">?</button>
-            </div>
-            <div id="upload-video-hint" class="info-tooltip-popup" hidden>
-              One well-lit object on its own; walk slowly all the way around it. It takes a couple of minutes.
-            </div>
-            <button id="upload-mode-file-btn" type="button" class="auth-link-btn">Back to manual file upload</button>
-          </div>
         </div>
         <div id="upload-step-dimensions" hidden>
           <div class="upload-step-heading">
@@ -483,7 +481,7 @@
           </div>
           <div id="upload-dimensions-preview"></div>
           <button id="upload-retry-video-btn" type="button" class="auth-link-btn" hidden>
-            &#128249; Not quite right? Generate from a different video
+            Not quite right? Make a model from a different video
           </button>
           <div id="upload-animations-detected" hidden></div>
           <label id="upload-avatar-category-label">

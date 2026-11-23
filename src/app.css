@@ -3262,6 +3262,44 @@
       #upload-clip-roles[hidden] {
         display: none;
       }
+      /* #4078: making a model from a video is the first way offered, so it is the prominent one: a
+         the leaf's primary button (docs/DESIGN.md "Inside a leaf") is the Record button; uploading a file
+         is the quiet link beneath it (.auth-link-btn). */
+      #upload-video-section {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-sm);
+      }
+      #upload-video-section[hidden] {
+        display: none;
+      }
+      #upload-video-title {
+        font: var(--text-lg)/var(--leading-normal) var(--font-sans);
+        color: var(--ink);
+      }
+      #upload-video-intro {
+        margin: 0;
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #upload-video-record-btn {
+        min-height: 44px;
+        padding: var(--space-sm) var(--space-2xl);
+        border: none;
+        border-radius: var(--radius-pill);
+        background: var(--brand-green);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        cursor: pointer;
+      }
+      #upload-video-chosen {
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #upload-video-chosen:empty {
+        display: none;
+      }
       /* #2442: the free-generations-remaining line above the video picker
          -- same small/muted treatment as #upload-animations-detected. */
       #upload-video-credits {
