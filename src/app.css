@@ -3263,7 +3263,8 @@
         display: none;
       }
       /* #4078: making a model from a video is the first way offered, so it is the prominent one: a
-         filled Record button; uploading a file is the quiet link beneath it (.auth-link-btn). */
+         the leaf's primary button (docs/DESIGN.md "Inside a leaf") is the Record button; uploading a file
+         is the quiet link beneath it (.auth-link-btn). */
       #upload-video-section {
         display: flex;
         flex-direction: column;
@@ -3284,10 +3285,10 @@
       }
       #upload-video-record-btn {
         min-height: 44px;
-        padding: var(--space-xs) var(--space-2xl);
+        padding: var(--space-sm) var(--space-2xl);
         border: none;
         border-radius: var(--radius-pill);
-        background: var(--petal-yellow);
+        background: var(--brand-green);
         color: var(--ink);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
         cursor: pointer;
