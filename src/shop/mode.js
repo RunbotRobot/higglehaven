@@ -44,6 +44,7 @@
 // in main.js. (#3502: the ground disc/wall/dome, with SHOP_WALL_MARGIN_M, the
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
+import { sayAvatarDidNotLoad } from './avatarLoadNotice.js';
 import { disposeBatchTiers } from './batchTiers.js';
 import * as THREE from 'three';
 import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS } from '../ui/gestureWords.js';
@@ -677,6 +678,7 @@ export async function enterShopMode() {
       return swap;
     },
     cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
+    onModelFailed: sayAvatarDidNotLoad, // #4067
     // #4067: someone who may wear a model of their own is shown fog, not the default body, until it is known.
     beginAvatarFogHold: () => {
       activeAvatarSwap?.cancel();

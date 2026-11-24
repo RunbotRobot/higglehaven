@@ -111,6 +111,19 @@ describe('mountShopAvatar (#3294)', () => {
     warn.mockRestore();
   });
 
+  it('says so once, through onModelFailed, when the worn model fails to load, and not when it loads (#4067)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed = setup({ avatar: { modelUrl: '/bad.glb' }, customAvatar: new Error('load failed') });
+    failed.deps.onModelFailed = vi.fn();
+    await mountSettled({ scene: failed.scene, isLoggedIn: true }, failed.deps);
+    expect(failed.deps.onModelFailed).toHaveBeenCalledTimes(1);
+    const fine = setup({ avatar: { modelUrl: '/u.glb' }, customAvatar: { group: 'custom-group', modelUrl: '/u.glb' } });
+    fine.deps.onModelFailed = vi.fn();
+    await mountSettled({ scene: fine.scene, isLoggedIn: true }, fine.deps);
+    expect(fine.deps.onModelFailed).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('removes and disposes an avatar left from a previous round trip before mounting the new one', async () => {
     const previous = { group: 'old-group' };
     const t = setup({ previous });

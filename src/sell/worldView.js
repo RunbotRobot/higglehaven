@@ -10,6 +10,7 @@
 // What Sell deliberately does NOT do: no presence report, chat, voice or Shop
 // world loading -- those are Shop's world services (updateShopWorldServices),
 // which this never calls. Only the movement core runs.
+import { sayAvatarDidNotLoad } from '../shop/avatarLoadNotice.js';
 import { scene, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
 import { landlet } from '../world/models.js';
 import { controls } from '../build/scene.js';
@@ -193,6 +194,7 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
+    onModelFailed: sayAvatarDidNotLoad, // #4067
   });
   mounted = true;
   fitEnclosureToPage();
