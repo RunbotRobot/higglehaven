@@ -33,7 +33,7 @@ import {
 // DIDIT_API_KEY/OPENAI_API_KEY (worker/index.js): with env.TRIPO_API_KEY
 // unset, tripoConfigured(env) is false and the route handlers below
 // return a real 503 rather than attempting a live network call.
-function tripoConfigured(env) {
+export function tripoConfigured(env) {
   return !!env.TRIPO_API_KEY;
 }
 

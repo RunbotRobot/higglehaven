@@ -34,6 +34,26 @@ await page.waitForTimeout(300);
 await openAddProductLeaf(page, 'video'); // #4078: the steps open on making a model from a video
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 
+// #4076: with no provider connected (the e2e Worker never has TRIPO_API_KEY) nothing is offered to record: the
+// video way is not drawn and one plain sentence says why, before anything could be recorded.
+await page.waitForSelector('#upload-video-off-note:not([hidden])', { timeout: 15000 });
+const offNoteText = (await page.textContent('#upload-video-off-note')).trim();
+const recordHiddenWhenOff = !(await page.isVisible('#upload-video-record-btn')) && !(await page.isVisible('#upload-mode-video-btn'));
+console.log('off: note says so (should be true):', offNoteText === 'Turning a video into a model is not switched on yet.');
+console.log('off: no record/generate way offered (should be true):', recordHiddenWhenOff);
+
+// The refusal can still arrive after a video was chosen (the provider went away in between). Make the profile
+// say it is available again, reopen, and drive the rest of the flow against the real 503.
+await page.route('**/api/builders/me', async (route) => {
+  const response = await route.fetch();
+  const body = await response.json();
+  if (body.builder) body.builder.videoGenerationAvailable = true;
+  await route.fulfill({ response, json: body });
+});
+await page.click('#upload-cancel-btn');
+await openAddProductLeaf(page, 'video');
+await page.waitForSelector('#upload-video-record-btn', { state: 'visible', timeout: 15000 });
+
 // Before toggling: the video way is the one on screen, the file row is not.
 const videoFirst = await page.isVisible('#upload-video-section') && !(await page.isVisible('#upload-file-field-row'));
 const recordLabelInitially = (await page.textContent('#upload-video-record-btn')).trim();
@@ -137,7 +157,11 @@ const unexpectedErrors = errors.filter(
 );
 console.log('unexpected page errors (should be empty):', unexpectedErrors);
 
-const pass = fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
+const refusalMessageOk = statusText.includes("isn't available right now") && statusText.includes('was not used');
+console.log('refusal after choosing a video says nothing was used (should be true):', refusalMessageOk);
+
+const pass = offNoteText === 'Turning a video into a model is not switched on yet.' && recordHiddenWhenOff && refusalMessageOk
+  && fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
   && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate model'
   && videoPickerVisibleAfterToggle && ['Record again', 'Choose another video'].includes(recordedLabel) && chosenLine.startsWith('Video ready:')
   && ['Record', 'Choose a video'].includes(recordLabelInitially)

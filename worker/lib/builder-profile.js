@@ -159,13 +159,15 @@ export async function getOrCreateBuilderForUser(db, user) {
   return row;
 }
 
-export async function handleMyBuilder(request, db) {
+// #4076: `videoGenerationAvailable` says whether the provider is connected on this Worker, so Build can
+// say video-to-model is off before a person records anything (the create route answers 503 without it).
+export async function handleMyBuilder(request, db, videoGenerationAvailable = true) {
   const user = await requireCurrentUser(request, db);
   const row = await getOrCreateBuilderForUser(db, user);
   const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
   row.land_cap_m2 = nextCap;
   row.owned_area_m2 = ownedAreaM2;
-  return json({ builder: builderFromRow(row) });
+  return json({ builder: { ...builderFromRow(row), videoGenerationAvailable: !!videoGenerationAvailable } });
 }
 
 // #680 (sub-issue of #679, N53): every "avatar"-category catalog template

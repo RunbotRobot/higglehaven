@@ -3,9 +3,10 @@
 // way. Upload keeps its steps and refuses an empty required field on the step that holds it; Sell
 // This Too is the other answer. The + Upload Model and Sell this too buttons are gone from My
 // products, and closing the leaf puts My products back only if it was open underneath.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, videoGenerationOn, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Add product Leaf', viewport: { width: 390, height: 844 } });
+await videoGenerationOn(page); // #4076: this test walks the video-first steps
 await chooseIdentity(page, { mode: 'sell', label: 'Add product Leaf', isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
