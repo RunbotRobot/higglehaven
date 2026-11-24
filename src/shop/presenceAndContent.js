@@ -818,7 +818,7 @@ export function updateShopLandletInfo() {
   }
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
   // #3770: named at the top of the open menu, in the brand's lettering, with the builder under it.
-  showBudPlace({ name: found.record.name, builder: ownerLabel });
+  showBudPlace({ name: found.record.name, builder: ownerLabel, wordmarkStyle: found.record.wordmarkStyle, wordmarkColors: found.record.wordmarkColors });
 }
 
 // #2853 (leaf of #2373, Option C real terrain): the real per-landlet
