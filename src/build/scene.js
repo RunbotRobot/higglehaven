@@ -5206,6 +5206,8 @@ selectedMeshes.onAdd = (mesh) => buildBatching.releaseNow(mesh);
 const buildArrival = createBuildArrival({ parent: landletElevationGroup, anchor: () => ({ x: controls.target.x, y: controls.target.y }) });
 const buildLod = createBuildLod({ camera, target: controls.target, arrival: buildArrival, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
 window.__testBuildBatchCounts = () => buildBatching.counts();
+window.__testBuildFadesInFlight = () => buildBatching.fadesInFlight; // e2e (#4115): version dissolves running now
+window.__testBuildFadesStarted = () => buildBatching.fadesStarted; // e2e (#4115): how many have started
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
@@ -5281,6 +5283,7 @@ export function buildModeFrameUpdate(now) {
   applyBuildKeyboardCamera(now);
   controls.update();
   buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
+  buildBatching.update(now); // #4115: a change of version dissolves; nothing when none is running
   buildArrival.update(); // #4003: fog and dissolve of the items just let in; nothing when none
   updateCameraDebug(now);
   // A selected item's box must track it live while the translate/rotate
