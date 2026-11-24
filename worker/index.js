@@ -3931,6 +3931,22 @@ async function exportCommerceData(db, builderRow, userId) {
     SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC, bundle_id DESC
   `).bind(builderId).all();
 
+  // #4142: the builder's own money held back from release, and the auctions
+  // they ran or bid in. Plain fields only (no resolution tokens or internal
+  // timestamps); the amounts and dates are what the person could be asked about.
+  const commissionHolds = await db.prepare(`
+    SELECT hold_id, purchase_id, amount_cents, release_at, released_at, revoked_at, created_at
+    FROM commission_holds WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  const auctionsRun = await db.prepare(`
+    SELECT auction_id, landlet_id, starting_bid_cents, status, ends_at, winning_bid_id, created_at
+    FROM auctions WHERE seller_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  const auctionBidsPlaced = await db.prepare(`
+    SELECT bid_id, auction_id, amount_cents, created_at
+    FROM auction_bids WHERE bidder_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
   return {
     purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
@@ -3957,6 +3973,30 @@ async function exportCommerceData(db, builderRow, userId) {
       createdAt: row.created_at,
     })),
     bundles: bundles.results.map(bundleFromRow),
+    commissionHolds: commissionHolds.results.map((row) => ({
+      holdId: row.hold_id,
+      purchaseId: row.purchase_id,
+      amountCents: row.amount_cents,
+      releaseAt: row.release_at,
+      releasedAt: row.released_at,
+      revokedAt: row.revoked_at,
+      createdAt: row.created_at,
+    })),
+    auctionsRun: auctionsRun.results.map((row) => ({
+      auctionId: row.auction_id,
+      landletId: row.landlet_id,
+      startingBidCents: row.starting_bid_cents,
+      status: row.status,
+      endsAt: row.ends_at,
+      winningBidId: row.winning_bid_id,
+      createdAt: row.created_at,
+    })),
+    auctionBidsPlaced: auctionBidsPlaced.results.map((row) => ({
+      bidId: row.bid_id,
+      auctionId: row.auction_id,
+      amountCents: row.amount_cents,
+      createdAt: row.created_at,
+    })),
     tax1099Forms: tax1099FormsExport,
   };
 }
