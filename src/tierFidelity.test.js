@@ -60,3 +60,23 @@ describe('silhouetteFidelity (#4062)', () => {
     expect(max).toEqual([1.5, 1.5, 1.5]);
   });
 });
+
+describe('colour (#4111)', () => {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const batch = (color) => ({ positions: tri, doubleSided: true, area: 0.5, color });
+  const report = (a, b) => silhouetteFidelity([batch(a)], [batch(b)]);
+
+  it('reports no shift when a side carries no colour', () => {
+    expect(silhouetteFidelity([{ positions: tri, doubleSided: true }], [batch([1, 1, 1])]).colorShift).toBeNull();
+  });
+
+  it('rejects a version that is a different colour although its outline matches (a dark grey model drawn white)', () => {
+    const dark = [0.05, 0.05, 0.05];
+    expect(isFaithful(report(dark, [0.9, 0.9, 0.9]), 'far')).toBe(false);
+    expect(isFaithful(report(dark, [0.9, 0.9, 0.9]), 'mid')).toBe(false);
+  });
+
+  it('accepts the same colour', () => {
+    expect(isFaithful(report([0.2, 0.3, 0.1], [0.2, 0.3, 0.1]), 'far')).toBe(true);
+  });
+});
