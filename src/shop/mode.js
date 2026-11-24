@@ -112,6 +112,7 @@ import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
+import { readWornHint as readWornHintFor, writeWornHint as writeWornHintFor, hintKindForEquipped } from './wornHint.js';
 
 // Skip building a ground mesh for a landlet with no chance of being seen
 // (entirely beyond the wall, comfortably past any land's own footprint) —
@@ -702,12 +703,8 @@ export async function enterShopMode() {
       setActiveAvatarSwap(hold.released ? null : hold);
       return hold;
     },
-    readWornHint: () => {
-      try { return localStorage.getItem(`hh-worn-avatar:${currentAuthUser?.userId ?? ''}`); } catch { return null; }
-    },
-    writeWornHint: (kind) => {
-      try { if (currentAuthUser?.userId) localStorage.setItem(`hh-worn-avatar:${currentAuthUser.userId}`, kind); } catch { /* remembered only when allowed */ }
-    },
+    readWornHint: () => readWornHintFor(localStorage, currentAuthUser?.userId),
+    writeWornHint: (kind) => writeWornHintFor(localStorage, currentAuthUser?.userId, kind),
   });
   markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
@@ -980,6 +977,8 @@ function renderMyAvatarsField(onEquipped) {
           // already in Shop mode left it comparing against whichever
           // avatar was equipped when enterShopMode last ran.
           setShopEquippedAvatarSkeletonSignature(newEquipped.skeletonSignature);
+          // #4106: remember the new body now, so the next arrival waits in fog for it instead of drawing the standard one.
+          writeWornHintFor(localStorage, currentAuthUser?.userId, hintKindForEquipped(newEquipped));
           await refreshEquippedShopAvatar(newEquipped.modelUrl, newEquipped.clipRoles);
           renderMyAvatarsList();
           onEquipped?.();
