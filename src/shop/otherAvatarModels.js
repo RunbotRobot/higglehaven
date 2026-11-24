@@ -125,3 +125,20 @@ export function chooseAllowedTemplateIds(wanted, shown, failedAt, now, cap = MAX
 export function desiredAvatarFor(equipped, allowed) {
   return equipped && allowed.has(equipped.templateId) ? equipped : null;
 }
+
+// #4107: what reconcileOtherAvatarBodies does for ONE avatar, decided from data so it is unit-testable.
+//   desiredId:   the template this person should be drawn with now (null = the default body).
+//   requestedId: the template last asked for (null = the default body, or nothing asked yet).
+//   waiting:     true while fog still stands where their body will be (#4067: a wearer of a model starts as
+//                fog, never as the default body, until their own body is in).
+// Returns 'keep' (nothing to do), 'default' (put the default body in and end any fog wait) or 'load'
+// (fetch desiredId and swap it in). The one case a plain desiredId === requestedId check got wrong: a
+// wearer whose model may not be drawn (over the distinct-models cap, or temporarily failed) starts with
+// requestedId null and a wait standing, so desiredId (null) matched requestedId (null) and the fog stood
+// there for good, an invisible, untappable patch. A wait that has no model coming is always ended.
+export function otherAvatarBodyAction(desiredId, requestedId, waiting) {
+  const desired = desiredId ?? null;
+  const requested = requestedId ?? null;
+  if (desired === requested) return desired === null && waiting ? 'default' : 'keep';
+  return desired === null ? 'default' : 'load';
+}
