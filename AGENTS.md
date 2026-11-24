@@ -1274,6 +1274,26 @@ most likely to come up again.
   because an upload shown to every visitor needs the reporting and removal
   every other upload has.)
 
+  **Flying is level, and height is a slide along the right edge (2026-11-24,
+  #4102, built under #4105).** This replaces "the view's pitch is the climb"
+  above. With pitch as the climb, flying level meant looking level, and a
+  person could not look down at what they flew over. Rather than ask the
+  owner to choose from words, the fleet built three ways to change height
+  behind an address switch (edge slide, double-tap-hold-slide, pinch) and
+  the owner flew them: "I like "A"! It's easy to use with normal phone
+  holding, compared to the pinch. It also feels like a gesture people might
+  discover on accident, which is in line with the effort to provide
+  intuitive gestures." So flight is level, a thumb sliding up or down the
+  right edge rises or sinks, and the other two ways and pitch-climb are
+  removed ("One model, not a hybrid"). The principles: a gesture is judged
+  with the phone held the way people hold it, one hand and a thumb before
+  two fingers; a gesture a person can fall into by accident is worth more
+  than one that has to be taught, though it is still taught once; one
+  gesture does one thing, so looking never also moves the person; and a
+  choice about feel is put in the owner's hand as things to try, each
+  behind its own switch, so that choosing only removes code. It was
+  answered within a day of going live.
+
   **The flower is one plant, whole and attached (2026-11-20, #3754, #4012).**
   Three notes after a few days of use. The head: "I like option C for the
   bud" (the solid green bud with the logo in cream; #3754). An open menu:
@@ -1736,7 +1756,7 @@ is spent and the owner has applied the free reset):
   here): 2 Sell end to end (upload, My products, orders, payouts, tax forms). 3 the far
   view and what a frame costs (#3412, #3418, #3479, #4063, #4089). 4 Build in the flower
   (#3654 and its slices, #3545). 5 the admin dashboard and the owner's tools. 6 Shop:
-  moving, flying, hints, orbs, the first visit (#3544, #4072, #4102). 7 the assistants,
+  moving, flying, hints, orbs, the first visit (#3544, #4072, #4105). 7 the assistants,
   coding side (#3614, #3531, #3448, #3449). 8 accounts: sign-up, age and ID steps,
   Settings, every email we send (#3547, #3877). 9 buying and money: checkout, orders,
   refunds, ratings (#3934, #3946); blast-radius review applies. 10 people: friends,
@@ -1749,7 +1769,7 @@ is spent and the owner has applied the free reset):
   the code: list what is not built, file tracking issues with leaves, keep docs/API.md
   true.
 - **A choice the owner has not made yet is built up to the choice.** Where the owner is
-  asked to pick among options (wordmark styles, the Build plan, flight height), build
+  asked to pick among options (wordmark styles, the Build plan), build
   what every option needs and keep each option behind its own switch, so the pick only
   removes code. Anything that needs a decision no standing decision covers still goes to
   the owner (`waitingOn: "owner"` with the reason); take the next thing, do not wait.
