@@ -301,3 +301,24 @@ describe('a computer mouse (#3831)', () => {
     expect(events).toEqual([]);
   });
 });
+
+describe('a finger the flight-height control claims (#4102)', () => {
+  it('is forgotten without a tap, and a look it had started stops', () => {
+    const { events, gestures } = rig();
+    gestures.down(1, RIGHT, 400, 0);
+    gestures.move(1, RIGHT + 30, 400);
+    expect(events.at(-1)[0]).toBe('look');
+    gestures.drop(1);
+    expect(events.at(-1)).toEqual(['look', 0, 0]);
+    expect(gestures.activeFingers()).toBe(0);
+    events.length = 0;
+    gestures.up(1, 100); // already gone: nothing happens, and it is never half of a double-tap
+    expect(events).toEqual([]);
+  });
+
+  it('does nothing for a finger it never saw', () => {
+    const { events, gestures } = rig();
+    gestures.drop(7);
+    expect(events).toEqual([]);
+  });
+});
