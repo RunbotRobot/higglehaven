@@ -728,8 +728,8 @@ go. It stops at the edge of how far you can go and never turns upside down.
 **If something goes wrong:**
 - Nothing moves: a box or a window is open and has the keys. Close it, or press
   Escape, and try again.
-- You can only move the view with keys so far: picking, placing, moving and
-  deleting items still need a mouse or a touch screen for now.
+- You can move the view and delete or undo by key so far: picking, placing and
+  moving items still need a mouse or a touch screen for now.
 
 ```controls build
 #add-item-btn | Add item
@@ -815,13 +815,14 @@ go. It stops at the edge of how far you can go and never turns upside down.
 ### How do I remove an item, or get it back?
 
 1. Tap the item.
-2. Tap "Delete" on the card beside it.
+2. Tap "Delete" on the card beside it. On a keyboard, press Delete or Backspace
+   with the item selected instead.
 
 **You will see:** the item disappears at once. There is no "are you sure" for a
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back.
+- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back. On a keyboard, press Ctrl and Z (Cmd and Z on a Mac), and Ctrl, Shift and Z to redo.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.

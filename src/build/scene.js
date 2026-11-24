@@ -83,6 +83,7 @@ import {
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
 import { stepBuildCamera } from './keyboardCamera.js';
+import { buildEditKeyAction } from './keyboardEdit.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -5229,6 +5230,20 @@ window.addEventListener('keydown', (event) => {
   buildKeysDown.add(event.code);
 });
 window.addEventListener('keyup', (event) => { buildKeysDown.delete(event.code); });
+// #4161 (leaf 3 of #4158): Delete and undo/redo by key press the button of the same name, so a key and a
+// tap do exactly the same thing (and Delete stays undoable).
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  const usable = (button) => !button.disabled && !button.hidden && !sceneMutationBusy;
+  const action = buildEditKeyAction(event, {
+    hasSelection: selectedMeshes.size > 0 && usable(deleteBtn),
+    canUndo: usable(undoBtn),
+    canRedo: usable(redoBtn),
+  });
+  if (!action) return;
+  event.preventDefault(); // Backspace would otherwise go back a page, Ctrl+Z reach the browser
+  ({ delete: deleteBtn, undo: undoBtn, redo: redoBtn })[action].click();
+});
 window.addEventListener('blur', () => { buildKeysDown.clear(); });
 function applyBuildKeyboardCamera(now) {
   if (buildKeysDown.size === 0 || currentMode !== 'build') { buildKeysLastAt = null; return; }

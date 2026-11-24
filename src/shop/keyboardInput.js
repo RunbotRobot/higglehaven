@@ -72,6 +72,12 @@ export function isNavigationKeyEvent(event) {
 // someone typing or answering, never the world.
 function isModifiedOrTyping(event) {
   if (event.ctrlKey || event.metaKey || event.altKey) return true;
+  return isTypingOrInDialog(event);
+}
+
+// #4161: the same "someone typing or answering" test without the modifier rule, for the Build
+// shortcuts that deliberately use Ctrl or Cmd (undo, redo).
+export function isTypingOrInDialog(event) {
   const target = event.target;
   if (target) {
     const tag = target.tagName;
