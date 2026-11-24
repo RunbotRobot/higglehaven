@@ -3728,6 +3728,58 @@ async function exportSocialSection(db, builderId, userId) {
   };
 }
 
+// #4142: the account's own conversations with the assistants and the blocks it
+// made. These key on the account (user_id), not on a builder profile, so they
+// are exported for every account, builder or not. Both sides of an assistant
+// thread are the person's to read (the assistant's replies are addressed to
+// them); the assistant is named by its username. Who blocked the person is
+// deliberately not here ("A block is silent").
+async function exportCommunicationData(db, userId) {
+  const conversations = await db.prepare(`
+    SELECT c.conversation_id, c.status, c.ended_by, c.created_at, c.ended_at, u.username AS assistant_name
+    FROM assistant_conversations c LEFT JOIN users u ON u.user_id = c.assistant_user_id
+    WHERE c.shopper_user_id = ? ORDER BY c.created_at ASC
+  `).bind(userId).all();
+  const messages = await db.prepare(`
+    SELECT m.conversation_id, m.sender, m.text, m.created_at FROM assistant_messages m
+    WHERE m.conversation_id IN (SELECT conversation_id FROM assistant_conversations WHERE shopper_user_id = ?)
+    ORDER BY m.created_at ASC
+  `).bind(userId).all();
+  const questions = await db.prepare(`
+    SELECT status, text, answer_text, answered_at, created_at, closed_at FROM assistant_questions
+    WHERE shopper_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const blocks = await db.prepare(`
+    SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
+    LEFT JOIN users u ON u.user_id = b.blocked_user_id
+    WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
+  `).bind(userId).all();
+  const byConversation = new Map();
+  for (const row of messages.results) {
+    if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
+    byConversation.get(row.conversation_id).push({ sender: row.sender, text: row.text, sentAt: row.created_at });
+  }
+  return {
+    assistantConversations: conversations.results.map((row) => ({
+      assistant: row.assistant_name,
+      status: row.status,
+      endedBy: row.ended_by,
+      startedAt: row.created_at,
+      endedAt: row.ended_at,
+      messages: byConversation.get(row.conversation_id) ?? [],
+    })),
+    assistantQuestions: questions.results.map((row) => ({
+      status: row.status,
+      question: row.text,
+      answer: row.answer_text,
+      askedAt: row.created_at,
+      answeredAt: row.answered_at,
+      closedAt: row.closed_at,
+    })),
+    blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -3781,6 +3833,7 @@ async function handleExportData(request, db) {
     },
     commerce: await exportCommerceData(db, builderRow, user.user_id),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
+    communication: await exportCommunicationData(db, user.user_id),
   });
 }
 
