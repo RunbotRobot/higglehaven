@@ -751,8 +751,9 @@ without internal resolution fields.
 (each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and
 its `messages` as `{sender, text, sentAt}`), `assistantQuestions` (a question left
 while no assistant was free, with its `answer`), and `blocksMade` (who this
-account blocked and when). Who blocked the account is deliberately not exported
-("A block is silent").
+account blocked and when) and `bugReports` (feedback the account submitted: description,
+screenshot link, device facts; not the render-state dump). Who blocked the account
+is deliberately not exported ("A block is silent").
 
 **#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
 survey left open): `profile.moderationDecisions` lists every

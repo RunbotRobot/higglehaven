@@ -657,10 +657,27 @@ describe('GET /auth/export-data -- communication section (#4142)', () => {
     expect(JSON.stringify(result.body)).not.toContain('someone else secret');
   });
 
+  it('lists the bug reports the account submitted, without the render-state dump or anyone else\'s', async () => {
+    const reporter = await signupBuilder('export-comm-reporter');
+    const stranger = await signupBuilder('export-comm-stranger');
+    await env.DB.prepare(`
+      INSERT INTO bug_reports (report_id, user_id, description, user_agent, platform, render_state_buffer_json, submitted_at)
+      VALUES ('report-mine', ?, 'The wall flickers', 'TestAgent/1', 'Linux', '{"big":"dump"}', '2026-01-03T00:00:00.000Z'),
+             ('report-theirs', ?, 'Not mine', 'Other/1', 'Mac', '{}', '2026-01-03T00:00:00.000Z')
+    `).bind((await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(reporter.builderId).first()).user_id,
+      (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(stranger.builderId).first()).user_id).run();
+    const result = await api('/auth/export-data', reporter.session());
+    expect(result.body.communication.bugReports).toEqual([expect.objectContaining({
+      reportId: 'report-mine', description: 'The wall flickers', userAgent: 'TestAgent/1', platform: 'Linux',
+    })]);
+    expect(JSON.stringify(result.body)).not.toContain('"big":"dump"');
+    expect(JSON.stringify(result.body)).not.toContain('Not mine');
+  });
+
   it('is present, and empty, for an account that has never used any of it', async () => {
     const quiet = await signupBuilder('export-comm-quiet');
     const result = await api('/auth/export-data', quiet.session());
-    expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [] });
+    expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [], bugReports: [] });
   });
 });
 
