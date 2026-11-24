@@ -47,7 +47,7 @@ export function isSkinnedGeometry(geometry) {
 // and far versions in the shopper's browser) can spread one pass across frames.
 // A pass on a 50k-triangle mesh took several seconds as one task. The result is
 // the same as simplifyGeometryOnePass's.
-export function* simplifyGeometryOnePassSteps(geometry, targetTriangles, maxRemovalFraction = MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION) {
+export function* simplifyGeometryOnePassSteps(geometry, targetTriangles, maxRemovalFraction = MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION, options = {}) {
   const triangleCount = countTriangles(geometry);
   if (triangleCount <= targetTriangles) return null;
   if (isSkinnedGeometry(geometry)) return null;
@@ -72,7 +72,7 @@ export function* simplifyGeometryOnePassSteps(geometry, targetTriangles, maxRemo
     return Math.min(uncappedRemoveCount, Math.floor(vertexCount * maxRemovalFraction));
   };
 
-  return yield* simplifier.modifySteps(geometry, removeCountFor);
+  return yield* simplifier.modifySteps(geometry, removeCountFor, options);
 }
 
 // #3528: how many edges of a geometry belong to exactly one triangle, with

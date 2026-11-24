@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { silhouetteFidelity, isFaithful, boundsOfBatches } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats } from './tierFidelity.js';
 
 // A unit cube as twelve triangles with outward-facing (counter-clockwise from outside) windings.
 function cube(scale = 1, doubleSided = false, flip = false) {
@@ -50,7 +50,7 @@ describe('silhouetteFidelity (#4062)', () => {
   });
 
   it('a slightly shrunken version still passes the mid bar and a model with no triangles is trivially faithful', () => {
-    expect(isFaithful(silhouetteFidelity(cube(), cube(0.96)), 'mid')).toBe(true);
+    expect(isFaithful(silhouetteFidelity(cube(), cube(0.98)), 'mid')).toBe(true);
     expect(isFaithful(silhouetteFidelity([], []), 'mid')).toBe(true);
   });
 
@@ -58,5 +58,28 @@ describe('silhouetteFidelity (#4062)', () => {
     const { min, max } = boundsOfBatches([...cube(1), ...cube(3)]);
     expect(min).toEqual([-1.5, -1.5, -1.5]);
     expect(max).toEqual([1.5, 1.5, 1.5]);
+  });
+});
+
+describe('surface checks (#4114)', () => {
+  it('surfaceStats measures area and open edge length; a closed cube has no open edges', () => {
+    const closed = surfaceStats(cube());
+    expect(closed.area).toBeCloseTo(6, 5);
+    expect(closed.openEdgeLength).toBe(0);
+    const open = surfaceStats([{ positions: cube()[0].positions.slice(0, 9 * 10), doubleSided: false }]);
+    expect(open.openEdgeLength).toBeGreaterThan(0);
+  });
+
+  it('a version that keeps the outline but loses surface fails the mid bar', () => {
+    const report = silhouetteFidelity(cube(), cube(0.9));
+    expect(report.areaKept).toBeCloseTo(0.81, 2);
+    expect(isFaithful(report, 'mid')).toBe(false);
+  });
+
+  it('a version torn open where the model was closed fails the mid bar', () => {
+    const torn = [{ positions: cube()[0].positions.slice(0, 9 * 11), doubleSided: false }];
+    const report = silhouetteFidelity(cube(), torn);
+    expect(report.openGrowth).toBeGreaterThan(1.15);
+    expect(isFaithful(report, 'mid')).toBe(false);
   });
 });
