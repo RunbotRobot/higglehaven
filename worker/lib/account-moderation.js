@@ -11,6 +11,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { landletLevelZRange } from './land.js';
+import { invalidateFarPlacementsForLandlets, farPlacementCentersForUser, invalidateFarPlacementCenters, invalidateFarPlacementsForUser } from './far-placements.js';
 // #2542 (landed on main while this leaf's PR was in flight): normalizeEmail/
 // userFromRow stay defined in worker/index.js itself (re-exported for
 // worker/lib/auth-routes.js and worker/lib/stripe.js too) rather than
@@ -378,6 +379,8 @@ async function snapshotAndRemoveSellerInstances(db, sellerId, { permanent }) {
     namesByBuilder.set(builderId, names);
   }
   if (statements.length > 0) await db.batch(statements);
+  // #4147: a permanent closure comes through here too, and a draft's far tile must let go of what was removed.
+  await invalidateFarPlacementsForLandlets(db, instances.map((instance) => instance.landlet_id));
   return { removedByBuilder, namesByBuilder, removed: statements.length / 2 };
 }
 
@@ -653,12 +656,16 @@ export async function handleSuspendAccount(request, db) {
   // #2032: run only after the suspension itself is confirmed landed -- a
   // removeContent request against an account that turned out to already be
   // suspended (the 409 above) must not remove anything.
+  // #4147: read before the removal below, which deletes the placements this finds, and drop the far tiles
+  // after it: a suspended builder's lándlet and a suspended seller's products leave the far view too.
+  const farCenters = await farPlacementCentersForUser(db, row.user_id);
   const removedContent = removeContent
     ? await removeSuspendedUserPostedContent(db, admin.user_id, row.user_id)
     : null;
   // #2986: unconditional, unlike removedContent above -- see that
   // function's own comment for why.
   const { instancesRemoved } = await removeSuspendedSellerPlacedInstances(db, row.user_id);
+  await invalidateFarPlacementCenters(farCenters);
 
   return json({
     suspension: {
@@ -715,6 +722,7 @@ export async function handleUnsuspendAccount(request, db) {
   const { instancesRestored } = unsuspendedSeller
     ? await restoreSuspendedSellerPlacedInstances(db, unsuspendedSeller.seller_id)
     : { instancesRestored: 0 };
+  await invalidateFarPlacementsForUser(db, row.user_id); // #4147: what the suspension hid is back in the far view
 
   return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt }, instancesRestored });
 }

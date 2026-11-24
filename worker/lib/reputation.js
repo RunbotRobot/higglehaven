@@ -29,6 +29,7 @@ import {
 import { adminActionLogStatement } from './admin-log.js';
 import { sessionIsPurchaseBuyer, purchaseBuyerUserIdSql } from './purchase-buyer.js';
 import { assertNotFleetAccount } from './fleet.js';
+import { farPlacementCentersForTemplates, invalidateFarPlacementCenters } from './far-placements.js';
 import { removeSuspendedSellerPlacedInstances, SUSPENSION_SPARES_LAST_ADMIN_SQL } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
@@ -622,11 +623,15 @@ export async function handleProductFlags(request, db, route) {
           UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
           WHERE product_id = ? AND flagged_hidden_at IS NULL
         `).bind(template.product_id).run();
+        // #4147: the placements go from every lándlet's draft; drop the far tiles that held them.
+        const { results: siblingTemplates } = await db.prepare('SELECT template_id FROM catalog_templates WHERE product_id = ?').bind(template.product_id).all();
+        const farCenters = await farPlacementCentersForTemplates(db, siblingTemplates.map((row) => row.template_id));
         await db.prepare(`
           DELETE FROM placed_instances WHERE template_id IN (
             SELECT template_id FROM catalog_templates WHERE product_id = ?
           )
         `).bind(template.product_id).run();
+        await invalidateFarPlacementCenters(farCenters);
         // Best-effort notification to every *other* seller whose own
         // listing of the same product just got cascade-hidden -- unlike
         // the flagged listing's own seller below, they get no strike (the

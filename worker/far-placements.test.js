@@ -8,7 +8,7 @@ import {
   api, signupAdmin, signupBuilder, signupSeller, createGreenbeltLandletAs,
 } from './test-helpers.js';
 import { decodeFarPlacements } from './lib/far-placements-encoding.js';
-import { FAR_PLACEMENT_TILE_M } from './lib/far-placements.js';
+import { FAR_PLACEMENT_TILE_M, farPlacementCentersForTemplates, invalidateFarPlacementCenters } from './lib/far-placements.js';
 
 let adminSession;
 
@@ -258,5 +258,41 @@ describe('far placements are dropped when a lándlet is emptied (#4147)', () => 
     const after = await readTile(tile);
     expect(after.response.headers.get('x-far-placements-cache')).toBe('miss');
     expect(after.body.landlets ?? []).toHaveLength(0);
+  });
+
+  it('suspending a builder, and lifting it', async () => {
+    const { tile, builder } = await standing('far-suspend');
+    const suspended = await api('/auth/suspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: builder.email, reason: 'far view test' }),
+    }));
+    expect(suspended.response.status).toBe(200);
+    const during = await readTile(tile);
+    expect(during.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(during.body.landlets ?? []).toHaveLength(0);
+    const lifted = await api('/auth/unsuspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: builder.email }),
+    }));
+    expect(lifted.response.status).toBe(200);
+    const after = await readTile(tile);
+    expect(after.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(after.body.landlets[0].items).toHaveLength(1);
+  });
+
+  it('finds the tile of every lándlet that places a product, for the writes that delist or remove it', async () => {
+    const tile = freshTile();
+    const seller = await signupSeller('far-centers-seller');
+    const builder = await signupAdmin('far-centers-builder');
+    await createTemplate('far-centers-template', seller);
+    await setupLandlet('far-centers-landlet', tile.center, builder);
+    await place(builder, 'far-centers-landlet', 'far-centers-template');
+    expect(await farPlacementCentersForTemplates(env.DB, ['far-centers-template'])).toEqual([
+      { center_x_m: tile.center.x, center_y_m: tile.center.y },
+    ]);
+    expect(await farPlacementCentersForTemplates(env.DB, ['no-such-template'])).toEqual([]);
+    expect(await farPlacementCentersForTemplates(env.DB, [])).toEqual([]);
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('hit');
+    await invalidateFarPlacementCenters(await farPlacementCentersForTemplates(env.DB, ['far-centers-template']));
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('miss');
   });
 });

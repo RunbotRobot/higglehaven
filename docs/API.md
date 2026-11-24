@@ -4370,17 +4370,19 @@ scale, crop?], ...] }] }`; positions are landlet-local (add `cx`, `cy`), and
 draft; suspended builders' landlets and delisted or suspended-seller products
 are left out. `400` for a malformed or out-of-world tile. Cached at the edge
 for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version,
-Make greenbelt, admin reassign-owner, builder or account deletion and an auction
-resolving drop the tile's entry in the same data centre (#4147), other changes
+Make greenbelt, admin reassign-owner, builder or account deletion, an auction
+resolving, an account suspension and its lifting, a seller's placements removed at
+suspension or closure, a delisted product and a flagged product's placements
+removed everywhere drop the tile's entry in the same data centre (#4147), other changes
 show within the TTL. A Shop that is open reads each tile in range again every two
 minutes (src/shop/farView.js `TILE_REFRESH_MS`), so an emptied landlet leaves its
 far view without a reload.
 
 Decisions recorded for this read (#3417):
 
-- **Freshness.** Draft edits, delisting a product, suspending or closing a
-  seller and suspending a builder are not wired to invalidate the cache. They
-  reach far view within the 60 s TTL. The cache (`caches.default`) is per data
+- **Freshness.** Draft edits (and restoring an archived version or a draft) are
+  not wired to invalidate the cache; they reach far view within the 60 s TTL.
+  (Suspensions, closures, delistings and moderation removals are, since #4147.) The cache (`caches.default`) is per data
   centre, so an explicit drop could only ever help the one data centre that
   handled the write and every other one would wait out the TTL anyway; more than
   twenty write paths (every placement edit, plus the suspension and delist
