@@ -826,7 +826,10 @@ export async function openAddProductLeaf(page, way = 'upload') {
     if (way === 'upload') {
       // The steps open on the video way (or on the file way when video-to-model is off, #4076); most
       // callers want the file picker, one tap away.
-      await page.waitForSelector('#upload-file-field-row:not([hidden]), #upload-mode-file-btn:not([hidden])', { timeout: 15000 });
+      await page.waitForFunction(() => {
+        const shown = (id) => { const el = document.getElementById(id); return !!el && el.getClientRects().length > 0; };
+        return shown('upload-file-field-row') || shown('upload-mode-file-btn');
+      }, null, { timeout: 15000 });
       if (!(await page.isVisible('#upload-file-field-row'))) await page.click('#upload-mode-file-btn');
       await page.waitForSelector('#upload-file-field-row:not([hidden])', { timeout: 5000 });
     }
