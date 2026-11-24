@@ -7,8 +7,7 @@
 // ID-verified the same way (the adult-only gate). A real tap on a pixel is never
 // automated in this suite, so the panel is opened by the test hook the product
 // tap also goes through.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, openAssistantFromHelp, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAssistantFromHelp, finish, localD1 } from './helpers.mjs';
 
 const LABEL_A = 'Assistant Chat Shopper';
 const LABEL_B = 'Assistant Chat Stand-in';
@@ -36,9 +35,7 @@ async function fetchJson(page, path, options) {
 const postJson = (page, path, body) => fetchJson(page, path, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
 });
-const sql = (statement) => execSync(`npx wrangler d1 execute higglehaven-db --local --command "${statement}"`, {
-  cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe',
-});
+const sql = (statement) => localD1(statement);
 
 await chooseIdentity(pageA, { mode: 'build', label: LABEL_A, isNew: true });
 const builderA = (await fetchJson(pageA, '/api/builders/me')).body.builder;

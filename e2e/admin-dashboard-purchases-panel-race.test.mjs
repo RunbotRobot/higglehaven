@@ -32,11 +32,11 @@
 // test still needs true) at all, only the deletion guard.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import {
   launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, emailForLabel, grantAdmin,
   openAddProductLeaf,
+  localD1,
 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -112,10 +112,7 @@ console.log('purchase created (status should be 201):', purchased.status);
 console.log('purchase has a paymentIntentId (should be true):', !!purchased.body.purchase?.paymentIntentId);
 const purchaseId = purchased.body.purchase?.purchaseId;
 
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `UPDATE purchases SET paid_out_at = '2024-01-01T00:00:00.000Z', stripe_payout_id = 'po_dangling_race_test' WHERE purchase_id = '${purchaseId}'`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
+localD1(`UPDATE purchases SET paid_out_at = '2024-01-01T00:00:00.000Z', stripe_payout_id = 'po_dangling_race_test' WHERE purchase_id = '${purchaseId}'`);
 console.log('stood in for a real Stripe payout on the purchase, satisfying the #732/#745 deletion guard');
 
 const { seller } = (await fetchJson('/api/sellers/me')).body;

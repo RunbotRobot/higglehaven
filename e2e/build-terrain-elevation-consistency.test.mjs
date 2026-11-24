@@ -16,8 +16,7 @@
 // baseline.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, localD1 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LABEL = 'Build Elevation Consistency Tester';
@@ -45,10 +44,7 @@ const placedLocalZ = before.products[0]?.localZ;
 // A fresh local D1 (see e2e/run-all.mjs) only ever seeds one claimable
 // landlet -- "starter-landlet" -- which claimLandlet() above always ends
 // up claiming, so it's safe to name directly here.
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `UPDATE landlets SET elevation_m = ${ELEVATION_M} WHERE landlet_id = 'starter-landlet'`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
+localD1(`UPDATE landlets SET elevation_m = ${ELEVATION_M} WHERE landlet_id = 'starter-landlet'`);
 console.log(`wrote a real elevation_m = ${ELEVATION_M} directly to D1 for starter-landlet`);
 
 // A raw reload lands in Shop mode by default unless this is set first, the
