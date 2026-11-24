@@ -101,6 +101,7 @@ import {
   expireStaleVideoGenerationJobs, tripoConfigured,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+import { handleArchivedVersions } from './lib/archived-versions.js';
 import { handleAssistant } from './lib/assistant-shift.js';
 // #2614: the instance-purchase creation/checkout domain (simulated and
 // real-money paths), extracted into worker/lib/purchase-creation.js -- see
@@ -1301,6 +1302,11 @@ async function handleBuilders(request, env, db, route, url) {
 
   // #680 (sub-issue of #679, N53): every "avatar"-category template this
   // account has purchased, for a future picker UI (#681) to offer.
+  // #4094: the builder's own archived lándlet versions, and restoring one as a new saved version.
+  if (route.length >= 3 && route[1] === 'me' && route[2] === 'archived-versions') {
+    return handleArchivedVersions(request, db, route, url);
+  }
+
   if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'avatars') {
     return handleMyOwnedAvatars(request, db);
   }
@@ -4733,7 +4739,7 @@ export function versionFromRow(row) {
 // own comment on why it can't be the identity column). versionInstanceFromRow
 // below is reused as-is for archived_version_instances rows -- every
 // column it reads is shared verbatim between the two tables.
-function archivedVersionFromRow(row) {
+export function archivedVersionFromRow(row) {
   return {
     versionId: row.version_id,
     sourceLandletId: row.source_landlet_id,
