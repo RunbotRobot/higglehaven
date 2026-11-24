@@ -82,6 +82,7 @@ import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
@@ -1142,6 +1143,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
         modelWait: waitsForModel
           ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
           : null,
+        bodySwapFog: null, // #4109: the fog hiding a change of avatar, while there is one
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
         motion: defaultOtherAvatarMotion(defaultAvatar),
@@ -1279,6 +1281,30 @@ function reconcileOtherAvatarBodies(now) {
 }
 
 function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4109: someone changing what they wear is seen changing inside a puff of fog, not in one frame ("nothing
+  // pops in"). Only when a body is already standing there to be replaced: an arrival still waiting for its
+  // model (modelWait, #4067) has its own fog, and the first body of an entry goes straight in. A change
+  // that lands while an earlier one is still in its fog finishes that one first (its commit runs at once).
+  entry.bodySwapFog?.cancel();
+  entry.bodySwapFog = null;
+  const replacing = !entry.modelWait && entry.body && entry.body.children.length > 0;
+  const place = () => {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    reconcileOtherAvatarAnimations(performance.now());
+    refreshOtherShopAvatarsDiagnostic();
+  };
+  if (!replacing) {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    return;
+  }
+  const swap = beginAvatarSwapFog({
+    createFog: createArrivalFog, parent: scene, getPosition: () => entry.group.position,
+    commit: place, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion(),
+  });
+  entry.bodySwapFog = swap.released ? null : swap;
+}
+
+function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
   // #4067: the real body is in place, so the fog thins away over it; a default body put in instead
   // (the model cannot be had) ends the wait at once.
   if (templateId !== null) entry.modelWait?.ready(performance.now());
@@ -1494,6 +1520,8 @@ setNearbySpeechHandler((builderId) => {
 });
 
 function releaseOtherAvatarEntry(entry) {
+  entry.bodySwapFog?.cancel(); // #4109: a swap still in its fog finishes (its commit runs) before the entry goes
+  entry.bodySwapFog = null;
   entry.modelWait?.cancel();
   entry.modelWait = null;
   entry.speechCue?.dispose();
@@ -1528,6 +1556,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    swappingBody: Boolean(entry.bodySwapFog), // added for #4109 -- e2e needs to see that someone changing avatar is fog first, with the old body still standing until the new one goes in
     waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
@@ -1594,6 +1623,7 @@ export function updateOtherShopAvatars(now) {
     if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
     if (entry.modelWait && entry.modelWait.step(now)) entry.modelWait = null; // #4067
+    if (entry.bodySwapFog && entry.bodySwapFog.step(now)) entry.bodySwapFog = null; // #4109: a change of avatar, in fog
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
     if (entry.transition && entry.transition.step(now)) {
