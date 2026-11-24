@@ -1,0 +1,27 @@
+/* Flight height (#4102, part of #3539). A page of three links, not the app. Brand tokens are the app's own
+   (src/tokens.css): ink 22 36 10, pale green 214 232 190, pale yellow 250 240 199, brand green #6ca42e;
+   one sans family (the system one). */
+:root {
+  --ink-rgb: 22 36 10;
+  --pill-rgb: 214 232 190;
+  --panel-rgb: 250 240 199;
+  --brand-green: #6ca42e;
+  --ink: rgb(var(--ink-rgb));
+  --ink-soft: rgb(var(--ink-rgb) / 0.72);
+}
+* { box-sizing: border-box; }
+html { background: rgb(var(--panel-rgb)); }
+body { margin: 0 auto; max-width: 430px; padding: 16px 16px 48px; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); }
+.wordmark { height: 40px; width: auto; display: block; }
+h1 { font-size: 22px; line-height: 1.2; margin: 10px 0 6px; font-weight: 600; }
+h2 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+.lede { margin: 0 0 16px; color: var(--ink-soft); }
+.option { display: block; margin: 0 0 12px; padding: 14px 16px; border-radius: 16px; background: rgb(var(--pill-rgb)); color: inherit; text-decoration: none; }
+.option:focus-visible { outline: 3px solid var(--brand-green); outline-offset: 2px; }
+.option .letter { display: inline-block; min-width: 28px; height: 28px; margin-right: 8px; border-radius: 50%; background: var(--brand-green); color: #fff; text-align: center; line-height: 28px; font-weight: 600; }
+.option p { margin: 4px 0 0; }
+.option .cost { color: var(--ink-soft); font-size: 15px; }
+.option .go { display: inline-block; margin-top: 8px; font-weight: 600; text-decoration: underline; min-height: 44px; line-height: 44px; }
+.plain { margin: 20px 0 0; }
+.plain a, .note a { color: inherit; font-weight: 600; text-decoration: underline; display: inline-block; min-height: 44px; line-height: 44px; }
+.note { margin: 12px 0 0; color: var(--ink-soft); font-size: 15px; }
