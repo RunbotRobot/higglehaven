@@ -374,6 +374,18 @@ its own endpoint. Counted against the rate limit below the same as every
 other rejection on this endpoint — a cheap validation failure isn't a free
 way to probe past the limiter.
 
+`username` (#4136, `worker/lib/username-rules.js`; the same rules apply to a rename,
+`PUT`/`PATCH /api/builders/:id`): stored in NFC with odd spaces turned into a plain space
+and runs of white space collapsed; at most 40 characters; refused with `400` ("That name
+contains a character we cannot show...") when it holds control, zero-width, direction-override
+or other format characters, private-use or unassigned characters, line separators or a lone
+surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
+Cyrillic and Greek look-alike letters), so a name that reads as an existing one is `409`; the
+misleading names (admin, administrator, support, staff, moderator, higglehaven) and every
+assistant's name are reserved in that form, also with spaces taken out. Accounts older than
+migration 0235 have the column filled in the next time any name is checked
+(`worker/lib/username-store.js`); existing names are never changed.
+
 `email` is normalized (trimmed, lowercased) and validated against a
 deliberately permissive pattern — "does this look roughly like an email,"
 not a full RFC-5322 parser, since the only real validation of an address

@@ -147,7 +147,7 @@ export async function handleFleetLogin(request, env, db, url, keyKind) {
     // A rename in the mapping: applied on this login, never onto a name
     // another account holds.
     await db.prepare(`
-      UPDATE users SET username = ?
+      UPDATE users SET username = ?, username_skeleton = NULL
       WHERE user_id = ? AND is_fleet = 1
         AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? AND user_id != ?)
     `).bind(username, user.user_id, username, user.user_id).run();
