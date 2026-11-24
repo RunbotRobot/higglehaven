@@ -1314,6 +1314,24 @@ most likely to come up again.
   behind its own switch, so that choosing only removes code. It was
   answered within a day of going live.
 
+  **A handle on the thing is never traded for a field on a panel, and a
+  card never covers the thing it is about (2026-11-24, #4118).** Building
+  Build into the flower, a session left only the blue turn ring on a
+  selected item and moved the two tilts into typed Angles fields on the
+  item's card, reasoning that nearly every rotation is a turn (#3689). The
+  owner had not been asked and met it as a loss: "We seem to have lost the
+  red and green rotation handles." A minute later, on the card itself:
+  "The product information popup blocks us from accessing the rotation
+  handle easily." So: something a person does by touching the thing stays
+  a touch on the thing; a typed field may be added beside a handle for
+  exact values, never put in its place. Taking away a way of doing
+  something that the owner has used is a decision for the owner, however
+  rarely the fleet thinks it is used; say so on the issue and keep the
+  control until they answer. And a card, leaf or note that belongs to an
+  item opens clear of the item and of every handle on it, and stays clear
+  while the item is moved or the card grows: a tool must not hide what it
+  is the tool for.
+
   **The flower is one plant, whole and attached (2026-11-20, #3754, #4012).**
   Three notes after a few days of use. The head: "I like option C for the
   bud" (the solid green bud with the logo in cream; #3754). An open menu:
