@@ -331,6 +331,10 @@ looks. A row, field or button that is not one of these five is either an
 exception named on #3933 or the next thing to bring onto them.
 `npm test` holds the count of distinct row looks at one (`scripts/leaf-parts-baseline.json`,
 #3939): a new `-row` class joins the shared row rule in `src/app.css` and keeps only its layout.
+In Sell > My products a product's detail lines (size, price, digital good, returns, shipping) are
+`--text-sm` in full ink, and the Edit/More/Reviews/Sales links are 44px tall tap targets in full ink
+(`--pill-text-soft` on the expanded row's green measures about 4.3, under the 4.5 floor);
+`scripts/check-seller-row-readable.mjs` holds it (#3589).
 
 ## Motion
 

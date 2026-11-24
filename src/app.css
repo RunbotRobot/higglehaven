@@ -4538,8 +4538,8 @@
         color: var(--danger-text);
       }
       .seller-row-dims {
-        font-size: var(--text-2xs);
-        color: var(--pill-text-soft);
+        font-size: var(--text-sm);
+        color: var(--pill-text);
       }
       .seller-row-actions {
         display: flex;
@@ -4592,13 +4592,19 @@
          text-styled toggle keeps it available without competing visually
          with the pill buttons above for a seller who's just here to
          rename or delete something. */
+      /* #3589: the Edit/More/Reviews/Sales links are tap targets, so they are 44px tall (the
+         padding is invisible, the underline stays on the words) and read in full ink: ink at 60%
+         on the expanded row's green is about 4.0, under the 4.5 floor. */
       .seller-extensibility-toggle {
         align-self: flex-start;
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
         padding: var(--space-3xs) 0;
         border: none;
         background: none;
-        color: rgb(var(--ink-rgb) / 0.6);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+        color: var(--pill-text);
+        font: var(--text-sm)/var(--leading-normal) var(--font-sans);
         text-decoration: underline;
         text-underline-offset: 2px;
       }
@@ -4738,8 +4744,8 @@
          own classes throughout for the same "don't share a class across
          genuinely different rows/panels" reasoning. */
       .seller-row-price {
-        font-size: var(--text-2xs);
-        color: var(--pill-text-soft);
+        font-size: var(--text-sm);
+        color: var(--pill-text);
       }
       .seller-price-panel {
         display: flex;
@@ -4791,8 +4797,8 @@
          class across genuinely different rows/panels" reasoning as
          Extensibility vs. Edit size). */
       .seller-row-digital-good {
-        font-size: var(--text-2xs);
-        color: var(--pill-text-soft);
+        font-size: var(--text-sm);
+        color: var(--pill-text);
       }
       .seller-digital-good-panel {
         display: flex;
@@ -4834,8 +4840,8 @@
          classes throughout, same "don't share a class across genuinely
          different rows/panels" reasoning as Digital Good vs. Edit size. */
       .seller-row-no-returns {
-        font-size: var(--text-2xs);
-        color: var(--pill-text-soft);
+        font-size: var(--text-sm);
+        color: var(--pill-text);
       }
       .seller-no-returns-panel {
         display: flex;
@@ -4876,8 +4882,8 @@
          throughout, same "don't share a class across genuinely different
          rows/panels" reasoning as No-Returns vs. Digital Good. */
       .seller-row-domestic-only {
-        font-size: var(--text-2xs);
-        color: var(--pill-text-soft);
+        font-size: var(--text-sm);
+        color: var(--pill-text);
       }
       .seller-domestic-only-panel {
         display: flex;
