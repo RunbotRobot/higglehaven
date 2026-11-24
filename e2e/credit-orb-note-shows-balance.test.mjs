@@ -41,6 +41,14 @@ async function collectAt(dx, dy, expectedWord) {
 
 const first = await collectAt(2, -1, `${before + 1} credit${before + 1 === 1 ? '' : 's'}`);
 console.log('after the first orb (word should say the balance, which the API agrees with):', JSON.stringify(first), 'balance before:', before);
+// #4179 (nothing explains itself unasked): a brand-new account that has just collected its first orb sees the
+// note beside the head and nothing else about orbs: no open card, no status line, no hint over the world.
+const unasked = await page.evaluate(() => ({
+  leafOpen: !!document.querySelector('.bud-leaf'),
+  status: document.querySelector('#shop-status.visible')?.textContent.trim() ?? '',
+  worldHint: document.querySelector('#world-hint.visible')?.textContent.trim() ?? '',
+}));
+console.log('what is on screen beyond the note after the first orb (all should be empty):', JSON.stringify(unasked));
 const second = await collectAt(8, -1, `${before + 2} credits`);
 console.log('after the second orb:', JSON.stringify(second));
 
@@ -49,7 +57,8 @@ await page.waitForSelector('#bud-leaf-orb-collected', { timeout: 5000 });
 const card = await page.locator('#bud-leaf-orb-collected .bud-leaf-body').innerText();
 console.log('card:', JSON.stringify(card));
 
-const pass = first.shown && first.api === before + 1 &&
+const pass = !unasked.leafOpen && unasked.status === '' && unasked.worldHint === '' &&
+  first.shown && first.api === before + 1 &&
   second.shown && second.api === before + 2 && second.word === `${before + 2} credits` &&
   new RegExp(`You have ${before + 2} now\\.`).test(card) &&
   errors.length === 0;
