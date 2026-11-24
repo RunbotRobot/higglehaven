@@ -225,6 +225,28 @@ export function setBoundingSphere(members) {
   };
 }
 
+// #4089 (part of #4063): a set's whole size is the right input for keeping every member on one decision
+// (no line sweeping across a wall, #4062) and the wrong input for how much detail each member gets: a brick
+// 60 m away is a few pixels wide whatever the wall's width, but the 27 m wall it belongs to is hundreds of
+// pixels, so judged by its whole size the wall kept most of its bricks on full or mid detail out to 60 m
+// (1.66 M triangles a frame on the 1,650-brick wall, above what a phone takes comfortably, #3920).
+// So a set that would cost more than this to draw whole in full detail is judged by its biggest member,
+// seen from its nearest one. A set that costs less (a house, a short wall) keeps being judged by its whole
+// size, exactly as before: drawing it whole is cheap and it reads as one thing at a distance.
+export const SET_WHOLE_JUDGEMENT_MAX_TRIANGLES = 300_000;
+
+// The apparent size a set is decided from, in CSS pixels. `set`: { sphere: { radiusM }, centerDistanceM,
+// maxMemberRadiusM, nearestMemberDistanceM, fullTriangles }. For a big set the answer is the biggest
+// member's size at the nearest member's distance, which is never smaller than any member's own apparent
+// size (radius over distance), so no member loses detail it would have had alone; it is still one number
+// for the whole set, so all members still make one decision.
+export function setApparentPx(set, fovDeg, viewportHeightPx) {
+  if (set.fullTriangles > SET_WHOLE_JUDGEMENT_MAX_TRIANGLES) {
+    return apparentSizePx(set.maxMemberRadiusM, set.nearestMemberDistanceM, fovDeg, viewportHeightPx);
+  }
+  return apparentSizePx(set.sphere.radiusM, set.centerDistanceM, fovDeg, viewportHeightPx);
+}
+
 // #3494 / #3396: when several items are due to change version in one tick, the
 // biggest on screen go first ("nearest and largest first"). That decides which
 // of them get one of the few cross-fades that can run at once, and who is
