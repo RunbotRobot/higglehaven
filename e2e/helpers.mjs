@@ -798,8 +798,9 @@ export async function openMyProducts(page) {
 }
 
 // #3703 (Sell in the bud, 5/6): every way of adding a product starts at the bud's Add a product
-// petal, which opens one leaf asking which way. `way` is 'upload' (the upload steps) or
-// 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
+// petal, which opens one leaf asking which way. `way` is 'upload' (the steps for a model file the
+// seller already has), 'video' (the steps open on making a model from a video, #4078: the first way
+// offered) or 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
 export async function openAddProductLeaf(page, way = 'upload') {
   const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!expanded) await openAccountMenu(page);
@@ -811,6 +812,11 @@ export async function openAddProductLeaf(page, way = 'upload') {
   } else {
     await page.click('#add-product-upload-btn');
     await page.waitForSelector('#upload-step-file:not([hidden])', { timeout: 5000 });
+    if (way === 'upload') {
+      // The steps open on the video way; most callers want the file picker, one tap away.
+      await page.click('#upload-mode-file-btn');
+      await page.waitForSelector('#upload-file-field-row:not([hidden])', { timeout: 5000 });
+    }
   }
 }
 

@@ -112,6 +112,58 @@ await page.click('#usersResetBtn');
 const hasIdAfterReset = await page.$('.users-sort[data-sort="userId"]') !== null;
 console.log('Account id column kept across reload, gone after Reset view:', hasIdAfterReload && !hasIdAfterReset);
 
+// #4073: Select all / Deselect all, the lines between columns, and widths the owner can drag.
+const headCount = () => page.$$eval('.users-table thead tr:first-child th', (ths) => ths.length);
+const widthOf = (key) => page.$eval(`.users-table thead th[data-key="${key}"]`, (th) => Math.round(th.getBoundingClientRect().width));
+await page.click('#usersColumnsBtn');
+await page.click('#usersColumnChooser > .users-bulk-all [data-bulk="all"]');
+const allShown = await headCount();
+const allBoxes = await page.$$eval('#usersColumnChooser input[data-col]', (els) => els.length);
+await page.click('#usersColumnChooser > .users-bulk-all [data-bulk="none"]');
+const noneShown = await headCount();
+const onlyUsernameLeft = await page.$eval('.users-table thead th', (th) => th.dataset.key);
+console.log('Select all shows every column; Deselect all leaves only Username:', allShown === allBoxes, noneShown === 1 && onlyUsernameLeft === 'username');
+await page.click('#usersColumnChooser > .users-bulk-all [data-bulk="all"]');
+const firstGroup = await page.$eval('#usersColumnChooser fieldset .users-bulk [data-bulk="group-none"]', (b) => b.dataset.group);
+await page.click(`#usersColumnChooser [data-bulk="group-none"][data-group="${firstGroup}"]`);
+const afterGroupNone = await headCount();
+console.log('Deselect all on one group removes just that group:', afterGroupNone < allShown && afterGroupNone > 1);
+await page.click('#usersColumnChooser > .users-bulk-all [data-bulk="all"]');
+await page.click('#usersColumnsBtn');
+const rule = await page.$eval('.users-table tbody tr td:first-child', (td) => getComputedStyle(td).borderRightWidth);
+console.log('a rule separates columns:', rule !== '0px');
+const before = await widthOf('username');
+const handle = page.locator('.users-resize[data-resize="username"]');
+const hb = await handle.boundingBox();
+await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+await page.mouse.down();
+await page.mouse.move(hb.x + hb.width / 2 + 80, hb.y + hb.height / 2, { steps: 6 });
+await page.mouse.up();
+const dragged = await widthOf('username');
+console.log('dragging a heading edge widens the column by about the drag:', dragged - before >= 70 && dragged - before <= 90, { before, dragged });
+const sortedByDrag = await page.$eval('.users-table thead th[data-key="username"]', (th) => th.getAttribute('aria-sort'));
+await page.reload({ waitUntil: 'networkidle' });
+await page.click('button[data-panel="accounts"]');
+await page.waitForSelector('#usersTbody .users-open', { timeout: 15000 });
+const afterReload = await widthOf('username');
+console.log('the width survives a reload:', Math.abs(afterReload - dragged) <= 1, { afterReload });
+await page.locator('.users-resize[data-resize="username"]').dblclick();
+const afterDouble = await widthOf('username');
+console.log('double-click on the edge returns the default width:', Math.abs(afterDouble - before) <= 1, { afterDouble });
+const hb2 = await page.locator('.users-resize[data-resize="username"]').boundingBox();
+await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2);
+await page.mouse.down();
+await page.mouse.move(hb2.x + hb2.width / 2 - 60, hb2.y + hb2.height / 2, { steps: 6 });
+await page.mouse.up();
+const narrowed = await widthOf('username');
+await page.click('#usersResetBtn');
+const afterResetWidth = await widthOf('username');
+console.log('Reset view clears the widths:', narrowed < before && Math.abs(afterResetWidth - before) <= 1, { narrowed, afterResetWidth });
+const resizeOk = dragged - before >= 70 && dragged - before <= 90 && Math.abs(afterReload - dragged) <= 1
+  && Math.abs(afterDouble - before) <= 1 && narrowed < before && Math.abs(afterResetWidth - before) <= 1;
+const bulkOk = allShown === allBoxes && noneShown === 1 && onlyUsernameLeft === 'username' && afterGroupNone < allShown && afterGroupNone > 1 && rule !== '0px';
+console.log('a drag did not sort the column:', sortedByDrag === null || sortedByDrag === 'ascending' || sortedByDrag === 'descending');
+
 // A tap on a name opens that account's detail below.
 await page.fill('#usersSearchInput', names[0]);
 await page.click('#usersTbody .users-open');
@@ -121,5 +173,6 @@ console.log('tapping a name opens its detail:', true);
 const pass = anon.response.status === 401 && nonAdmin.response.status === 403 && searched.length === 3
   && asc.join() === [...asc].sort().join() && desc.join() === [...asc].reverse().join()
   && onlySuspended.length === 1 && onlySuspended[0] === names[1] && byEmail.length === 1 && noOrders
-  && futureEmpty && pastRows === 3 && afterClear >= 3 && selectable && hasIdAfterReload && !hasIdAfterReset;
-await finish(browser, { pass, label: 'Admin users table (#4060): search, sort, filters, column chooser, refusals', errors });
+  && futureEmpty && pastRows === 3 && afterClear >= 3 && selectable && hasIdAfterReload && !hasIdAfterReset
+  && bulkOk && resizeOk;
+await finish(browser, { pass, label: 'Admin users table (#4060, #4073): search, sort, filters, column chooser, select all, column widths, refusals', errors });

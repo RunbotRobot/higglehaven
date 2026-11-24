@@ -283,6 +283,7 @@ import {
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
   shopOtherAvatars, assistantFromHit, assistantGroups, otherPersonGroups, personFromHit, personForBuilderId,
+  creditOrbMeshes, showCreditOrbAbout,
 } from './shop/presenceAndContent.js';
 // #3555: tapping another person in the Shop world offers friendship.
 import { confirmAndOfferFriendship } from './friends.js';
@@ -1673,6 +1674,15 @@ renderer.domElement.addEventListener('click', (event) => {
     setShopTappedProduct(null);
     closeProductCard();
     confirmAndOfferFriendship(tappedPerson.builderId, tappedPerson.label);
+    return;
+  }
+  // #4072: a glowing orb in front of a product is what was tapped, the nearer hit wins. A tap on one
+  // says what it is and never collects it (collecting stays a touch of the avatar).
+  const orbHit = raycaster.intersectObjects(creditOrbMeshes(), true)[0];
+  if (orbHit && (hits.length === 0 || orbHit.distance < hits[0].distance)) {
+    setShopTappedProduct(null);
+    closeProductCard();
+    showCreditOrbAbout();
     return;
   }
   const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;

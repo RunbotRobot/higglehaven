@@ -33,6 +33,11 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     // fog (src/shop/avatarSwapFog.js) and returns { done }, a promise that resolves once commit has run;
     // cancelAvatarSwap() ends a swap still in progress. Without them the swap is immediate.
     beginAvatarSwap = null, cancelAvatarSwap = null,
+    // #4067: optional. beginAvatarFogHold() starts fog where the avatar stands with no body drawn, until
+    // resolve(commit) (src/shop/avatarSwapFog.js); readWornHint()/writeWornHint(kind) remember, per account in
+    // this browser, whether the person wears 'custom' or 'default', so someone who wears the default is
+    // shown it at once instead of waiting in fog for an answer that is almost always "the default".
+    beginAvatarFogHold = null, readWornHint = () => null, writeWornHint = () => {},
   } = deps;
 
   // #3905 (leaf of #3873, the mode-switch wait): the world no longer waits for the equipped avatar. The
@@ -56,12 +61,28 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   setShopAvatar(startAvatar);
   scene.add(startAvatar.group);
   publishAvatar(win, startAvatar, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
+  // #4067: someone who may wear a model of their own is never shown the default body in its place, not even
+  // for a moment: until the answer is in there is fog where they stand and no body. (Signed out, or known to
+  // wear the default: the default body is theirs and is shown at once.)
+  const mayWearCustom = loggedIn() && readWornHint() !== 'default';
+  let hold = null;
+  if (mayWearCustom && beginAvatarFogHold) {
+    startAvatar.group.visible = false;
+    hold = beginAvatarFogHold();
+  }
+  const showDefault = () => { if (hold) startAvatar.group.visible = true; }; // only ever hidden by the hold above
+  const finish = (commit) => { if (hold) hold.resolve(commit); else commit(); };
   resetShopAvatarIdleState(); // src/shop/avatar.js (#2623): zeroes every idle/sway/sit/lean field it owns
 
   win.__shopAvatarSettled = false; // e2e: true once the equipped avatar (if any) is the one on screen
   const settled = upgradeToEquippedAvatar().then(
     () => { win.__shopAvatarSettled = true; },
-    (err) => { console.warn('Equipped avatar upgrade failed, keeping the default avatar:', err); win.__shopAvatarSettled = true; },
+    (err) => {
+      console.warn('Equipped avatar upgrade failed, keeping the default avatar:', err);
+      hold?.cancel();
+      showDefault(); // a failure is not a stand-in, and not an invisible person
+      win.__shopAvatarSettled = true;
+    },
   );
   return { avatar: startAvatar, settled };
 
@@ -91,12 +112,20 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
         }
       }
     }
-    if (!equippedAvatarModelUrl) return; // nothing equipped: the default avatar stays
+    if (!equippedAvatarModelUrl) {
+      // Nothing equipped: the default avatar is theirs (shown from the fog if it was held).
+      if (loggedIn()) writeWornHint('default');
+      await new Promise((resolve) => finish(() => { showDefault(); resolve(); }));
+      return;
+    }
+    writeWornHint('custom');
     let custom;
     try {
       custom = await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation, equippedAvatarClipRoles);
     } catch (err) {
+      // A failure is not a stand-in: the default body is what is left, and the failure is logged.
       console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
+      await new Promise((resolve) => finish(() => { showDefault(); resolve(); }));
       return;
     }
     // Something else replaced the avatar while this loaded (the person equipped one, or left the mode and
@@ -104,6 +133,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     const isStale = () => generation !== mountGeneration || getShopAvatar() !== startAvatar;
     if (isStale()) {
       disposeObject3D(custom.group);
+      hold?.cancel(); // never leave fog standing for an avatar that is gone
       return;
     }
     const commit = () => {
@@ -117,7 +147,8 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
       scene.add(custom.group);
       publishAvatar(win, custom, { shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM });
     };
-    if (beginAvatarSwap) await beginAvatarSwap(commit).done;
+    if (hold) await new Promise((resolve) => hold.resolve(() => { commit(); resolve(); }));
+    else if (beginAvatarSwap) await beginAvatarSwap(commit).done;
     else commit();
   }
 }

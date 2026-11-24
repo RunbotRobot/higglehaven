@@ -89,7 +89,7 @@ import {
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
 import { mountShopAvatar } from './mountShopAvatar.js';
-import { beginAvatarSwapFog } from './avatarSwapFog.js';
+import { beginAvatarSwapFog, beginAvatarFogHold } from './avatarSwapFog.js';
 import { createArrivalFog } from './arrivalEffect.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import { updateShopSky, currentShopSkyTimeS } from './sky.js';
@@ -677,6 +677,23 @@ export async function enterShopMode() {
       return swap;
     },
     cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
+    // #4067: someone who may wear a model of their own is shown fog, not the default body, until it is known.
+    beginAvatarFogHold: () => {
+      activeAvatarSwap?.cancel();
+      const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      const hold = beginAvatarFogHold({
+        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
+        nowMs: performance.now(), reducedMotion,
+      });
+      activeAvatarSwap = hold.released ? null : hold;
+      return hold;
+    },
+    readWornHint: () => {
+      try { return localStorage.getItem(`hh-worn-avatar:${currentAuthUser?.userId ?? ''}`); } catch { return null; }
+    },
+    writeWornHint: (kind) => {
+      try { if (currentAuthUser?.userId) localStorage.setItem(`hh-worn-avatar:${currentAuthUser.userId}`, kind); } catch { /* remembered only when allowed */ }
+    },
   });
   markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
