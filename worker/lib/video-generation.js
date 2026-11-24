@@ -399,6 +399,20 @@ const TRIPO_STORE_MAX_ATTEMPTS = 5;
 // applyDiditDecision (worker/lib/didit.js) uses -- whichever of the
 // webhook or a poll gets there first applies the result; the other is a
 // safe no-op.
+// #4122: ask the provider again about a job's task for a fresh output URL. Never throws: a failed ask means no new URL.
+async function refreshedModelUrl(db, env, jobId) {
+  try {
+    if (!tripoConfigured(env)) return null;
+    const job = await db.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+    if (!job?.provider_task_id) return null;
+    const fresh = await tripoRequest(env, 'GET', `tasks/${encodeURIComponent(job.provider_task_id)}`);
+    if (fresh?.status !== 'success' || !fresh?.output?.model_url) return null;
+    return { url: fresh.output.model_url, outputKeys: Object.keys(fresh.output) };
+  } catch {
+    return null;
+  }
+}
+
 async function applyTripoTaskResult(db, env, jobId, task) {
   if (task.status === 'success') {
     // #2226: sibling case to the #1673 catch below -- Tripo can also report
@@ -431,7 +445,17 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // of failing immediately with the real cause.
     let stored;
     try {
-      stored = await storeTripoModelOutput(env, task.output.model_url, Object.keys(task.output));
+      try {
+        stored = await storeTripoModelOutput(env, task.output.model_url, Object.keys(task.output));
+      } catch (firstErr) {
+        // #4122: the provider's output URL is short-lived. A refused download
+        // (4xx) asks the provider once more, which costs nothing, for a fresh
+        // URL before giving up; only a different URL is worth another try.
+        if (!(firstErr instanceof TripoStoreFatalError) || firstErr.detail?.reason !== 'download_refused') throw firstErr;
+        const refreshed = await refreshedModelUrl(db, env, jobId);
+        if (!refreshed || refreshed.url === task.output.model_url) throw firstErr;
+        stored = await storeTripoModelOutput(env, refreshed.url, refreshed.outputKeys);
+      }
     } catch (err) {
       // #3108: a transient failure leaves the job 'processing' (processed_at
       // unset) so the next poll or webhook retries the store from Tripo's
