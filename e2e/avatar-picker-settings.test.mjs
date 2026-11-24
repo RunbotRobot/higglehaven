@@ -155,6 +155,17 @@ console.log('Default avatar row shows no purchase date (should be true):', !defa
 // geometry count by one without any avatar leak. One equip-and-revert round
 // trip first puts the scene in the state every later revert returns to, so the
 // baseline below is comparable with the revert's count.
+// #4109: a re-equip now swaps the body in inside a puff of fog, whose own soft texture stays alive until the
+// fog has gone, so the count is read once the new body is the one standing there and the fog is clear
+// (window.__shopAvatarSwapFogActive), from the live renderer count, not the snapshot written at the swap.
+async function memoryOnceSettled(wantCustom) {
+  await page.waitForFunction(
+    (custom) => Boolean(window.__shopAvatarModelUrl) === custom && !window.__shopAvatarSwapFogActive,
+    wantCustom,
+    { timeout: 30000 },
+  );
+  return page.evaluate(() => window.__currentRendererMemory());
+}
 async function equipRow(rowLocator, equippedText) {
   await rowLocator.locator('button', { hasText: 'Equip' }).click();
   await page.waitForFunction(
@@ -174,6 +185,12 @@ console.log('renderer live-geometry count for the default avatar, right before e
 // a fresh Shop-mode entry ---
 const purchasedRow = myAvatarsField.locator('.version-row', { hasText: PRODUCT_NAME });
 await purchasedRow.locator('button', { hasText: 'Equip' }).click();
+// #4109: the new body goes in inside a puff of fog, not in one frame: the fog is up while the old (default) body
+// still stands, and the custom one is in place a moment later.
+await page.waitForFunction(() => window.__shopAvatarSwapFogActive === true, null, { timeout: 15000 });
+const modelUrlWhileFogRises = await page.evaluate(() => window.__shopAvatarModelUrl ?? null);
+console.log('the fog is up before the new body is in place (the old one still stands):', !modelUrlWhileFogRises);
+await page.waitForFunction(() => Boolean(window.__shopAvatarModelUrl), null, { timeout: 15000 });
 await page.waitForFunction(
   (name) => [...document.querySelectorAll('.version-row')].some((r) => r.textContent.includes(name) && r.textContent.includes('equipped')),
   PRODUCT_NAME,
@@ -198,7 +215,7 @@ console.log('window marker set before equipping still present (proves no page re
 // outgoing avatar is actually disposed, not just detached from the scene
 // graph. Captured now so the revert/re-equip steps below can confirm this
 // doesn't climb across repeated swaps.
-const memAfterFirstEquip = await page.evaluate(() => window.__rendererMemory);
+const memAfterFirstEquip = await memoryOnceSettled(true);
 console.log('renderer live-geometry count right after equipping the custom avatar:', memAfterFirstEquip);
 
 // --- Revert to the default avatar via the same picker, no page reload ---
@@ -224,7 +241,7 @@ const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 // traverse also skips every avatar's own afkSprite (a THREE.Sprite, not a
 // Mesh) unless its texture-disposal gap is also fixed -- textures below
 // covers that.
-const memAfterRevert = await page.evaluate(() => window.__rendererMemory);
+const memAfterRevert = await memoryOnceSettled(false);
 console.log('renderer live-geometry/texture counts right after reverting to the default avatar (should match the pre-equip baseline above, not exceed it):', memAfterRevert);
 
 // --- Equip the purchased avatar a second time — confirms the count stays
@@ -235,7 +252,7 @@ await page.waitForFunction(
   PRODUCT_NAME,
   { timeout: 10000 },
 );
-const memAfterSecondEquip = await page.evaluate(() => window.__rendererMemory);
+const memAfterSecondEquip = await memoryOnceSettled(true);
 console.log('renderer live-geometry count right after re-equipping the custom avatar (should still match):', memAfterSecondEquip);
 
 const pass = purchased.status === 201 &&
@@ -246,6 +263,7 @@ const pass = purchased.status === 201 &&
   !!purchasedRowAfter?.includes('equipped') &&
   !defaultRowAfter?.includes('equipped') &&
   noFallbackWarningAfterEquip &&
+  !modelUrlWhileFogRises &&
   markerAfterEquip === 'still-here' &&
   !!defaultRowAfterRevert?.includes('equipped') &&
   !purchasedRowAfterRevert?.includes('equipped') &&

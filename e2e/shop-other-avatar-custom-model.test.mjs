@@ -87,6 +87,12 @@ console.log('baseline: B seen, body template (should be null):', baselineSeen, b
 
 // 1. B equips a custom model -> A draws it.
 equippedForB = CRATE;
+// #4109: B changing avatar is fog first: the fog is up while the default body still stands, the model goes in at its peak.
+const fogBeforeBody = await waitFor((id) => {
+  const a = (window.__shopOtherAvatars ?? []).find((x) => x.builderId === id);
+  return Boolean(a) && a.swappingBody === true && a.bodyTemplateId === null;
+}, builderB.builderId);
+console.log('B changing avatar: fog is up before the new body is in (should be true):', fogBeforeBody);
 const drewCustom = await waitFor(([id, t]) => (window.__shopOtherAvatars ?? []).find((a) => a.builderId === id)?.bodyTemplateId === t, [builderB.builderId, CRATE.templateId]);
 console.log('custom model drawn for B (should be true):', drewCustom);
 
@@ -118,7 +124,7 @@ const errors = [...sessionA.errors, ...sessionB.errors].filter((e) => !/Failed t
 const pass =
   landletCreated.status === 201 &&
   baselineSeen && baselineBody === null &&
-  drewCustom && backToDefault &&
+  fogBeforeBody && drewCustom && backToDefault &&
   brokenBody === null && stillVisible &&
   drawnCount >= 1 && drawnCount <= 6 && totalSeen === 10 &&
   errors.length === 0;

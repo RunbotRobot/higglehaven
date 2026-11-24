@@ -83,7 +83,7 @@ import {
 import {
   shopAvatar, setShopAvatar, createShopAvatar, createCustomShopAvatar,
   shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
-  resetShopAvatarIdleState, refreshEquippedShopAvatar,
+  resetShopAvatarIdleState, refreshEquippedShopAvatar, setShopAvatarSwapStarter,
 } from './avatar.js';
 import {
   beginShopSpawn, updateShopMovement,
@@ -385,6 +385,25 @@ export function buildShopGroundMesh(record) {
 const SHOP_PREFETCH_MAX_AGE_MS = 2000;
 
 let activeAvatarSwap = null; // #3905: the fog hiding the swap of the equipped avatar in, stepped each frame
+// added for #4109 -- an e2e needs to know when an avatar's fog (the arrival hold or a swap) is gone, because the
+// fog's own soft texture is alive until then and would otherwise be counted as an avatar leak.
+function setActiveAvatarSwap(swap) {
+  activeAvatarSwap = swap;
+  window.__shopAvatarSwapFogActive = Boolean(swap);
+}
+
+// #3905, #4109: puts a body in place inside a puff of fog at the avatar (the one at mount, and every re-equip
+// from the avatar picker). Returns { done }, resolved once `commit` has run.
+function startAvatarSwap(commit) {
+  activeAvatarSwap?.cancel();
+  const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const swap = beginAvatarSwapFog({
+    createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
+    commit, nowMs: performance.now(), reducedMotion,
+  });
+  setActiveAvatarSwap(swap.released ? null : swap);
+  return swap;
+}
 
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
@@ -658,6 +677,7 @@ export async function enterShopMode() {
   // #3294: one shared function builds and mounts the avatar (see
   // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
   // #1358 dispose of a previous round trip's avatar and the fallbacks).
+  setShopAvatarSwapStarter(startAvatarSwap); // #4109: a re-equip from the picker swaps the body in fog too
   await mountShopAvatar({ scene, isLoggedIn: () => Boolean(currentAuthUser) && !isAccountSessionEnding() }, {
     // #3745: already started above once sign-in was known.
     fetchMyEquippedAvatar: () => equippedAvatarLoad ?? fetchMyEquippedAvatar(),
@@ -668,17 +688,8 @@ export async function enterShopMode() {
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
     // #3905: the equipped avatar replaces the default body inside a puff of fog, not as a pop.
-    beginAvatarSwap: (commit) => {
-      activeAvatarSwap?.cancel();
-      const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      const swap = beginAvatarSwapFog({
-        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
-        commit, nowMs: performance.now(), reducedMotion,
-      });
-      activeAvatarSwap = swap.released ? null : swap;
-      return swap;
-    },
-    cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
+    beginAvatarSwap: startAvatarSwap,
+    cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); setActiveAvatarSwap(null); },
     onModelFailed: sayAvatarDidNotLoad, // #4067
     // #4067: someone who may wear a model of their own is shown fog, not the default body, until it is known.
     beginAvatarFogHold: () => {
@@ -688,7 +699,7 @@ export async function enterShopMode() {
         createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
         nowMs: performance.now(), reducedMotion,
       });
-      activeAvatarSwap = hold.released ? null : hold;
+      setActiveAvatarSwap(hold.released ? null : hold);
       return hold;
     },
     readWornHint: () => {
@@ -733,7 +744,7 @@ export async function enterShopMode() {
   registerModeFrameUpdate((now) => {
     updateShopMovement(now);
     updateShopSky(now);
-    if (activeAvatarSwap?.step(now)) activeAvatarSwap = null; // #3905: the fog over the avatar swap
+    if (activeAvatarSwap?.step(now)) setActiveAvatarSwap(null); // #3905: the fog over the avatar swap
     // #2717: feed the render-state ring buffer (src/feedback/
     // renderStateBuffer.js) a fresh snapshot every frame -- it throttles
     // itself to ~1Hz internally (see that module's own comment), so it's
