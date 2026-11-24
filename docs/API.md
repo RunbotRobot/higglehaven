@@ -740,6 +740,12 @@ every ID-verification session this account started (`sessionId`, `status`,
 raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
 
+**#4142 (money and auctions):** `commerce.commissionHolds` (a builder's own
+earnings held back: `amountCents`, `releaseAt`, `releasedAt`, `revokedAt`),
+`commerce.auctionsRun` (auctions on the builder's lándlets) and
+`commerce.auctionBidsPlaced` (bids the builder placed) are exported for builders,
+without internal resolution fields.
+
 **#4142:** a top-level `communication` section, present for every account
 (builder or not), holds what keys on the account itself: `assistantConversations`
 (each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and

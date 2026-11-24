@@ -54,13 +54,10 @@ const NOT_EXPORTED = {
 // Own data that should be in the export and is not yet. Each line is a task,
 // not an excuse: remove it when the section lands (tracked on #4142).
 const KNOWN_GAPS = {
-  commission_holds: 'money held against a builder\'s own earnings',
   bug_reports: 'feedback reports the person submitted',
   suspended_seller_instance_snapshots: 'a builder\'s own placed content, saved while suspended',
   nearby_chat_messages: 'what the person said in nearby chat (short-lived)',
   user_content_edit_history: 'earlier versions of the person\'s own reviews and sign posts',
-  auctions: 'auctions the builder ran',
-  auction_bids: 'bids the builder placed',
   credit_orbs: 'orbs the person collected (video-to-3D credit grants)',
   products: 'the seller\'s own product listings',
 };

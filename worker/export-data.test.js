@@ -147,6 +147,9 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
       tax1099Forms: [],
     });
   });
@@ -163,6 +166,9 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
       tax1099Forms: [],
     });
   });
@@ -655,5 +661,54 @@ describe('GET /auth/export-data -- communication section (#4142)', () => {
     const quiet = await signupBuilder('export-comm-quiet');
     const result = await api('/auth/export-data', quiet.session());
     expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [] });
+  });
+});
+
+// #4142: a builder's held commissions and the auctions they ran or bid in.
+describe('GET /auth/export-data -- commission holds and auctions (#4142)', () => {
+  async function purchaseFor(label, buyerBuilderId) {
+    const templateId = `export-hold-template-${crypto.randomUUID()}`;
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({ templateId, name: `Hold test ${templateId}`, color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } }),
+    });
+    expect(created.response.status).toBe(201);
+    const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host ${label} ${crypto.randomUUID()}` }) })).body.builder;
+    const purchaseId = `purchase-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5)
+    `).bind(purchaseId, `instance-${crypto.randomUUID()}`, templateId, host.builderId, `seller-${crypto.randomUUID()}`, label, buyerBuilderId).run();
+    return purchaseId;
+  }
+
+  it('lists the builder\'s own holds, auctions run and bids placed, and nobody else\'s', async () => {
+    const me = await signupBuilder('export-hold-me');
+    const other = await signupBuilder('export-hold-other');
+    const purchaseId = await purchaseFor('export-hold-buyer', other.builderId);
+    await env.DB.prepare(`
+      INSERT INTO landlets (landlet_id, name, owner_builder_id, status) VALUES
+        ('export-hold-landlet-mine', 'Mine', ?, 'claimed'), ('export-hold-landlet-theirs', 'Theirs', ?, 'claimed')
+    `).bind(me.builderId, other.builderId).run();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO commission_holds (hold_id, purchase_id, builder_id, amount_cents, release_at) VALUES
+        ('hold-mine', ?, ?, 250, '2026-12-01T00:00:00.000Z'), ('hold-theirs', ?, ?, 999, '2026-12-01T00:00:00.000Z')`)
+        .bind(purchaseId, me.builderId, purchaseId, other.builderId),
+      env.DB.prepare(`INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at) VALUES
+        ('auction-mine', 'export-hold-landlet-mine', ?, 0, '2026-12-02T00:00:00.000Z'),
+        ('auction-theirs', 'export-hold-landlet-theirs', ?, 5, '2026-12-02T00:00:00.000Z')`)
+        .bind(me.builderId, other.builderId),
+      env.DB.prepare(`INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES
+        ('bid-mine', 'auction-theirs', ?, 700), ('bid-theirs', 'auction-mine', ?, 800)`)
+        .bind(me.builderId, other.builderId),
+    ]);
+    const result = await api('/auth/export-data', me.session());
+    expect(result.response.status).toBe(200);
+    const { commissionHolds, auctionsRun, auctionBidsPlaced } = result.body.commerce;
+    expect(commissionHolds.map((h) => [h.holdId, h.amountCents])).toEqual([['hold-mine', 250]]);
+    expect(auctionsRun.map((a) => a.auctionId)).toEqual(['auction-mine']);
+    expect(auctionBidsPlaced.map((b) => [b.bidId, b.amountCents])).toEqual([['bid-mine', 700]]);
   });
 });
