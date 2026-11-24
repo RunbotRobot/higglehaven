@@ -46,6 +46,7 @@ import {
 } from '../index.js';
 import { getStorageUsage, reserveStorageBudget, formatBytes } from './storage.js';
 import { handleProductReviews, handleProductFlags } from './reputation.js';
+import { farPlacementCentersForTemplates, invalidateFarPlacementCenters } from './far-placements.js';
 
 // #1978: see this file's own header comment above for why these are
 // duplicated rather than imported -- each is the exact value worker/
@@ -900,6 +901,9 @@ async function removeCatalogTemplates(db, templateIds) {
   const owned = new Set(results.map((row) => row.template_id));
   const delistedIds = templateIds.filter((id) => owned.has(id));
   const deletedIds = templateIds.filter((id) => !owned.has(id));
+  // #4147: read before the write (a deleted template's rows must still be found) and dropped after it: the far
+  // view leaves out a delisted product, so a tile that holds it must be re-read.
+  const farCenters = await farPlacementCentersForTemplates(db, templateIds);
   await db.batch([
     ...delistedIds.map((id) => db.prepare(`
       UPDATE catalog_templates SET delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -907,6 +911,7 @@ async function removeCatalogTemplates(db, templateIds) {
     `).bind(id)),
     ...deletedIds.map((id) => db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(id)),
   ]);
+  await invalidateFarPlacementCenters(farCenters);
   return { deletedIds, delistedIds };
 }
 
