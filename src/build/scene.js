@@ -71,6 +71,7 @@ import {
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
   fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
   fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
+  fetchArchivedVersions, restoreArchivedVersion,
   fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles, updateBundle,
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
@@ -5669,6 +5670,67 @@ export function renderBuildSettingsSection() {
   };
   appendAboveFolds(historyField);
 
+  // #4094: versions kept from a lándlet this builder no longer has (released for inactivity). Closed, and
+  // drawn only when there is one. "Add to my versions" copies it onto this lándlet as one more saved
+  // version; nothing live changes, and Restore to editor / Set live then work on it like any other.
+  const archivedFold = document.createElement('details');
+  archivedFold.className = 'settings-account-fold settings-archived-versions';
+  archivedFold.hidden = true;
+  const archivedSummary = document.createElement('summary');
+  archivedSummary.textContent = 'From an earlier lándlet';
+  archivedFold.appendChild(archivedSummary);
+  const archivedHint = document.createElement('div');
+  archivedHint.className = 'settings-empty-note';
+  archivedHint.textContent = 'What you had built on a lándlet you no longer have. Adding one here saves it as a version of this lándlet; nothing live changes.';
+  archivedFold.appendChild(archivedHint);
+  const archivedList = document.createElement('div');
+  archivedList.className = 'version-list';
+  archivedFold.appendChild(archivedList);
+  appendAboveFolds(archivedFold);
+
+  async function renderArchivedVersions() {
+    let archivedVersions;
+    try {
+      ({ archivedVersions } = await fetchArchivedVersions());
+    } catch (err) {
+      console.warn('Could not load archived versions:', err); // best effort: the fold simply stays closed and hidden
+      return;
+    }
+    archivedList.innerHTML = '';
+    archivedFold.hidden = archivedVersions.length === 0;
+    for (const archived of archivedVersions) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      info.textContent = `${archived.name} — ${archived.instanceCount} ${archived.instanceCount === 1 ? 'item' : 'items'} — ${new Date(archived.createdAt).toLocaleString()}`;
+      row.appendChild(info);
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'version-action-btn';
+      addBtn.textContent = 'Add to my versions';
+      addBtn.addEventListener('click', async () => {
+        addBtn.disabled = true;
+        try {
+          const { version } = await restoreArchivedVersion(archived.versionId, landletId);
+          publishStatus.textContent = `Saved as "${version.name}" in your version history. Restore it to the editor from there when you want it.`;
+          publishStatus.classList.remove('error');
+          renderVersionHistory();
+        } catch (err) {
+          publishStatus.textContent = err.message || 'Couldn\'t add that version.';
+          publishStatus.classList.add('error');
+        } finally {
+          addBtn.disabled = false;
+        }
+      });
+      actions.appendChild(addBtn);
+      row.appendChild(actions);
+      archivedList.appendChild(row);
+    }
+  }
+
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
   // (#633) land here — reusing Version History's own .settings-field/
   // .version-list/.version-row/.version-action-btn look immediately above
@@ -6001,6 +6063,7 @@ export function renderBuildSettingsSection() {
   });
 
   renderVersionHistory();
+  renderArchivedVersions();
 }
 
 function formatAuctionTimeRemaining(isoString) {
