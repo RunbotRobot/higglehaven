@@ -3422,7 +3422,7 @@ export async function cascadeDeleteAccount(db, userId) {
   statements.push(
     db.prepare(`
       UPDATE users SET
-        email = ?, email_canonical = NULL, username = ?, password_hash = ?,
+        email = ?, email_canonical = NULL, username = ?, username_skeleton = NULL, password_hash = ?,
         failed_login_attempts = 0, locked_until = NULL,
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')

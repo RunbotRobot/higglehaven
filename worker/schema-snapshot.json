@@ -846,7 +846,8 @@
       "turnstile_failed_at": "TEXT|0||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "user_id": "TEXT|0||1",
-      "username": "TEXT|0||0"
+      "username": "TEXT|0||0",
+      "username_skeleton": "TEXT|0||0"
     },
     "version_instances": {
       "bundle_id": "TEXT|0||0",
@@ -1448,6 +1449,10 @@
     "index:idx_users_username_nocase": {
       "tbl": "users",
       "sql": "CREATE UNIQUE INDEX idx_users_username_nocase ON users (username COLLATE NOCASE)"
+    },
+    "index:idx_users_username_skeleton": {
+      "tbl": "users",
+      "sql": "CREATE INDEX idx_users_username_skeleton ON users (username_skeleton)"
     },
     "index:idx_video_generation_jobs_builder_id": {
       "tbl": "video_generation_jobs",
