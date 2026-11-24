@@ -1382,6 +1382,29 @@ most likely to come up again.
   the petal of another mode takes you there; the petal of the mode you are in
   is only marked; the opening takes about half a second.)
 
+- **Nothing explains itself unasked; people find things out by curiosity.**
+  (2026-11-24, #4179.) A plan to have the very first orb a person collects
+  say what it is, without a tap, was cancelled by the owner: "I don't think
+  the orb should automatically tell the user what it is when it first is
+  seen. I prefer users to explore out of curiosity and investigate things
+  when it suits them. Let's make this a standing rule. There are other
+  places where we introduce a user to a feature the first time they see it,
+  and I'd like to eliminate that." So the app does not volunteer what a
+  thing is or how a feature works the first time it is seen or used: no
+  first-time sentence, card, tooltip, highlight or tour. The words still
+  exist, on the thing's own card when a person taps it and in Help's
+  manuals, and they wait to be asked for. What this does not remove: a
+  refusal or limit saying why, a confirmation before something
+  destructive, the result of a person's own action, and anything the
+  person opened. The principle: discovery is part of the product, and an
+  explanation nobody asked for takes it away and takes space from the
+  world; do not propose a new introduction, and remove one when you find
+  it. (higglehaven1's reading, put to the owner and open to their
+  correction: the three movement hints of a first visit, walk, look and
+  fly, and the head's word "Menu" until it is first opened, stay, because
+  gestures cannot be seen and a person who cannot move or find the menu
+  cannot explore at all; they are not extended.)
+
 - **A surface opens with its contents in it; an empty one reads as loss.**
   (2026-11-18, #3773.) "When I click the assistant button, the subsequent
   modal opens before the chat conversation has loaded, which initially
