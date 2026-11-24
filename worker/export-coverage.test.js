@@ -29,6 +29,7 @@ const NOT_EXPORTED = {
   product_flags: 'flags are weighed invisibly; the reporter and the reviewer stay private',
   nearby_chat_reports: 'conduct reports are invisible to the reported person and to others',
   voice_conduct_reports: 'conduct reports are invisible to the reported person and to others',
+  direct_message_reports: 'conduct reports are invisible to the reported person and to others',
   ncmec_reports: 'segregated legal record, admin-only (#3041)',
   ncmec_evidence: 'segregated legal record, admin-only (#3041)',
   moderation_removal_snapshots: 'moderation plumbing; the person is told of a removal when it happens',

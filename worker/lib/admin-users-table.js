@@ -144,10 +144,10 @@ export async function handleAdminUsers(request, db) {
     db.prepare(`SELECT recipient_user_id AS k, count(*) AS n FROM friendships WHERE status = 'pending' AND recipient_user_id IS NOT NULL GROUP BY recipient_user_id`).all(),
     db.prepare('SELECT blocker_user_id AS k, count(*) AS n FROM user_blocks GROUP BY blocker_user_id').all(),
     db.prepare(`SELECT u AS k, count(*) AS n FROM (
-        SELECT reported_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reported_user_id AS u FROM voice_conduct_reports
+        SELECT reported_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reported_user_id AS u FROM voice_conduct_reports UNION ALL SELECT reported_user_id AS u FROM direct_message_reports
       ) WHERE u IS NOT NULL GROUP BY u`).all(),
     db.prepare(`SELECT u AS k, count(*) AS n FROM (
-        SELECT reporter_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reporter_user_id AS u FROM voice_conduct_reports
+        SELECT reporter_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reporter_user_id AS u FROM voice_conduct_reports UNION ALL SELECT reporter_user_id AS u FROM direct_message_reports
       ) WHERE u IS NOT NULL GROUP BY u`).all(),
     db.prepare(`SELECT assistant_conversations.shopper_user_id AS k, max(assistant_messages.created_at) AS last_at
       FROM assistant_conversations LEFT JOIN assistant_messages ON assistant_messages.conversation_id = assistant_conversations.conversation_id

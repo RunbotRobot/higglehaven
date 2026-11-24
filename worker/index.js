@@ -3399,7 +3399,7 @@ export async function cascadeDeleteAccount(db, userId) {
   // reports the account filed (a deleted reporter's own reports have no
   // durable evidentiary role; the reported side is kept by user id, #3121).
   // Gated like the statements around it.
-  for (const reportsTable of ['voice_conduct_reports', 'nearby_chat_reports']) {
+  for (const reportsTable of ['voice_conduct_reports', 'nearby_chat_reports', 'direct_message_reports']) {
     statements.push(db.prepare(`
       DELETE FROM ${reportsTable}
       WHERE reporter_user_id = ? AND ${builderOkClause} AND ${sellerOkClause}

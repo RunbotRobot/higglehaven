@@ -1732,6 +1732,46 @@ async function assertAcceptedFriendship(db, builderIdA, builderIdB, message = 'D
   }
 }
 
+// #4169: see the route above. The reporter must have a thread with the person (a message in either direction), so
+// the report cannot be pointed at a stranger; the refusal is the same plain sentence an unknown id gets.
+const DIRECT_MESSAGE_REPORT_CREATE_RATE_LIMIT_MAX = 20;
+
+async function handleDirectMessageReportCreate(request, db) {
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  await checkRateLimit(db, `direct-message-report-create:${sessionBuilder.user_id}`, DIRECT_MESSAGE_REPORT_CREATE_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
+  if (reportedBuilderId === sessionBuilder.builder_id) {
+    throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  }
+  const reason = input.reason === undefined || input.reason === null || input.reason === ''
+    ? null
+    : stringValue(input.reason, 'reason');
+  if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
+  const labelsById = await labelsByBuilderId(db, [reportedBuilderId]);
+  const reportedLabel = labelsById.get(reportedBuilderId);
+  const reportedUserId = reportedLabel === undefined ? null : await reportedUserIdOf(db, reportedBuilderId);
+  if (!reportedUserId) throw new HttpError('reportedBuilderId does not name a real builder', 400);
+  if (reportedUserId === sessionBuilder.user_id) throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  const thread = await db.prepare(`
+    SELECT 1 AS present FROM direct_messages
+    WHERE (sender_user_id = ? AND recipient_user_id = ?) OR (sender_user_id = ? AND recipient_user_id = ?)
+    LIMIT 1
+  `).bind(sessionBuilder.user_id, reportedUserId, reportedUserId, sessionBuilder.user_id).first();
+  if (!thread) throw new HttpError('You can only report someone you have exchanged messages with', 403);
+  const reportId = `direct-message-report-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  const noteLines = [`Reported account: ${reportedUserId} — current builder "${reportedLabel}" (${reportedBuilderId})`];
+  if (reason) noteLines.push(`Reason: ${reason}`);
+  noteLines.push('Reported from a direct message thread. The report holds no message text; an admin does not read the thread.');
+  const storedReportId = await fileConductReport(db, {
+    table: 'direct_message_reports', kind: 'direct-message-report', reportId,
+    reporterUserId: sessionBuilder.user_id, reportedUserId, reason,
+    title: `Direct message conduct report against "${reportedLabel}"`, noteLines, now,
+  });
+  return json({ reportId: storedReportId }, 201);
+}
+
 export async function handleDirectMessages(request, db, route, url) {
   // Ahead of the generic list GET below, same "specific path before generic
   // CRUD" ordering GET /api/notifications/unread-count already uses for
@@ -1744,6 +1784,12 @@ export async function handleDirectMessages(request, db, route, url) {
         AND ${notBlockedByUserSql('direct_messages.recipient_user_id', 'direct_messages.sender_user_id')}
     `).bind(sessionBuilder.user_id).first();
     return json({ count: count.count });
+  }
+
+  // #4169: a conduct report about someone the caller has exchanged messages with, like the nearby chat and voice
+  // ones: invisible to the reported person, one row and one Control Room card per pair, never any message text.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'reports') {
+    return handleDirectMessageReportCreate(request, db);
   }
 
   if (request.method === 'GET' && route.length === 1) {

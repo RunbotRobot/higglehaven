@@ -310,6 +310,13 @@
       "url": "TEXT|0||0",
       "user_id": "TEXT|1||0"
     },
+    "direct_message_reports": {
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "reason": "TEXT|0||0",
+      "report_id": "TEXT|0||1",
+      "reported_user_id": "TEXT|0||0",
+      "reporter_user_id": "TEXT|0||0"
+    },
     "direct_messages": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "message_id": "TEXT|0||1",
@@ -1117,6 +1124,14 @@
     "index:idx_didit_verification_sessions_user_id": {
       "tbl": "didit_verification_sessions",
       "sql": "CREATE INDEX idx_didit_verification_sessions_user_id ON didit_verification_sessions(user_id, created_at)"
+    },
+    "index:idx_direct_message_reports_pair": {
+      "tbl": "direct_message_reports",
+      "sql": "CREATE UNIQUE INDEX idx_direct_message_reports_pair ON direct_message_reports(reporter_user_id, reported_user_id)"
+    },
+    "index:idx_direct_message_reports_reported_user": {
+      "tbl": "direct_message_reports",
+      "sql": "CREATE INDEX idx_direct_message_reports_reported_user ON direct_message_reports(reported_user_id, created_at)"
     },
     "index:idx_direct_messages_recipient_user": {
       "tbl": "direct_messages",
