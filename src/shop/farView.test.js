@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createFarView, FAR_FADE_MS } from './farView.js';
+import { createFarView, FAR_FADE_MS, TILE_REFRESH_MS } from './farView.js';
 import { createFrameBudgetQueue } from '../world/frameBudgetQueue.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup({ loaded = new Set(), payloads, reducedMotion = true, createDissolve } = {}) {
+function setup({ loaded = new Set(), payloads, reducedMotion = true, createDissolve, fetchOverride } = {}) {
   let clock = 0;
   const queue = createFrameBudgetQueue({ now: () => clock, schedule: () => {} });
   const root = new THREE.Group();
@@ -13,7 +13,7 @@ function setup({ loaded = new Set(), payloads, reducedMotion = true, createDisso
   const disposed = [];
   const view = createFarView({
     queue, root,
-    fetchTile: async (x, y) => { fetched.push(`${x},${y}`); return payloads[`${x},${y}`] ?? { templates: [], landlets: [] }; },
+    fetchTile: async (x, y) => { fetched.push(`${x},${y}`); fetchOverride?.(`${x},${y}`); return payloads[`${x},${y}`] ?? { templates: [], landlets: [] }; },
     loadSource: async (id) => ({
       container: new THREE.Group(),
       parts: [{ geometry: new THREE.BoxGeometry(1, 1, 1), material: new THREE.MeshBasicMaterial(), matrix: new THREE.Matrix4() }],
@@ -48,6 +48,38 @@ describe('createFarView (#3478)', () => {
     expect(meshes).toHaveLength(1);
     expect(meshes[0].count).toBe(2); // the loaded landlet's item is left to the normal loader
     expect(view.stats().drawCalls).toBe(1);
+  });
+
+  // #4147: a lándlet emptied while a Shop is open must leave the far view without a reload.
+  it('reads a tile in range again after TILE_REFRESH_MS, and a lándlet the server no longer lists leaves the view', async () => {
+    const payloads = { '0,0': payload };
+    const { view, queue, root, fetched, advance, settle } = setup({ payloads });
+    await settle();
+    expect(fetched.filter((k) => k === '0,0')).toHaveLength(1);
+    expect(root.children.flatMap((child) => child.children)[0].count).toBe(3);
+    payloads['0,0'] = { templates: ['tpl'], landlets: [payload.landlets[1]] }; // 'near' was emptied on the server
+    advance(TILE_REFRESH_MS - 20000);
+    view.update(); await flush();
+    expect(fetched.filter((k) => k === '0,0')).toHaveLength(1); // not yet
+    advance(TILE_REFRESH_MS);
+    for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); } // one tile a second
+    await queue.drain();
+    expect(fetched.filter((k) => k === '0,0')).toHaveLength(2);
+    expect(root.children.flatMap((child) => child.children)[0].count).toBe(1);
+  });
+
+  it('keeps what it drew when the refresh read fails', async () => {
+    const payloads = { '0,0': payload };
+    let failing = false;
+    const { view, queue, root, advance, settle } = setup({
+      payloads, fetchOverride: () => { if (failing) throw new Error('offline'); },
+    });
+    await settle();
+    failing = true;
+    advance(TILE_REFRESH_MS + 1000);
+    for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); }
+    await queue.drain();
+    expect(root.children.flatMap((child) => child.children)[0].count).toBe(3);
   });
 
   it('does not draw before the product model is ready, and never draws a stand-in', async () => {

@@ -158,8 +158,25 @@ async function instanceLodBand(id = instanceId) {
   return pageB.evaluate((probeId) => window.__testShopInstanceLodBand(probeId), id);
 }
 
+// #4156: content is built in small pieces inside a per-frame budget ("Moving, looking and drawing never wait on
+// loading"), so on a loaded machine the mesh of a present instance can arrive well after the 600 ms tick wait.
+// "Should be present" is therefore polled for (the same probe, up to 20 s); "should be gone" is read at once, since
+// unloading is immediate. A fixed wait here failed twice on a loaded CI shard with the content restored but not yet drawn.
+async function waitForInstanceLodBand(id = instanceId, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let band = await instanceLodBand(id);
+  while (band === null && Date.now() < deadline) {
+    await pageB.waitForTimeout(250);
+    band = await instanceLodBand(id);
+  }
+  // Printed so a slow run shows how long the mesh took to arrive, not only that it did or did not.
+  console.log(`instance ${id} drawn after ${Date.now() - startedAt} ms of waiting (band: ${band})`);
+  return band;
+}
+
 await teleportOntoLandletAndTick();
-const bandWhileOwned = await instanceLodBand();
+const bandWhileOwned = await waitForInstanceLodBand();
 console.log('instance LOD band while owner is still in good standing (should NOT be null):', bandWhileOwned);
 
 const suspend = await adminFetch('/auth/suspend-account', adminCookie, {
@@ -204,7 +221,7 @@ const restoredInstance = (restoredBody.instances || []).find((i) => i.templateId
 console.log('restored instance found after unsuspension (fresh id expected):', !!restoredInstance);
 await pageB.evaluate(() => window.__testForceShopLandletRecordRefresh());
 await teleportOntoLandletAndTick();
-const bandAfterUnsuspendRefresh = restoredInstance ? await instanceLodBand(restoredInstance.instanceId) : null;
+const bandAfterUnsuspendRefresh = restoredInstance ? await waitForInstanceLodBand(restoredInstance.instanceId) : null;
 console.log('instance LOD band after unsuspending and refreshing again (should NOT be null again):', bandAfterUnsuspendRefresh);
 
 const pass = !!landlet && !!builderA

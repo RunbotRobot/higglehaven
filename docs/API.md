@@ -1411,12 +1411,22 @@ either), and the same probe confirmed it never hits this rejection.
     "userId", "username", "email", "trustTier", "createdAt", "emailVerifiedAt",
     "builderId", "builderLabel", "sellerId", "sellerLabel"
   },
+  "landlets": [{
+    "landletId", "name", "status", "areaM2", "centerXM", "centerYM",
+    "publishedVersion", "updatedAt"
+  }],
   "suspensions": [{
     "suspensionId", "adminUserId", "reason", "evidenceNote", "suspendedAt",
     "gracePeriodEndsAt", "liftedAt", "liftedByAdminUserId", "escalatedAt"
   }]
 }
 ```
+
+`landlets` (#4135) is every lándlet the account's builder profile owns now,
+ordered by id (`[]` for a person with none or no builder profile), with
+`publishedVersion` the number of the active version shoppers see (`null`
+when nothing is published). Read-only, one query, no paging: a person holds a
+handful, and it needs paging only if one account ever holds hundreds.
 
 `builderId`/`sellerId` (and their `label`) are `null` when the account has
 no linked profile of that kind — note a `builders` row is always
@@ -4353,9 +4363,12 @@ scale, crop?], ...] }] }`; positions are landlet-local (add `cx`, `cy`), and
 `crop` appears only when set. Published versions are used, falling back to the
 draft; suspended builders' landlets and delisted or suspended-seller products
 are left out. `400` for a malformed or out-of-world tile. Cached at the edge
-for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
-drops its tile's entry in the same data centre, other changes show within the
-TTL.
+for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version,
+Make greenbelt, admin reassign-owner, builder or account deletion and an auction
+resolving drop the tile's entry in the same data centre (#4147), other changes
+show within the TTL. A Shop that is open reads each tile in range again every two
+minutes (src/shop/farView.js `TILE_REFRESH_MS`), so an emptied landlet leaves its
+far view without a reload.
 
 Decisions recorded for this read (#3417):
 

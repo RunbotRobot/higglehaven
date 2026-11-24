@@ -842,6 +842,19 @@ export async function handleAdminUserDetail(request, db, url) {
   if (!row) throw new HttpError('No account with that userId', 404);
   const builder = await db.prepare('SELECT builder_id, label FROM builders WHERE user_id = ?').bind(userId).first();
   const seller = await db.prepare('SELECT seller_id, label FROM sellers WHERE user_id = ?').bind(userId).first();
+  // #4135: the lándlets this person holds now, found through their builder profile (the account is the
+  // person, the builder profile is the role that owns lándlets, so a reset profile shows what it holds
+  // today). One query, no paging: a person holds a handful. Revisit if one account ever holds hundreds.
+  const landletRows = builder
+    ? (await db.prepare(`
+      SELECT landlets.landlet_id, landlets.name, landlets.status, landlets.area_m2, landlets.center_x_m,
+        landlets.center_y_m, landlets.updated_at, landlet_versions.version_number AS published_version
+      FROM landlets
+      LEFT JOIN landlet_versions ON landlet_versions.version_id = landlets.active_version_id
+      WHERE landlets.owner_builder_id = ?
+      ORDER BY landlets.landlet_id
+    `).bind(builder.builder_id).all()).results
+    : [];
   // Every past suspend/lift/escalate cycle for this account, not just
   // whether one is currently active (handleSuspensionStatus's own job) --
   // the whole point of this detail view is to let an admin see the full
@@ -870,6 +883,16 @@ export async function handleAdminUserDetail(request, db, url) {
       sellerId: seller ? seller.seller_id : null,
       sellerLabel: seller ? seller.label : null,
     },
+    landlets: landletRows.map((l) => ({
+      landletId: l.landlet_id,
+      name: l.name,
+      status: l.status,
+      areaM2: l.area_m2,
+      centerXM: l.center_x_m,
+      centerYM: l.center_y_m,
+      publishedVersion: l.published_version ?? null,
+      updatedAt: l.updated_at,
+    })),
     suspensions: suspensionRows.map((s) => ({
       suspensionId: s.suspension_id,
       adminUserId: s.admin_user_id,

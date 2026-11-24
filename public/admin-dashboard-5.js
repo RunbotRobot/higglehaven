@@ -143,6 +143,21 @@
           </tr>
         `).join('')
         : '<tr><td colspan="5"><p class="empty">No suspension history.</p></td></tr>';
+      // #4135: the person's lándlets, each a door to the Landlet overrides panel (where Make greenbelt and the
+      // rest already are); nothing is changed from here.
+      const landlets = detail.landlets || [];
+      const landletRows = landlets.length
+        ? landlets.map((l) => `
+          <tr>
+            <td>${escapeHtml(l.name)}</td>
+            <td class="mono">${escapeHtml(l.landletId)}</td>
+            <td>${escapeHtml(Math.round(l.centerXM))}, ${escapeHtml(Math.round(l.centerYM))} (${escapeHtml(Math.round(l.areaM2))} m²)</td>
+            <td>${l.publishedVersion ? 'Version ' + escapeHtml(l.publishedVersion) : 'None'}</td>
+            <td>${escapeHtml(l.updatedAt)}</td>
+            <td><button class="secondary open-landlet-btn" type="button" data-landlet-id="${escapeHtml(l.landletId)}">Open</button></td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="6"><p class="empty">This person has no lándlets.</p></td></tr>';
       userDetailWrap.innerHTML = `
         <div class="stat-grid">
           <div class="stat"><div class="n">${escapeHtml(user.username)}</div><div class="l">Username</div></div>
@@ -155,6 +170,11 @@
         </div>
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
         <button class="secondary delete-account-btn" type="button">Delete account</button>
+        <h3 id="userLandletsHeading">Lándlets (${landlets.length})</h3>
+        <table class="user-landlets" aria-labelledby="userLandletsHeading">
+          <thead><tr><th>Name</th><th>Id</th><th>Where (x, y)</th><th>Published</th><th>Last changed</th><th></th></tr></thead>
+          <tbody>${landletRows}</tbody>
+        </table>
         <h3>Suspension history</h3>
         <table>
           <thead><tr><th>Suspended at</th><th>Reason</th><th>Grace period ends</th><th>Status</th><th></th></tr></thead>
@@ -163,6 +183,13 @@
       `;
       userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
       userDetailWrap.querySelector('.delete-account-btn').addEventListener('click', () => openDeleteAccount(user.userId));
+      userDetailWrap.querySelectorAll('.open-landlet-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelector('nav button[data-panel="landlets"]').click();
+          document.getElementById('landletLookupInput').value = btn.dataset.landletId;
+          document.getElementById('landletLookupBtn').click();
+        });
+      });
       userDetailWrap.querySelectorAll('.use-for-ncmec-btn').forEach((btn) => {
         btn.addEventListener('click', () => useSuspensionForNcmecReport(btn.dataset.suspensionId));
       });
