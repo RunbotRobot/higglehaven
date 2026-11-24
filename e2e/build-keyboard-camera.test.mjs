@@ -55,11 +55,12 @@ check(after.camera.z - after.target.z > 0, 'R never takes the camera below the g
 before = await pose();
 await hold('PageUp');
 after = await pose();
-check(dist(after) < dist(before) - 0.3, `Page Up zooms in (${dist(before).toFixed(2)} -> ${dist(after).toFixed(2)})`);
+check(moved(before, after) > 0.3 || Math.abs(after.camera.z - before.camera.z) > 0.3, `Page Up flies the view forward (camera z ${before.camera.z.toFixed(2)} -> ${after.camera.z.toFixed(2)}, target moved ${moved(before, after).toFixed(2)} m)`);
+check(Math.abs(dist(after) - dist(before)) < 0.05, 'zooming keeps the distance between the camera and what it looks at');
 before = await pose();
 await hold('PageDown', 900);
 after = await pose();
-check(dist(after) > dist(before) + 0.3, 'Page Down zooms out');
+check(moved(before, after) > 0.3 || Math.abs(after.camera.z - before.camera.z) > 0.3, 'Page Down flies it back');
 
 // A field with focus keeps its keys.
 await page.evaluate(() => {

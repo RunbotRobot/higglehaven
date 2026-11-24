@@ -5208,8 +5208,6 @@ function applyBuildKeyboardCamera(now) {
     keyboardAxes(buildKeysDown), keyboardRise(buildKeysDown), dt,
     {
       maxPolarRad: controls.maxPolarAngle,
-      minDistance: Math.max(1, controls.minDistance),
-      maxDistance: controls.maxDistance,
       maxTargetRadius: MAX_FLY_TARGET_DISTANCE_M,
     },
   );

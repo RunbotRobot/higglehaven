@@ -1,9 +1,9 @@
 // #4159: Build's camera from a keyboard, as pure maths.
 import { describe, expect, it } from 'vitest';
-import { stepBuildCamera, ORBIT_RAD_S, TILT_RAD_S } from './keyboardCamera.js';
+import { stepBuildCamera, ORBIT_RAD_S, TILT_RAD_S, MIN_CAMERA_Z_M } from './keyboardCamera.js';
 
 const none = { moveX: 0, moveY: 0, lookX: 0, lookY: 0 };
-const limits = { maxPolarRad: Math.PI * 0.49, minDistance: 2, maxDistance: 500, maxTargetRadius: 500 };
+const limits = { maxPolarRad: Math.PI * 0.49, maxTargetRadius: 500 };
 // The camera 10 m south and 10 m up from the target at the origin, looking north and down.
 const start = () => ({ camera: { x: 0, y: -10, z: 10 }, target: { x: 0, y: 0, z: 0 } });
 const dist = (v) => Math.hypot(v.camera.x - v.target.x, v.camera.y - v.target.y, v.camera.z - v.target.z);
@@ -51,12 +51,21 @@ describe('stepBuildCamera', () => {
     expect(TILT_RAD_S).toBeGreaterThan(0);
   });
 
-  it('page up zooms in and page down zooms out, inside the distance limits', () => {
+  it('page up flies camera and target forward along the view, page down back; the distance between them is unchanged', () => {
     const view = start();
-    expect(dist(stepBuildCamera(view, none, 1, 0.2, limits))).toBeLessThan(dist(view));
-    expect(dist(stepBuildCamera(view, none, -1, 0.2, limits))).toBeGreaterThan(dist(view));
-    expect(dist(stepBuildCamera(view, none, 1, 100, limits))).toBeCloseTo(limits.minDistance, 6);
-    expect(dist(stepBuildCamera(view, none, -1, 100, limits))).toBeCloseTo(limits.maxDistance, 6);
+    const inward = stepBuildCamera(view, none, 1, 0.2, limits);
+    expect(inward.target.y).toBeGreaterThan(0); // the view faces north
+    expect(inward.camera.z).toBeLessThan(10); // and down, so the camera comes down as it goes in
+    expect(dist(inward)).toBeCloseTo(dist(view), 6);
+    const outward = stepBuildCamera(view, none, -1, 0.2, limits);
+    expect(outward.target.y).toBeLessThan(0);
+    expect(outward.camera.z).toBeGreaterThan(10);
+    expect(dist(outward)).toBeCloseTo(dist(view), 6);
+  });
+
+  it('zooming in never takes the camera under the ground', () => {
+    const next = stepBuildCamera(start(), none, 1, 100, limits);
+    expect(next.camera.z).toBeGreaterThanOrEqual(MIN_CAMERA_Z_M - 1e-9);
   });
 
   it('the view stays inside the radius it may wander to', () => {
