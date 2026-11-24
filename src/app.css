@@ -1898,6 +1898,15 @@
          the cursor is a wait cursor over the world (the assistant in the world has no control to mark). */
       body.assistant-opening { cursor: progress; }
       body.assistant-opening #account-menu-toggle .bud-logo { animation: bud-head-pulse 1.1s ease-in-out infinite; }
+      /* #4138: both pulses above name the head by its id, so they outrank the reduced-motion rule that
+         stops the head's animation (`.bud-logo { animation: none }`) and looped forever. With reduced
+         motion the head keeps the pulse's bright state, still: the tap is still answered and the
+         first-visit head still stands out, without a loop. The selectors match theirs exactly, so
+         this later rule wins. */
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"][data-bud-new] #account-menu-toggle:not(.active) .bud-logo,
+        body.assistant-opening #account-menu-toggle .bud-logo { animation: none; filter: var(--filter-head-pulse); }
+      }
       #help-ask-assistant-btn[aria-busy="true"] { opacity: 0.7; }
       #assistant-chat-form {
         display: flex;
