@@ -367,6 +367,25 @@ async function failVideoGenerationJob(db, jobId, message, { refundCredit, failur
   return true;
 }
 
+// #4122 ("No silent loss"): when the provider made a model and we could not keep it, a paid result is lost, so the
+// fleet is told without waiting for anyone to report it: one bug-report card per job, with the job id and the kept
+// reason (the same detail the admin panel shows). INSERT OR IGNORE: a repeat of the same job raises nothing twice.
+async function raiseLostModelCard(db, jobId, failureDetail) {
+  try {
+    const now = new Date().toISOString();
+    const title = `A finished video-to-3D model could not be saved (${failureDetail?.reason ?? 'unknown'})`;
+    const note = `Job ${jobId}: the provider reported success but storing its output failed. Kept reason: ${JSON.stringify(failureDetail)}. The builder's credit was returned; the provider's charge was not. In the admin dashboard, Video-to-3D jobs > Check the saved result shows whether saving would work now.`;
+    await db.prepare(
+      `INSERT OR IGNORE INTO control_room_tasks
+         (task_id, kind, note_number, title, status, session, posted_by, waiting_on, note, note_updated_at, note_author, created_at, updated_at)
+       VALUES (?, 'bug-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'system', 'claude', ?, ?, 'system', ?, ?)`,
+    ).bind(`video-store-failed-${jobId}`, title, note, now, now, now).run();
+  } catch (err) {
+    // The card is a courtesy on top of the job row, which already holds the reason; never fail the job over it.
+    console.error('video-to-3D: could not raise the lost-model card', jobId, err);
+  }
+}
+
 // #3108: how many times a transient failure to store a finished model is
 // retried (once per status poll or webhook delivery) before the job is given
 // up on. Bounded so a persistent fault, e.g. storage genuinely full, doesn't
@@ -436,6 +455,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       await failVideoGenerationJob(db, jobId,
         'The model was made, but we couldn\'t save it. Your credit has been returned. Please try again in a little while.',
         { refundCredit: true, failureDetail });
+      await raiseLostModelCard(db, jobId, failureDetail);
       return;
     }
     await db.prepare(`
