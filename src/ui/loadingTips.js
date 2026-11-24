@@ -33,7 +33,7 @@ export const LOADING_TIPS = [
     words: ['offer friendship', 'friends'],
   },
   {
-    text: 'Glowing orbs are free credits for making models. Fly into one to collect it.',
+    text: 'Glowing orbs are free credits for making models. Walk through one to collect it.',
     handbook: 'What are the glowing orbs, and what if I hit the limit?',
     words: ['glowing orbs', 'free'],
   },
