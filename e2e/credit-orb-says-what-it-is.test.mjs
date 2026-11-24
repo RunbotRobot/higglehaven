@@ -45,7 +45,7 @@ await page.waitForSelector('#bud-leaf-orb-collected', { timeout: 5000 });
 const collectedText = await page.locator('#bud-leaf-orb-collected .bud-leaf-body').innerText();
 console.log('collected card:', JSON.stringify(collectedText));
 
-const pass = /glowing orb/i.test(aboutText) && /Walk or fly into it/.test(aboutText) && /up to \d+ orbs every \d+ minutes?/.test(aboutText) &&
+const pass = /glowing orb/i.test(aboutText) && /Walk through it/.test(aboutText) && /up to \d+ orbs every \d+ minutes?/.test(aboutText) &&
   stillThere === 1 &&
   /free credit/.test(collectedText) && /You have 1 now\./.test(collectedText) && /Build/.test(collectedText) &&
   !/landlet|\bbud\b|flower|petal|leaf/i.test(aboutText + collectedText) &&
