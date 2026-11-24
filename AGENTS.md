@@ -503,6 +503,23 @@ most likely to come up again.
   for either this or next week." A theme for a week is a lean, not a
   fence.
 
+- **A doubled week is front-loaded: the first allowance is spent as fast as
+  real work allows, the second is paced.** (2026-11-24.) The owner has a
+  free usage reset to apply, which makes a week worth two allowances. Last
+  week the fleet reached the half-way point with barely half of the first
+  one used, then had to be throttled to finish. The owner: "Let's try to
+  push through the first set of usage as quickly as possible since we
+  struggled to get through it in the first half of last week, then we can
+  return to pacing that we're more familiar with for the second half,
+  possibly combined with the lessons learned from the hard push through
+  the first half." With two allowances the first risk is leaving one
+  unused, and running out only matters for the second. So every session
+  works until the first is gone; what holds the fleet back then is the
+  supply of work worth building, which is higglehaven1's to keep fed and
+  each session's to find in its own area. "Usage is paced to last the
+  whole week" still governs the second allowance, and the model is still
+  not changed to burn or save usage.
+
 - **Owner items are surfaced in conversation, one at a time — never as
   an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
   above.) Proactive email is for genuine emergencies only. **Channel
@@ -828,6 +845,26 @@ most likely to come up again.
   backdrop (#2377 and its sub-issues, closed as superseded). The owner
   offered several models per product as an example and left the
   implementation open; the design is in #3412.
+  **A change of version is never something a person can see (2026-11-24,
+  #4111).** A placed toilet drew white and blocky at middle distance and
+  turned dark grey and smooth a few steps closer. The owner: "The far-away
+  version of this model is not very visually similar to the original. The
+  true color of dark grey renders as white. The polygons are also
+  strikingly dissimilar. If possible, the user shouldn't be seeing a
+  difference between the two objects. The different-sized models should be
+  a behind-the-scenes efficiency strategy, not something user-facing." So
+  a cheaper version is acceptable only at a size on screen where it cannot
+  be told from the better one, in colour and shading as well as outline;
+  the generator checks all three, a version that fails is thrown away, and
+  an item with no acceptable cheaper version is drawn as the better one,
+  never the worse. The check has to measure what a person sees: this model
+  passed an outline-only check while being the wrong colour. The owner
+  named ways to pay for it (more versions per model, more triangles in the
+  middle and far versions, flat images of the real model for far-off
+  views) and left the choice open; the cheapest that meets the standard is
+  tried first and measured with stills, and flat images are a design
+  question that goes back to the owner with numbers. This is the same line
+  as "The system may group things for its own efficiency, invisibly".
 
 - **The owner reads email, not the session log; tell them only what
   they need to know.** (2026-11-10.) "I'd like to stop reading your
@@ -1256,6 +1293,26 @@ most likely to come up again.
   a choice from a set of lettering and colours with no uploaded image,
   because an upload shown to every visitor needs the reporting and removal
   every other upload has.)
+
+  **Flying is level, and height is a slide along the right edge (2026-11-24,
+  #4102, built under #4105).** This replaces "the view's pitch is the climb"
+  above. With pitch as the climb, flying level meant looking level, and a
+  person could not look down at what they flew over. Rather than ask the
+  owner to choose from words, the fleet built three ways to change height
+  behind an address switch (edge slide, double-tap-hold-slide, pinch) and
+  the owner flew them: "I like "A"! It's easy to use with normal phone
+  holding, compared to the pinch. It also feels like a gesture people might
+  discover on accident, which is in line with the effort to provide
+  intuitive gestures." So flight is level, a thumb sliding up or down the
+  right edge rises or sinks, and the other two ways and pitch-climb are
+  removed ("One model, not a hybrid"). The principles: a gesture is judged
+  with the phone held the way people hold it, one hand and a thumb before
+  two fingers; a gesture a person can fall into by accident is worth more
+  than one that has to be taught, though it is still taught once; one
+  gesture does one thing, so looking never also moves the person; and a
+  choice about feel is put in the owner's hand as things to try, each
+  behind its own switch, so that choosing only removes code. It was
+  answered within a day of going live.
 
   **The flower is one plant, whole and attached (2026-11-20, #3754, #4012).**
   Three notes after a few days of use. The head: "I like option C for the
@@ -1694,28 +1751,54 @@ These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
 
-**Pace for the week of 2026-11-23: a normal week, so four sessions work and the
-rest stay off their timers (higglehaven1, 2026-11-23).** Last week showed what the
-allowance holds: at 98% seven hours before the reset the assistants in the world
-were close to stopping. Measured over that week, higglehaven1, Juniper and the
-owner's own conversation use a little under half of a week between them, and each
-working session about one point every fourteen hours. That leaves room for about
-four. Until 2026-11-30 21:00Z:
+**Pace for the week of 2026-11-23: a doubled week, and the first allowance is spent as
+fast as real work allows (owner, 2026-11-24).** At 13% on Tuesday morning the owner
+wrote: "I do want this to be a doubled usage week... Let's try to push through the first
+set of usage as quickly as possible since we struggled to get through it in the first
+half of last week, then we can return to pacing that we're more familiar with for the
+second half." So, until higglehaven1 replaces this paragraph (when the first allowance
+is spent and the owner has applied the free reset):
 
-- **Working: higglehaven2, 3, 6 and 12**, on hourly check-ins. One task at a time,
-  straight from one card to the next; they take owner feedback and bug-report cards
-  first. A card with status `queued` and an empty session is free, whoever wrote its
-  note last.
-- **Resting: every other coding session (4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16).**
-  Finish and merge what you hold from the burst after the reset, release anything
-  you will not finish (card `queued`, session empty, one line saying what is left),
-  then claim nothing new. Your timers are off; higglehaven1 wakes a named session
-  when a card needs one.
-- The two queries above apply only to the sessions that are working.
+- **Every coding session works** (higglehaven2 to 16), on hourly check-ins, one task at
+  a time, straight from one merge to the next. The two queries above apply to all of you.
+- **What limits us is work worth building, not sessions.** Last week most free cards
+  ended "left: a look by the owner", and sessions stood down beside them. A session that
+  finds no free card with real work in it does not stand down: it explores its own area
+  (below), files every real finding as its own issue with a card ("Backlog exploration"
+  and "Proposing big feature work" below), and builds them, smallest first.
+- **Real work only.** Something a shopper, builder, seller or the owner would notice, or
+  that removes a real risk: a gap against docs/SPEC.md, a bug, a slow or janky path with
+  a measurement, a refusal that does not say why, a missing test for something that has
+  broken before, a place where two sibling surfaces differ ("Parity across sibling
+  surfaces"). Not: an issue whose only content is "a live look", a rewrite for taste, a
+  second design beside an existing one, or anything a standing owner decision rules out.
+- **Areas, so fifteen explorations do not overlap** (take free cards anywhere; explore
+  here): 2 Sell end to end (upload, My products, orders, payouts, tax forms). 3 the far
+  view and what a frame costs (#3412, #3418, #3479, #4063, #4089). 4 Build in the flower
+  (#3654 and its slices, #3545). 5 the admin dashboard and the owner's tools. 6 Shop:
+  moving, flying, hints, orbs, the first visit (#3544, #4072, #4105). 7 the assistants,
+  coding side (#3614, #3531, #3448, #3449). 8 accounts: sign-up, age and ID steps,
+  Settings, every email we send (#3547, #3877). 9 buying and money: checkout, orders,
+  refunds, ratings (#3934, #3946); blast-radius review applies. 10 people: friends,
+  messages, nearby chat, voice, blocks and reports (#3835). 11 lándlet wordmarks (#3771,
+  #3782 to #3784). 12 Shop drawing: model versions, batches, fog, avatars and animation
+  (#4062, #4067). 13 the flower and the world for someone on a keyboard, a screen reader
+  or reduced motion (#3818, #3832). 14 reliability: flaky e2e, CI time, slow opening,
+  D1 round trips (#3735, #3464). 15 security and data: headers, key rotation, history
+  snapshots, export, rate-limit parity (#1360, #1075, #2041). 16 docs/SPEC.md against
+  the code: list what is not built, file tracking issues with leaves, keep docs/API.md
+  true.
+- **A choice the owner has not made yet is built up to the choice.** Where the owner is
+  asked to pick among options (wordmark styles, the Build plan), build
+  what every option needs and keep each option behind its own switch, so the pick only
+  removes code. Anything that needs a decision no standing decision covers still goes to
+  the owner (`waitingOn: "owner"` with the reason); take the next thing, do not wait.
+- **Nothing else loosens.** The claim gate, CI patience, review effort by blast radius,
+  the live look after a deploy and the conduct rules on the live site all stand. The
+  speed comes from never idling, not from skipping a check.
 
-higglehaven1 changes who works as the owner's usage readings come in, and replaces
-this paragraph when the week resets. If it is still here after 2026-11-30 21:00Z,
-ignore it.
+higglehaven1 watches for the limit, asks the owner for the reset, and then replaces this
+paragraph with a paced one. If it is still here after 2026-11-30 21:00Z, ignore it.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
