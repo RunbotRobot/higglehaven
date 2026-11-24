@@ -4512,6 +4512,18 @@ Returns the newly claimed landlet. Errors are:
 - `409` when the landlet is unavailable or the builder already owns a claimed
   landlet.
 
+### `POST /api/landlets/:landletId/make-greenbelt`
+
+Admin-only (`403` otherwise), rate-limited with reassign-owner's budget (#4075).
+Returns a **claimed** lándlet to the greenbelt (`409` if it is already greenbelt, or
+if an auction is active on it: let it end or cancel it first). Unlike the release in
+builder deletion, nothing is lost silently: every placed item (with community sign
+posts and calendar events) is copied into a saved layout in the previous owner's
+account, then items, versions, levels and sold-out markers are cleared, the land cap
+is recomputed, the previous owner gets a notification, and `landlet_made_greenbelt`
+is written to the admin log. Response: `{ landlet, savedLayoutId (null when nothing
+was placed), savedInstanceCount }`.
+
 ### `POST /api/landlets/:landletId/reassign-owner`
 
 Admin-only (`403` without an admin session — see "Admin role" under
