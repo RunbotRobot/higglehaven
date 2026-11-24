@@ -43,7 +43,8 @@ check(b.name.top >= b.undo.bottom || b.name.right <= b.undo.left, `the name does
 
 // Selecting nothing again: the toolbar row goes, and nothing is left behind that
 // would push the next one down.
-await page.mouse.click(40, 600);
+// (#4118: the card now opens clear of the item's rings, often below it, so the empty ground is tapped well to the side.)
+await page.mouse.click(372, 770);
 await page.waitForTimeout(500);
 const after = await boxes();
 check(!after.toolbar.shown, 'the toolbar row goes with the selection');
