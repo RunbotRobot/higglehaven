@@ -88,7 +88,7 @@ import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
-  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, isTemporarilyFailed,
+  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, otherAvatarBodyAction, isTemporarilyFailed,
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
@@ -1127,7 +1127,8 @@ export async function pollNearbyPresenceIfNeeded(now) {
       // #4067: someone who wears a model is never drawn as the default body while it loads ("never
       // replaced by a stand-in", "things arrive through fog"): nothing stands there but soft fog until
       // their own body is ready. The default body is drawn only for someone who wears it, or when the
-      // model cannot be had (failed, or over the distinct-models cap), see reconcileOtherAvatarBodies.
+      // model cannot be had (failed, or over the distinct-models cap): reconcileOtherAvatarBodies ends the fog
+      // and puts the default body in (#4107: it used to skip someone who asked for null from the start).
       const waitsForModel = !avatar.assistant && !!normalizeEquippedAvatar(avatar.equippedAvatar)
         && !isTemporarilyFailed(otherAvatarModelFailedAt, normalizeEquippedAvatar(avatar.equippedAvatar).templateId, now);
       const defaultAvatar = waitsForModel ? null : createShopAvatar();
@@ -1238,7 +1239,10 @@ function reconcileOtherAvatarBodies(now) {
   for (const [builderId, entry] of shopOtherAvatars) {
     const desired = desiredAvatarFor(entry.equippedAvatar ?? null, allowed);
     const desiredId = desired ? desired.templateId : null;
-    if (desiredId === entry.bodyRequestedTemplateId) continue;
+    // #4107: not just "is it the template already asked for": a wearer over the distinct-models cap asks
+    // for null from the start and still has fog standing, which must become the default body.
+    const action = otherAvatarBodyAction(desiredId, entry.bodyRequestedTemplateId, Boolean(entry.modelWait));
+    if (action === 'keep') continue;
     entry.bodyRequestedTemplateId = desiredId;
     const myToken = ++entry.bodySwapToken;
     if (!desired) {

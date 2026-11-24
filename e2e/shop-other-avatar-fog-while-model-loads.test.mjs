@@ -77,13 +77,30 @@ const brokenDefault = await waitFor((id) => {
 }, 'fog-broken');
 console.log('failed model: default body and no fog (should be true):', brokenDefault);
 
+// #4107: seven people wearing seven distinct models (the cap is six): the first six are fog until their
+// body is in, and the seventh, whose model may not be drawn, is the default body with no fog left
+// standing (it used to stay an untappable patch of fog for good).
+const capCount = 7;
+avatars = Array.from({ length: capCount }, (_, i) => ({
+  builderId: `cap-${i}`, x: 2 + i, y: 4, z: 0, heading: 0,
+  equippedAvatar: { templateId: `tpl-cap-${i}`, modelUrl: '/models/crate.glb' },
+}));
+const capSettled = await waitFor((n) => {
+  const list = window.__shopOtherAvatars ?? [];
+  const over = list.find((a) => a.builderId === `cap-${n - 1}`);
+  const first = list.find((a) => a.builderId === 'cap-0');
+  return !!over && over.waitingForModel === false && over.motionKind === 'limbs' && !!first && first.bodyTemplateId === 'tpl-cap-0' && first.waitingForModel === false;
+}, capCount, 20000);
+const capEntries = await page.evaluate(() => (window.__shopOtherAvatars ?? []).filter((a) => a.builderId.startsWith('cap-')).map((a) => [a.builderId, a.waitingForModel, a.motionKind, a.bodyTemplateId]));
+console.log('seven distinct models: the first is its model with no fog, the seventh the default body with no fog (should be true):', capSettled, JSON.stringify(capEntries));
+
 const errors = sessionA.errors.filter((e) => !/Failed to load resource|404/.test(String(e)));
 const pass = seen &&
   waiting?.waitingForModel === true && waiting?.motionKind === null && waiting?.bodyTemplateId === null &&
   bare?.waitingForModel === false && bare?.motionKind === 'limbs' &&
-  arrived && fogGone && brokenDefault && errors.length === 0;
+  arrived && fogGone && brokenDefault && capSettled && errors.length === 0;
 await finish(sessionA.browser, {
   pass,
-  label: 'Another person who wears a model is fog, never the default body, until their model is in (#4067)',
+  label: 'Another person who wears a model is fog, never the default body, until their model is in; over the model cap they are the default body (#4067, #4107)',
   errors,
 });
