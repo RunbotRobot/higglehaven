@@ -3,8 +3,7 @@
 // says nothing when she is off shift or right here. Setup is assistant-chat-panel's: A is an
 // ordinary shopper in the Shop world; B is made an assistant account directly in the local D1
 // (fleet-login needs a deployment secret) and kept on shift by an inbox poll's timestamp.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, finish, localD1 } from './helpers.mjs';
 
 const LABEL_A = 'Standing Shopper';
 const LABEL_B = 'Standing Stand-in';
@@ -22,9 +21,7 @@ async function fetchJson(page, path, options) {
     return { status: res.status, body: await res.json() };
   }, [path, options]);
 }
-const sql = (statement) => execSync(`npx wrangler d1 execute higglehaven-db --local --command "${statement}"`, {
-  cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe',
-});
+const sql = (statement) => localD1(statement);
 const quote = (value) => value.replace(/'/g, "''");
 
 // A public landlet for her to stand on.

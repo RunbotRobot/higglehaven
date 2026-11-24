@@ -5,9 +5,9 @@
 // the waiting message on stdout; the reply program answers, files a card and
 // ends the conversation; the shopper reads the reply. No browser. Nothing
 // printed may contain a cookie or the key.
-import { execSync, spawn, execFile } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { finish } from './helpers.mjs';
+import { finish, localD1 } from './helpers.mjs';
 
 const exec = promisify(execFile);
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
@@ -18,7 +18,7 @@ const env = { ...process.env, LIVE_SITE_FLEET_KEY: FLEET_KEY };
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const d1 = (sql) => JSON.parse(execSync(`npx wrangler d1 execute higglehaven-db --local --json --command "${sql}"`, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }).toString());
+const d1 = (sql) => localD1(sql, { json: true });
 
 async function reply(args) {
   try {

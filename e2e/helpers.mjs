@@ -4,6 +4,7 @@
 // and claiming a landlet — so individual test files read as "what's
 // actually being verified" rather than repeating this boilerplate each time.
 import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
 
 // #2728: a test file that throws an uncaught error (most often a
 // page.waitForSelector/waitForFunction that genuinely times out, with
@@ -1100,4 +1101,26 @@ export async function openBuildMoreFold(page) {
 export async function openEarlierVersions(page) {
   await page.waitForSelector('.settings-earlier-versions:not([hidden])', { state: 'attached', timeout: 10000 });
   await page.evaluate(() => document.querySelectorAll('.settings-earlier-versions').forEach((el) => el.setAttribute('open', '')));
+}
+
+// #4117: a test reaches into the local D1 with `wrangler d1 execute --local`, a second process opening
+// the same SQLite file the running `wrangler dev` has open. When the server writes during that
+// process's snapshot it fails with SQLITE_BUSY ("database is locked"), which once ended
+// assistant-shift-scripts on both in-job attempts. Every e2e that shells out to the local database goes
+// through here: a busy database is tried again after a short, growing pause (about 6 s in all), and any
+// other failure throws as before. `json: true` parses the `--json` output.
+const LOCAL_D1_REPO_ROOT = new URL('..', import.meta.url).pathname;
+const D1_BUSY = /SQLITE_BUSY|database is locked/i;
+export function localD1(sql, { json = false, attempts = 8 } = {}) {
+  const args = ['wrangler', 'd1', 'execute', 'higglehaven-db', '--local', ...(json ? ['--json'] : []), '--command', sql];
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const out = execFileSync('npx', args, { cwd: LOCAL_D1_REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+      return json ? JSON.parse(out) : out;
+    } catch (error) {
+      const text = `${error.stderr || ''}${error.stdout || ''}${error.message || ''}`;
+      if (attempt >= attempts || !D1_BUSY.test(text)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+    }
+  }
 }

@@ -8,8 +8,7 @@
 // ID-verified, B stands in A's landlet and is made the assistant "Juniper", and a
 // third account C is made the assistant "Clover" and put on shift. B's and C's
 // own pages stand in for the two assistants' sessions.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, localD1 } from './helpers.mjs';
 
 const LABEL_A = 'Handover Shopper';
 const LABEL_B = 'Handover Stand-in One';
@@ -39,9 +38,7 @@ async function fetchJson(page, path, options) {
 const postJson = (page, path, body) => fetchJson(page, path, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}),
 });
-const sql = (statement) => execSync(`npx wrangler d1 execute higglehaven-db --local --command "${statement}"`, {
-  cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe',
-});
+const sql = (statement) => localD1(statement);
 const quote = (value) => value.replace(/'/g, "''");
 const usernameOf = async (page) => (await fetchJson(page, '/api/auth/me')).body.user.username;
 
