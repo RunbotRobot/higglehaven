@@ -1496,11 +1496,8 @@ async function handleBuilders(request, env, db, route, url) {
     // where a username is set, signup's rules apply here too, from the same
     // function (spaces collapsed, unshowable characters refused, look-alikes
     // and the reserved names compared in folded form).
-    if (typeof input.label !== 'string' || input.label.length > 400) {
-      // A bound before the work below, so a huge string is never normalised.
-      throw new HttpError(typeof input.label === 'string' ? 'label must be 40 characters or fewer' : 'label is required', 400);
-    }
-    const label = normalizeUsername(input.label);
+    // labelValue first: its 100-character bound runs before anything is normalised.
+    const label = normalizeUsername(labelValue(input.label, 'label'));
     const labelSkeleton = usernameSkeleton(label);
     if (isReservedSkeleton(labelSkeleton)) {
       throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
