@@ -247,7 +247,7 @@ class TripoStoreFatalError extends Error {
 }
 
 // `outputKeys` (#4122): the keys the provider's output held, so a failure says what it did have.
-async function storeTripoModelOutput(env, tripoModelUrl, outputKeys = []) {
+async function storeTripoModelOutput(env, tripoModelUrl, outputKeys = [], { dryRun = false } = {}) {
   const response = await fetch(tripoModelUrl);
   const contentType = response.headers?.get?.('content-type') ?? null;
   if (!response.ok) {
@@ -278,6 +278,9 @@ async function storeTripoModelOutput(env, tripoModelUrl, outputKeys = []) {
     throw new TripoStoreFatalError(validatorMessage,
       { reason: 'not_a_glb', bytes: bytes.byteLength, contentType, validatorMessage, outputKeys });
   }
+
+  // #4122: the admin's "Check the saved result" asks only whether this would have been kept; nothing is written.
+  if (dryRun) return { dryRun: true, sizeBytes: bytes.byteLength, contentType };
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   const hash = bytesToHex(digest);
@@ -727,4 +730,32 @@ export async function handleVideoGenerationWebhook(request, env, db) {
   if (!job || job.processed_at !== null) return json({ received: true });
   await applyTripoTaskResult(db, env, job.job_id, payload.data);
   return json({ received: true });
+}
+
+// #4122: the admin's "Check the saved result" on a failed job. Asks the provider about the job's task (a read,
+// no charge), then tries the same download, size and GLB checks the store step runs, writing nothing. The job's
+// status and credit are left exactly as they are; only what the check found is recorded on the job (failure_detail),
+// so the owner and the fleet can see why a finished model was not kept. Returns what it found.
+export async function checkVideoGenerationJobResult(env, db, job) {
+  if (!tripoConfigured(env)) throw new HttpError('Video-to-3D is not configured', 503);
+  if (!job.provider_task_id) throw new HttpError('This job never reached the provider, so there is nothing to check', 409);
+  const task = await tripoRequest(env, 'GET', `tasks/${encodeURIComponent(job.provider_task_id)}`);
+  const outputKeys = Object.keys(task?.output ?? {});
+  const found = { checkedAt: new Date().toISOString(), taskStatus: task?.status ?? null, outputKeys };
+  if (task?.status !== 'success' || !task?.output?.model_url) {
+    found.reason = task?.status === 'success' ? 'no_model_url' : 'task_not_successful';
+  } else {
+    try {
+      const stored = await storeTripoModelOutput(env, task.output.model_url, outputKeys, { dryRun: true });
+      found.reason = 'would_save_now';
+      found.bytes = stored.sizeBytes;
+      found.contentType = stored.contentType;
+    } catch (err) {
+      Object.assign(found, err instanceof TripoStoreFatalError
+        ? { ...err.detail, message: err.message }
+        : { reason: 'store_error', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await db.prepare('UPDATE video_generation_jobs SET failure_detail = ? WHERE job_id = ?').bind(JSON.stringify(found), job.job_id).run();
+  return found;
 }
