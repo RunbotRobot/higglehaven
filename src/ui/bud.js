@@ -561,6 +561,11 @@ export function openLeaf({ id, title, render, onClose = null }) {
   return body;
 }
 
+// Whether the flower's menu or one of its leaves is open (Escape closes that before anything else, #4160).
+export function isBudOpen() {
+  return Boolean(leafEl) || Boolean(panel()?.classList.contains('expanded'));
+}
+
 export function currentLeafId() {
   return leafId;
 }
@@ -748,8 +753,9 @@ if (typeof document !== 'undefined') {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (leafEl) { closeLeaf(); toggle()?.focus({ preventScroll: true }); return; }
-    if (panel()?.classList.contains('expanded')) { foldBud(); toggle()?.focus({ preventScroll: true }); }
+    // This Escape is spent closing the menu: it must not also let go of a selected item in Build (#4160).
+    if (leafEl) { event.preventDefault(); closeLeaf(); toggle()?.focus({ preventScroll: true }); return; }
+    if (panel()?.classList.contains('expanded')) { event.preventDefault(); foldBud(); toggle()?.focus({ preventScroll: true }); }
   });
 }
 

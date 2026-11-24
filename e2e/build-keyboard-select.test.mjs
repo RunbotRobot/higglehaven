@@ -45,6 +45,12 @@ await page.waitForTimeout(200);
 check(/, 3 of 3$/.test(await status()), 'Shift+N goes back, wrapping to the last');
 check((await selectedCount()) === 1, 'still exactly one item selected');
 
+// An open menu takes the first Escape (it closes), the item stays selected; the next Escape lets go of it.
+await page.click('#account-menu-toggle');
+await page.waitForTimeout(700);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(500);
+check((await selectedCount()) === 1, 'Escape with the menu open closes the menu and keeps the selection');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(200);
 check((await selectedCount()) === 0, 'Escape lets go of the selection');

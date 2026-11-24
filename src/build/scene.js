@@ -56,6 +56,7 @@
 // state directly.
 import * as THREE from 'three';
 import { selectionStops, stepIndex, announceStop, isStepKeyEvent, isDeselectKeyEvent } from './keyboardSelect.js';
+import { isBudOpen } from '../ui/bud.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
@@ -4256,7 +4257,7 @@ const buildSelectStatusEl = document.getElementById('build-select-status');
 document.addEventListener('keydown', (event) => {
   if (currentMode !== 'build') return;
   if (isDeselectKeyEvent(event)) {
-    if (selectedMeshes.size === 0 || sceneMutationBusy) return;
+    if (selectedMeshes.size === 0 || sceneMutationBusy || isBudOpen()) return; // an open menu takes this Escape first
     clearSelection();
     updateSelectionUI();
     if (buildSelectStatusEl) buildSelectStatusEl.textContent = 'Nothing selected';
