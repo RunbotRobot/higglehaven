@@ -4609,6 +4609,30 @@ export async function handlePlacementClick() {
 }
 
 
+// #4163 (part of #4158, from the keyboard pass of #3818): a person who cannot tap the world places by key. Once an item
+// is chosen from the catalog (its tiles are buttons, so Tab and Enter reach them), Enter on the world places it at the
+// point the camera is looking at, exactly as a tap there would: the same raycast, the same limits, the same undo step.
+// Focus is put on the world when the item is chosen (focusWorldForPlacement), because the control that was last focused
+// is now "Cancel placing" and Enter on it would cancel instead.
+canvas.tabIndex = 0;
+canvas.setAttribute('aria-label', 'Build view. With an item chosen, press Enter to place it where the camera is looking.');
+export function focusWorldForPlacement() {
+  canvas.focus({ preventScroll: true });
+}
+export async function placePendingAtViewCentre() {
+  if (!pendingPlacement) return false;
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  await handlePlacementClick();
+  return true;
+}
+canvas.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.defaultPrevented) return;
+  if (!pendingPlacement) return;
+  event.preventDefault();
+  placePendingAtViewCentre();
+});
+
+
 // Swipe-to-select: while multi-select is on, dragging across several items
 // (a course of bricks, say) adds every one the finger passes over, instead
 // of requiring a separate tap per item. One-finger drag is free for this
