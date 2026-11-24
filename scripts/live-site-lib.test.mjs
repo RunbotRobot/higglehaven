@@ -9,6 +9,9 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('walk:forward:3000')).toEqual({ command: 'walk', args: ['forward', 3000] });
     expect(parseStep('walk:left')).toEqual({ command: 'walk', args: ['left', 1000] });
     expect(parseStep('aim:up:1500')).toEqual({ command: 'aim', args: ['up', 1500] });
+    expect(parseStep('rise:up:800')).toEqual({ command: 'rise', args: ['up', 800] });
+    expect(parseStep('rise:down')).toEqual({ command: 'rise', args: ['down', 1000] });
+    expect(() => parseStep('rise:left')).toThrow(/up or down/);
     expect(parseStep('aim:left')).toEqual({ command: 'aim', args: ['left', 1000] });
     expect(parseStep('look:40:-20')).toEqual({ command: 'look', args: [40, -20] });
     expect(parseStep('item')).toEqual({ command: 'item', args: [1] });

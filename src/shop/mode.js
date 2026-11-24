@@ -47,7 +47,7 @@
 import { sayAvatarDidNotLoad } from './avatarLoadNotice.js';
 import { disposeBatchTiers } from './batchTiers.js';
 import * as THREE from 'three';
-import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS } from '../ui/gestureWords.js';
+import { WALK_WORDS, LOOK_WORDS, FLY_WORDS, FRIEND_WORDS, HEIGHT_WORDS } from '../ui/gestureWords.js';
 import { markStartup } from '../ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from '../ui/loadingStages.js';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
@@ -815,7 +815,7 @@ export function renderShopSettingsSection() {
   addLine(`${WALK_WORDS} (drag further to run)`);
   addLine(LOOK_WORDS);
   addLine(`${FLY_WORDS}, and again to land`);
-  addLine('While flying you go where the view points: look up and walk forward to climb, look down to descend');
+  addLine(HEIGHT_WORDS);
   addLine(`${FRIEND_WORDS} (on a computer, click them)`);
   field.appendChild(note);
   // #3652: the keyboard lines fold into a closed disclosure, so a phone's first screen stays short.
@@ -829,7 +829,7 @@ export function renderShopSettingsSection() {
   for (const text of [
     'WASD or the arrow keys to walk, Q and E to turn, R and F to look up and down',
     'Hold the left mouse button on the world and drag to look around',
-    'T or a double-press of space to fly, N to open the nearest product\'s card',
+    'T or a double-press of space to fly, Page Up and Page Down to rise and sink, N to open the nearest product\'s card',
   ]) {
     const li = document.createElement('li');
     li.textContent = text;
