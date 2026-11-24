@@ -845,6 +845,26 @@ most likely to come up again.
   backdrop (#2377 and its sub-issues, closed as superseded). The owner
   offered several models per product as an example and left the
   implementation open; the design is in #3412.
+  **A change of version is never something a person can see (2026-11-24,
+  #4111).** A placed toilet drew white and blocky at middle distance and
+  turned dark grey and smooth a few steps closer. The owner: "The far-away
+  version of this model is not very visually similar to the original. The
+  true color of dark grey renders as white. The polygons are also
+  strikingly dissimilar. If possible, the user shouldn't be seeing a
+  difference between the two objects. The different-sized models should be
+  a behind-the-scenes efficiency strategy, not something user-facing." So
+  a cheaper version is acceptable only at a size on screen where it cannot
+  be told from the better one, in colour and shading as well as outline;
+  the generator checks all three, a version that fails is thrown away, and
+  an item with no acceptable cheaper version is drawn as the better one,
+  never the worse. The check has to measure what a person sees: this model
+  passed an outline-only check while being the wrong colour. The owner
+  named ways to pay for it (more versions per model, more triangles in the
+  middle and far versions, flat images of the real model for far-off
+  views) and left the choice open; the cheapest that meets the standard is
+  tried first and measured with stills, and flat images are a design
+  question that goes back to the owner with numbers. This is the same line
+  as "The system may group things for its own efficiency, invisibly".
 
 - **The owner reads email, not the session log; tell them only what
   they need to know.** (2026-11-10.) "I'd like to stop reading your
