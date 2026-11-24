@@ -294,7 +294,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       for (const index of acc.members) {
         const entry = items[index];
         entry.px = acc.px;
-        if (protectNear && acc.near) entry.protected = true;
+        if (protectNear && acc.near && acc.triangles <= fullTriangleCap) entry.protected = true; // a set too heavy to hold in full is not (it would spend the whole budget)
         entry.wanted = entry.protected ? TIER_FULL : nextTier(acc.currentTier, acc.px);
         objects[index].userData.lodProtected = entry.protected; // not set aside for batching: only selected ones are
       }
@@ -310,7 +310,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     for (const acc of accs.values()) {
       if (acc.members.length < 2) continue;
       let tier = TIER_FULL;
-      if (!(protectNear && acc.near)) {
+      if (!(protectNear && acc.near && acc.triangles <= fullTriangleCap)) {
         for (const index of acc.members) {
           if (!items[index].selected && TIER_COST[tiers[index]] > TIER_COST[tier]) tier = tiers[index];
         }
