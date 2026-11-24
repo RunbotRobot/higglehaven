@@ -84,6 +84,7 @@ import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
 import { stepBuildCamera } from './keyboardCamera.js';
 import { buildEditKeyAction } from './keyboardEdit.js';
+import { buildItemKeyAction, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -5226,6 +5227,7 @@ const buildKeysDown = new Set();
 let buildKeysLastAt = null;
 window.addEventListener('keydown', (event) => {
   if (currentMode !== 'build' || !isNavigationKeyEvent(event)) return;
+  if (isItemKey(event, selectedMeshes.size === 1)) return; // #4162: Shift with these keys is the selected item's
   event.preventDefault(); // Page Up and Page Down would otherwise scroll the page
   buildKeysDown.add(event.code);
 });
@@ -5243,6 +5245,27 @@ window.addEventListener('keydown', (event) => {
   if (!action) return;
   event.preventDefault(); // Backspace would otherwise go back a page, Ctrl+Z reach the browser
   ({ delete: deleteBtn, undo: undoBtn, redo: redoBtn })[action].click();
+});
+// #4162 (leaf 4 of #4158): Shift with the arrows, Page Up and Page Down, Q and E moves and turns the one
+// selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
+let lastItemKeyAt = 0;
+function turnSelectedItem(degrees) {
+  if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
+  const [mesh] = selectedMeshes;
+  const next = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(degrees)).multiply(mesh.quaternion);
+  runSyntheticDrag(rotateControls, mesh, () => mesh.quaternion.copy(next));
+  refreshCardNumbers();
+}
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  const action = buildItemKeyAction(event, { singleSelected: selectedMeshes.size === 1 });
+  if (!action) return;
+  event.preventDefault();
+  const now = performance.now();
+  if (now - lastItemKeyAt < ITEM_KEY_MIN_GAP_MS) return;
+  lastItemKeyAt = now;
+  if (action.type === 'nudge') nudgeSelectedItem(action.direction);
+  else turnSelectedItem(action.degrees);
 });
 window.addEventListener('blur', () => { buildKeysDown.clear(); });
 function applyBuildKeyboardCamera(now) {
