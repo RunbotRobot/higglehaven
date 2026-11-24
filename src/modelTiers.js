@@ -47,7 +47,7 @@ import {
   Vector3,
   CanvasTexture,
 } from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
 import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
 import {
@@ -586,6 +586,7 @@ function sampleTexture(texture, pixels, u, v, target) {
 // flat far surface cannot show. A metalness map is not read (a scalar of 1 beside a map says nothing
 // about where the metal is). Emission is added, since the far material is not emissive.
 const FAR_METAL_DARKENING = 0.65;
+const FAR_CREASE_ANGLE = (75 * Math.PI) / 180; // a coarse far mesh turns 50 to 70 degrees between faces on a curve; a box edge (90) stays sharp
 function shadingOf(material) {
   const metalness = material && !material.metalnessMap && typeof material.metalness === 'number' ? clamp(material.metalness, 0, 1) : 0;
   const emissive = material && material.emissive && !material.emissiveMap
@@ -739,9 +740,12 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
     simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
   }
 
-  const merged = mergeGeometries(simplifiedParts, false);
-  if (!merged || countTriangles(merged) === 0) return sharedModel(model);
-  merged.computeVertexNormals();
+  const joined = mergeGeometries(simplifiedParts, false);
+  if (!joined || countTriangles(joined) === 0) return sharedModel(model);
+  // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
+  // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
+  // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
+  const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
   fitBoundingBox(merged, fullBox);
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
