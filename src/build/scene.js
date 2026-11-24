@@ -81,6 +81,8 @@ import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
+import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
+import { stepBuildCamera } from './keyboardCamera.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -541,6 +543,12 @@ rotateControls.setMode('rotate');
 // The free-turn ball (XYZE) is not offered: its pick area is a sphere around the item, which would take a
 // press that means "drag the item" (#3689) and is not one of the three rings the owner asked for.
 rotateControls.showXYZE = false;
+// ...and neither is the outer view ring (E, a screen-roll ring a good deal wider than the three): it comes
+// back whenever all three axes are shown, and a tap on empty ground that lands near its circle would grab it
+// instead of deselecting. Taking its handle and its picker out of the gizmo leaves exactly the three rings.
+for (const group of [rotateControls._gizmo.gizmo.rotate, rotateControls._gizmo.picker.rotate]) {
+  for (const handle of [...group.children]) if (handle.name === 'E') group.remove(handle);
+}
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
@@ -5176,12 +5184,42 @@ window.__testBuildBatchCounts = () => buildBatching.counts();
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
+window.__testBuildCameraPose = () => ({ camera: { x: camera.position.x, y: camera.position.y, z: camera.position.z }, target: { x: controls.target.x, y: controls.target.y, z: controls.target.z } }); // #4159 e2e: where Build's camera is and what it looks at
 window.__testBuildArrivingCount = () => buildArrival.arrivingCount(); // e2e: items still dissolving in (not batched yet)
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
 window.__testBuildRenderedCalls = () => renderer.info.render.calls; // the last frame's draw calls (#3929)
 window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
+
+// #4159 (leaf 1 of #4158): Build's camera from a keyboard, with Shop's keys (src/build/keyboardCamera.js).
+// Keys held in Build only; a field, a dialog or a leaf with focus keeps its own keys (the same rule Shop
+// uses), and every key lets go when the page loses focus so none stays stuck.
+const buildKeysDown = new Set();
+let buildKeysLastAt = null;
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build' || !isNavigationKeyEvent(event)) return;
+  event.preventDefault(); // Page Up and Page Down would otherwise scroll the page
+  buildKeysDown.add(event.code);
+});
+window.addEventListener('keyup', (event) => { buildKeysDown.delete(event.code); });
+window.addEventListener('blur', () => { buildKeysDown.clear(); });
+function applyBuildKeyboardCamera(now) {
+  if (buildKeysDown.size === 0 || currentMode !== 'build') { buildKeysLastAt = null; return; }
+  const dt = buildKeysLastAt === null ? 0 : Math.min(0.1, (now - buildKeysLastAt) / 1000);
+  buildKeysLastAt = now;
+  if (dt <= 0) return;
+  const next = stepBuildCamera(
+    { camera: camera.position, target: controls.target },
+    keyboardAxes(buildKeysDown), keyboardRise(buildKeysDown), dt,
+    {
+      maxPolarRad: controls.maxPolarAngle,
+      maxTargetRadius: MAX_FLY_TARGET_DISTANCE_M,
+    },
+  );
+  controls.target.set(next.target.x, next.target.y, next.target.z);
+  camera.position.set(next.camera.x, next.camera.y, next.camera.z);
+}
 
 export function buildModeFrameUpdate(now) {
   // #3302: feed the Submit feedback ring buffer from Build too (it is
@@ -5199,6 +5237,7 @@ export function buildModeFrameUpdate(now) {
   });
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
+  applyBuildKeyboardCamera(now);
   controls.update();
   buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
   buildArrival.update(); // #4003: fog and dissolve of the items just let in; nothing when none

@@ -595,3 +595,16 @@ describe('far shading (#4111)', () => {
     expect(normalSpread(far)).toBeLessThan(0.2);
   });
 });
+
+describe('colour fidelity (#4111)', () => {
+  it('reads a metal mesh as the darker colour it is drawn in, and a plain one as its own', () => {
+    const colorOf = (props) => {
+      const model = chair();
+      model.traverse((o) => { if (o.isMesh) Object.assign(o.material, props); });
+      return fidelityBatches(model)[0].color;
+    };
+    const plain = colorOf({ metalness: 0 });
+    const metal = colorOf({ metalness: 1 });
+    expect(metal[0]).toBeLessThan(plain[0] * 0.5);
+  });
+});

@@ -168,11 +168,46 @@ export function silhouetteFidelity(full, tier, grid = FIDELITY_GRID) {
   // A closed full model has no open edges at all: any open edge on the version is then a hole it tore, measured
   // against a few percent of the model's own size so a hair of welding noise is not a verdict.
   const openGrowth = (tierSurface.openEdgeLength + 0.02 * span) / (fullSurface.openEdgeLength + 0.02 * span);
-  return { coverage, extra, views, areaKept, openGrowth };
+  return { coverage, extra, views, areaKept, openGrowth, colorShift: colorShift(full, tier) };
+}
+
+// #4111: colour. A batch may carry `color` ([r, g, b], linear, what the batch looks like lit) and `area`
+// (its triangles' total area). A toilet of dark grey passed the outline check above while its far
+// version was white, so the version a person sees from further away must also be the same colour.
+// The shift is the largest difference in any channel, in sRGB (0 to 1), between the area-weighted mean
+// colours of the model and of the version; null when either side carries no colour (an old caller).
+export const COLOR_SHIFT_LIMIT = { mid: 0.08, far: 0.1 };
+
+function toSrgb(c) {
+  const v = Math.min(1, Math.max(0, c));
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
+export function meanBatchColor(batches) {
+  let area = 0;
+  const sum = [0, 0, 0];
+  for (const batch of batches) {
+    if (!batch.color || !(batch.area > 0)) continue;
+    area += batch.area;
+    for (let k = 0; k < 3; k++) sum[k] += batch.color[k] * batch.area;
+  }
+  return area > 0 ? sum.map((v) => v / area) : null;
+}
+
+export function colorShift(full, tier) {
+  const a = meanBatchColor(full);
+  const b = meanBatchColor(tier);
+  if (!a || !b) return null;
+  let shift = 0;
+  for (let k = 0; k < 3; k++) shift = Math.max(shift, Math.abs(toSrgb(a[k]) - toSrgb(b[k])));
+  return shift;
 }
 
 export function isFaithful(report, tier = 'mid') {
-  const { minCoverage, maxExtra, minAreaKept, maxOpenGrowth } = typeof tier === 'string' ? TIER_LIMITS[tier] : tier;
+  const limits = typeof tier === 'string' ? TIER_LIMITS[tier] : tier;
+  const { minCoverage, maxExtra, minAreaKept, maxOpenGrowth } = limits;
+  const maxShift = limits.maxColorShift ?? (tier === 'far' ? COLOR_SHIFT_LIMIT.far : COLOR_SHIFT_LIMIT.mid);
+  if (report.colorShift != null && report.colorShift > maxShift) return false;
   if (report.coverage < minCoverage || report.extra > maxExtra) return false;
   // #4114: the surface checks, where the tier asks for them and the report carries them.
   if (minAreaKept !== undefined && report.areaKept !== undefined && report.areaKept < minAreaKept) return false;

@@ -710,6 +710,30 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
 #undo-btn | Undo
 ```
 
+### How do I look around my lándlet from a keyboard?
+
+1. Open Build. The keys work whenever you are not typing in a box or have a window
+   open in front of the view.
+2. Press W, A, S and D (or the arrow keys) to slide the view forward, left, back and
+   right over your lándlet.
+3. Press Q and E to turn the view around what it is looking at, and R and F to tip
+   it down and up.
+4. Press Page Up to zoom in and Page Down to zoom out. When you want to place
+   something, use "Add item" as usual.
+
+**You will see:** the view moves smoothly while a key is held and stops when you let
+go. It stops at the edge of how far you can go and never turns upside down.
+
+**If something goes wrong:**
+- Nothing moves: a box or a window is open and has the keys. Close it, or press
+  Escape, and try again.
+- You can only move the view with keys so far: picking, placing, moving and
+  deleting items still need a mouse or a touch screen for now.
+
+```controls build
+#add-item-btn | Add item
+```
+
 ### How do I move an item?
 
 1. Tap the item. It gets a ring around it and a small card beside it.

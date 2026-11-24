@@ -83,7 +83,9 @@ export function createWorldCard(cardEl) {
     },
     // worldPosition: a THREE.Vector3 (the thing's centre); halfSize: half its
     // largest dimension in metres.
-    place(worldPosition, halfSize) {
+    // minRadiusPx (optional): a clear space to keep round the thing, for a card whose thing wears
+    // handles that reach past its own size (Build's rings, #4118): the card sits beyond it.
+    place(worldPosition, halfSize, minRadiusPx = 0) {
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       camera.getWorldDirection(scratchForward);
       const behind = scratchProjected.copy(worldPosition).sub(camera.position).dot(scratchForward) <= camera.near;
@@ -98,7 +100,7 @@ export function createWorldCard(cardEl) {
         // sideways to the camera, lands from its centre.
         scratchRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(halfSize).add(worldPosition).project(camera);
         const rightX = (scratchRight.x * 0.5 + 0.5) * viewport.width;
-        anchor = { x, y, radius: clampAnchorRadius(Math.abs(rightX - x)), behind: false };
+        anchor = { x, y, radius: clampAnchorRadius(Math.max(Math.abs(rightX - x), minRadiusPx)), behind: false };
       }
       lastAnchor = anchor;
 
