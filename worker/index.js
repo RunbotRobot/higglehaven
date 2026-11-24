@@ -172,7 +172,7 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
-import { handleFarPlacements } from './lib/far-placements.js';
+import { handleFarPlacements, invalidateFarPlacementsForLandlets } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
 import { DEFAULT_WORDMARK_ID, isWordmarkStyleId, isWordmarkColorId } from '../shared/wordmark-set.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
@@ -1577,7 +1577,9 @@ async function handleBuilders(request, env, db, route, url) {
       if (!stillExists) throw new HttpError('Builder not found', 404);
       throw new HttpError(await builderDeletionBlockMessage(db, route[1], 'this builder'), 409);
     }
-    return json({ deleted: true, releasedLandletIds: released.results.map((row) => row.landlet_id) });
+    const releasedIds = released.results.map((row) => row.landlet_id);
+    await invalidateFarPlacementsForLandlets(db, releasedIds); // #4147: far view lets go of what was released
+    return json({ deleted: true, releasedLandletIds: releasedIds });
   }
 
   // Admin-only test/ops fixture support — mirrors POST /api/landlets'
@@ -2520,6 +2522,7 @@ async function resolveAuction(db, auction) {
       return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
     }
   }
+  await invalidateFarPlacementsForLandlets(db, [auction.landlet_id]); // #4147: a transfer or release empties what far view drew
   await fireNotifications(db, pendingNotifications);
   return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
 }
@@ -3471,11 +3474,11 @@ export async function cascadeDeleteAccount(db, userId) {
     await removeClosedSellerPlacedInstances(db, sellerId)
       .catch((error) => console.error('cascadeDeleteAccount: failed to remove a closed seller\'s placed products', sellerId, error));
   }
-  return {
-    releasedLandletIds: landletsReleasedIndex >= 0
-      ? batchResults[landletsReleasedIndex].results.map((row) => row.landlet_id)
-      : [],
-  };
+  const releasedLandletIds = landletsReleasedIndex >= 0
+    ? batchResults[landletsReleasedIndex].results.map((row) => row.landlet_id)
+    : [];
+  await invalidateFarPlacementsForLandlets(db, releasedLandletIds); // #4147: far view lets go of what was released
+  return { releasedLandletIds };
 }
 
 // #2542: handleDeleteAccount moved to worker/lib/auth-routes.js (calls

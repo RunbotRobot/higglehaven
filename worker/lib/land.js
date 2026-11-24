@@ -1171,6 +1171,7 @@ export async function handleLandlets(request, db, route, url) {
     // leaving it stale until some unrelated later action happens to
     // trigger a recompute.
     await recomputeLandCap(db, newOwnerBuilderId);
+    await invalidateFarPlacementsAt(existing.center_x_m, existing.center_y_m); // #4147: the previous owner's content is gone
     // Same post-batch, outside-the-atomic-write shape as auctionWinnerNotifications'
     // own call above (#1122) -- a self-delete race on either recipient must
     // not roll back the ownership transfer itself.
@@ -1274,6 +1275,7 @@ export async function handleLandlets(request, db, route, url) {
       }),
     ]);
     await recomputeLandCap(db, previousOwner);
+    await invalidateFarPlacementsAt(existing.center_x_m, existing.center_y_m); // #4147: an open Shop's far view lets it go
     await fireNotifications(db, [{
       builderId: previousOwner,
       message: savedLayoutId
