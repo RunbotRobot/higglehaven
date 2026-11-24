@@ -113,7 +113,7 @@ await page.waitForTimeout(300);
 await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y), [orbWorldX, orbWorldY]);
 await page.waitForTimeout(1500);
 
-const toastVisibleAfterRecovery = (await budWordText(page)) === 'Credit +1';
+const toastVisibleAfterRecovery = /^\d+ credits?$/.test(await budWordText(page));
 console.log('collect-confirmation toast shown once the outage clears (should be true):', toastVisibleAfterRecovery);
 
 const noticeHiddenAfterRecovery = (await budNoteText(page)) !== 'Offline';

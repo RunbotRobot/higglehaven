@@ -5,6 +5,15 @@
 // of its own ("A message that limits or refuses an action states the limit").
 import { rateLimitCapText } from '../rateLimitNotice.js';
 
+// #4123: the word beside the head when an orb is collected says how many credits the person holds
+// now, which is the figure they care about, not the increment. Until a balance is known the old
+// "Credit +1" stands in for it.
+export function creditOrbBalanceWord(balance) {
+  if (typeof balance !== 'number' || !Number.isFinite(balance) || balance < 0) return 'Credit +1';
+  const n = Math.floor(balance);
+  return `${n} credit${n === 1 ? '' : 's'}`;
+}
+
 const USE_SENTENCE = 'Use it from Build when you add a product from a short video.';
 
 // credits: how many the builder holds now (from the server), or null when it could not be read.

@@ -143,7 +143,13 @@ export async function handleCreditOrbs(request, db, route, url) {
   // it and reversing the pop on a 429. Read-only: it never spends a slot.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'standing') {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    return json({ standing: await rateLimitStanding(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX) });
+    // #4123: the balance rides along, so the Shop can say how many credits a person holds the moment
+    // they collect one (it shows the expected balance at once and the server's own number replaces it).
+    const balance = await db.prepare('SELECT video_generation_credits AS credits FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
+    return json({
+      standing: await rateLimitStanding(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
+      credits: balance?.credits ?? 0,
+    });
   }
   // POST /api/credit-orbs -- admin-gated test/ops fixture, same escape-hatch
   // reasoning as POST /api/landlets/.../land-cap-grants/higgles-grants: the
@@ -225,7 +231,7 @@ export async function handleCreditOrbs(request, db, route, url) {
     if (!nearby) {
       throw new HttpError('You need to be near this credit orb in the world to collect it', 403);
     }
-    const [claim, , standingRead] = await db.batch([
+    const [claim, , standingRead, balanceRead] = await db.batch([
       db.prepare(`
         UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
         WHERE orb_id = ? AND collected_at IS NULL
@@ -239,6 +245,8 @@ export async function handleCreditOrbs(request, db, route, url) {
       // #3464: the standing rides in the claim's round trip (its rate-limit
       // insert already ran above, so it does not depend on the claim).
       rateLimitStandingStatement(db, collectBucket),
+      // #4123: the balance after this orb, read in the same round trip as the grant.
+      db.prepare('SELECT video_generation_credits AS credits FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id),
     ]);
     if (claim.meta.changes === 0) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
@@ -248,6 +256,7 @@ export async function handleCreditOrbs(request, db, route, url) {
     return json({
       collected: true,
       standing: rateLimitStandingFromRow(standingRead.results[0], CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
+      credits: balanceRead.results[0]?.credits ?? null,
     });
   }
   return json({ error: 'Not found' }, 404);

@@ -77,7 +77,7 @@ await page.waitForTimeout(500);
 
 const listedWhileFlyingOver = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
 console.log('orb still active while flying directly over it at altitude (should be true):', listedWhileFlyingOver.orbs.some((o) => o.orbId === orbId));
-const toastVisibleWhileFlying = await page.evaluate(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1');
+const toastVisibleWhileFlying = await page.evaluate(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim().match(/^\d+ credits?$/) !== null);
 console.log('no collect toast while flying over it (should be false):', toastVisibleWhileFlying);
 
 // Now land back on the ground at the exact same x/y -- confirms this is a
@@ -87,7 +87,7 @@ await page.evaluate(([x, y, z]) => {
   window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
 }, [orbWorldX, orbWorldY, GROUND_Z]);
-await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim().match(/^\d+ credits?$/) !== null, null, { timeout: 5000 });
 const toastText = await budWordText(page); // #3889: a short word beside the head, gone by itself
 console.log('collect confirmation toast text after landing on it (should mention credit):', toastText);
 

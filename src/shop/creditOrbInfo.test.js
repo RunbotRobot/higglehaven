@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { creditOrbAboutText, creditOrbCollectedText } from './creditOrbInfo.js';
+import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
 import { rateLimitCapText, rateLimitNoticeText } from '../rateLimitNotice.js';
 
 describe('creditOrbCollectedText', () => {
@@ -17,6 +17,21 @@ describe('creditOrbCollectedText', () => {
       expect(text).toContain('lándlet');
       expect(text).not.toMatch(/landlet|\bbud\b|flower|petal|leaf|modal|#\d/i);
     }
+  });
+});
+
+describe('creditOrbBalanceWord', () => {
+  it('says how many credits the person holds, singular for one', () => {
+    expect(creditOrbBalanceWord(1)).toBe('1 credit');
+    expect(creditOrbBalanceWord(2)).toBe('2 credits');
+    expect(creditOrbBalanceWord(0)).toBe('0 credits');
+    expect(creditOrbBalanceWord(12)).toBe('12 credits');
+  });
+  it('falls back to the old word until a balance is known', () => {
+    expect(creditOrbBalanceWord(null)).toBe('Credit +1');
+    expect(creditOrbBalanceWord(undefined)).toBe('Credit +1');
+    expect(creditOrbBalanceWord(Number.NaN)).toBe('Credit +1');
+    expect(creditOrbBalanceWord(-1)).toBe('Credit +1');
   });
 });
 
