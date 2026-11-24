@@ -55,6 +55,8 @@
 // renderBuildSettingsSection() rather than reaching into this module's own
 // state directly.
 import * as THREE from 'three';
+import { selectionStops, stepIndex, announceStop, isStepKeyEvent, isDeselectKeyEvent } from './keyboardSelect.js';
+import { isBudOpen } from '../ui/bud.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
@@ -4250,7 +4252,42 @@ editBundleBtn.addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && editingGroupId && !event.defaultPrevented) exitBundleEdit();
+  if (event.key === 'Escape' && editingGroupId && !event.defaultPrevented) {
+    exitBundleEdit();
+    event.preventDefault(); // this Escape is spent: it must not also let go of the selection (#4160)
+  }
+});
+
+// #4160 (part of #4158): N steps to the next placed item and selects it, Shift+N the one before, Escape lets go. The
+// view turns to it (the same pivot a rotate uses) and a polite live region says what it is, so someone who cannot tap
+// an item in the world can still reach every one of them. Every later keyboard step (delete, nudge, rotate) works on
+// this selection through the same state a tap uses.
+const buildSelectStatusEl = document.getElementById('build-select-status');
+document.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  if (isDeselectKeyEvent(event)) {
+    if (selectedMeshes.size === 0 || sceneMutationBusy || isBudOpen()) return; // an open menu takes this Escape first
+    clearSelection();
+    updateSelectionUI();
+    if (buildSelectStatusEl) buildSelectStatusEl.textContent = 'Nothing selected';
+    return;
+  }
+  if (!isStepKeyEvent(event) || sceneMutationBusy) return;
+  const stops = selectionStops(productMeshes);
+  const selectedKeys = new Set([...selectedMeshes].map((m) => m.userData.groupId ?? m.userData.instanceId ?? m.uuid));
+  const index = stepIndex(stops, selectedKeys, event.shiftKey);
+  if (index === -1) {
+    if (buildSelectStatusEl) buildSelectStatusEl.textContent = 'Nothing is placed on this lándlet yet';
+    return;
+  }
+  event.preventDefault();
+  const { mesh } = stops[index];
+  selectOnly(mesh);
+  const pivot = getSelectionPivot();
+  if (pivot) beginTargetTween(pivot);
+  const members = mesh.userData.groupId ? productMeshes.filter((m) => m.userData.groupId === mesh.userData.groupId).length : 1;
+  const name = members > 1 ? `${members} items` : (mesh.userData.template?.name ?? 'Item');
+  if (buildSelectStatusEl) buildSelectStatusEl.textContent = announceStop(name, index, stops.length, { bundle: members > 1 });
 });
 
 ungroupBtn.addEventListener('click', async () => {
