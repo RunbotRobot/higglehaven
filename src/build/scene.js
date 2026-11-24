@@ -533,11 +533,13 @@ function wireDraggingBehavior(transformControls) {
 // spin the product in place.
 export const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
-// #3689 (slice b): the ring on the item turns it about its upright axis only, which is what nearly every
-// rotation is. The other two axes are typed in the card's Angles block (the gizmo still turns about
-// any of the three when a test drives it, and the readout still names all three).
-rotateControls.showX = false;
-rotateControls.showY = false;
+// #4118: all three rings are on the selected item again (red and green tilt, blue turns). #3689 (slice b) had
+// hidden the red and green ones and left their angles to the card's typed fields; the owner read that as
+// something lost: "We seem to have lost the red and green rotation handles." A handle on the thing itself
+// is the way, and the typed fields stay for exact values.
+// The free-turn ball (XYZE) is not offered: its pick area is a sphere around the item, which would take a
+// press that means "drag the item" (#3689) and is not one of the three rings the owner asked for.
+rotateControls.showXYZE = false;
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
@@ -990,6 +992,7 @@ rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 // without mouse-dragging the 3D gizmo.
 // #3376: `dragAxis: true` also tells the gizmo which ring is being turned, the
 // way a real drag does, so Snap / settle apply; without it the raw angle is used.
+window.__testRotateRingsShown = () => ({ x: rotateControls.showX, y: rotateControls.showY, z: rotateControls.showZ }); // e2e (#4118): which rings the selected item wears
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
@@ -2927,6 +2930,18 @@ function endBodyDrag() {
   translateControls.detach();
 }
 
+// #4118: the red and green rings pass over the item (a ring seen edge-on is a line through its middle), so a
+// press that lands on the selected item would grab one and the drag from the item would never start. A press
+// on the item's own body is the item's: for that one press the red and green rings cannot be picked
+// (TransformControls reads the pickers' visibility on the press; the next frame sets them again). The blue
+// ring, the easy one, and a press on any ring where it stands clear of the item are unchanged.
+window.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary || event.button > 0 || !rotateControls.object) return;
+  if (!selectedItemHitAt(event)) return;
+  for (const picker of rotateControls._gizmo.picker.rotate.children) {
+    if (picker.name === 'X' || picker.name === 'Y') picker.visible = false;
+  }
+}, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (bodyDrag) { endBodyDrag(); return; } // a second finger: it is looking, not moving
   if (!event.isPrimary || event.button > 0) return;

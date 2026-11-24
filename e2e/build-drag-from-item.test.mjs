@@ -29,6 +29,9 @@ await placeTreeAt(160, 380);
 check((await page.locator('#mode-move').count()) === 0 && (await page.locator('#mode-rotate').count()) === 0, 'there are no Move and Rotate buttons any more');
 const readoutShown = await page.evaluate(() => !document.getElementById('rotation-readout').hidden);
 check(readoutShown, 'the ring is on the selected item without pressing anything (its angle line is up)');
+// #4118: the red and green tilt rings are back beside the blue turn ring.
+const rings = await page.evaluate(() => window.__testRotateRingsShown());
+check(rings.x && rings.y && rings.z, `all three rings (red, green, blue) are on the selected item (${JSON.stringify(rings)})`);
 
 const s0 = await state();
 const spot = await screenOf(0);
