@@ -80,7 +80,8 @@ await placeCrateAt(320, 700);
 // selection (it would otherwise count as "already selected," and the
 // very first of the two taps below would toggle it back OFF instead of
 // adding the other crate, netting exactly one selected item throughout).
-await page.mouse.click(210, 600);
+// (#4118: the selected crate now wears three rings about 100 px wide, so the empty ground is tapped well away from them and from the card, which now opens above the crate.)
+await page.mouse.click(60, 700);
 await page.waitForTimeout(300);
 
 // Unlike a tall tree (whose canopy renders well above its placement
