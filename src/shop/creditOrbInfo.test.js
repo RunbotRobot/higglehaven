@@ -42,7 +42,8 @@ describe('creditOrbAboutText', () => {
   });
   it('says only what an orb is and how to collect it while no numbers are known', () => {
     const text = creditOrbAboutText(null);
-    expect(text).toContain('Walk or fly into it');
+    expect(text).toContain('Walk through it');
+    expect(text).not.toMatch(/fly/i); // collected on contact: nothing promises flying into one (#4173)
     expect(text).not.toMatch(/up to/);
   });
 });

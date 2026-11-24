@@ -28,7 +28,7 @@ export function creditOrbCollectedText(credits) {
 export function creditOrbAboutText(standing) {
   const parts = [
     'A glowing orb is a free credit for turning a short video into a 3D model for your lándlet.',
-    'Walk or fly into it to collect it.',
+    'Walk through it to collect it.',
   ];
   const cap = rateLimitCapText('orbs', standing);
   if (cap) parts.push(cap);
