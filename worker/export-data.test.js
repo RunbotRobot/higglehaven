@@ -603,3 +603,57 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     });
   });
 });
+
+// #4142: the account's own assistant conversations and blocks it made.
+describe('GET /auth/export-data -- communication section (#4142)', () => {
+  async function userIdOf(builder) {
+    return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+  }
+
+  it('includes the account\'s assistant thread, left questions and own blocks, and nothing of anyone else', async () => {
+    const shopper = await signupBuilder('export-comm-shopper');
+    const assistant = await signupBuilder('export-comm-assistant');
+    const other = await signupBuilder('export-comm-other');
+    const shopperId = await userIdOf(shopper);
+    const assistantId = await userIdOf(assistant);
+    const otherId = await userIdOf(other);
+    await env.DB.prepare(`
+      INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status, ended_by, ended_at)
+      VALUES ('export-comm-conv', ?, ?, 'ended', 'shopper', '2026-01-01T00:10:00.000Z'),
+             ('export-comm-conv-other', ?, ?, 'open', NULL, NULL)
+    `).bind(assistantId, shopperId, assistantId, otherId).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES
+        ('export-comm-m1', 'export-comm-conv', 'shopper', 'How do I place a wall?', '2026-01-01T00:01:00.000Z'),
+        ('export-comm-m2', 'export-comm-conv', 'assistant', 'Open Build, then the catalog.', '2026-01-01T00:02:00.000Z'),
+        ('export-comm-m3', 'export-comm-conv-other', 'shopper', 'someone else secret', '2026-01-01T00:03:00.000Z')
+    `).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_questions (question_id, shopper_user_id, text, status, answer_text, answered_at)
+      VALUES ('export-comm-q1', ?, 'Is anyone there?', 'answered', 'Yes, now.', '2026-01-02T00:00:00.000Z')
+    `).bind(shopperId).run();
+    await env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?), (?, ?)')
+      .bind(shopperId, otherId, otherId, shopperId).run();
+
+    const result = await api('/auth/export-data', shopper.session());
+    expect(result.response.status).toBe(200);
+    const comm = result.body.communication;
+    expect(comm.assistantConversations).toHaveLength(1);
+    expect(comm.assistantConversations[0]).toMatchObject({ status: 'ended', endedBy: 'shopper' });
+    expect(comm.assistantConversations[0].messages.map((m) => [m.sender, m.text])).toEqual([
+      ['shopper', 'How do I place a wall?'],
+      ['assistant', 'Open Build, then the catalog.'],
+    ]);
+    expect(comm.assistantQuestions).toHaveLength(1);
+    expect(comm.assistantQuestions[0]).toMatchObject({ question: 'Is anyone there?', answer: 'Yes, now.', status: 'answered' });
+    // Only the block this account made; the one against it stays out.
+    expect(comm.blocksMade).toHaveLength(1);
+    expect(JSON.stringify(result.body)).not.toContain('someone else secret');
+  });
+
+  it('is present, and empty, for an account that has never used any of it', async () => {
+    const quiet = await signupBuilder('export-comm-quiet');
+    const result = await api('/auth/export-data', quiet.session());
+    expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [] });
+  });
+});

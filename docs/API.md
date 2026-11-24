@@ -728,6 +728,14 @@ every ID-verification session this account started (`sessionId`, `status`,
 raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
 
+**#4142:** a top-level `communication` section, present for every account
+(builder or not), holds what keys on the account itself: `assistantConversations`
+(each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and
+its `messages` as `{sender, text, sentAt}`), `assistantQuestions` (a question left
+while no assistant was free, with its `answer`), and `blocksMade` (who this
+account blocked and when). Who blocked the account is deliberately not exported
+("A block is silent").
+
 **#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
 survey left open): `profile.moderationDecisions` lists every
 `account_moderation_decisions` row (migrations/0110, #1404's AI-driven
