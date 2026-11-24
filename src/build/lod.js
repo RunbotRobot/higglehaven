@@ -45,6 +45,7 @@ export const BUILD_HOLD_MAX_MS = 20000;
 
 const scratchPosition = new THREE.Vector3();
 const scratchSetPosition = new THREE.Vector3();
+const SET_OVERFLOW_TOLERANCE = 0.1; // #4115: see the set pass in update()
 const TIER_COST = { [TIER_FULL]: 0, [TIER_MID]: 1, [TIER_FAR]: 2 };
 
 // A cheap number for "which product and which bundle this item is", kept on the item and worked out again
@@ -212,7 +213,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     objects.length = 0;
     accs.clear();
     const height = viewportHeight();
-    let signatureSum = 0;
+    let signatureHash = 0x811c9dc5; // order-sensitive hash of every item's place, size and product (#4115)
     for (const object of getMeshes()) {
       if (!hasLodTiers(object) || !object.parent) { if (object.userData.lodHeld) setHeld(object, false); continue; }
       const data = object.userData;
@@ -224,7 +225,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       data.lodNear = near;
       data.lodDistM = groundDistanceM;
       const selectedItem = isSelected(object);
-      signatureSum += scratchPosition.x * 1.37 + scratchPosition.y * 2.11 + scratchPosition.z * 3.07 + radiusM * 0.59 + setKeyHashOf(data);
+      for (const v of [Math.round(scratchPosition.x * 100), Math.round(scratchPosition.y * 100), Math.round(scratchPosition.z * 100), Math.round(radiusM * 100), setKeyHashOf(data)]) {
+        signatureHash = Math.imul(signatureHash ^ (v | 0), 0x01000193);
+      }
       const own = (protectNear && near) || selectedItem;
       const fullTriangles = fullTrianglesOf(object);
       items.push({
@@ -244,8 +247,8 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         if (!acc) {
           acc = {
             members: [], minX: Infinity, minY: Infinity, minZ: Infinity, maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
-            maxRadiusM: 0, nearestSquared: Infinity, triangles: 0, near: false,
-            currentTier: undefined, hasCurrent: false, px: 0,
+            maxRadiusM: 0, nearestSquared: Infinity, triangles: 0, near: false, nearestGround: Infinity,
+            currentTier: undefined, px: 0, whole: false,
           };
           accs.set(setId, acc);
         }
@@ -258,13 +261,15 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         if (squared < acc.nearestSquared) acc.nearestSquared = squared;
         acc.triangles += fullTriangles;
         if (near) acc.near = true;
+        if (groundDistanceM < acc.nearestGround) acc.nearestGround = groundDistanceM;
         // The selected item is judged on its own (it is always full, and highlighted); the set's version so far
         // is that of a member that is not selected.
-        if (!selectedItem && !acc.hasCurrent) { acc.hasCurrent = true; acc.currentTier = data.lodTier; }
+        // (a member without a tier yet, one just placed, does not reset the set to plain thresholds.)
+        if (!selectedItem && acc.currentTier === undefined) acc.currentTier = data.lodTier;
       }
     }
     // #4115: the layout stood still for a tick: work the sets out again. (The first time, at once.)
-    const signature = `${objects.length}:${signatureSum.toFixed(3)}`;
+    const signature = `${objects.length}:${signatureHash >>> 0}`;
     if (signature !== setsSignature && (signature === lastSignature || setsSignature === null)) {
       sets = buildLodSets(objects, {
         hasTiers: () => true,
@@ -291,55 +296,88 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         nearestMemberDistanceM: Math.sqrt(acc.nearestSquared),
         fullTriangles: acc.triangles,
       }, camera.fov, height);
+    }
+    // The sets beside the builder's work stay whole at full detail, nearest first, while they and the selected
+    // items fit the triangle cap together. A set that does not fit is not held whole: its members within the ring
+    // stay protected one by one (as before sets) and the rest of it drops as one part.
+    let wholeUsed = 0;
+    for (const item of items) if (item.selected && item.tris > 0) wholeUsed += item.tris;
+    if (protectNear) {
+      const near = [...accs.values()].filter((acc) => acc.members.length >= 2 && acc.near).sort((a, b) => a.nearestGround - b.nearestGround);
+      for (const acc of near) {
+        if (wholeUsed + acc.triangles > fullTriangleCap) continue;
+        wholeUsed += acc.triangles;
+        acc.whole = true;
+      }
+    }
+    for (const acc of accs.values()) {
+      if (acc.members.length < 2) continue;
       for (const index of acc.members) {
         const entry = items[index];
         entry.px = acc.px;
-        if (protectNear && acc.near && acc.triangles <= fullTriangleCap) entry.protected = true; // a set too heavy to hold in full is not (it would spend the whole budget)
+        if (acc.whole) entry.protected = true;
         entry.wanted = entry.protected ? TIER_FULL : nextTier(acc.currentTier, acc.px);
         objects[index].userData.lodProtected = entry.protected; // not set aside for batching: only selected ones are
       }
     }
     for (let i = 0; i < objects.length; i++) objects[i].userData.lodProtected = items[i].protected; // read by src/build/batching.js
-    const tiers = budgetedTiers(items, undefined, undefined, fullTriangleCap);
-    // The budget serves items nearest first and does not know of sets, so it can give one set two versions.
-    // A set beside the builder's work (any member within the full-detail ring of the point being looked at)
-    // is always the real model, as a protected item is: it is the work area, and one set is bounded in size
-    // (a set wider than 30 m is cut into cells of 20 m, src/shop/implicitLodSets.js). Any other set takes the
-    // cheapest version the budget gave any of its members, so the budget is never spent on a set it did not
-    // fit, and a wall is on one version, not two.
+    // The budget spends the triangle cap nearest first and does not know of sets. The selected items and the
+    // sets held whole are served first (they already fit the cap together, above), then everything else by
+    // its distance, so a selection is never pushed out by a wall beside it and the cap still holds for all.
+    const budgetItems = items.map((item, i) => (item.selected || accs.get(objects[i].userData.lodSetId)?.whole ? { ...item, dist: item.dist - 1e6 } : item));
+    const tiers = budgetedTiers(budgetItems, undefined, undefined, fullTriangleCap);
+    // A set that is not held whole takes the cheapest version the budget gave any member that is not
+    // protected one by one, so the budget is never spent on a set it did not fit and the part of a wall that
+    // drops is on one version. Hysteresis: a set drawn full that the budget cuts by no more than a tenth of its
+    // cost stays full, so a marginal overflow from some other item does not flip a whole wall.
     for (const acc of accs.values()) {
       if (acc.members.length < 2) continue;
+      if (acc.whole) { for (const index of acc.members) tiers[index] = TIER_FULL; continue; }
       let tier = TIER_FULL;
-      if (!(protectNear && acc.near && acc.triangles <= fullTriangleCap)) {
-        for (const index of acc.members) {
-          if (!items[index].selected && TIER_COST[tiers[index]] > TIER_COST[tier]) tier = tiers[index];
-        }
+      let cutTriangles = 0;
+      for (const index of acc.members) {
+        const item = items[index];
+        if (item.selected || item.protected) continue;
+        if (TIER_COST[tiers[index]] > TIER_COST[tier]) tier = tiers[index];
+        if (tiers[index] !== TIER_FULL) cutTriangles += item.tris;
       }
-      for (const index of acc.members) if (!items[index].selected) tiers[index] = tier;
+      if (tier !== TIER_FULL && acc.currentTier === TIER_FULL && cutTriangles <= acc.triangles * SET_OVERFLOW_TOLERANCE) tier = TIER_FULL;
+      for (const index of acc.members) if (!items[index].selected && !items[index].protected) tiers[index] = tier;
     }
-    // The selected item is the builder's own work in hand: always the real model, outside the budget.
-    for (let i = 0; i < items.length; i++) if (items[i].selected) tiers[i] = TIER_FULL;
     applyHoldBack(objects, items, tiers, now);
     flips.length = 0;
+    // A set whose members are not all ready to change (a versions still loading) waits, so it never shows two
+    // versions for as long as that takes.
+    const blocked = new Set();
+    for (let i = 0; i < objects.length; i++) {
+      const state = objects[i].userData.lodTiersState;
+      const setId = objects[i].userData.lodSetId;
+      if (setId !== undefined && !items[i].selected && state !== 'ready' && state !== 'none' && tiers[i] !== TIER_FULL) blocked.add(setId);
+    }
     for (let i = 0; i < objects.length; i++) {
       const object = objects[i];
       const tier = tiers[i];
       object.userData.lodTier = tier;
       if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
       if (object.userData.lodTiersState !== 'ready' || tier === (object.userData.lodApplied ?? TIER_FULL)) continue;
+      if (object.userData.lodSetId !== undefined && !items[i].selected && blocked.has(object.userData.lodSetId)) continue;
       flips.push(i);
     }
-    // The biggest on screen first; a set's members stay together and go nearest first, so when the slice is
-    // spent at most one set is left part way over and the next pass finishes it before starting another.
+    // The biggest on screen first, a set's members together. A set changes in one pass, whole, even if that
+    // runs past the slice (flipping a member is a visibility toggle, measured at well under a millisecond per
+    // hundred), because a half-changed set is the edge this exists to remove; the slice is checked between sets.
     flips.sort((a, b) => (items[b].px - items[a].px)
       || ((objects[a].userData.lodSetId ?? '') < (objects[b].userData.lodSetId ?? '') ? -1 : (objects[a].userData.lodSetId ?? '') > (objects[b].userData.lodSetId ?? '') ? 1 : 0)
       || (items[a].dist - items[b].dist));
-    for (const i of flips) {
+    for (let k = 0; k < flips.length; k++) {
+      const i = flips[k];
       const object = objects[i];
       object.userData.lodApplied = tiers[i];
       setInstanceLodState(object, tiers[i]);
       window.__buildLodFlipCount = (window.__buildLodFlipCount ?? 0) + 1; // e2e counts tier changes
-      if (performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
+      const setId = object.userData.lodSetId;
+      const lastOfRun = k + 1 >= flips.length || setId === undefined || objects[flips[k + 1]].userData.lodSetId !== setId || items[i].selected;
+      if (lastOfRun && performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
     }
     // #4003: what was let in this pass from the first load's hold resolves out of fog together.
     if (arrival) {
