@@ -6112,6 +6112,22 @@
         margin: 0;
         font-size: var(--text-lg);
       }
+      /* #3140, #4169: the person-level controls in the DM header, side by side. */
+      #dm-person-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+      }
+      /* #4169: Report is the quiet button (DESIGN.md, "Inside a leaf"), as Block is the destructive one. */
+      #dm-report-btn {
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-lg);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
+      }
       /* #3140: the DM header's Block control. */
       #dm-block-btn {
         align-self: flex-start;
