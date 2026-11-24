@@ -4903,6 +4903,24 @@ Moves the landlet's active-version pointer to an existing snapshot belonging to
 that landlet. This endpoint does not overwrite the builder's current draft.
 The response includes both the updated landlet and selected version metadata.
 
+### `GET /api/builders/me/archived-versions`
+
+The signed-in builder's own archived lándlet versions (#4094): the versions the no-bid inactivity
+release moved off a lándlet instead of deleting (`archived_landlet_versions`, migrations/0140). Newest
+first; `limit` 1 to 100, default 100. Each record has `versionId`, `sourceLandletId` (informational, may be
+`null`), `versionNumber`, `name`, `instanceCount`, `metadata` and `createdAt`. Only the caller's own
+versions are listed. `401` without a session.
+
+### `POST /api/builders/me/archived-versions/:versionId/restore`
+
+Body `{ "landletId": "..." }`: copies the archived version's items onto a lándlet the caller owns, as a
+**new saved version** (`201`, `{ version }`, named `Restored: <name>`, its `metadata` carrying
+`restoredFromArchivedVersionId`). It never changes the lándlet's live draft or its active version: the
+builder then uses that lándlet's own version history ("Restore to Editor", "Set Live", each with its own
+confirmation). `404` for an archived version that is not the caller's (the same answer as one that does not
+exist), `403` for a lándlet the caller does not own. Rate-limited in the same per-builder bucket as
+`POST .../versions`.
+
 ## Placed instances
 
 Placed instances represent objects placed into a landlet from catalog templates.
