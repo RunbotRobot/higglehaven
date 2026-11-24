@@ -372,6 +372,20 @@ describe('buildModelTiersSync', () => {
     expect(Math.abs(actual.b - expected.b)).toBeLessThan(0.12);
   });
 
+  it('draws a metal model darker than its base colour and adds emission, as the lit full model looks (#4111)', () => {
+    const farOf = (props) => {
+      const model = chair();
+      model.traverse((o) => { if (o.isMesh) Object.assign(o.material, props); });
+      return farAverageColor(buildModelTiersSync(model).far.object);
+    };
+    const plain = farOf({ metalness: 0 });
+    const metal = farOf({ metalness: 1 });
+    expect(metal.r).toBeLessThan(plain.r * 0.5);
+    expect(metal.r).toBeGreaterThan(plain.r * 0.2);
+    const glowing = farOf({ metalness: 0, emissive: new THREE.Color(0.2, 0, 0), emissiveIntensity: 1 });
+    expect(glowing.r).toBeCloseTo(plain.r + 0.2, 1);
+  });
+
   it('keeps every part of a multi-mesh model in the far version, merged into one mesh', () => {
     const { far, stats } = buildModelTiersSync(multiMesh());
     expect(meshesOf(far.object)).toHaveLength(1);
