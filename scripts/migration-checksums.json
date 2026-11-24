@@ -215,5 +215,6 @@
   "0230_purchase_product_record.sql": "a2c74c39c3866f2cbc2c7a82aec8001664d09e4d5f131d9e98e46dc438aaa95f",
   "0231_users_loading_tips.sql": "c7bf92eb9b08e14580fefe03d178758fe4bf79d3695e79cfd2645e342f3099da",
   "0232_starter_landlet_accent.sql": "7d06ea4586d01c4d9ba1c1b9e5754953b0fd09e0f7ed575d84a70357a3c6a831",
-  "0233_users_first_hints.sql": "59a45864aaf70658c5d33dc1b761d707938a4c60d08e288d0e71b6bfc4c0b521"
+  "0233_users_first_hints.sql": "59a45864aaf70658c5d33dc1b761d707938a4c60d08e288d0e71b6bfc4c0b521",
+  "0234_video_generation_failure_detail.sql": "a8693bab5430638600cad87dba60feb3e5788bc3c3f37f6fc99fefd1a3a22c02"
 }

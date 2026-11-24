@@ -40,23 +40,21 @@ console.log('flow:', JSON.stringify({ ...flow, box: undefined }));
 await page.click('#assistant-chat-minimize').catch(() => {});
 await page.waitForTimeout(300);
 await openAccountMenu(page);
-// The menu leaves unfurl for about half a second after it opens (the flower grows out of the bud), and
-// a hit test taken while one is still moving can land beside it: wait for the row to hold still before
-// asking what is on top of it. The answer asked for is the same; only when it is asked changes (a loaded
-// CI runner failed this at the first read, #4113).
-const readPill = () => page.evaluate(() => {
+// The flower grows its leaves over about half a second (#4027); under CI load the row can still be moving when it is
+// measured, so wait until it can be hit before reading the answer (a row that never can be hit still fails below).
+await page.waitForFunction(() => {
+  const el = document.getElementById('assistant-menu-btn');
+  if (!el || el.hidden) return false;
+  const box = el.getBoundingClientRect();
+  return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+}, null, { timeout: 5000 }).catch(() => {});
+const pill = await page.evaluate(() => {
   const el = document.getElementById('assistant-menu-btn');
   if (!el || el.hidden) return { shown: false };
   const box = el.getBoundingClientRect();
   const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-  return { shown: true, onTop: el.contains(hit), sellerStillOpen: document.getElementById('seller-modal').classList.contains('visible'), at: `${Math.round(box.left)},${Math.round(box.top)}` };
+  return { shown: true, onTop: el.contains(hit), sellerStillOpen: document.getElementById('seller-modal').classList.contains('visible') };
 });
-let pill = await readPill();
-for (let i = 0; i < 12 && !(pill.shown && pill.onTop); i += 1) {
-  await page.waitForTimeout(250);
-  pill = await readPill();
-}
-delete pill.at;
 console.log('pill:', JSON.stringify(pill));
 
 // Every fixed element with a stacking level at or above the assistant window's.

@@ -339,7 +339,7 @@ async function refreshAccountMenuPlace() {
       hideBudPlace();
       return;
     }
-    showBudPlace({ name: mine.name || mine.landletId, builder: me.label });
+    showBudPlace({ name: mine.name || mine.landletId, builder: me.label, wordmarkStyle: mine.wordmarkStyle, wordmarkColors: mine.wordmarkColors });
   } catch (err) {
     console.warn('Could not refresh the lándlet name in the menu:', err);
     hideBudPlace();

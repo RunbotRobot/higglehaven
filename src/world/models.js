@@ -477,7 +477,7 @@ export function attachInstanceTiers(object, scenes) {
 // a switch could tap-miss (an invisible version still absorbing the hit) while
 // the hidden side keeps catching every tap meant for whichever the shopper can
 // actually see. Returns the tier now shown: a version the item does not have
-// falls back to the nearest one it does (mid <-> far), then to the full model.
+// falls back: far to mid when there is one, otherwise the full model; mid to the full model (#4111).
 // A no-op returning 'full' for an item with no reduced versions.
 //
 // #3494: with `crossfades` (src/shop/tierCrossfade.js) the version being left
@@ -489,7 +489,10 @@ export function setInstanceLodState(object, tier, crossfades) {
   if (!tiers) return TIER_FULL;
   let shown = tier;
   if (shown === TIER_FAR && !tiers.far) shown = tiers.mid ? TIER_MID : TIER_FULL;
-  if (shown === TIER_MID && !tiers.mid) shown = tiers.far ? TIER_FAR : TIER_FULL;
+  // #4111: a product with no mid version stays on its full model across the whole mid range. It used to
+  // drop to far there, so a model the generator could not simplify (every rung failed its check) was drawn
+  // as its roughest version at 60 to 75 px, where the owner saw a white, faceted toilet.
+  if (shown === TIER_MID && !tiers.mid) shown = TIER_FULL;
   const tierOf = (child) => (child === tiers.mid ? TIER_MID : child === tiers.far ? TIER_FAR : TIER_FULL);
   // A swap during a fade settles the fade first, so one item never shows three versions.
   crossfades?.finish(object);

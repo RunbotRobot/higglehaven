@@ -76,19 +76,20 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
-import { creditOrbAboutText, creditOrbCollectedText } from './creditOrbInfo.js';
+import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
 import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
 import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
-  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, isTemporarilyFailed,
+  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, otherAvatarBodyAction, isTemporarilyFailed,
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
@@ -840,7 +841,7 @@ export function updateShopLandletInfo() {
   }
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
   // #3770: named at the top of the open menu, in the brand's lettering, with the builder under it.
-  showBudPlace({ name: found.record.name, builder: ownerLabel });
+  showBudPlace({ name: found.record.name, builder: ownerLabel, wordmarkStyle: found.record.wordmarkStyle, wordmarkColors: found.record.wordmarkColors });
 }
 
 // #2853 (leaf of #2373, Option C real terrain): the real per-landlet
@@ -1149,7 +1150,8 @@ export async function pollNearbyPresenceIfNeeded(now) {
       // #4067: someone who wears a model is never drawn as the default body while it loads ("never
       // replaced by a stand-in", "things arrive through fog"): nothing stands there but soft fog until
       // their own body is ready. The default body is drawn only for someone who wears it, or when the
-      // model cannot be had (failed, or over the distinct-models cap), see reconcileOtherAvatarBodies.
+      // model cannot be had (failed, or over the distinct-models cap): reconcileOtherAvatarBodies ends the fog
+      // and puts the default body in (#4107: it used to skip someone who asked for null from the start).
       const waitsForModel = !avatar.assistant && !!normalizeEquippedAvatar(avatar.equippedAvatar)
         && !isTemporarilyFailed(otherAvatarModelFailedAt, normalizeEquippedAvatar(avatar.equippedAvatar).templateId, now);
       const defaultAvatar = waitsForModel ? null : createShopAvatar();
@@ -1164,6 +1166,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
         modelWait: waitsForModel
           ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
           : null,
+        bodySwapFog: null, // #4109: the fog hiding a change of avatar, while there is one
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
         motion: defaultOtherAvatarMotion(defaultAvatar),
@@ -1260,7 +1263,10 @@ function reconcileOtherAvatarBodies(now) {
   for (const [builderId, entry] of shopOtherAvatars) {
     const desired = desiredAvatarFor(entry.equippedAvatar ?? null, allowed);
     const desiredId = desired ? desired.templateId : null;
-    if (desiredId === entry.bodyRequestedTemplateId) continue;
+    // #4107: not just "is it the template already asked for": a wearer over the distinct-models cap asks
+    // for null from the start and still has fog standing, which must become the default body.
+    const action = otherAvatarBodyAction(desiredId, entry.bodyRequestedTemplateId, Boolean(entry.modelWait));
+    if (action === 'keep') continue;
     entry.bodyRequestedTemplateId = desiredId;
     const myToken = ++entry.bodySwapToken;
     if (!desired) {
@@ -1301,6 +1307,30 @@ function reconcileOtherAvatarBodies(now) {
 }
 
 function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4109: someone changing what they wear is seen changing inside a puff of fog, not in one frame ("nothing
+  // pops in"). Only when a body is already standing there to be replaced: an arrival still waiting for its
+  // model (modelWait, #4067) has its own fog, and the first body of an entry goes straight in. A change
+  // that lands while an earlier one is still in its fog finishes that one first (its commit runs at once).
+  entry.bodySwapFog?.cancel();
+  entry.bodySwapFog = null;
+  const replacing = !entry.modelWait && entry.body && entry.body.children.length > 0;
+  const place = () => {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    reconcileOtherAvatarAnimations(performance.now());
+    refreshOtherShopAvatarsDiagnostic();
+  };
+  if (!replacing) {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    return;
+  }
+  const swap = beginAvatarSwapFog({
+    createFog: createArrivalFog, parent: scene, getPosition: () => entry.group.position,
+    commit: place, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion(),
+  });
+  entry.bodySwapFog = swap.released ? null : swap;
+}
+
+function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
   // #4067: the real body is in place, so the fog thins away over it; a default body put in instead
   // (the model cannot be had) ends the wait at once.
   if (templateId !== null) entry.modelWait?.ready(performance.now());
@@ -1516,6 +1546,8 @@ setNearbySpeechHandler((builderId) => {
 });
 
 function releaseOtherAvatarEntry(entry) {
+  entry.bodySwapFog?.cancel(); // #4109: a swap still in its fog finishes (its commit runs) before the entry goes
+  entry.bodySwapFog = null;
   entry.modelWait?.cancel();
   entry.modelWait = null;
   entry.speechCue?.dispose();
@@ -1550,6 +1582,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    swappingBody: Boolean(entry.bodySwapFog), // added for #4109 -- e2e needs to see that someone changing avatar is fog first, with the old body still standing until the new one goes in
     waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
@@ -1616,6 +1649,7 @@ export function updateOtherShopAvatars(now) {
     if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
     if (entry.modelWait && entry.modelWait.step(now)) entry.modelWait = null; // #4067
+    if (entry.bodySwapFog && entry.bodySwapFog.step(now)) entry.bodySwapFog = null; // #4109: a change of avatar, in fog
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
     if (entry.transition && entry.transition.step(now)) {
@@ -2043,7 +2077,16 @@ let creditOrbRateLimitedUntilMs = null;
 // An orb touched while this says "at the limit" is left in place and the
 // notice shows, instead of popping and being reversed by the next 429.
 let creditOrbStanding = null;
+// #4123: how many free credits the person holds, as the server last said (null until it has). Collecting an
+// orb adds one at once ("felt the instant it happens", #3392) and a refusal takes it back.
+let creditOrbBalance = null;
 function applyCreditOrbStanding(reply) {
+  // #4123: the server's balance (the standing read and a collect's reply both carry it) replaces whatever
+  // was expected, and the word beside the head follows it while it is still showing.
+  if (typeof reply?.credits === 'number') {
+    creditOrbBalance = reply.credits;
+    refreshCreditOrbWord();
+  }
   const state = creditOrbStandingState(reply, performance.now());
   if (state) creditOrbStanding = state;
 }
@@ -2126,11 +2169,13 @@ function popAndCollectCreditOrb(orb) {
   // clones it first, so it has its own geometry/material to animate.
   spawnCreditOrbPopEffect(orb);
   removeCreditOrb(orb);
-  showCreditOrbToast();
+  const countedIntoBalance = showCreditOrbToast();
+  // #4123: a refused collect takes the expected credit back, with the word it showed.
+  const takeBackCredit = () => { if (countedIntoBalance && creditOrbBalance !== null && creditOrbBalance > 0) creditOrbBalance -= 1; };
   const startedAt = performance.now();
   const attempt = () => {
     collectCreditOrb(snapshot.orbId).then((reply) => {
-      applyCreditOrbStanding(reply?.standing);
+      applyCreditOrbStanding(reply?.standing ? { ...reply.standing, credits: reply.credits } : { credits: reply?.credits });
       markCreditOrbCollectReachedServer();
       hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
     }).catch((error) => {
@@ -2147,6 +2192,7 @@ function popAndCollectCreditOrb(orb) {
         // Gave up: the orb was never confirmed, so it comes back and the
         // person is told, instead of the pop standing for something that did
         // not happen (#2264: it must not vanish for the session either).
+        takeBackCredit();
         hideCreditOrbToast();
         restoreCreditOrb(snapshot);
         showCreditOrbProblemNotice(isNetworkError(error)
@@ -2155,6 +2201,7 @@ function popAndCollectCreditOrb(orb) {
         return;
       }
       markCreditOrbCollectReachedServer();
+      takeBackCredit();
       hideCreditOrbToast();
       if (refusal === 'gone') {
         // The server's own atomic claim is authoritative: another shopper
@@ -2251,8 +2298,10 @@ let creditOrbToastHideTimer = null;
 // with the builder's own count in it, read from the server just before; if that cannot be read the
 // sentence is said without it.
 async function openCreditOrbCollectedLeaf() {
-  let credits = null;
-  try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  let credits = creditOrbBalance; // the note's own number, so the card agrees with it (#4123)
+  if (credits === null) {
+    try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  }
   openLeaf({
     id: 'orb-collected',
     title: 'Credit collected',
@@ -2263,13 +2312,27 @@ async function openCreditOrbCollectedLeaf() {
     },
   });
 }
-function showCreditOrbToast() {
-  setBudWord(ORB_CREDIT_KEY, 'Credit +1', {
+let creditOrbWordShowing = false;
+function setCreditOrbWord() {
+  const word = creditOrbBalanceWord(creditOrbBalance);
+  setBudWord(ORB_CREDIT_KEY, word, {
     open: () => { openCreditOrbCollectedLeaf(); },
-    label: 'You collected a free credit. Open for details.',
+    label: `${word}. You collected a free credit. Open for details.`,
   });
+}
+// The word follows the server's number if it arrives while the word is still up.
+function refreshCreditOrbWord() {
+  if (creditOrbWordShowing) setCreditOrbWord();
+}
+// Returns whether it counted this orb into the expected balance, so a refusal can take it back.
+function showCreditOrbToast() {
+  const counted = creditOrbBalance !== null;
+  if (counted) creditOrbBalance += 1;
+  creditOrbWordShowing = true;
+  setCreditOrbWord();
   clearTimeout(creditOrbToastHideTimer);
-  creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+  creditOrbToastHideTimer = setTimeout(() => { creditOrbWordShowing = false; clearBudWord(ORB_CREDIT_KEY); }, CREDIT_ORB_TOAST_VISIBLE_MS);
+  return counted;
 }
 // #4072: the meshes a tap can land on to ask what an orb is, and the answer. Tapping never
 // collects: collecting stays a touch of the avatar, felt at once (#3392).
@@ -2291,6 +2354,7 @@ export function showCreditOrbAbout() {
   });
 }
 function hideCreditOrbToast() {
+  creditOrbWordShowing = false;
   clearTimeout(creditOrbToastHideTimer);
   clearBudWord(ORB_CREDIT_KEY);
 }

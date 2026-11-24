@@ -122,18 +122,5 @@ export function createWorldGestures(handlers) {
     if (hadLook) handlers.onLook(0, 0);
   }
 
-  // #4102: a finger the flight-height control (src/shop/flightHeight.js) has claimed is forgotten
-  // here, without a tap and without a double-tap, and whatever it was walking or looking stops.
-  function drop(id) {
-    const finger = fingers.get(id);
-    if (!finger) return;
-    fingers.delete(id);
-    lastTap = null;
-    if (finger.active) {
-      if (finger.role === 'walk') handlers.onMove(0, 0);
-      else if (finger.role === 'look') handlers.onLook(0, 0);
-    }
-  }
-
-  return { down, move, up, cancel, drop, activeFingers: () => fingers.size };
+  return { down, move, up, cancel, activeFingers: () => fingers.size };
 }

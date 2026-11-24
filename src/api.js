@@ -2233,8 +2233,9 @@ export async function fetchCreditOrbs(landletId) {
 // no session or the read fails -- the server still enforces the limit either way.
 export async function fetchCreditOrbStanding() {
   try {
-    const { standing } = await requestJson('/credit-orbs/standing');
-    return standing ?? null;
+    const { standing, credits } = await requestJson('/credit-orbs/standing');
+    // #4123: the balance rides along with the standing, so the note can say how many credits a person holds.
+    return standing ? { ...standing, credits: typeof credits === 'number' ? credits : null } : null;
   } catch {
     return null;
   }

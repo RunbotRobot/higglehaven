@@ -101,10 +101,8 @@ a soft white wash, no dimming scrim, close in its upper right, one at a time, no
 wider than the screen, scrolling inside itself.
 
 Everything else is a gesture on the world itself: drag on the left half of the
-screen to walk, drag on the right half to look, double-tap to fly (the view's
-pitch is the climb: point it up to rise, down to descend; three other ways of
-changing height are on trial at `public/design-directions/flight-height.html`, none of
-them on by default, until the owner chooses one), tap a product to open
+screen to walk, drag on the right half to look, double-tap to fly (flight is level, so you can look
+straight down; slide a thumb up or down along the right edge to rise or sink), tap a product to open
 its card. A gesture cannot be seen until it is taught once, so the head teaches (it
 pulses and says Menu until first opened) and the instructions live in it, one tap
 away, under Help. Under `prefers-reduced-motion` nothing animates.
@@ -123,7 +121,11 @@ Not built yet; do not describe these to a person as if they exist:
   that a graphic wants, and the logo is large and the word "Menu" sits beside it; the
   unread dot sits on the bud's shoulder, ringed in white.
 - **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
-  menu in lettering the builder chooses from a set.
+  menu in lettering the builder chooses from a set. One renderer (`src/ui/wordmark.js`,
+  #3782) draws it: the name stays selectable text with the style and colours as data
+  attributes and variables, a face is fetched once and only when a name asks for it, and an
+  id that `shared/wordmark-set.js` does not offer draws the default look. The owner's pick
+  from the lettering page is one line in that set.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
   Settings, kept under Help.
 

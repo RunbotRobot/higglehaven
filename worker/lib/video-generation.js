@@ -238,16 +238,24 @@ function isStaleVideoGenerationReservation(row) {
 // TripoStoreFatalError (an expired/denied output URL, an oversized or
 // malformed file); anything else propagates as-is and applyTripoTaskResult
 // treats it as retryable.
-class TripoStoreFatalError extends Error {}
+class TripoStoreFatalError extends Error {
+  // #4122: `detail` says which of the fatal cases this was, for the admin only.
+  constructor(message, detail) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
-async function storeTripoModelOutput(env, tripoModelUrl) {
+// `outputKeys` (#4122): the keys the provider's output held, so a failure says what it did have.
+async function storeTripoModelOutput(env, tripoModelUrl, outputKeys = []) {
   const response = await fetch(tripoModelUrl);
+  const contentType = response.headers?.get?.('content-type') ?? null;
   if (!response.ok) {
     const message = 'Failed to download the generated model from the video-to-3D provider';
     // 4xx other than 429: the output URL expired or is refused; asking again
     // returns the same answer.
     if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-      throw new TripoStoreFatalError(message);
+      throw new TripoStoreFatalError(message, { reason: 'download_refused', httpStatus: response.status, contentType, outputKeys });
     }
     throw new HttpError(message, 502);
   }
@@ -260,12 +268,15 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
   // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
   // budget below ever checked.
   if (bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new TripoStoreFatalError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`);
+    throw new TripoStoreFatalError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`,
+      { reason: 'too_big', bytes: bytes.byteLength, limitBytes: MAX_MODEL_BYTES, contentType, outputKeys });
   }
   try {
     validateGlb(bytes);
   } catch (err) {
-    throw new TripoStoreFatalError(err instanceof Error ? err.message : 'Generated model is not a valid GLB');
+    const validatorMessage = err instanceof Error ? err.message : 'Generated model is not a valid GLB';
+    throw new TripoStoreFatalError(validatorMessage,
+      { reason: 'not_a_glb', bytes: bytes.byteLength, contentType, validatorMessage, outputKeys });
   }
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -331,11 +342,12 @@ const VIDEO_GENERATION_CREDIT_RETURNED_NOTICE = 'Your 3D model generation didn\'
 // same `processed_at IS NULL` guard in applyTripoTaskResult). The
 // notification is sent only by the caller whose status update actually
 // changed the row.
-async function failVideoGenerationJob(db, jobId, message, { refundCredit }) {
+async function failVideoGenerationJob(db, jobId, message, { refundCredit, failureDetail = null }) {
+  // #4122: failureDetail is the real reason, kept for the admin and never sent to the builder.
   const failJob = db.prepare(`
-    UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    UPDATE video_generation_jobs SET status = 'failed', error_message = ?, failure_detail = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE job_id = ? AND processed_at IS NULL
-  `).bind(message, jobId);
+  `).bind(message, failureDetail === null ? null : JSON.stringify(failureDetail), jobId);
   if (!refundCredit) {
     await failJob.run();
     return false;
@@ -377,7 +389,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     if (!task?.output?.model_url) {
       await failVideoGenerationJob(db, jobId,
         'We couldn\'t retrieve the finished model. Your credit has been returned. Start a new generation.',
-        { refundCredit: true });
+        { refundCredit: true, failureDetail: { reason: 'no_model_url', outputKeys: Object.keys(task?.output ?? {}) } });
       return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
@@ -397,7 +409,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // of failing immediately with the real cause.
     let stored;
     try {
-      stored = await storeTripoModelOutput(env, task.output.model_url);
+      stored = await storeTripoModelOutput(env, task.output.model_url, Object.keys(task.output));
     } catch (err) {
       // #3108: a transient failure leaves the job 'processing' (processed_at
       // unset) so the next poll or webhook retries the store from Tripo's
@@ -405,6 +417,11 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       // one-pending-job-per-builder index keeps the builder from starting a
       // second billed generation meanwhile. Counted atomically so concurrent
       // callers can't each think they're on attempt one.
+      // #4122: keep the real reason on the job and in the log; the person reads the plain sentence below.
+      const failureDetail = err instanceof TripoStoreFatalError
+        ? { ...err.detail, message: err.message }
+        : { reason: 'store_error', message: err instanceof Error ? err.message : String(err), outputKeys: Object.keys(task.output) };
+      console.error('video-to-3D: provider succeeded but the model could not be stored', jobId, JSON.stringify(failureDetail));
       if (!(err instanceof TripoStoreFatalError)) {
         const attempt = await db.prepare(`
           UPDATE video_generation_jobs SET store_attempts = store_attempts + 1
@@ -414,8 +431,8 @@ async function applyTripoTaskResult(db, env, jobId, task) {
         if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
       }
       await failVideoGenerationJob(db, jobId,
-        'We couldn\'t retrieve the generated model. Your credit has been returned. Try again.',
-        { refundCredit: true });
+        'The model was made, but we couldn\'t save it. Your credit has been returned. Please try again in a little while.',
+        { refundCredit: true, failureDetail });
       return;
     }
     await db.prepare(`

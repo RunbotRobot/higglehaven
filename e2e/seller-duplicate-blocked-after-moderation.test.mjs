@@ -20,8 +20,7 @@
 // standing up multiple real flagger builder sessions.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish, openAddProductLeaf, showMyProductsAfterEntry } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, openAddProductLeaf, showMyProductsAfterEntry, localD1 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -59,10 +58,7 @@ console.log('uploaded product found (should be true):', Boolean(template));
 
 // The one way to reach flagged_hidden_at here without three real flagger
 // builder sessions -- see this file's own header comment.
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE template_id = '${template.templateId}'`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
+localD1(`UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE template_id = '${template.templateId}'`);
 
 // A raw reload lands in Shop mode by default unless this is set first --
 // see e2e/bundle-rename-sync.test.mjs's own identical comment.

@@ -39,7 +39,7 @@ await page.click('#bud-leaf-orb-about .bud-leaf-close');
 
 // Collect it, then open the word.
 await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y); window.__testForceShopProximityCheck(); }, [mine.center.x + 2, mine.center.y - 1]);
-await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim().match(/^\d+ credits?$/) !== null, null, { timeout: 5000 });
 await page.click('#bud-note');
 await page.waitForSelector('#bud-leaf-orb-collected', { timeout: 5000 });
 const collectedText = await page.locator('#bud-leaf-orb-collected .bud-leaf-body').innerText();

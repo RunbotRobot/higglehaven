@@ -83,7 +83,7 @@ await page.evaluate(([x, y]) => {
 const popEffectsRightAfterCollecting = await page.evaluate(() => new Promise((resolve) => {
   const deadline = performance.now() + 5000;
   (function poll() {
-    if (document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1') {
+    if (document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim().match(/^\d+ credits?$/) !== null) {
       resolve(window.__testActiveCreditOrbPopEffectCount());
       return;
     }
