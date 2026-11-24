@@ -82,6 +82,7 @@ import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { createCreditOrbFades } from './creditOrbArrival.js';
 import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
@@ -350,6 +351,11 @@ let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a
 // loadShopLandletInstances rather than discovered via any instance's
 // userData, but torn down the identical way in unloadShopLandletInstances.
 const shopCreditOrbs = [];
+// #4174: orbs arrive and leave through fog (src/shop/creditOrbArrival.js), the same fog and dissolve a lándlet's
+// products use.
+const creditOrbFades = createCreditOrbFades({
+  createFog: createArrivalFog, createDissolve: createArrivalDissolve, reducedMotion: () => otherAvatarReducedMotion(),
+});
 
 // #3261: distance is measured from the AVATAR (horizontal), not the camera --
 // in flight the chase camera trails well behind and above the avatar, so a
@@ -1939,7 +1945,9 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     const mesh = createCreditOrbMesh();
     mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
     entry.group.add(mesh);
-    shopCreditOrbs.push({ mesh, group: entry.group, orbId: orb.orbId, collecting: false });
+    const loadedOrb = { mesh, group: entry.group, orbId: orb.orbId, collecting: false };
+    shopCreditOrbs.push(loadedOrb);
+    creditOrbFades.arrive(loadedOrb); // #4174: resolves out of fog instead of popping in
   }
 }
 
@@ -1954,8 +1962,11 @@ function unloadCreditOrbsForLandlet(entry) {
   for (const orb of [...shopCreditOrbs]) {
     if (orb.group !== entry.group) continue;
     shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
-    orb.group.remove(orb.mesh);
-    disposeObject3D(orb.mesh);
+    // #4174: out of the list now (so it cannot be collected), and dissolved into fog before it is released.
+    creditOrbFades.depart(orb, () => {
+      orb.group.remove(orb.mesh);
+      disposeObject3D(orb.mesh);
+    });
   }
 }
 
@@ -2065,6 +2076,7 @@ function applyCreditOrbStanding(reply) {
 // updateCalendarFade — the shimmer needs to read as continuous, and
 // collection should feel immediate, not stepped to SHOP_PROXIMITY_INTERVAL_MS.
 export function updateCreditOrbs(dt) {
+  creditOrbFades.update(dt); // #4174
   creditOrbShimmerElapsedS += dt;
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
@@ -2133,6 +2145,7 @@ let creditOrbLastRateLimit = null;
 
 function popAndCollectCreditOrb(orb) {
   orb.collecting = true;
+  creditOrbFades.finish(orb); // #4174: the orb a person touches is plain and whole, so its pop is instant (#3392)
   // Kept so a refusal can put the orb back or play the reversal where it was.
   const snapshot = { orbId: orb.orbId, group: orb.group, position: orb.mesh.position.clone() };
   // #2441: spawned before removeCreditOrb disposes the real orb.mesh -- the pop
@@ -2235,6 +2248,7 @@ function removeCreditOrb(orb) {
   const index = shopCreditOrbs.indexOf(orb);
   if (index === -1) return; // already removed (e.g. its landlet was unloaded while the request was in flight)
   shopCreditOrbs.splice(index, 1);
+  creditOrbFades.finish(orb);
   orb.group.remove(orb.mesh);
   disposeObject3D(orb.mesh);
 }
@@ -2244,6 +2258,8 @@ function removeCreditOrb(orb) {
 // -- lets a test confirm an orb survives a transient collect failure
 // (429/500/network) instead of being wrongly removed from the scene.
 window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
+// #4174: how many orbs are fading in or out, or waiting their turn; the e2e reads it to see an arrival and its end.
+window.__testCreditOrbFadeStats = () => creditOrbFades.stats();
 // #2441: same e2e-only convention as window.__testActiveCreditOrbIds just
 // above -- lets a test confirm a pop effect actually spawned on collection
 // (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
