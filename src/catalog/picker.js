@@ -44,7 +44,7 @@ import {
 // src/build/scene.js -- see that module's own comment.
 // #2560: hideBackupReferenceMesh now lives in src/build/metadataModals.js.
 import { hideBackupReferenceMesh } from '../build/metadataModals.js';
-import { enterPlacementMode, cancelPlacementMode, pendingPlacement } from '../build/scene.js';
+import { enterPlacementMode, cancelPlacementMode, pendingPlacement, focusWorldForPlacement } from '../build/scene.js';
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
 // template as a grid of thumbnails with the name below each, rather than a
@@ -255,6 +255,7 @@ function buildCatalogTemplateTile(template) {
     }
     rememberRecentTemplate(template.templateId);
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
+    focusWorldForPlacement(); // #4163: Enter then places it where the camera looks
   });
   return { tile, thumb };
 }
@@ -453,6 +454,7 @@ export function renderBundlePicker() {
       // unlike an ordinary clipboard paste through pasteBtn elsewhere in
       // src/build/scene.js, which leaves this unset.
       enterPlacementMode({ type: 'clipboard', items: bundle.items, group: true, bundleId: bundle.bundleId }, `Tap a spot to place "${bundle.name}"`);
+      focusWorldForPlacement(); // #4163
     });
     tile.appendChild(placeBtn);
 

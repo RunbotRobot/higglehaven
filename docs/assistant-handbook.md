@@ -686,7 +686,8 @@ are inside it: tap the Build petal to see them (the bud opens on the menu of the
    the top, beside the close button.
 3. Tap an item's name. The list closes and the top of the screen says "Tap a spot
    to place" and the item's name.
-4. Tap the ground where you want it.
+4. Tap the ground where you want it. On a keyboard, press Enter instead: it places the
+   item where the camera is looking, in the middle of the screen.
 
 **You will see:** the item stands where you tapped and is already selected, with a
 a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
