@@ -559,12 +559,16 @@
         cursor: pointer;
         opacity: 0;
         pointer-events: none;
-        transition: opacity var(--motion-fade);
+        transition: opacity var(--motion-fade), top var(--motion-fade);
       }
       #shop-last-location-btn.visible {
         opacity: 1;
         pointer-events: auto;
       }
+      /* The head's note (a friend request, a reply, the orb balance) ends about 60px down and was touching
+         this button, which starts at 56px and is centred under it. While a note is showing, the button sits
+         one step lower so the two never overlap. */
+      body[data-bud-note] #shop-last-location-btn { top: calc(56px + var(--space-2xl)); }
       /* #3570: the account menu opens over this button, whose label then
          showed through the menu's edge. Two surfaces never overlap: the
          button steps aside (same fade) while the menu is open and returns
