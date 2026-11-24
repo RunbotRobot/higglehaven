@@ -237,8 +237,9 @@ describe('Build judges a wall as one set (#4115)', () => {
     look(3, -10, 5);
     tick(3);
     expect(tiersOf(a)).toEqual(new Set(['full'])); // the nearer one
-    expect(tiersOf(b).has('full')).toBe(false);
-    expect(tiersOf(b).size).toBe(1);
+    expect(tiersOf(b).has('full')).toBe(true); // what the budget has room for, nearest first, as for a loose wall
+    expect(tiersOf(b.filter((object) => tierOf(object) !== 'full')).size).toBe(1); // and the rest of it on one version
+    expect(fullTriangles(objects)).toBeLessThanOrEqual(60_000 + 1200);
   });
 
   it('does not flip a whole wall that is full for a marginal overflow', () => {
@@ -253,7 +254,52 @@ describe('Build judges a wall as one set (#4115)', () => {
     expect(tiersOf(objects)).toEqual(new Set(['full']));
     lod.setFullTriangleCap(60_000); // a real overflow
     tick(3);
-    expect(tiersOf(objects).has('full')).toBe(false);
+    expect(tiersOf(objects).has('mid')).toBe(true);
+    expect(fullTriangles(objects)).toBeLessThanOrEqual(60_000 + 1200);
+    expect(tiersOf(objects.filter((object) => tierOf(object) !== 'full')).size).toBe(1);
+  });
+
+  it('keeps a brick just outside the ring full where the budget has room, and drops only the far part', () => {
+    // A line of 40 bricks, the target at x=5: the ring covers x up to about 15, a brick at 17 is just outside it.
+    const objects = Array.from({ length: 40 }, (_, i) => brick('brick', i, 0, 0));
+    const { lod, look, tick } = setup(objects, { target: new THREE.Vector3(5, 0, 0) });
+    lod.setFullTriangleCap(40_000); // the 48k wall does not fit whole; 33 bricks do
+    look(5, -6, 3);
+    tick(4);
+    expect(tierOf(objects[17])).toBe('full'); // main drew it full: so does this
+    expect(tierOf(objects[39])).not.toBe('full');
+    expect(tiersOf(objects.slice(36)).size).toBe(1);
+    expect(fullTriangles(objects)).toBeLessThanOrEqual(40_000 + 1200);
+  });
+
+  it('does not swap two near sets between full and reduced as the target moves a few centimetres', () => {
+    const a = wall('brick', 6, 6); // x 0..5
+    const b = wall('stone', 6, 6, { x0: 7 }); // x 7..12
+    const objects = [...a, ...b];
+    const target = new THREE.Vector3(6, 0, 0); // between them
+    const { lod, look, tick } = setup(objects, { target });
+    lod.setFullTriangleCap(60_000); // one of them fits whole, not both
+    look(6, -12, 5);
+    tick(4);
+    const snapshot = () => objects.map(tierOf).join(',');
+    const settled = snapshot();
+    for (let n = 0; n < 24; n++) {
+      target.x = 6 + (n % 2 === 0 ? 0.04 : -0.04) + (n % 4 < 2 ? 0.01 : -0.01);
+      tick(1);
+      expect(snapshot()).toBe(settled);
+    }
+  });
+
+  it('does not let a set whose versions never arrive hold up another set', () => {
+    const stuck = wall('brick', 6, 6);
+    const free = wall('stone', 6, 6, { x0: 20 });
+    stuck[0].userData.lodTiersState = 'loading'; // never becomes ready
+    const objects = [...stuck, ...free];
+    const { look, tick } = setup(objects);
+    look(10, -90, 40);
+    tick(4);
+    expect(tiersOf(free).has('full')).toBe(false); // it changed, the stuck set did not hold it
+    expect(tiersOf(stuck.slice(1)).has('far')).toBe(false); // the stuck set waits as a whole, unchanged
   });
 
   it('is not reset by a member without a tier yet: a newly placed item does not change the wall', () => {
