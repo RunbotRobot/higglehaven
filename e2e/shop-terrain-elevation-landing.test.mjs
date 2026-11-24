@@ -21,8 +21,7 @@
 // specifically drives the real 'landing' flight-state machine
 // (updateShopFlight), the actual path that broke, via the real fly button
 // rather than the test-only teleport hook's grounded shortcut.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox, localD1 } from './helpers.mjs';
 
 const LABEL = 'Terrain Elevation Landing Builder';
 const TEST_ELEVATION_M = 8;
@@ -58,10 +57,7 @@ const treeWorldY = myLandlet.center.y + treeInstance.y;
 // The one real way to drive a nonzero elevation_m through this deployment
 // for a test-claimed landlet -- see shop-terrain-elevation-consistency.test.mjs's
 // own header comment for why.
-execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${myLandlet.landletId}'"`,
-  { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
-);
+localD1(`UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${myLandlet.landletId}'`);
 
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForTimeout(500);

@@ -59,13 +59,14 @@ export function addBatchTier(batch, name, parts, root = batch.root) {
 }
 
 // The tier a placement can actually be shown in: a version the product does not have falls back
-// to the nearest one it does (mid <-> far), then to the full model, as setInstanceLodState does for
+// far to mid when there is one, otherwise the full model; mid to the full model, as setInstanceLodState does for
 // a single item.
 export function resolveBatchTier(batch, wanted) {
   const tiers = batch.tiers;
   let shown = wanted;
   if (shown === BATCH_TIER_FAR && !tiers[BATCH_TIER_FAR]) shown = tiers[BATCH_TIER_MID] ? BATCH_TIER_MID : BATCH_TIER_FULL;
-  if (shown === BATCH_TIER_MID && !tiers[BATCH_TIER_MID]) shown = tiers[BATCH_TIER_FAR] ? BATCH_TIER_FAR : BATCH_TIER_FULL;
+  // #4111: a missing mid is the full model, never far (see setInstanceLodState).
+  if (shown === BATCH_TIER_MID && !tiers[BATCH_TIER_MID]) shown = BATCH_TIER_FULL;
   return shown;
 }
 

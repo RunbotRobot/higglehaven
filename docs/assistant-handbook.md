@@ -323,20 +323,19 @@ animation you have applied (see the avatar entry below) replaces that motion.
 1. You start each visit in the air. To come down, double-tap the world: two quick
    taps in the same place. It works while your other thumb is walking or looking,
    so you do not have to stop first. On a keyboard, press T once instead.
-2. While you are flying, you go where the view points.
-   Drag on the left half of the screen to fly forward. To climb, drag on the
-   right half of the screen to look up while you fly forward. To descend, look down and walk forward. A level view flies level,
-   and when you stop walking you hold your height. On a keyboard, R looks up and
-   F looks down.
+2. While you are flying, you fly level: drag on the left half of the screen to fly forward, and the view can look anywhere,
+   straight down included, without changing your height. Slide a thumb up or down along the right edge of the screen to rise or sink.
+   When you let go you hold your height. On a keyboard, Page Up rises and Page Down sinks, and R and F look up and down.
 3. Walk and look by dragging, as usual.
 4. To go up again from the ground, double-tap the world again, or press T.
 
-**You will see:** the bird tips its nose up or down with your view, and a
+**You will see:** the bird flies level whichever way you look, and a
 double-tap switches between flying and standing. At the top of the sky, or as low
 as you can fly, a short note says so and you stay there.
 
 **If something goes wrong:**
-- You do not climb: you are on the ground. Double-tap the world to fly.
+- You do not rise: you are on the ground. Double-tap the world to fly.
+- Dragging at the very edge of the right side moves your height, not the view: drag a little further in to look around.
 - A double-tap on a product opens that product instead: double-tap on open ground.
 - You cannot find the ground: double-tap the world and let it come down by itself.
 

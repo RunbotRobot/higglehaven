@@ -13,10 +13,13 @@ const MOVE_FORWARD = ['KeyW', 'ArrowUp'];
 const MOVE_BACK = ['KeyS', 'ArrowDown'];
 const TURN_LEFT = ['KeyQ'];
 const TURN_RIGHT = ['KeyE'];
-// #3769: with no up/down arrows in flight, height follows where the view points, so a
-// keyboard needs to point the view: R looks up, F looks down.
+// R looks up, F looks down (the view only; flight is level, #4105).
 const LOOK_UP = ['KeyR'];
 const LOOK_DOWN = ['KeyF'];
+// #4105: height changes by a thumb sliding along the right edge; on a keyboard, Page Up rises and
+// Page Down sinks while flying.
+const RISE = ['PageUp'];
+const SINK = ['PageDown'];
 
 // #3823 (found by the accessibility pass, #3818): take off and land with one key. A
 // double-tap on the world (and a double-press of Space on a desktop) already toggle
@@ -27,7 +30,7 @@ export const FLIGHT_TOGGLE_CODES = ['KeyT'];
 
 export const SHOP_KEYBOARD_CODES = new Set([
   ...MOVE_LEFT, ...MOVE_RIGHT, ...MOVE_FORWARD, ...MOVE_BACK, ...TURN_LEFT, ...TURN_RIGHT,
-  ...LOOK_UP, ...LOOK_DOWN,
+  ...LOOK_UP, ...LOOK_DOWN, ...RISE, ...SINK,
 ]);
 
 const anyDown = (down, codes) => codes.some((code) => down.has(code));
@@ -45,6 +48,11 @@ export function keyboardAxes(down) {
     // Same sign as the look joystick: positive is down.
     lookY: axis(LOOK_DOWN, LOOK_UP),
   };
+}
+
+// -1..1 for flight height from the keyboard: Page Up rises, Page Down sinks, both cancel.
+export function keyboardRise(down) {
+  return (anyDown(down, RISE) ? 1 : 0) - (anyDown(down, SINK) ? 1 : 0);
 }
 
 // One merged vector per stick: an actively held joystick wins, otherwise the

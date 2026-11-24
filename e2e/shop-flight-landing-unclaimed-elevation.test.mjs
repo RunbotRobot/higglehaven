@@ -41,8 +41,7 @@
 // case (landing on the player's own CLAIMED, elevated landlet) -- this
 // test specifically exercises the claimed/unclaimed asymmetry by landing
 // on an unclaimed (greenbelt) landlet instead, with no claim of any kind.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox, localD1 } from './helpers.mjs';
 
 const LABEL = 'Unclaimed Elevation Landing Tester';
 const TEST_ELEVATION_M = -6;
@@ -72,10 +71,7 @@ if (!greenbeltLandlet) throw new Error('shop-flight-landing-unclaimed-elevation:
 // Same "one real way to drive a nonzero elevation_m through this
 // deployment" precedent e2e/shop-terrain-elevation-consistency.test.mjs
 // and e2e/shop-terrain-elevation-landing.test.mjs both already use.
-execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${greenbeltLandlet.landletId}'"`,
-  { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
-);
+localD1(`UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${greenbeltLandlet.landletId}'`);
 
 // A fresh page load re-fetches /api/landlets for real, picking up the
 // elevation_m just written -- same pattern those same two test files use.

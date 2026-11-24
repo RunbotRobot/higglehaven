@@ -40,6 +40,14 @@ console.log('flow:', JSON.stringify({ ...flow, box: undefined }));
 await page.click('#assistant-chat-minimize').catch(() => {});
 await page.waitForTimeout(300);
 await openAccountMenu(page);
+// The flower grows its leaves over about half a second (#4027); under CI load the row can still be moving when it is
+// measured, so wait until it can be hit before reading the answer (a row that never can be hit still fails below).
+await page.waitForFunction(() => {
+  const el = document.getElementById('assistant-menu-btn');
+  if (!el || el.hidden) return false;
+  const box = el.getBoundingClientRect();
+  return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+}, null, { timeout: 5000 }).catch(() => {});
 const pill = await page.evaluate(() => {
   const el = document.getElementById('assistant-menu-btn');
   if (!el || el.hidden) return { shown: false };
