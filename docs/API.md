@@ -4903,6 +4903,8 @@ Moves the landlet's active-version pointer to an existing snapshot belonging to
 that landlet. This endpoint does not overwrite the builder's current draft.
 The response includes both the updated landlet and selected version metadata.
 
+**Frontend wiring (#4094):** Settings > Build draws a closed "From an earlier lándlet" row under Version history, only when the builder has an archived version; each row's "Add to my versions" calls the restore route for the lándlet being built on, then redraws Version history.
+
 ### `GET /api/builders/me/archived-versions`
 
 The signed-in builder's own archived lándlet versions (#4094): the versions the no-bid inactivity

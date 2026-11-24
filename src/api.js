@@ -1315,6 +1315,20 @@ export async function fetchLandletVersion(landletId, versionId) {
 
 // Points the landlet's activeVersionId at an existing snapshot — the
 // builder's own live draft is untouched, only what Shop mode shows changes.
+// #4094: the signed-in builder's own archived lándlet versions (a lándlet released for inactivity keeps its
+// builder's versions), and adding one to a lándlet they own as a new saved version. Neither changes the live
+// draft or the active version.
+export async function fetchArchivedVersions() {
+  return requestJson('/builders/me/archived-versions'); // { archivedVersions }
+}
+
+export async function restoreArchivedVersion(versionId, landletId) {
+  return requestJson(`/builders/me/archived-versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+    body: JSON.stringify({ landletId }),
+  }); // { version }
+}
+
 export async function activateLandletVersion(landletId, versionId) {
   return requestJson(`/landlets/${encodeURIComponent(landletId)}/versions/${encodeURIComponent(versionId)}/activate`, {
     method: 'POST',
