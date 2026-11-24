@@ -1465,6 +1465,29 @@
         overflow-wrap: break-word; /* spaces first; inside a word only when it alone is wider than the sign */
         hyphens: manual;
       }
+      /* #3782 (part of #3771): the lettering and colours a builder chose, set by src/ui/wordmark.js as a data
+         attribute and two variables on .bud-place-name; nothing else about the sign changes. Only ids that
+         shared/wordmark-set.js offers ever appear here, so with `default` alone none of this applies. The
+         faces are loaded on demand (FontFace) under the same family names; until one arrives the name shows
+         in the default serif. The sign is folded away until the menu opens, so the swap is normally over
+         before anyone sees it. Sizes are the lettering page's (#3780), as multiples of the default. */
+      .bud-place-name[data-wordmark-colour] { color: var(--wm-ink); }
+      .bud-place-name[data-wordmark-colour]::after {
+        content: "";
+        display: block;
+        width: 44px;
+        height: 4px;
+        margin-top: 6px;
+        border-radius: 3px;
+        background: var(--wm-accent);
+      }
+      .bud-place-name[data-wordmark="round"] { font-family: "WM Round", Georgia, 'Times New Roman', serif; font-weight: 600; }
+      .bud-place-name[data-wordmark="airy"] { font-family: "WM Airy", Georgia, 'Times New Roman', serif; font-weight: 700; }
+      .bud-place-name[data-wordmark="serif"] { font-family: "WM Serif", Georgia, 'Times New Roman', serif; font-weight: 700; }
+      .bud-place-name[data-wordmark="slab"] { font-family: "WM Slab", Georgia, 'Times New Roman', serif; font-weight: 600; }
+      .bud-place-name[data-wordmark="script"] { font-family: "WM Script", Georgia, 'Times New Roman', serif; font-weight: 400; font-size: 1.04em; line-height: 1.3; }
+      .bud-place-name[data-wordmark="stencil"] { font-family: "WM Stencil", Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 0.9em; }
+      .bud-place-name[data-wordmark="hand"] { font-family: "WM Hand-drawn", Georgia, 'Times New Roman', serif; font-weight: 400; font-size: 1.1em; line-height: 1.1; }
       .bud-place-by {
         font: var(--text-xs)/var(--leading-tight) var(--font-sans);
         color: var(--pill-text);

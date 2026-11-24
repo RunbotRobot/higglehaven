@@ -123,7 +123,11 @@ Not built yet; do not describe these to a person as if they exist:
   that a graphic wants, and the logo is large and the word "Menu" sits beside it; the
   unread dot sits on the bud's shoulder, ringed in white.
 - **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
-  menu in lettering the builder chooses from a set.
+  menu in lettering the builder chooses from a set. One renderer (`src/ui/wordmark.js`,
+  #3782) draws it: the name stays selectable text with the style and colours as data
+  attributes and variables, a face is fetched once and only when a name asks for it, and an
+  id that `shared/wordmark-set.js` does not offer draws the default look. The owner's pick
+  from the lettering page is one line in that set.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
   Settings, kept under Help.
 
