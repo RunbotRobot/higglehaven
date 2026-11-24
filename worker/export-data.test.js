@@ -604,58 +604,56 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
   });
 });
 
-// #4142: assistant thread, questions and own blocks key on the account, so they come with every export,
-// even one with no builder profile.
-describe('GET /auth/export-data -- assistant thread, questions and blocks (#4142)', () => {
-  const userIdOf = async (email) => (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first()).user_id;
+// #4142: the account's own assistant conversations and blocks it made.
+describe('GET /auth/export-data -- communication section (#4142)', () => {
+  async function userIdOf(builder) {
+    return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+  }
 
-  it('returns all three empty for an account with none', async () => {
-    const email = `export-4142-empty-${crypto.randomUUID()}@example.com`;
-    const signedUp = await signup(email, 'a fine long password here', { username: `exp4142-${crypto.randomUUID().slice(0, 8)}` });
-    const result = await api('/auth/export-data', withSession(extractSessionCookie(signedUp.response)));
+  it('includes the account\'s assistant thread, left questions and own blocks, and nothing of anyone else', async () => {
+    const shopper = await signupBuilder('export-comm-shopper');
+    const assistant = await signupBuilder('export-comm-assistant');
+    const other = await signupBuilder('export-comm-other');
+    const shopperId = await userIdOf(shopper);
+    const assistantId = await userIdOf(assistant);
+    const otherId = await userIdOf(other);
+    await env.DB.prepare(`
+      INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status, ended_by, ended_at)
+      VALUES ('export-comm-conv', ?, ?, 'ended', 'shopper', '2026-01-01T00:10:00.000Z'),
+             ('export-comm-conv-other', ?, ?, 'open', NULL, NULL)
+    `).bind(assistantId, shopperId, assistantId, otherId).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES
+        ('export-comm-m1', 'export-comm-conv', 'shopper', 'How do I place a wall?', '2026-01-01T00:01:00.000Z'),
+        ('export-comm-m2', 'export-comm-conv', 'assistant', 'Open Build, then the catalog.', '2026-01-01T00:02:00.000Z'),
+        ('export-comm-m3', 'export-comm-conv-other', 'shopper', 'someone else secret', '2026-01-01T00:03:00.000Z')
+    `).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_questions (question_id, shopper_user_id, text, status, answer_text, answered_at)
+      VALUES ('export-comm-q1', ?, 'Is anyone there?', 'answered', 'Yes, now.', '2026-01-02T00:00:00.000Z')
+    `).bind(shopperId).run();
+    await env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?), (?, ?)')
+      .bind(shopperId, otherId, otherId, shopperId).run();
+
+    const result = await api('/auth/export-data', shopper.session());
     expect(result.response.status).toBe(200);
-    expect(result.body.assistantConversations).toEqual([]);
-    expect(result.body.assistantQuestions).toEqual([]);
-    expect(result.body.blocks).toEqual([]);
+    const comm = result.body.communication;
+    expect(comm.assistantConversations).toHaveLength(1);
+    expect(comm.assistantConversations[0]).toMatchObject({ status: 'ended', endedBy: 'shopper' });
+    expect(comm.assistantConversations[0].messages.map((m) => [m.sender, m.text])).toEqual([
+      ['shopper', 'How do I place a wall?'],
+      ['assistant', 'Open Build, then the catalog.'],
+    ]);
+    expect(comm.assistantQuestions).toHaveLength(1);
+    expect(comm.assistantQuestions[0]).toMatchObject({ question: 'Is anyone there?', answer: 'Yes, now.', status: 'answered' });
+    // Only the block this account made; the one against it stays out.
+    expect(comm.blocksMade).toHaveLength(1);
+    expect(JSON.stringify(result.body)).not.toContain('someone else secret');
   });
 
-  it('includes the person\'s own assistant thread, questions and blocks, and nobody else\'s', async () => {
-    const me = await signupBuilder('export-4142-me');
-    const assistant = await signupBuilder('export-4142-assistant');
-    const other = await signupBuilder('export-4142-other');
-    const myId = await userIdOf(me.email);
-    const assistantId = await userIdOf(assistant.email);
-    const otherId = await userIdOf(other.email);
-    const conversationId = `conv-4142-${crypto.randomUUID()}`;
-    await env.DB.batch([
-      env.DB.prepare(`INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status, ended_by, ended_at)
-        VALUES (?, ?, ?, 'ended', 'shopper', '2026-11-20T10:05:00.000Z')`).bind(conversationId, assistantId, myId),
-      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES (?, ?, 'shopper', 'How do I build?', '2026-11-20T10:00:00.000Z')`).bind(`m1-${conversationId}`, conversationId),
-      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES (?, ?, 'assistant', 'Open the Build petal.', '2026-11-20T10:01:00.000Z')`).bind(`m2-${conversationId}`, conversationId),
-      env.DB.prepare(`INSERT INTO assistant_questions (question_id, shopper_user_id, text, status, answer_text, answered_at)
-        VALUES (?, ?, 'Where is my order?', 'answered', 'In My Purchases.', '2026-11-21T09:00:00.000Z')`).bind(`q-${conversationId}`, myId),
-      env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(myId, otherId),
-      // someone else's: another person's thread with the same assistant, and a block *of* me
-      env.DB.prepare(`INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status) VALUES (?, ?, ?, 'open')`).bind(`${conversationId}-x`, assistantId, otherId),
-      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text) VALUES (?, ?, 'shopper', 'someone else')`).bind(`m3-${conversationId}`, `${conversationId}-x`),
-      env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(otherId, myId),
-    ]);
-
-    const result = await api('/auth/export-data', me.session());
-    expect(result.response.status).toBe(200);
-    expect(result.body.assistantConversations).toHaveLength(1);
-    const [conversation] = result.body.assistantConversations;
-    expect(conversation.status).toBe('ended');
-    expect(conversation.endedBy).toBe('shopper');
-    expect(conversation.messages.map((m) => [m.from, m.text])).toEqual([
-      ['shopper', 'How do I build?'], ['assistant', 'Open the Build petal.'],
-    ]);
-    expect(result.body.assistantQuestions).toEqual([{
-      text: 'Where is my order?', status: 'answered', answer: 'In My Purchases.',
-      askedAt: expect.any(String), answeredAt: '2026-11-21T09:00:00.000Z', closedAt: null,
-    }]);
-    // my own block is listed; the block of me is not ("A block is silent")
-    expect(result.body.blocks).toHaveLength(1);
-    expect(JSON.stringify(result.body)).not.toContain('someone else');
+  it('is present, and empty, for an account that has never used any of it', async () => {
+    const quiet = await signupBuilder('export-comm-quiet');
+    const result = await api('/auth/export-data', quiet.session());
+    expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [] });
   });
 });

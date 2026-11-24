@@ -68,7 +68,7 @@ import {
 import { keepPairInside } from './rigidCameraPair.js';
 import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, keyboardRise, mergeStickInput } from './keyboardInput.js';
 // #4102: the three flight-height options the owner can fly and compare (off unless chosen).
-import { createHeightControl, HEIGHT_HINT, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
+import { createHeightControl, heightHint, HEIGHT_HINT, KEY_HEIGHT_HINT, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
@@ -1264,11 +1264,11 @@ let heightHintShown = false;
 function showHeightHintOnce() {
   if (heightHintShown || !document.body.classList.contains('shop-ready')) return;
   heightHintShown = true;
-  shopStatusEl.textContent = HEIGHT_HINT;
+  shopStatusEl.textContent = heightHint();
   shopStatusEl.classList.add('visible');
   clearTimeout(flightLimitNoticeTimer);
   flightLimitNoticeTimer = setTimeout(() => {
-    if (shopStatusEl.textContent === HEIGHT_HINT) {
+    if (shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
       shopStatusEl.classList.remove('visible');
       shopStatusEl.textContent = '';
     }
@@ -1286,7 +1286,7 @@ function showFlightLimitNotice(limit) {
   shopStatusEl.classList.add('visible');
   clearTimeout(flightLimitNoticeTimer);
   flightLimitNoticeTimer = setTimeout(() => {
-    if (shopStatusEl.textContent.startsWith('You are ') || shopStatusEl.textContent === HEIGHT_HINT) {
+    if (shopStatusEl.textContent.startsWith('You are ') || shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
       shopStatusEl.classList.remove('visible');
       shopStatusEl.textContent = '';
     }

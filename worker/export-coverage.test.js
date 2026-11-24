@@ -12,7 +12,7 @@ beforeAll(async () => {
 });
 
 // In GET /auth/export-data (worker/index.js: handleExportData, exportCommerceData, exportSocialSection,
-// exportAccountHelpAndBlocks).
+// the account-keyed helpers in exportSocialSection (assistant thread, questions, blocks)).
 const EXPORTED = [
   'users', 'builders', 'sellers', 'didit_verification_sessions', 'account_moderation_decisions',
   'friendships', 'direct_messages', 'notifications', 'product_reviews', 'seller_feedback', 'sign_posts',

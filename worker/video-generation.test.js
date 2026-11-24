@@ -407,6 +407,12 @@ describe('Video-to-3D job creation (#1619)', () => {
       const detail = JSON.parse(row.failure_detail);
       expect(detail.reason).toBe('too_big');
       expect(detail.bytes).toBeGreaterThan(detail.limitBytes);
+      // #4122: a lost paid result raises one bug-report card on its own, with the job id and the kept reason.
+      const card = await env.DB.prepare('SELECT kind, status, waiting_on, title, note FROM control_room_tasks WHERE task_id = ?').bind(`video-store-failed-${createdBody.jobId}`).first();
+      expect(card.kind).toBe('bug-report');
+      expect(card.status).toBe('queued');
+      expect(card.title).toMatch(/could not be saved \(too_big\)/);
+      expect(card.note).toContain(createdBody.jobId);
       expect(row.processed_at).not.toBeNull();
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
