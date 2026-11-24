@@ -184,6 +184,14 @@ console.log('My Avatars rows after equipping (purchased avatar should now say "â
 const purchasedRowAfter = rowTextsAfterEquip.find((t) => t.includes(PRODUCT_NAME));
 const defaultRowAfter = rowTextsAfterEquip.find((t) => t.includes('Default avatar'));
 
+const wornHint = () => page.evaluate(() => {
+  const key = Object.keys(localStorage).find((k) => k.startsWith('hh-worn-avatar:'));
+  return key ? localStorage.getItem(key) : null;
+});
+// #4106: equipping remembers the new body at once, so the next arrival waits in fog for it, not the standard body.
+const hintAfterEquip = await wornHint();
+console.log('worn-avatar hint right after equipping (should be custom):', hintAfterEquip);
+
 const noFallbackWarningAfterEquip = !consoleWarnings.some((w) => w.includes('Failed to load equipped avatar model'));
 console.log('no fallback-to-default-avatar warning logged when equipping (should be true â€” the custom model swap succeeded):', noFallbackWarningAfterEquip);
 
@@ -213,6 +221,9 @@ const rowTextsAfterRevert = await myAvatarsField.locator('.version-row').allText
 console.log('My Avatars rows after reverting to default:', rowTextsAfterRevert);
 const defaultRowAfterRevert = rowTextsAfterRevert.find((t) => t.includes('Default avatar'));
 const purchasedRowAfterRevert = rowTextsAfterRevert.find((t) => t.includes(PRODUCT_NAME));
+
+const hintAfterRevert = await wornHint();
+console.log('worn-avatar hint right after reverting (should be default):', hintAfterRevert);
 
 const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 
@@ -245,6 +256,7 @@ const pass = purchased.status === 201 &&
   !defaultRowBefore?.includes('purchased ') &&
   !!purchasedRowAfter?.includes('equipped') &&
   !defaultRowAfter?.includes('equipped') &&
+  hintAfterEquip === 'custom' && hintAfterRevert === 'default' &&
   noFallbackWarningAfterEquip &&
   markerAfterEquip === 'still-here' &&
   !!defaultRowAfterRevert?.includes('equipped') &&
