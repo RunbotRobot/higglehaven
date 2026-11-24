@@ -3757,6 +3757,13 @@ async function exportCommunicationData(db, userId) {
     LEFT JOIN users u ON u.user_id = b.blocked_user_id
     WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
   `).bind(userId).all();
+  // The feedback reports this account submitted. The attached device facts are
+  // the person's own; the render-state ring buffer is a large diagnostic dump
+  // and stays out, like the screenshot bytes (only the link is listed).
+  const bugReports = await db.prepare(`
+    SELECT report_id, description, screenshot_url, user_agent, platform, submitted_at, created_at
+    FROM bug_reports WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
   const byConversation = new Map();
   for (const row of messages.results) {
     if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
@@ -3780,6 +3787,15 @@ async function exportCommunicationData(db, userId) {
       closedAt: row.closed_at,
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    bugReports: bugReports.results.map((row) => ({
+      reportId: row.report_id,
+      description: row.description,
+      screenshotUrl: row.screenshot_url,
+      userAgent: row.user_agent,
+      platform: row.platform,
+      submittedAt: row.submitted_at,
+      createdAt: row.created_at,
+    })),
   };
 }
 
