@@ -541,6 +541,12 @@ rotateControls.setMode('rotate');
 // The free-turn ball (XYZE) is not offered: its pick area is a sphere around the item, which would take a
 // press that means "drag the item" (#3689) and is not one of the three rings the owner asked for.
 rotateControls.showXYZE = false;
+// ...and neither is the outer view ring (E, a screen-roll ring a good deal wider than the three): it comes
+// back whenever all three axes are shown, and a tap on empty ground that lands near its circle would grab it
+// instead of deselecting. Taking its handle and its picker out of the gizmo leaves exactly the three rings.
+for (const group of [rotateControls._gizmo.gizmo.rotate, rotateControls._gizmo.picker.rotate]) {
+  for (const handle of [...group.children]) if (handle.name === 'E') group.remove(handle);
+}
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
