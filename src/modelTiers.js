@@ -579,6 +579,21 @@ function sampleTexture(texture, pixels, u, v, target) {
   return toLinear(texture, data[i], data[i + 1], data[i + 2], target);
 }
 
+// #4111: the far colour is what the full model looks like lit, not its raw base colour. This world has
+// no environment light, so a metal surface is drawn from its sun and sky light only, much darker than
+// its base colour, while the far material (metalness 0) drew that same base colour at full strength: a
+// metal fixture turned white at mid distance. A metal keeps a floor of its colour for the highlights a
+// flat far surface cannot show. A metalness map is not read (a scalar of 1 beside a map says nothing
+// about where the metal is). Emission is added, since the far material is not emissive.
+const FAR_METAL_DARKENING = 0.65;
+function shadingOf(material) {
+  const metalness = material && !material.metalnessMap && typeof material.metalness === 'number' ? clamp(material.metalness, 0, 1) : 0;
+  const emissive = material && material.emissive && !material.emissiveMap
+    ? material.emissive.clone().multiplyScalar(material.emissiveIntensity ?? 1)
+    : new Color(0, 0, 0);
+  return { diffuseScale: 1 - FAR_METAL_DARKENING * metalness, emissive };
+}
+
 // A copy of the geometry carrying only position (and index) plus a baked
 // linear-colour attribute: material colour x texture x existing vertex colour.
 function bakeColoredGeometry(mesh, getPixels) {
@@ -594,6 +609,7 @@ function bakeColoredGeometry(mesh, getPixels) {
   const pixels = map ? getPixels(map) : null;
   const sampled = !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
   const mean = pixels && !sampled ? meanTextureColor(map, pixels) : null;
+  const { diffuseScale, emissive } = shadingOf(material);
 
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
@@ -620,9 +636,9 @@ function bakeColoredGeometry(mesh, getPixels) {
       g *= mean.g;
       b *= mean.b;
     }
-    colors[i * 3] = r;
-    colors[i * 3 + 1] = g;
-    colors[i * 3 + 2] = b;
+    colors[i * 3] = r * diffuseScale + emissive.r;
+    colors[i * 3 + 1] = g * diffuseScale + emissive.g;
+    colors[i * 3 + 2] = b * diffuseScale + emissive.b;
   }
 
   const baked = new BufferGeometry();
