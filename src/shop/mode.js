@@ -90,8 +90,7 @@ import {
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
 import { mountShopAvatar } from './mountShopAvatar.js';
-import { beginAvatarSwapFog, beginAvatarFogHold } from './avatarSwapFog.js';
-import { createArrivalFog } from './arrivalEffect.js';
+import { createAvatarArrival } from './avatarArrival.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import { updateShopSky, currentShopSkyTimeS } from './sky.js';
 import {
@@ -384,7 +383,10 @@ export function buildShopGroundMesh(record) {
 // sign-in gate passes before they are used as they are.
 const SHOP_PREFETCH_MAX_AGE_MS = 2000;
 
-let activeAvatarSwap = null; // #3905: the fog hiding the swap of the equipped avatar in, stepped each frame
+// #3905: the fog hiding the swap of the equipped avatar in, stepped each frame (src/shop/avatarArrival.js)
+const avatarArrival = createAvatarArrival({
+  getScene: () => scene, getPosition: () => shopAvatarPosition, getUserId: () => currentAuthUser?.userId ?? null,
+});
 
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
@@ -667,36 +669,8 @@ export async function enterShopMode() {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
-    // #3905: the equipped avatar replaces the default body inside a puff of fog, not as a pop.
-    beginAvatarSwap: (commit) => {
-      activeAvatarSwap?.cancel();
-      const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      const swap = beginAvatarSwapFog({
-        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
-        commit, nowMs: performance.now(), reducedMotion,
-      });
-      activeAvatarSwap = swap.released ? null : swap;
-      return swap;
-    },
-    cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
+    ...avatarArrival.deps, // #3905, #4067, #4108: the fog the avatar arrives through, shared with Sell
     onModelFailed: sayAvatarDidNotLoad, // #4067
-    // #4067: someone who may wear a model of their own is shown fog, not the default body, until it is known.
-    beginAvatarFogHold: () => {
-      activeAvatarSwap?.cancel();
-      const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      const hold = beginAvatarFogHold({
-        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
-        nowMs: performance.now(), reducedMotion,
-      });
-      activeAvatarSwap = hold.released ? null : hold;
-      return hold;
-    },
-    readWornHint: () => {
-      try { return localStorage.getItem(`hh-worn-avatar:${currentAuthUser?.userId ?? ''}`); } catch { return null; }
-    },
-    writeWornHint: (kind) => {
-      try { if (currentAuthUser?.userId) localStorage.setItem(`hh-worn-avatar:${currentAuthUser.userId}`, kind); } catch { /* remembered only when allowed */ }
-    },
   });
   markStartup('avatar-mounted');
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
@@ -733,7 +707,7 @@ export async function enterShopMode() {
   registerModeFrameUpdate((now) => {
     updateShopMovement(now);
     updateShopSky(now);
-    if (activeAvatarSwap?.step(now)) activeAvatarSwap = null; // #3905: the fog over the avatar swap
+    avatarArrival.step(now); // #3905: the fog over the avatar swap
     // #2717: feed the render-state ring buffer (src/feedback/
     // renderStateBuffer.js) a fresh snapshot every frame -- it throttles
     // itself to ~1Hz internally (see that module's own comment), so it's

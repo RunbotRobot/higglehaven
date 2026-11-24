@@ -18,7 +18,7 @@ import { currentAuthUser } from '../account/auth.js';
 import { fetchMyEquippedAvatar, fetchMyEquippedAnimation } from '../api.js';
 import {
   shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature, setShopDomeMesh,
-  setShopControlsVisible, shopStatusEl,
+  setShopControlsVisible, shopStatusEl, shopAvatarPosition,
 } from '../main.js';
 import {
   shopAvatar, setShopAvatar, createShopAvatar, createCustomShopAvatar,
@@ -30,6 +30,7 @@ import {
   updateShopMovementCore, beginShopStanding, isShopStandingSpotBlocked, releaseShopMovementInput,
 } from '../shop/flightMovement.js';
 import { mountShopAvatar } from '../shop/mountShopAvatar.js';
+import { createAvatarArrival } from '../shop/avatarArrival.js';
 import { setMovementWorld, createSellMovementWorld } from '../shop/movementWorld.js';
 import { createWorldEnclosure } from '../shop/enclosure.js';
 import { updateShopSky, currentShopSkyTimeS, shopDomeRiseM, growShopDomeIfNeeded } from '../shop/sky.js';
@@ -49,6 +50,10 @@ let groundBounds = null;
 // when the world view mounts (#3756).
 let modalOpen = true;
 let mounted = false;
+// #4108: the avatar arrives through fog here too, never as the default body popping to the worn one.
+const avatarArrival = createAvatarArrival({
+  getScene: () => scene, getPosition: () => shopAvatarPosition, getUserId: () => currentAuthUser?.userId ?? null,
+});
 
 // #3502 (owner decision "A place outside the world still looks like the
 // world"): the showroom is a small, empty piece of the world, the standard
@@ -194,6 +199,7 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
     createCustomShopAvatar, createShopAvatar,
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
+    ...avatarArrival.deps,
     onModelFailed: sayAvatarDidNotLoad, // #4067
   });
   mounted = true;
@@ -208,6 +214,7 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
   registerModeFrameUpdate((now) => {
     updateShopMovementCore(now);
     updateShopSky(now);
+    avatarArrival.step(now);
     onFrame?.(now);
   });
   registerFacingOverride(() => shopAvatarFacing);
