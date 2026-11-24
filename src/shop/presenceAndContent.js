@@ -66,7 +66,7 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { buildLodSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -76,12 +76,13 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
-import { creditOrbAboutText, creditOrbCollectedText } from './creditOrbInfo.js';
+import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
 import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
 import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
@@ -589,6 +590,25 @@ function fullTrianglesOf(object) {
 let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
 window.__testSetShopFullTriangleCap = (triangles) => { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; };
 
+// #4113: the read-out the issue asked for first: per set (and per item not in one), the version shown and
+// why, as of the last tick. e2e/console only; it costs nothing until it is asked for once.
+let tierReadoutOn = false;
+let lastTierReadout = null;
+window.__testShopSetTiers = () => {
+  tierReadoutOn = true;
+  if (!lastTierReadout) return [];
+  const groups = new Map();
+  for (const row of lastTierReadout.items) {
+    const key = row.object.userData.lodSetId ?? `item:${row.object.userData.instanceId ?? row.object.uuid}`;
+    let group = groups.get(key);
+    if (!group) groups.set(key, group = { set: row.object.userData.lodSetId ? key : null, members: 0, px: row.px, near: row.near, wanted: row.wanted, tiers: {}, reasons: {} });
+    group.members += 1;
+    group.tiers[row.tier] = (group.tiers[row.tier] ?? 0) + 1;
+    group.reasons[row.reason] = (group.reasons[row.reason] ?? 0) + 1;
+  }
+  return [...groups.values()].filter((g) => g.set).map((g) => ({ ...g, px: Math.round(g.px * 10) / 10 }));
+};
+
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
@@ -645,7 +665,7 @@ function updateInstanceLodTiers() {
       lodItemsScratch.push({
         px,
         protected: nearAvatar,
-        wanted: nearAvatar ? TIER_FULL : nextTier(currentTier, px),
+        wanted: nearAvatar ? TIER_FULL : (set ? nextSetTier(currentTier, px) : nextTier(currentTier, px)),
         tris: fullTrianglesOf(object), // #3920: the triangle budget counts protected items too
         dist: ownDistanceM,
         current: object.userData.lodApplied,
@@ -653,7 +673,9 @@ function updateInstanceLodTiers() {
       lodObjectsScratch.push({ entry, object });
     }
   }
-  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap);
+  const reasons = tierReadoutOn ? [] : null;
+  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap, reasons);
+  if (reasons) lastTierReadout = { items: lodObjectsScratch.map(({ object }, i) => ({ object, px: lodItemsScratch[i].px, near: lodItemsScratch[i].protected, wanted: lodItemsScratch[i].wanted, tier: tiers[i], reason: reasons[i] })) };
   // First note every item's wanted version (and ask for the reduced versions of
   // any that will need them); the ones due to change are collected to be applied
   // largest first.
@@ -680,9 +702,10 @@ function updateInstanceLodTiers() {
     const tier = tiers[i];
     object.userData.lodApplied = tier;
     // #3403: a batched placement changes version by moving between the batch's instanced sets.
-    // #4062: the ones that change dissolve from the old version to the new (a few at a time), except
-    // beside the avatar, where the real model is wanted at once.
-    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier, { instant: lodItemsScratch[i].protected });
+    // #4062: the ones that change dissolve from the old version to the new (a few at a time).
+    // #4113: no exception for what is beside the avatar any more: that was the one change a person saw most (the owner's
+    // wall went from flat to full in one frame at 10 m). The caps in batchCrossfade.js still swap what cannot fade.
+    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier);
     else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
@@ -1113,6 +1136,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
         modelWait: waitsForModel
           ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
           : null,
+        bodySwapFog: null, // #4109: the fog hiding a change of avatar, while there is one
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
         motion: defaultOtherAvatarMotion(defaultAvatar),
@@ -1253,6 +1277,30 @@ function reconcileOtherAvatarBodies(now) {
 }
 
 function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4109: someone changing what they wear is seen changing inside a puff of fog, not in one frame ("nothing
+  // pops in"). Only when a body is already standing there to be replaced: an arrival still waiting for its
+  // model (modelWait, #4067) has its own fog, and the first body of an entry goes straight in. A change
+  // that lands while an earlier one is still in its fog finishes that one first (its commit runs at once).
+  entry.bodySwapFog?.cancel();
+  entry.bodySwapFog = null;
+  const replacing = !entry.modelWait && entry.body && entry.body.children.length > 0;
+  const place = () => {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    reconcileOtherAvatarAnimations(performance.now());
+    refreshOtherShopAvatarsDiagnostic();
+  };
+  if (!replacing) {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    return;
+  }
+  const swap = beginAvatarSwapFog({
+    createFog: createArrivalFog, parent: scene, getPosition: () => entry.group.position,
+    commit: place, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion(),
+  });
+  entry.bodySwapFog = swap.released ? null : swap;
+}
+
+function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
   // #4067: the real body is in place, so the fog thins away over it; a default body put in instead
   // (the model cannot be had) ends the wait at once.
   if (templateId !== null) entry.modelWait?.ready(performance.now());
@@ -1468,6 +1516,8 @@ setNearbySpeechHandler((builderId) => {
 });
 
 function releaseOtherAvatarEntry(entry) {
+  entry.bodySwapFog?.cancel(); // #4109: a swap still in its fog finishes (its commit runs) before the entry goes
+  entry.bodySwapFog = null;
   entry.modelWait?.cancel();
   entry.modelWait = null;
   entry.speechCue?.dispose();
@@ -1502,6 +1552,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    swappingBody: Boolean(entry.bodySwapFog), // added for #4109 -- e2e needs to see that someone changing avatar is fog first, with the old body still standing until the new one goes in
     waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
@@ -1568,6 +1619,7 @@ export function updateOtherShopAvatars(now) {
     if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
     if (entry.modelWait && entry.modelWait.step(now)) entry.modelWait = null; // #4067
+    if (entry.bodySwapFog && entry.bodySwapFog.step(now)) entry.bodySwapFog = null; // #4109: a change of avatar, in fog
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
     if (entry.transition && entry.transition.step(now)) {
@@ -1995,7 +2047,16 @@ let creditOrbRateLimitedUntilMs = null;
 // An orb touched while this says "at the limit" is left in place and the
 // notice shows, instead of popping and being reversed by the next 429.
 let creditOrbStanding = null;
+// #4123: how many free credits the person holds, as the server last said (null until it has). Collecting an
+// orb adds one at once ("felt the instant it happens", #3392) and a refusal takes it back.
+let creditOrbBalance = null;
 function applyCreditOrbStanding(reply) {
+  // #4123: the server's balance (the standing read and a collect's reply both carry it) replaces whatever
+  // was expected, and the word beside the head follows it while it is still showing.
+  if (typeof reply?.credits === 'number') {
+    creditOrbBalance = reply.credits;
+    refreshCreditOrbWord();
+  }
   const state = creditOrbStandingState(reply, performance.now());
   if (state) creditOrbStanding = state;
 }
@@ -2078,11 +2139,13 @@ function popAndCollectCreditOrb(orb) {
   // clones it first, so it has its own geometry/material to animate.
   spawnCreditOrbPopEffect(orb);
   removeCreditOrb(orb);
-  showCreditOrbToast();
+  const countedIntoBalance = showCreditOrbToast();
+  // #4123: a refused collect takes the expected credit back, with the word it showed.
+  const takeBackCredit = () => { if (countedIntoBalance && creditOrbBalance !== null && creditOrbBalance > 0) creditOrbBalance -= 1; };
   const startedAt = performance.now();
   const attempt = () => {
     collectCreditOrb(snapshot.orbId).then((reply) => {
-      applyCreditOrbStanding(reply?.standing);
+      applyCreditOrbStanding(reply?.standing ? { ...reply.standing, credits: reply.credits } : { credits: reply?.credits });
       markCreditOrbCollectReachedServer();
       hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
     }).catch((error) => {
@@ -2099,6 +2162,7 @@ function popAndCollectCreditOrb(orb) {
         // Gave up: the orb was never confirmed, so it comes back and the
         // person is told, instead of the pop standing for something that did
         // not happen (#2264: it must not vanish for the session either).
+        takeBackCredit();
         hideCreditOrbToast();
         restoreCreditOrb(snapshot);
         showCreditOrbProblemNotice(isNetworkError(error)
@@ -2107,6 +2171,7 @@ function popAndCollectCreditOrb(orb) {
         return;
       }
       markCreditOrbCollectReachedServer();
+      takeBackCredit();
       hideCreditOrbToast();
       if (refusal === 'gone') {
         // The server's own atomic claim is authoritative: another shopper
@@ -2203,8 +2268,10 @@ let creditOrbToastHideTimer = null;
 // with the builder's own count in it, read from the server just before; if that cannot be read the
 // sentence is said without it.
 async function openCreditOrbCollectedLeaf() {
-  let credits = null;
-  try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  let credits = creditOrbBalance; // the note's own number, so the card agrees with it (#4123)
+  if (credits === null) {
+    try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  }
   openLeaf({
     id: 'orb-collected',
     title: 'Credit collected',
@@ -2215,13 +2282,27 @@ async function openCreditOrbCollectedLeaf() {
     },
   });
 }
-function showCreditOrbToast() {
-  setBudWord(ORB_CREDIT_KEY, 'Credit +1', {
+let creditOrbWordShowing = false;
+function setCreditOrbWord() {
+  const word = creditOrbBalanceWord(creditOrbBalance);
+  setBudWord(ORB_CREDIT_KEY, word, {
     open: () => { openCreditOrbCollectedLeaf(); },
-    label: 'You collected a free credit. Open for details.',
+    label: `${word}. You collected a free credit. Open for details.`,
   });
+}
+// The word follows the server's number if it arrives while the word is still up.
+function refreshCreditOrbWord() {
+  if (creditOrbWordShowing) setCreditOrbWord();
+}
+// Returns whether it counted this orb into the expected balance, so a refusal can take it back.
+function showCreditOrbToast() {
+  const counted = creditOrbBalance !== null;
+  if (counted) creditOrbBalance += 1;
+  creditOrbWordShowing = true;
+  setCreditOrbWord();
   clearTimeout(creditOrbToastHideTimer);
-  creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+  creditOrbToastHideTimer = setTimeout(() => { creditOrbWordShowing = false; clearBudWord(ORB_CREDIT_KEY); }, CREDIT_ORB_TOAST_VISIBLE_MS);
+  return counted;
 }
 // #4072: the meshes a tap can land on to ask what an orb is, and the answer. Tapping never
 // collects: collecting stays a touch of the avatar, felt at once (#3392).
@@ -2243,6 +2324,7 @@ export function showCreditOrbAbout() {
   });
 }
 function hideCreditOrbToast() {
+  creditOrbWordShowing = false;
   clearTimeout(creditOrbToastHideTimer);
   clearBudWord(ORB_CREDIT_KEY);
 }

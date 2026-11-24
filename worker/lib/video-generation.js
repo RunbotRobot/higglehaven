@@ -238,16 +238,24 @@ function isStaleVideoGenerationReservation(row) {
 // TripoStoreFatalError (an expired/denied output URL, an oversized or
 // malformed file); anything else propagates as-is and applyTripoTaskResult
 // treats it as retryable.
-class TripoStoreFatalError extends Error {}
+class TripoStoreFatalError extends Error {
+  // #4122: `detail` says which of the fatal cases this was, for the admin only.
+  constructor(message, detail) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
-async function storeTripoModelOutput(env, tripoModelUrl) {
+// `outputKeys` (#4122): the keys the provider's output held, so a failure says what it did have.
+async function storeTripoModelOutput(env, tripoModelUrl, outputKeys = [], { dryRun = false } = {}) {
   const response = await fetch(tripoModelUrl);
+  const contentType = response.headers?.get?.('content-type') ?? null;
   if (!response.ok) {
     const message = 'Failed to download the generated model from the video-to-3D provider';
     // 4xx other than 429: the output URL expired or is refused; asking again
     // returns the same answer.
     if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-      throw new TripoStoreFatalError(message);
+      throw new TripoStoreFatalError(message, { reason: 'download_refused', httpStatus: response.status, contentType, outputKeys });
     }
     throw new HttpError(message, 502);
   }
@@ -260,13 +268,19 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
   // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
   // budget below ever checked.
   if (bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new TripoStoreFatalError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`);
+    throw new TripoStoreFatalError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`,
+      { reason: 'too_big', bytes: bytes.byteLength, limitBytes: MAX_MODEL_BYTES, contentType, outputKeys });
   }
   try {
     validateGlb(bytes);
   } catch (err) {
-    throw new TripoStoreFatalError(err instanceof Error ? err.message : 'Generated model is not a valid GLB');
+    const validatorMessage = err instanceof Error ? err.message : 'Generated model is not a valid GLB';
+    throw new TripoStoreFatalError(validatorMessage,
+      { reason: 'not_a_glb', bytes: bytes.byteLength, contentType, validatorMessage, outputKeys });
   }
+
+  // #4122: the admin's "Check the saved result" asks only whether this would have been kept; nothing is written.
+  if (dryRun) return { dryRun: true, sizeBytes: bytes.byteLength, contentType };
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   const hash = bytesToHex(digest);
@@ -331,11 +345,12 @@ const VIDEO_GENERATION_CREDIT_RETURNED_NOTICE = 'Your 3D model generation didn\'
 // same `processed_at IS NULL` guard in applyTripoTaskResult). The
 // notification is sent only by the caller whose status update actually
 // changed the row.
-async function failVideoGenerationJob(db, jobId, message, { refundCredit }) {
+async function failVideoGenerationJob(db, jobId, message, { refundCredit, failureDetail = null }) {
+  // #4122: failureDetail is the real reason, kept for the admin and never sent to the builder.
   const failJob = db.prepare(`
-    UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    UPDATE video_generation_jobs SET status = 'failed', error_message = ?, failure_detail = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE job_id = ? AND processed_at IS NULL
-  `).bind(message, jobId);
+  `).bind(message, failureDetail === null ? null : JSON.stringify(failureDetail), jobId);
   if (!refundCredit) {
     await failJob.run();
     return false;
@@ -350,6 +365,25 @@ async function failVideoGenerationJob(db, jobId, message, { refundCredit }) {
   if (failed.meta.changes !== 1) return false;
   await fireNotification(db, job.builder_id, VIDEO_GENERATION_CREDIT_RETURNED_NOTICE);
   return true;
+}
+
+// #4122 ("No silent loss"): when the provider made a model and we could not keep it, a paid result is lost, so the
+// fleet is told without waiting for anyone to report it: one bug-report card per job, with the job id and the kept
+// reason (the same detail the admin panel shows). INSERT OR IGNORE: a repeat of the same job raises nothing twice.
+async function raiseLostModelCard(db, jobId, failureDetail) {
+  try {
+    const now = new Date().toISOString();
+    const title = `A finished video-to-3D model could not be saved (${failureDetail?.reason ?? 'unknown'})`;
+    const note = `Job ${jobId}: the provider reported success but storing its output failed. Kept reason: ${JSON.stringify(failureDetail)}. The builder's credit was returned; the provider's charge was not. In the admin dashboard, Video-to-3D jobs > Check the saved result shows whether saving would work now.`;
+    await db.prepare(
+      `INSERT OR IGNORE INTO control_room_tasks
+         (task_id, kind, note_number, title, status, session, posted_by, waiting_on, note, note_updated_at, note_author, created_at, updated_at)
+       VALUES (?, 'bug-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'system', 'claude', ?, ?, 'system', ?, ?)`,
+    ).bind(`video-store-failed-${jobId}`, title, note, now, now, now).run();
+  } catch (err) {
+    // The card is a courtesy on top of the job row, which already holds the reason; never fail the job over it.
+    console.error('video-to-3D: could not raise the lost-model card', jobId, err);
+  }
 }
 
 // #3108: how many times a transient failure to store a finished model is
@@ -377,7 +411,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     if (!task?.output?.model_url) {
       await failVideoGenerationJob(db, jobId,
         'We couldn\'t retrieve the finished model. Your credit has been returned. Start a new generation.',
-        { refundCredit: true });
+        { refundCredit: true, failureDetail: { reason: 'no_model_url', outputKeys: Object.keys(task?.output ?? {}) } });
       return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
@@ -397,7 +431,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // of failing immediately with the real cause.
     let stored;
     try {
-      stored = await storeTripoModelOutput(env, task.output.model_url);
+      stored = await storeTripoModelOutput(env, task.output.model_url, Object.keys(task.output));
     } catch (err) {
       // #3108: a transient failure leaves the job 'processing' (processed_at
       // unset) so the next poll or webhook retries the store from Tripo's
@@ -405,6 +439,11 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       // one-pending-job-per-builder index keeps the builder from starting a
       // second billed generation meanwhile. Counted atomically so concurrent
       // callers can't each think they're on attempt one.
+      // #4122: keep the real reason on the job and in the log; the person reads the plain sentence below.
+      const failureDetail = err instanceof TripoStoreFatalError
+        ? { ...err.detail, message: err.message }
+        : { reason: 'store_error', message: err instanceof Error ? err.message : String(err), outputKeys: Object.keys(task.output) };
+      console.error('video-to-3D: provider succeeded but the model could not be stored', jobId, JSON.stringify(failureDetail));
       if (!(err instanceof TripoStoreFatalError)) {
         const attempt = await db.prepare(`
           UPDATE video_generation_jobs SET store_attempts = store_attempts + 1
@@ -414,8 +453,9 @@ async function applyTripoTaskResult(db, env, jobId, task) {
         if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
       }
       await failVideoGenerationJob(db, jobId,
-        'We couldn\'t retrieve the generated model. Your credit has been returned. Try again.',
-        { refundCredit: true });
+        'The model was made, but we couldn\'t save it. Your credit has been returned. Please try again in a little while.',
+        { refundCredit: true, failureDetail });
+      await raiseLostModelCard(db, jobId, failureDetail);
       return;
     }
     await db.prepare(`
@@ -710,4 +750,32 @@ export async function handleVideoGenerationWebhook(request, env, db) {
   if (!job || job.processed_at !== null) return json({ received: true });
   await applyTripoTaskResult(db, env, job.job_id, payload.data);
   return json({ received: true });
+}
+
+// #4122: the admin's "Check the saved result" on a failed job. Asks the provider about the job's task (a read,
+// no charge), then tries the same download, size and GLB checks the store step runs, writing nothing. The job's
+// status and credit are left exactly as they are; only what the check found is recorded on the job (failure_detail),
+// so the owner and the fleet can see why a finished model was not kept. Returns what it found.
+export async function checkVideoGenerationJobResult(env, db, job) {
+  if (!tripoConfigured(env)) throw new HttpError('Video-to-3D is not configured', 503);
+  if (!job.provider_task_id) throw new HttpError('This job never reached the provider, so there is nothing to check', 409);
+  const task = await tripoRequest(env, 'GET', `tasks/${encodeURIComponent(job.provider_task_id)}`);
+  const outputKeys = Object.keys(task?.output ?? {});
+  const found = { checkedAt: new Date().toISOString(), taskStatus: task?.status ?? null, outputKeys };
+  if (task?.status !== 'success' || !task?.output?.model_url) {
+    found.reason = task?.status === 'success' ? 'no_model_url' : 'task_not_successful';
+  } else {
+    try {
+      const stored = await storeTripoModelOutput(env, task.output.model_url, outputKeys, { dryRun: true });
+      found.reason = 'would_save_now';
+      found.bytes = stored.sizeBytes;
+      found.contentType = stored.contentType;
+    } catch (err) {
+      Object.assign(found, err instanceof TripoStoreFatalError
+        ? { ...err.detail, message: err.message }
+        : { reason: 'store_error', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await db.prepare('UPDATE video_generation_jobs SET failure_detail = ? WHERE job_id = ?').bind(JSON.stringify(found), job.job_id).run();
+  return found;
 }

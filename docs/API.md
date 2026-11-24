@@ -374,6 +374,18 @@ its own endpoint. Counted against the rate limit below the same as every
 other rejection on this endpoint — a cheap validation failure isn't a free
 way to probe past the limiter.
 
+`username` (#4136, `worker/lib/username-rules.js`; the same rules apply to a rename,
+`PUT`/`PATCH /api/builders/:id`): stored in NFC with odd spaces turned into a plain space
+and runs of white space collapsed; at most 40 characters; refused with `400` ("That name
+contains a character we cannot show...") when it holds control, zero-width, direction-override
+or other format characters, private-use or unassigned characters, line separators or a lone
+surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
+Cyrillic and Greek look-alike letters), so a name that reads as an existing one is `409`; the
+misleading names (admin, administrator, support, staff, moderator, higglehaven) and every
+assistant's name are reserved in that form, also with spaces taken out. Accounts older than
+migration 0235 have the column filled in the next time any name is checked
+(`worker/lib/username-store.js`); existing names are never changed.
+
 `email` is normalized (trimmed, lowercased) and validated against a
 deliberately permissive pattern — "does this look roughly like an email,"
 not a full RFC-5322 parser, since the only real validation of an address
@@ -727,6 +739,14 @@ every ID-verification session this account started (`sessionId`, `status`,
 `createdAt`, `processedAt`) — status/timestamps only, deliberately never a
 raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
+
+**#4142:** a top-level `communication` section, present for every account
+(builder or not), holds what keys on the account itself: `assistantConversations`
+(each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and
+its `messages` as `{sender, text, sentAt}`), `assistantQuestions` (a question left
+while no assistant was free, with its `answer`), and `blocksMade` (who this
+account blocked and when). Who blocked the account is deliberately not exported
+("A block is silent").
 
 **#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
 survey left open): `profile.moderationDecisions` lists every
@@ -11655,6 +11675,22 @@ independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
 
+### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
+
+The dashboard's Video-to-3D jobs panel. The list returns the latest 50 jobs, newest first: `jobId`, `status`,
+`createdAt`, `finishedAt`, `username`, `message` (what the builder was told), `detail` (why it failed, admin
+only: `reason` is one of `download_refused`, `too_big`, `not_a_glb`, `no_model_url`, `store_error`, plus the HTTP
+status, byte count, content type, the validator's message and the keys the provider's output held) and `canCheck`.
+`detail` is stored in `video_generation_jobs.failure_detail` (migration 0234) and is never part of
+`GET /api/video-generation-jobs/:jobId`.
+
+`POST .../check` is for a `failed` job that reached the provider. It reads the provider's task (no charge) and runs
+the same download, size and GLB checks the save step runs, writing no model; it records the finding as the job's
+`detail` (`would_save_now` when saving would work) and one admin-log row (`video_job_result_checked`). The job's
+status and the builder's credit are not changed. Refused with 403 for a non-admin, 404 for an unknown job and 409
+for a job that did not fail or never reached the provider.
+
+
 ### Frontend wiring (#1620)
 
 `index.html`'s `#upload-modal` (`POST /api/models`'s existing wizard, see
@@ -11829,7 +11865,9 @@ the collect limit, `{ "standing": { "limit", "windowSeconds", "remaining",
 the current window (every attempt, including a 404 or 403, counts, exactly as
 `POST .../collect` enforces it); `retryAfterSeconds` is when the oldest
 in-window attempt ages out (when the next slot frees), `0` when none is used.
-It never spends a slot. The Shop reads it when a landlet's orbs load, and a
+It never spends a slot. The reply also carries `"credits"` (#4123): how many
+free credits the builder holds now, so the Shop can show the balance rather than
+an increment. The Shop reads it when a landlet's orbs load, and a
 successful collect returns the same object, so an orb touched at `remaining: 0`
 is left in place with the limit notice instead of being popped and reversed by
 a `429`; a `429` that still happens (two tabs, another device) is handled as
@@ -11859,8 +11897,10 @@ orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
 statement in the same batch has actually committed that builder as the
 collector, so the two statements either both land or neither does, and two
 shoppers racing the same orb can never both be credited for it. Returns
-`{ "collected": true, "standing": { ... } }` on success (`standing` as in
-`GET /api/credit-orbs/standing`, #3441). `404` if the orb doesn't exist, or
+`{ "collected": true, "standing": { ... }, "credits": <n> }` on success
+(`standing` as in `GET /api/credit-orbs/standing`, #3441; `credits` is the
+builder's balance after this orb, read in the same round trip as the grant,
+#4123). `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
 Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like

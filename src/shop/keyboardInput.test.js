@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isFlightToggleKeyEvent, isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, keyboardAxes, keyboardRise, mergeStickInput } from './keyboardInput.js';
 
 // #1319
 const down = (...codes) => new Set(codes);
 
 describe('keyboardAxes (#1319)', () => {
-  it('R looks up and F looks down, so a keyboard can steer flight height (#3769)', () => {
+  it('R looks up and F looks down, to look up and down (flight is level, #4105)', () => {
     expect(keyboardAxes(down('KeyR'))).toMatchObject({ lookY: -1 });
     expect(keyboardAxes(down('KeyF'))).toMatchObject({ lookY: 1 });
     expect(keyboardAxes(down('KeyR', 'KeyF'))).toMatchObject({ lookY: 0 });
@@ -110,5 +110,18 @@ describe('isFlightToggleKeyEvent (#3823)', () => {
     }
     expect(isFlightToggleKeyEvent({ code: 'KeyT', target: { tagName: 'DIV', isContentEditable: true } })).toBe(false);
     expect(isFlightToggleKeyEvent({ code: 'KeyT', target: { tagName: 'BUTTON', closest: (sel) => (sel === '[role="dialog"]' ? {} : null) } })).toBe(false);
+  });
+});
+
+describe('keyboardRise (#4105)', () => {
+  it('Page Up rises, Page Down sinks, both cancel, nothing is zero', () => {
+    expect(keyboardRise(down('PageUp'))).toBe(1);
+    expect(keyboardRise(down('PageDown'))).toBe(-1);
+    expect(keyboardRise(down('PageUp', 'PageDown'))).toBe(0);
+    expect(keyboardRise(down())).toBe(0);
+  });
+  it('the keys are navigation keys, so a form field keeps them', () => {
+    expect(isNavigationKeyEvent({ code: 'PageUp' })).toBe(true);
+    expect(isNavigationKeyEvent({ code: 'PageUp', target: { tagName: 'INPUT' } })).toBe(false);
   });
 });

@@ -14,9 +14,8 @@
 // does (see that file's own comment on why).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
-import { ensureAdminSession, finish } from './helpers.mjs';
+import { ensureAdminSession, finish, localD1 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -638,10 +637,7 @@ await page.unroute('**/api/control-room/tasks/*/replies');
 const quoteTaskId = `e2e-2526-quo"te-${Date.now()}`;
 const quoteTaskNumber = (Math.floor(Date.now() / 1000) % 100000) + 90;
 const quoteTaskTitle = `E2E quote-id regression target ${quoteTaskNumber}`;
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `INSERT INTO control_room_tasks (task_id, kind, number, title, status) VALUES ('${quoteTaskId}', 'feedback', ${quoteTaskNumber}, '${quoteTaskTitle}', 'queued')`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
+localD1(`INSERT INTO control_room_tasks (task_id, kind, number, title, status) VALUES ('${quoteTaskId}', 'feedback', ${quoteTaskNumber}, '${quoteTaskTitle}', 'queued')`);
 console.log('seeded a control_room_tasks row with a selector-metacharacter id via the direct-D1 fallback (task_id contains a double-quote)');
 
 // A second task, blocked on the quote-id task's own number, so its own

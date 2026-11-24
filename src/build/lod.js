@@ -26,7 +26,7 @@
 //     the next tick, and the biggest on screen go first.
 import * as THREE from 'three';
 import {
-  apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, TIER_FULL, TIER_MID, TIER_FAR,
+  apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, TIER_FULL, TIER_MID, TIER_FAR,
   MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready, setApparentPx,
 } from '../shop/lodTier.js';
 import { buildLodSets } from '../shop/lodSets.js';
@@ -329,7 +329,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         const entry = items[index];
         entry.px = acc.px;
         if (acc.whole) entry.protected = true;
-        entry.wanted = entry.protected ? TIER_FULL : nextTier(acc.currentTier, acc.px);
+        entry.wanted = entry.protected ? TIER_FULL : nextSetTier(acc.currentTier, acc.px) // #4113: a set takes the far version only where its parts are tiny, as in Shop;
         objects[index].userData.lodProtected = entry.protected; // not set aside for batching: only selected ones are
       }
     }

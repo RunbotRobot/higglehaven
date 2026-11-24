@@ -47,8 +47,7 @@
 // reads from -- there is no other way to drive a real elevation value
 // through this deployment, which never runs real USGS-backed generation
 // for a test-claimed landlet.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, localD1 } from './helpers.mjs';
 
 const LABEL = 'Shop Terrain Elevation Tester';
 const TEST_ELEVATION_M = 7.5;
@@ -109,10 +108,7 @@ console.log('bare-ground floor / tree top, before setting a real elevation (shou
 
 // The one real way to drive a nonzero elevation_m through this deployment
 // for a test-claimed landlet -- see this file's own header comment.
-execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${myLandlet.landletId}'"`,
-  { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
-);
+localD1(`UPDATE landlets SET elevation_m = ${TEST_ELEVATION_M} WHERE landlet_id = '${myLandlet.landletId}'`);
 
 // A fresh page load re-fetches /api/landlets for real, picking up the
 // elevation_m just written -- same "reload to pick up a server-side change

@@ -18,6 +18,8 @@
 //                                         gesture, no sticks (#3650, #3749)
 //   aim:<up|down|left|right>[:ms]         the same from the right half (default 1000 ms): turns
 //                                         the camera, up and down are the pitch
+//   rise:<up|down>[:ms]                   a finger sliding along the right edge (default 1000 ms) while
+//                                         flying: up rises, down sinks; flight is level (#4105)
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
 //                                         `tap:text=Orders` works on a label too)
@@ -420,6 +422,18 @@ async function holdLook(direction, ms) {
   await page.waitForTimeout(ms);
   await sendTouch('touchEnd', []);
 }
+// #4105: flight is level; a finger sliding along the right edge changes height (up rises, down sinks).
+async function holdRise(direction, ms) {
+  await page.waitForSelector('body.shop-ready', { timeout: 30000 }).catch(() => {});
+  const x = device.width - 14;
+  const y0 = device.height * 0.6;
+  const dy = direction === 'up' ? -1 : 1;
+  await sendTouch('touchStart', [{ id: 1, x, y: y0 }]);
+  await sendTouch('touchMove', [{ id: 1, x, y: y0 + dy * 30 }]);
+  await sendTouch('touchMove', [{ id: 1, x, y: y0 + dy * 70 }]);
+  await page.waitForTimeout(ms);
+  await sendTouch('touchEnd', []);
+}
 async function doubleTapWorld() {
   const x = device.width / 2;
   const y = device.height * 0.3;
@@ -584,6 +598,9 @@ async function runStepAction(step, index) {
       return null;
     case 'aim':
       await holdLook(a, b);
+      return null;
+    case 'rise':
+      await holdRise(a, b);
       return null;
     case 'look': {
       const startX = device.width / 2;

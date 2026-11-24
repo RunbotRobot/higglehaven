@@ -7,8 +7,7 @@
 // server sends) and the shirt. A coding session's fleet account is not an
 // assistant and stays an ordinary avatar (worker/fleet-access.test.js). Setup is
 // e2e/multiplayer-presence.test.mjs's, minus its position checks.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, localD1 } from './helpers.mjs';
 
 const LABEL_A = 'Assistant Look Builder A';
 const LABEL_B = 'Assistant Look Builder B';
@@ -157,10 +156,7 @@ const bUsername = (await fetchJson(pageB, '/api/auth/me')).body.user.username;
 // Only an assistant account is drawn as one (owner decision 2026-11-11), so B
 // is given one of the assistants' reserved agent names as well as the flag.
 const ASSISTANT_NAME = 'Juniper';
-execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE users SET is_fleet = 1, username = '${ASSISTANT_NAME}' WHERE username = '${bUsername.replace(/'/g, "''")}'"`,
-  { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
-);
+localD1(`UPDATE users SET is_fleet = 1, username = '${ASSISTANT_NAME}' WHERE username = '${bUsername.replace(/'/g, "''")}'`);
 await pageA.waitForFunction(
   (id) => (window.__shopOtherAvatars || []).some((a) => a.builderId === id && a.assistantName),
   builderB.builderId,

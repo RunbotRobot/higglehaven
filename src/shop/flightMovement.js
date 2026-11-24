@@ -66,10 +66,9 @@ import {
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
 import { keepPairInside } from './rigidCameraPair.js';
-import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
-import { verticalRateM_S, horizontalForwardScale, bodyTiltOffsetRad, FLIGHT_BODY_TILT_RANGE_RAD, FLIGHT_MAX_PATH_ANGLE_RAD } from './flightPitch.js';
+import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, keyboardRise, mergeStickInput } from './keyboardInput.js';
 // #4102: the three flight-height options the owner can fly and compare (off unless chosen).
-import { resolveHeightMode, createHeightControl, HEIGHT_HINT_WORDS } from './flightHeight.js';
+import { createHeightControl, heightHint, HEIGHT_HINT, KEY_HEIGHT_HINT, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
@@ -478,22 +477,12 @@ function announceWorldGesture(kind) {
   window.dispatchEvent(new CustomEvent(WORLD_GESTURE_EVENT, { detail: { kind } }));
 }
 let worldGestures = null;
-// #4102: null unless `?height=a|b|c` (or what this browser remembered) chose an option; then flight is
-// level and this control, not the view's pitch, changes height. See src/shop/flightHeight.js.
+// #4105: flight is level and a thumb sliding along the right edge changes height (src/shop/flightHeight.js).
 let heightControl = null;
 function bindWorldGestures(canvas) {
-  let heightMode = null;
-  try {
-    heightMode = resolveHeightMode(window.location.search, window.localStorage);
-  } catch { heightMode = resolveHeightMode(window.location.search, null); }
-  if (heightMode) {
-    heightControl = createHeightControl({
-      mode: heightMode,
-      viewportWidth: () => window.innerWidth,
-      halfX: () => window.innerWidth / 2,
-      onClaim: (id) => worldGestures.drop(id),
-    });
-  }
+  // An earlier comparison of ways to change height (#4102) left a choice in this browser's storage; forget it once.
+  try { window.localStorage.removeItem('higglehaven.flightHeight'); } catch { /* storage refused: nothing to forget */ }
+  heightControl = createHeightControl({ viewportWidth: () => window.innerWidth });
   worldGestures = createWorldGestures({
     onMove: (x, y) => {
       shopJoystickMove.x = x;
@@ -540,30 +529,30 @@ function bindWorldGestures(canvas) {
     }
     if (!touching(event)) return;
     try { canvas.setPointerCapture(event.pointerId); } catch { /* a pointer that is already gone */ }
-    // #4102: the height control sees every finger first; a finger it claims is not walking or looking.
-    if (heightControl && heightControl.down(event.pointerId, event.clientX, event.clientY, eventTime(event), shopFlightState === 'flying')) return;
+    // #4105: the height control sees every finger first; a finger it claims is not walking or looking.
+    if (heightControl.down(event.pointerId, event.clientX, event.clientY, eventTime(event), shopFlightState === 'flying')) return;
     worldGestures.down(event.pointerId, event.clientX, event.clientY, eventTime(event));
   });
   canvas.addEventListener('pointermove', (event) => {
     if (!shopActive || !(touching(event) || mouseLooking(event))) return;
-    if (heightControl && heightControl.move(event.pointerId, event.clientX, event.clientY)) return;
+    if (heightControl.move(event.pointerId, event.clientX, event.clientY)) return;
     worldGestures.move(event.pointerId, event.clientX, event.clientY);
   });
   canvas.addEventListener('pointerup', (event) => {
     if (!(touching(event) || mouseLooking(event))) return;
-    if (heightControl && heightControl.up(event.pointerId, eventTime(event), event.clientX, event.clientY)) return;
+    if (heightControl.up(event.pointerId, eventTime(event), event.clientX, event.clientY)) return;
     worldGestures.up(event.pointerId, eventTime(event), event.clientX, event.clientY);
   });
   canvas.addEventListener('pointercancel', (event) => {
     if (!(touching(event) || mouseLooking(event))) return;
-    if (heightControl) heightControl.cancel();
+    heightControl.cancel();
     worldGestures.cancel();
   });
 }
 // Flight (docs/SPEC.md §2): a double-tap on the world, double-press space
 // on desktop, or one press of T, toggles takeoff/landing (toggleShopFlight). Climbing and
-// descending while flying is steered by the view (#3769, see updateShopFlight
-// and flightPitch.js); there are no up/down buttons.
+// descending while flying is a thumb sliding along the right edge (#4105, see
+// updateShopFlight and flightHeight.js); there are no up/down buttons.
 
 // #1176: "Go to last location" — see startGoToLastLocation's own comment.
 // A plain click, not pointerdown like the fly button above: this one has
@@ -729,8 +718,8 @@ window.__testTeleportShopAvatar = (x, y, z) => {
 // the simulated duration is never actually guaranteed to be enough. Polling
 // this instead of guessing a bigger timeout is the robust fix.
 window.__testShopFlightState = () => shopFlightState;
-// #4102: which flight-height option is on (null: today's pitch-climb) and the rate it is asking for.
-window.__testShopFlightHeight = () => (heightControl ? { mode: heightControl.mode, rate: heightControl.rate() } : null);
+// #4105: the rate the edge slide is asking for (-1..1, positive rises).
+window.__testShopFlightHeight = () => (heightControl ? { rate: heightControl.rate() } : null);
 // #3650: the fly button the e2e suite used to click is gone; a double-tap is the
 // real input (covered by e2e/shop-world-gestures.test.mjs), this is the same
 // toggle without needing two taps in a row.
@@ -857,14 +846,12 @@ function shopAvatarFlightBodyReach() {
   // the FULL body height times sin(lean), not just the torso and head the
   // #1840 formula counted (0.78 m of a 1.64 m body). A custom avatar's
   // measured height flows through shopAvatarHeightM.
-  // #3769: the body tips up to FLIGHT_BODY_TILT_RANGE_RAD either side of the
-  // usual lean with the view; judge the farthest reach at the most forward tip
-  // and the greatest rise at the most upright one.
+  // #4105: flight is level, so the body keeps the usual lean (it no longer tips with the view).
   const h = shopAvatarHeightM();
   const half = shopAvatarCollisionHalfM();
   return {
-    forwardM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD - FLIGHT_BODY_TILT_RANGE_RAD, half).forwardM,
-    riseM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD + FLIGHT_BODY_TILT_RANGE_RAD, half).riseM,
+    forwardM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD, half).forwardM,
+    riseM: flightBodyReach(h, SHOP_AVATAR_FLIGHT_PITCH_RAD, half).riseM,
   };
 }
 
@@ -1239,24 +1226,13 @@ function updateShopFlight(dt) {
       if (shouldLevelOnLanding(shopPitch)) shopLandingLevel = { elapsedS: 0, fromPitch: shopPitch };
     }
   } else if (shopFlightState === 'flying') {
-    // #3769: the view steers height. Looking up and moving forward climbs,
-    // looking down descends (whichever way the avatar moves: #4068), a level view or no move
-    // gesture holds height. The rate is the flight speed the horizontal move
-    // uses, scaled by flightPitch.js's dead zone and ramp.
-    if (heightControl) {
-      // #4102: level flight. The view's pitch does not climb; the chosen gesture does, at up to the
-      // steepest rate the pitch used to give, so the options feel the same strength.
-      if (!shopGoToLastLocationPhase) {
-        const speed = SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM);
-        shopFlightAltitudeM += heightControl.rate() * Math.sin(FLIGHT_MAX_PATH_ANGLE_RAD) * speed * dt;
-      }
-      showHeightHintOnce();
-    } else if (!shopGoToLastLocationPhase && shopMoveY !== 0) {
-      camera.getWorldDirection(shopViewDirection);
-      const viewPitchRad = Math.asin(THREE.MathUtils.clamp(shopViewDirection.z, -1, 1));
+    // #4105: flight is level; a thumb sliding along the right edge rises or sinks, at the rate the
+    // flight speed gives (the view's pitch does not climb, so a person can look straight down).
+    if (!shopGoToLastLocationPhase) {
       const speed = SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM);
-      shopFlightAltitudeM += verticalRateM_S(viewPitchRad, -shopMoveY, speed) * dt;
+      shopFlightAltitudeM += (heightControl.rate() || keyboardRise(shopKeysDown)) * FLIGHT_CLIMB_FRACTION * speed * dt;
     }
+    showHeightHintOnce();
     // The limits are felt during the gesture: at the top of the sky and at the
     // lowest hover (or the top of an item under the avatar) the avatar levels
     // off and rests, never bounces, and says so once. It never lands by itself.
@@ -1282,17 +1258,17 @@ function updateShopFlight(dt) {
   }
 }
 
-// #4102: with an option chosen, the first time someone flies the page says the gesture in its own
-// words (a status line that fades, like the limit notices, never a control on the world).
+// #4105: the first time someone flies, the page says the gesture in its own words (a status line that
+// fades, like the limit notices, never a control on the world).
 let heightHintShown = false;
 function showHeightHintOnce() {
-  if (heightHintShown || !heightControl || !document.body.classList.contains('shop-ready')) return;
+  if (heightHintShown || !document.body.classList.contains('shop-ready')) return;
   heightHintShown = true;
-  shopStatusEl.textContent = HEIGHT_HINT_WORDS[heightControl.mode];
+  shopStatusEl.textContent = heightHint();
   shopStatusEl.classList.add('visible');
   clearTimeout(flightLimitNoticeTimer);
   flightLimitNoticeTimer = setTimeout(() => {
-    if (Object.values(HEIGHT_HINT_WORDS).includes(shopStatusEl.textContent)) {
+    if (shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
       shopStatusEl.classList.remove('visible');
       shopStatusEl.textContent = '';
     }
@@ -1305,12 +1281,12 @@ let flightLimitNoticed = null;
 let flightLimitNoticeTimer = null;
 function showFlightLimitNotice(limit) {
   shopStatusEl.textContent = limit === 'ceiling'
-    ? (heightControl ? 'You are at the top of the sky.' : 'You are at the top of the sky. Look level to fly along.')
+    ? 'You are at the top of the sky.'
     : 'You are as low as you can fly. Double-tap the world to land.';
   shopStatusEl.classList.add('visible');
   clearTimeout(flightLimitNoticeTimer);
   flightLimitNoticeTimer = setTimeout(() => {
-    if (shopStatusEl.textContent.startsWith('You are ') || Object.values(HEIGHT_HINT_WORDS).includes(shopStatusEl.textContent)) {
+    if (shopStatusEl.textContent.startsWith('You are ') || shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
       shopStatusEl.classList.remove('visible');
       shopStatusEl.textContent = '';
     }
@@ -1851,14 +1827,6 @@ export function updateShopMovementCore(now) {
     let speed = airborne
       ? SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM) * moveMagnitude
       : THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
-    if (shopFlightState === 'flying' && shopMoveY !== 0 && !heightControl) {
-      // #3769: a climbing or diving path spends part of the speed on height
-      // (updateShopFlight), so the forward part of the move keeps only the rest.
-      camera.getWorldDirection(shopViewDirection);
-      const forwardShare = Math.abs(shopMoveY) / Math.hypot(shopMoveX, shopMoveY);
-      const scale = horizontalForwardScale(Math.asin(THREE.MathUtils.clamp(shopViewDirection.z, -1, 1)));
-      speed *= 1 - (1 - scale) * forwardShare;
-    }
     shopMoveDir
       .set(0, 0, 0)
       .addScaledVector(shopForward, -shopMoveY)
@@ -1991,12 +1959,8 @@ export function updateShopMovementCore(now) {
   // (shopLeanBlend, same shape as shopSitBlend -- 0 whenever
   // shopIdleInteractionTarget is null or 'sit'), so this term is a harmless
   // no-op outside an actual lean.
-  // #3769: the body tips with the view (nose up looking up, down looking down),
-  // a little either side of the usual lean, so it is clear which way it points.
-  const flightTiltRad = shopFlightState === 'flying' && !heightControl
-    ? bodyTiltOffsetRad(Math.asin(THREE.MathUtils.clamp(camera.getWorldDirection(shopViewDirection).z, -1, 1)))
-    : 0;
-  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD + flightTiltRad : SHOP_LEAN_PITCH_RAD * shopLeanBlend;
+  // #4105: flight is level, so the body keeps the usual lean in the air (it no longer tips with the view).
+  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : SHOP_LEAN_PITCH_RAD * shopLeanBlend;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
   scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset + shopSitYawOffset + shopLeanYawOffset);
   scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);

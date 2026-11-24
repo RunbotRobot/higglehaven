@@ -114,7 +114,7 @@ const rateLimitNoticeVisible = await page.waitForFunction(() => {
 }, null, { timeout: 5000 }).then(() => true).catch(() => false);
 console.log('rate-limit notice shown after the 429 (should be true):', rateLimitNoticeVisible);
 
-const toastVisible = (await budWordText(page)) === 'Credit +1';
+const toastVisible = /^\d+ credits?$/.test(await budWordText(page));
 console.log('no collect-confirmation toast shown (should be true, the 429 never succeeded):', !toastVisible);
 
 const activeAfterFailedCollect = await page.evaluate(() => window.__testActiveCreditOrbIds());

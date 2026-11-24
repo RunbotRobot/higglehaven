@@ -27,6 +27,8 @@ const BROKEN_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/expired.gl
 // exercised the same isolated way #1673's BROKEN_MODEL_DOWNLOAD_URL
 // exercises the download-failure path above.
 const OVERSIZED_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/oversized.glb';
+// #4122: a download that answers 200 with something that is not a GLB (the third fatal case).
+const NOT_A_GLB_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/not-a-glb.glb';
 const MAX_MODEL_BYTES_FOR_TEST = 20 * 1024 * 1024;
 // #3108: a download URL whose first N responses are a provider-side 503, then
 // a valid model -- a transient failure Tripo's CDN recovers from. Padded so
@@ -119,6 +121,9 @@ beforeAll(async () => {
     }
     if (url === OVERSIZED_MODEL_DOWNLOAD_URL) {
       return new Response(glbBytesOfAtLeast(MAX_MODEL_BYTES_FOR_TEST + 1), { status: 200 });
+    }
+    if (url === NOT_A_GLB_DOWNLOAD_URL) {
+      return new Response('<html>not a model</html>', { status: 200, headers: { 'content-type': 'text/html' } });
     }
     return originalFetch(input, init);
   };
@@ -342,11 +347,18 @@ describe('Video-to-3D job creation (#1619)', () => {
     try {
       const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(status.body.status).toBe('failed');
-      expect(status.body.error).toMatch(/retrieve the generated model/);
+      expect(status.body.error).toMatch(/model was made, but we couldn't save it/);
+      expect(status.body.error).toMatch(/credit has been returned/);
+      // #4122: the person reads a plain sentence; the real reason is kept for the admin and never sent.
+      expect(JSON.stringify(status.body)).not.toMatch(/download_refused|failure/i);
 
-      const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      const row = await env.DB.prepare('SELECT status, processed_at, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');
       expect(row.processed_at).not.toBeNull();
+      const detail = JSON.parse(row.failure_detail);
+      expect(detail.reason).toBe('download_refused');
+      expect(detail.httpStatus).toBeGreaterThanOrEqual(400);
+      expect(detail.outputKeys).toContain('model_url');
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
     }
@@ -364,9 +376,10 @@ describe('Video-to-3D job creation (#1619)', () => {
       expect(status.body.error).toMatch(/couldn't retrieve the finished model/);
       expect(status.body.error).not.toMatch(/provider/i);
 
-      const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      const row = await env.DB.prepare('SELECT status, processed_at, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');
       expect(row.processed_at).not.toBeNull();
+      expect(JSON.parse(row.failure_detail).reason).toBe('no_model_url');
     } finally {
       nextTaskStatus = 'success';
     }
@@ -386,12 +399,42 @@ describe('Video-to-3D job creation (#1619)', () => {
     try {
       const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(status.body.status).toBe('failed');
-      expect(status.body.error).toMatch(/retrieve the generated model/);
+      expect(status.body.error).toMatch(/model was made, but we couldn't save it/);
 
-      const row = await env.DB.prepare('SELECT status, model_url, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      const row = await env.DB.prepare('SELECT status, model_url, processed_at, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');
       expect(row.model_url).toBeNull();
+      const detail = JSON.parse(row.failure_detail);
+      expect(detail.reason).toBe('too_big');
+      expect(detail.bytes).toBeGreaterThan(detail.limitBytes);
+      // #4122: a lost paid result raises one bug-report card on its own, with the job id and the kept reason.
+      const card = await env.DB.prepare('SELECT kind, status, waiting_on, title, note FROM control_room_tasks WHERE task_id = ?').bind(`video-store-failed-${createdBody.jobId}`).first();
+      expect(card.kind).toBe('bug-report');
+      expect(card.status).toBe('queued');
+      expect(card.title).toMatch(/could not be saved \(too_big\)/);
+      expect(card.note).toContain(createdBody.jobId);
       expect(row.processed_at).not.toBeNull();
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  it('#4122: keeps why when the provider\'s output is not a model we accept, and the person still reads one plain sentence', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-not-a-glb');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = NOT_A_GLB_DOWNLOAD_URL;
+    try {
+      const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(status.body.status).toBe('failed');
+      expect(status.body.error).toMatch(/model was made, but we couldn't save it/);
+      const row = await env.DB.prepare('SELECT failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      const detail = JSON.parse(row.failure_detail);
+      expect(detail.reason).toBe('not_a_glb');
+      expect(detail.contentType).toBe('text/html');
+      expect(detail.validatorMessage).toBeTruthy();
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
     }
@@ -475,7 +518,7 @@ describe('Video-to-3D job creation (#1619)', () => {
       }
       const last = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(last.body.status).toBe('failed');
-      expect(last.body.error).toMatch(/retrieve the generated model/);
+      expect(last.body.error).toMatch(/model was made, but we couldn't save it/);
       const row = await env.DB.prepare('SELECT status, processed_at, store_attempts FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');
       expect(row.processed_at).not.toBeNull();

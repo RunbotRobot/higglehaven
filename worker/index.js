@@ -1,4 +1,6 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './lib/username-rules.js';
+import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
@@ -86,6 +88,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
@@ -862,6 +865,11 @@ async function handleApi(request, env, url, ctx) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
   }
 
+  // #4122: the admin dashboard's Video-to-3D jobs panel (why a finished model was not kept; a free re-check).
+  if (route[0] === 'admin-video-jobs') {
+    return handleAdminVideoJobs(request, env, env.DB, route);
+  }
+
   if (route[0] === 'credit-orbs') {
     return handleCreditOrbs(request, env.DB, route, url);
   }
@@ -1487,13 +1495,20 @@ async function handleBuilders(request, env, db, route, url) {
     // unlike POST /api/builders' own create path just above (already
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
-    const label = labelValue(input.label, 'label');
     // #3142 (owner decision 2026-11-05, "One alias per person"): a person's
     // name is the account's username, and builders.label is only a copy of
     // it, so a rename here sets the username and the label follows in the
-    // same batch -- the two can no longer drift apart. The signup cap on
-    // usernames applies, since this is now where one is set.
-    if (label.length > 40) throw new HttpError('label must be 40 characters or fewer', 400);
+    // same batch -- the two can no longer drift apart. #4136: since this is
+    // where a username is set, signup's rules apply here too, from the same
+    // function (spaces collapsed, unshowable characters refused, look-alikes
+    // and the reserved names compared in folded form).
+    // labelValue first: its 100-character bound runs before anything is normalised.
+    const label = normalizeUsername(labelValue(input.label, 'label'));
+    const labelSkeleton = usernameSkeleton(label);
+    if (isReservedSkeleton(labelSkeleton)) {
+      throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
+    }
+    await ensureUsernameSkeletons(db);
     const userId = sessionBuilder.user_id;
     // #1187's case-insensitive uniqueness, now against both other accounts'
     // usernames (the schema's own idx_users_username_nocase) and any other
@@ -1503,11 +1518,12 @@ async function handleBuilders(request, env, db, route, url) {
     // username UPDATE just before it did (the batch is one transaction).
     const [usernameResult, labelResult] = await db.batch([
       db.prepare(`
-        UPDATE users SET username = ?
+        UPDATE users SET username = ?, username_skeleton = ?
         WHERE user_id = ?
           AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND user_id != ?)
+          AND NOT EXISTS (SELECT 1 FROM users WHERE username_skeleton = ? AND user_id != ?)
           AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
-      `).bind(label, userId, label, userId, label, route[1]),
+      `).bind(label, labelSkeleton, userId, label, userId, labelSkeleton, userId, label, route[1]),
       db.prepare(`
         UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE builder_id = ? AND EXISTS (SELECT 1 FROM users WHERE user_id = ? AND username = ?)
@@ -3409,7 +3425,7 @@ export async function cascadeDeleteAccount(db, userId) {
   statements.push(
     db.prepare(`
       UPDATE users SET
-        email = ?, email_canonical = NULL, username = ?, password_hash = ?,
+        email = ?, email_canonical = NULL, username = ?, username_skeleton = NULL, password_hash = ?,
         failed_login_attempts = 0, locked_until = NULL,
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -3712,6 +3728,58 @@ async function exportSocialSection(db, builderId, userId) {
   };
 }
 
+// #4142: the account's own conversations with the assistants and the blocks it
+// made. These key on the account (user_id), not on a builder profile, so they
+// are exported for every account, builder or not. Both sides of an assistant
+// thread are the person's to read (the assistant's replies are addressed to
+// them); the assistant is named by its username. Who blocked the person is
+// deliberately not here ("A block is silent").
+async function exportCommunicationData(db, userId) {
+  const conversations = await db.prepare(`
+    SELECT c.conversation_id, c.status, c.ended_by, c.created_at, c.ended_at, u.username AS assistant_name
+    FROM assistant_conversations c LEFT JOIN users u ON u.user_id = c.assistant_user_id
+    WHERE c.shopper_user_id = ? ORDER BY c.created_at ASC
+  `).bind(userId).all();
+  const messages = await db.prepare(`
+    SELECT m.conversation_id, m.sender, m.text, m.created_at FROM assistant_messages m
+    WHERE m.conversation_id IN (SELECT conversation_id FROM assistant_conversations WHERE shopper_user_id = ?)
+    ORDER BY m.created_at ASC
+  `).bind(userId).all();
+  const questions = await db.prepare(`
+    SELECT status, text, answer_text, answered_at, created_at, closed_at FROM assistant_questions
+    WHERE shopper_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const blocks = await db.prepare(`
+    SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
+    LEFT JOIN users u ON u.user_id = b.blocked_user_id
+    WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
+  `).bind(userId).all();
+  const byConversation = new Map();
+  for (const row of messages.results) {
+    if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
+    byConversation.get(row.conversation_id).push({ sender: row.sender, text: row.text, sentAt: row.created_at });
+  }
+  return {
+    assistantConversations: conversations.results.map((row) => ({
+      assistant: row.assistant_name,
+      status: row.status,
+      endedBy: row.ended_by,
+      startedAt: row.created_at,
+      endedAt: row.ended_at,
+      messages: byConversation.get(row.conversation_id) ?? [],
+    })),
+    assistantQuestions: questions.results.map((row) => ({
+      status: row.status,
+      question: row.text,
+      answer: row.answer_text,
+      askedAt: row.created_at,
+      answeredAt: row.answered_at,
+      closedAt: row.closed_at,
+    })),
+    blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -3765,6 +3833,7 @@ async function handleExportData(request, db) {
     },
     commerce: await exportCommerceData(db, builderRow, user.user_id),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
+    communication: await exportCommunicationData(db, user.user_id),
   });
 }
 
