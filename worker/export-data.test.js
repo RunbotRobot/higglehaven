@@ -603,3 +603,59 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     });
   });
 });
+
+// #4142: assistant thread, questions and own blocks key on the account, so they come with every export,
+// even one with no builder profile.
+describe('GET /auth/export-data -- assistant thread, questions and blocks (#4142)', () => {
+  const userIdOf = async (email) => (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first()).user_id;
+
+  it('returns all three empty for an account with none', async () => {
+    const email = `export-4142-empty-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password here', { username: `exp4142-${crypto.randomUUID().slice(0, 8)}` });
+    const result = await api('/auth/export-data', withSession(extractSessionCookie(signedUp.response)));
+    expect(result.response.status).toBe(200);
+    expect(result.body.assistantConversations).toEqual([]);
+    expect(result.body.assistantQuestions).toEqual([]);
+    expect(result.body.blocks).toEqual([]);
+  });
+
+  it('includes the person\'s own assistant thread, questions and blocks, and nobody else\'s', async () => {
+    const me = await signupBuilder('export-4142-me');
+    const assistant = await signupBuilder('export-4142-assistant');
+    const other = await signupBuilder('export-4142-other');
+    const myId = await userIdOf(me.email);
+    const assistantId = await userIdOf(assistant.email);
+    const otherId = await userIdOf(other.email);
+    const conversationId = `conv-4142-${crypto.randomUUID()}`;
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status, ended_by, ended_at)
+        VALUES (?, ?, ?, 'ended', 'shopper', '2026-11-20T10:05:00.000Z')`).bind(conversationId, assistantId, myId),
+      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES (?, ?, 'shopper', 'How do I build?', '2026-11-20T10:00:00.000Z')`).bind(`m1-${conversationId}`, conversationId),
+      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES (?, ?, 'assistant', 'Open the Build petal.', '2026-11-20T10:01:00.000Z')`).bind(`m2-${conversationId}`, conversationId),
+      env.DB.prepare(`INSERT INTO assistant_questions (question_id, shopper_user_id, text, status, answer_text, answered_at)
+        VALUES (?, ?, 'Where is my order?', 'answered', 'In My Purchases.', '2026-11-21T09:00:00.000Z')`).bind(`q-${conversationId}`, myId),
+      env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(myId, otherId),
+      // someone else's: another person's thread with the same assistant, and a block *of* me
+      env.DB.prepare(`INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status) VALUES (?, ?, ?, 'open')`).bind(`${conversationId}-x`, assistantId, otherId),
+      env.DB.prepare(`INSERT INTO assistant_messages (message_id, conversation_id, sender, text) VALUES (?, ?, 'shopper', 'someone else')`).bind(`m3-${conversationId}`, `${conversationId}-x`),
+      env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(otherId, myId),
+    ]);
+
+    const result = await api('/auth/export-data', me.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.assistantConversations).toHaveLength(1);
+    const [conversation] = result.body.assistantConversations;
+    expect(conversation.status).toBe('ended');
+    expect(conversation.endedBy).toBe('shopper');
+    expect(conversation.messages.map((m) => [m.from, m.text])).toEqual([
+      ['shopper', 'How do I build?'], ['assistant', 'Open the Build petal.'],
+    ]);
+    expect(result.body.assistantQuestions).toEqual([{
+      text: 'Where is my order?', status: 'answered', answer: 'In My Purchases.',
+      askedAt: expect.any(String), answeredAt: '2026-11-21T09:00:00.000Z', closedAt: null,
+    }]);
+    // my own block is listed; the block of me is not ("A block is silent")
+    expect(result.body.blocks).toHaveLength(1);
+    expect(JSON.stringify(result.body)).not.toContain('someone else');
+  });
+});

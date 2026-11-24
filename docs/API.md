@@ -713,6 +713,14 @@ the requesting account's own data as a single JSON bundle:
 }
 ```
 
+Three more top-level lists key on the account, so every export carries them
+(#4142): `assistantConversations` (the person's own thread with the
+assistants: `assistant` username, `status`, `endedBy`, `startedAt`, `endedAt`
+and `messages` of `from`/`text`/`sentAt`), `assistantQuestions` (what they left
+while nobody was on shift: `text`, `status`, `answer`, `askedAt`, `answeredAt`,
+`closedAt`) and `blocks` (the blocks this account made: `blockedUsername`,
+`blockedAt`). Who blocked the account is never exported ("A block is silent").
+
 Session-gated via the plain `requireCurrentUser` bar (`401` without one) —
 unlike `delete-account`/`change-password`, this is read-only, so it doesn't
 need the extra "re-enter your password" step those destructive/sensitive

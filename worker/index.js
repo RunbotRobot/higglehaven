@@ -3718,6 +3718,61 @@ async function exportSocialSection(db, builderId, userId) {
   };
 }
 
+// #4142: the pieces of an export that key on the account (user_id) rather than a builder, so a person with
+// no builder profile still gets them: their own thread with the assistants (#3624, both sides of it are
+// addressed to them), the questions they left while nobody was on shift, and the blocks they made. The
+// reverse of a block (who blocked them) stays out: "A block is silent". An assistant is named by its
+// username, which is public; nothing else about it is shown.
+async function exportAccountHelpAndBlocks(db, userId) {
+  const conversations = await db.prepare(`
+    SELECT c.conversation_id, c.status, c.ended_by, c.created_at, c.ended_at, a.username AS assistant_username
+    FROM assistant_conversations c LEFT JOIN users a ON a.user_id = c.assistant_user_id
+    WHERE c.shopper_user_id = ? ORDER BY c.created_at ASC
+  `).bind(userId).all();
+  const messages = await db.prepare(`
+    SELECT m.conversation_id, m.sender, m.text, m.created_at FROM assistant_messages m
+    WHERE m.conversation_id IN (SELECT conversation_id FROM assistant_conversations WHERE shopper_user_id = ?)
+    ORDER BY m.created_at ASC
+  `).bind(userId).all();
+  const messagesByConversation = new Map();
+  for (const row of messages.results) {
+    const list = messagesByConversation.get(row.conversation_id) ?? [];
+    list.push({ from: row.sender, text: row.text, sentAt: row.created_at });
+    messagesByConversation.set(row.conversation_id, list);
+  }
+  const questions = await db.prepare(`
+    SELECT text, status, answer_text, answered_at, created_at, closed_at FROM assistant_questions
+    WHERE shopper_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const blocks = await db.prepare(`
+    SELECT b.created_at, u.username AS blocked_username FROM user_blocks b
+    LEFT JOIN users u ON u.user_id = b.blocked_user_id
+    WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
+  `).bind(userId).all();
+  return {
+    assistantConversations: conversations.results.map((row) => ({
+      assistant: row.assistant_username ?? null,
+      status: row.status,
+      endedBy: row.ended_by ?? null,
+      startedAt: row.created_at,
+      endedAt: row.ended_at ?? null,
+      messages: messagesByConversation.get(row.conversation_id) ?? [],
+    })),
+    assistantQuestions: questions.results.map((row) => ({
+      text: row.text,
+      status: row.status,
+      answer: row.answer_text ?? null,
+      askedAt: row.created_at,
+      answeredAt: row.answered_at ?? null,
+      closedAt: row.closed_at ?? null,
+    })),
+    blocks: blocks.results.map((row) => ({
+      blockedUsername: row.blocked_username ?? null,
+      blockedAt: row.created_at,
+    })),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -3771,6 +3826,8 @@ async function handleExportData(request, db) {
     },
     commerce: await exportCommerceData(db, builderRow, user.user_id),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
+    // #4142: keyed on the account, so present for everyone.
+    ...(await exportAccountHelpAndBlocks(db, user.user_id)),
   });
 }
 
