@@ -52,6 +52,21 @@ export async function invalidateFarPlacementsAt(centerXM, centerYM) {
   }
 }
 
+// #4147: the same drop for landlets known only by id (a release, a transfer, a removal of a whole account's
+// lándlets). Their centres are read here, after the write, since the callers have ids not rows.
+export async function invalidateFarPlacementsForLandlets(db, landletIds) {
+  try {
+    const ids = [...new Set((landletIds || []).filter(Boolean))];
+    if (ids.length === 0) return;
+    const { results } = await db.prepare(
+      `SELECT center_x_m, center_y_m FROM landlets WHERE landlet_id IN (${ids.map(() => '?').join(',')})`,
+    ).bind(...ids).all();
+    await Promise.all(results.map((row) => invalidateFarPlacementsAt(row.center_x_m, row.center_y_m)));
+  } catch {
+    // ignore: best effort, like invalidateFarPlacementsAt
+  }
+}
+
 // Whether a placed product may be drawn for a shopper: the catalog row exists,
 // is not delisted, and its seller is neither suspended nor permanently closed
 // (the predicates #3033 and #3057 apply to the published-version read).
