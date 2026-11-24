@@ -5821,6 +5821,21 @@ an open DM thread (on open, and again after every message sent), not
 just on a deliberate user action the way notification mark-read's own
 20/15min limit is.
 
+### `POST /api/direct-messages/reports` (#4169)
+
+A conduct report about someone the caller has a conversation with, the third of its kind beside
+`POST /api/nearby-chat/report` and `POST /api/voice/report` ("Parity across sibling surfaces"). ID-verified
+callers only. Body `{ reportedBuilderId, reason? }` (reason at most 280 characters). Answers `201 { reportId }`
+and nothing more, the same whether the report is new or a repeat.
+
+The caller must have exchanged at least one message with the person, in either direction: otherwise `403`; the
+caller themselves or an unknown id is `400`. It writes one `direct_message_reports` row per reporter and reported
+account pair and one Control Room card of kind `direct-message-report` (repeats append to the card and re-queue it
+if closed, through the shared `fileConductReport`). The report holds who reported whom and the reason, never any
+message text, and an admin does not read the thread; the reported person is told nothing (a conduct report is
+invisible to them, like the other two). Deleting the reporter's account removes their reports.
+
+
 ### Frontend wiring
 
 Reached only from an accepted friend's own row in the Friends modal (no

@@ -12,7 +12,7 @@ const columnsOf = async (table) => (await env.DB.prepare(`SELECT name FROM pragm
 
 const SOCIAL_TABLES = [
   'friendships', 'direct_messages', 'avatar_presence', 'nearby_chat_messages',
-  'voice_signaling_messages', 'friend_voice_channel_members', 'voice_conduct_reports', 'nearby_chat_reports',
+  'voice_signaling_messages', 'friend_voice_channel_members', 'voice_conduct_reports', 'nearby_chat_reports', 'direct_message_reports',
 ];
 
 describe('social tables carry no builder-id columns (#3149)', () => {
@@ -25,7 +25,7 @@ describe('social tables carry no builder-id columns (#3149)', () => {
   }
 
   it('keeps the one-per-reporter unique index on the account pair for both report tables', async () => {
-    for (const table of ['voice_conduct_reports', 'nearby_chat_reports']) {
+    for (const table of ['voice_conduct_reports', 'nearby_chat_reports', 'direct_message_reports']) {
       const index = await env.DB.prepare('SELECT sql FROM sqlite_master WHERE type = ? AND name = ?')
         .bind('index', `idx_${table}_pair`).first();
       expect(index.sql).toContain('(reporter_user_id, reported_user_id)');
