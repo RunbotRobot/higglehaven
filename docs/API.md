@@ -1391,12 +1391,22 @@ either), and the same probe confirmed it never hits this rejection.
     "userId", "username", "email", "trustTier", "createdAt", "emailVerifiedAt",
     "builderId", "builderLabel", "sellerId", "sellerLabel"
   },
+  "landlets": [{
+    "landletId", "name", "status", "areaM2", "centerXM", "centerYM",
+    "publishedVersion", "updatedAt"
+  }],
   "suspensions": [{
     "suspensionId", "adminUserId", "reason", "evidenceNote", "suspendedAt",
     "gracePeriodEndsAt", "liftedAt", "liftedByAdminUserId", "escalatedAt"
   }]
 }
 ```
+
+`landlets` (#4135) is every lándlet the account's builder profile owns now,
+ordered by id (`[]` for a person with none or no builder profile), with
+`publishedVersion` the number of the active version shoppers see (`null`
+when nothing is published). Read-only, one query, no paging: a person holds a
+handful, and it needs paging only if one account ever holds hundreds.
 
 `builderId`/`sellerId` (and their `label`) are `null` when the account has
 no linked profile of that kind — note a `builders` row is always
