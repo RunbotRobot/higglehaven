@@ -101,10 +101,8 @@ a soft white wash, no dimming scrim, close in its upper right, one at a time, no
 wider than the screen, scrolling inside itself.
 
 Everything else is a gesture on the world itself: drag on the left half of the
-screen to walk, drag on the right half to look, double-tap to fly (the view's
-pitch is the climb: point it up to rise, down to descend; three other ways of
-changing height are on trial at `public/design-directions/flight-height.html`, none of
-them on by default, until the owner chooses one), tap a product to open
+screen to walk, drag on the right half to look, double-tap to fly (flight is level, so you can look
+straight down; slide a thumb up or down along the right edge to rise or sink), tap a product to open
 its card. A gesture cannot be seen until it is taught once, so the head teaches (it
 pulses and says Menu until first opened) and the instructions live in it, one tap
 away, under Help. Under `prefers-reduced-motion` nothing animates.

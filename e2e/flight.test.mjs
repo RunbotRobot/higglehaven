@@ -11,7 +11,7 @@
 // #3650: the bird button is gone; a double-tap on the world (covered by
 // e2e/shop-world-gestures.test.mjs) or a double-press of space flies. This file
 // drives the same toggle through window.__testToggleShopFlight.
-import { launchPage, chooseIdentity, finish, flyByView } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, flyWithHeight } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Tester' });
 
@@ -66,19 +66,17 @@ const flyingClassRightAfterTakeoffTap = await isFlyingClassSet();
 // 'grounded' or 'flying', not mid-transition).
 await page.waitForTimeout(1500);
 
-// #3769: no up/down arrows. The avatar goes where the view points: look up (R) and
-// walk forward (W) to climb, look down (F) and walk forward to descend, a level
-// view flies level, and with no move input the height is held.
+// #4105: no up/down arrows. Flight is level; height changes by the height gesture (Page Up and Page
+// Down stand in for the edge slide here), and with no height input the height is held.
 const altitude = () => page.evaluate(() => window.__testShopAvatarPosition().z);
 const arrowsGone = (await page.locator('#shop-up-btn, #shop-down-btn, #shop-vertical-controls').count()) === 0;
 const z0 = await altitude();
-await flyByView(page, 'up', { lookMs: 900, moveMs: 1500 });
+await flyWithHeight(page, 'up', { moveMs: 1500 });
 const zUp = await altitude();
 await page.waitForTimeout(500);
 const zHeld = await altitude(); // no move input: height is held
-await flyByView(page, 'down', { lookMs: 1800, moveMs: 1500 }); // look from up past level to down
+await flyWithHeight(page, 'down', { moveMs: 1500 });
 const zDown = await altitude();
-// Level the view: R until the pitch is inside the dead zone is fiddly, so read the real view.
 const climbedByLooking = zUp > z0 + 1;
 const heldWhileNotMoving = Math.abs(zHeld - zUp) < 0.05;
 const descendedByLooking = zDown < zUp - 1;
@@ -97,9 +95,9 @@ console.log('flying immediately on spawn, no tap needed (should be true):', flyi
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
 console.log('no up/down arrows on the page (should be true):', arrowsGone);
-console.log('climbed by looking up and walking forward (should be true):', climbedByLooking, z0, zUp);
-console.log('height held with no move input (should be true):', heldWhileNotMoving, zUp, zHeld);
-console.log('descended by looking down and walking forward (should be true):', descendedByLooking, zUp, zDown);
+console.log('rose with the height key and walking forward (should be true):', climbedByLooking, z0, zUp);
+console.log('height held with no height input (should be true):', heldWhileNotMoving, zUp, zHeld);
+console.log('sank with the height key and walking forward (should be true):', descendedByLooking, zUp, zDown);
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 

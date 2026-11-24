@@ -8,6 +8,9 @@ export const WALK_WORDS = 'Drag on the left half of the screen to walk';
 export const LOOK_WORDS = 'Drag on the right half of the screen to look around';
 export const FLY_WORDS = 'Double-tap the world to fly';
 export const LAND_WORDS = 'Double-tap the world to land';
+// #4105: flight is level; height changes by a thumb along the right edge (Page Up and Page Down on a keyboard).
+export const HEIGHT_WORDS = 'Slide a thumb up or down along the right edge of the screen to rise or sink';
+export const KEY_HEIGHT_WORDS = 'Page Up rises and Page Down sinks';
 // #3555 (taught under #3657): a tap on another person in Shop offers friendship. Not one of the
 // three movement gestures, but a gesture nothing on screen shows, so it is taught the same way.
 export const FRIEND_WORDS = 'Tap a person to offer friendship';
@@ -25,6 +28,6 @@ export const KEY_LAND_WORDS = 'Press T to land';
 // What the handbook must say for each, so the surfaces cannot drift from it.
 export const GESTURE_HANDBOOK = [
   { entry: 'How do I walk around and look around?', phrases: ['left half of the screen', 'right half of the screen', 'drag', 'w, a, s and d', 'left button on the world'] },
-  { entry: 'How do I fly, go up and come back down?', phrases: ['double-tap the world', 'look up', 'look down', 'press t', 'drag on the left half of the screen to fly'] },
+  { entry: 'How do I fly, go up and come back down?', phrases: ['double-tap the world', 'slide a thumb up or down along the right edge of the screen to rise or sink', 'page up rises and page down sinks', 'press t', 'drag on the left half of the screen to fly'] },
   { entry: 'How do I add a friend and send them a message?', phrases: ['offer friendship', 'tap their avatar', 'send request'] },
 ];
