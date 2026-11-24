@@ -1,4 +1,6 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './lib/username-rules.js';
+import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
@@ -1487,13 +1489,23 @@ async function handleBuilders(request, env, db, route, url) {
     // unlike POST /api/builders' own create path just above (already
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
-    const label = labelValue(input.label, 'label');
     // #3142 (owner decision 2026-11-05, "One alias per person"): a person's
     // name is the account's username, and builders.label is only a copy of
     // it, so a rename here sets the username and the label follows in the
-    // same batch -- the two can no longer drift apart. The signup cap on
-    // usernames applies, since this is now where one is set.
-    if (label.length > 40) throw new HttpError('label must be 40 characters or fewer', 400);
+    // same batch -- the two can no longer drift apart. #4136: since this is
+    // where a username is set, signup's rules apply here too, from the same
+    // function (spaces collapsed, unshowable characters refused, look-alikes
+    // and the reserved names compared in folded form).
+    if (typeof input.label !== 'string' || input.label.length > 400) {
+      // A bound before the work below, so a huge string is never normalised.
+      throw new HttpError(typeof input.label === 'string' ? 'label must be 40 characters or fewer' : 'label is required', 400);
+    }
+    const label = normalizeUsername(input.label);
+    const labelSkeleton = usernameSkeleton(label);
+    if (isReservedSkeleton(labelSkeleton)) {
+      throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
+    }
+    await ensureUsernameSkeletons(db);
     const userId = sessionBuilder.user_id;
     // #1187's case-insensitive uniqueness, now against both other accounts'
     // usernames (the schema's own idx_users_username_nocase) and any other
@@ -1503,11 +1515,12 @@ async function handleBuilders(request, env, db, route, url) {
     // username UPDATE just before it did (the batch is one transaction).
     const [usernameResult, labelResult] = await db.batch([
       db.prepare(`
-        UPDATE users SET username = ?
+        UPDATE users SET username = ?, username_skeleton = ?
         WHERE user_id = ?
           AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND user_id != ?)
+          AND NOT EXISTS (SELECT 1 FROM users WHERE username_skeleton = ? AND user_id != ?)
           AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
-      `).bind(label, userId, label, userId, label, route[1]),
+      `).bind(label, labelSkeleton, userId, label, userId, labelSkeleton, userId, label, route[1]),
       db.prepare(`
         UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE builder_id = ? AND EXISTS (SELECT 1 FROM users WHERE user_id = ? AND username = ?)
