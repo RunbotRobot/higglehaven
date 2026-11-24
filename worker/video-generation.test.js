@@ -40,6 +40,9 @@ let flakyDownloadFailuresRemaining = 0;
 // its content hash isn't one a previous test already stored.
 let flakyModelMinSize = 4096;
 let nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+// #4122: when set, every task lookup after the first answers with this (a refreshed output URL).
+let refreshedModelDownloadUrl = null;
+let taskLookups = 0;
 const originalFetch = globalThis.fetch;
 
 function minimalGlbBytes() {
@@ -93,9 +96,11 @@ beforeAll(async () => {
     if (url.startsWith('https://openapi.tripo3d.ai/v3/tasks/')) {
       const taskId = url.slice('https://openapi.tripo3d.ai/v3/tasks/'.length);
       if (nextTaskStatus === 'success') {
+        taskLookups += 1;
+        const modelUrl = refreshedModelDownloadUrl && taskLookups > 1 ? refreshedModelDownloadUrl : nextModelDownloadUrl;
         return new Response(JSON.stringify({
           code: 0,
-          data: { task_id: taskId, status: 'success', output: { model_url: nextModelDownloadUrl } },
+          data: { task_id: taskId, status: 'success', output: { model_url: modelUrl } },
         }), { status: 200 });
       }
       // #2226: Tripo reporting success with no output/model_url at all --
@@ -361,6 +366,28 @@ describe('Video-to-3D job creation (#1619)', () => {
       expect(detail.outputKeys).toContain('model_url');
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  it('#4122: a refused download asks the provider once for a fresh URL and saves the model from it', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-fresh-url');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = BROKEN_MODEL_DOWNLOAD_URL;
+    refreshedModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    taskLookups = 0;
+    try {
+      const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(status.body.status).toBe('complete');
+      const row = await env.DB.prepare('SELECT status, model_url, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(row.status).toBe('complete');
+      expect(row.model_url).toMatch(/^\/uploads\/models\//);
+      expect(row.failure_detail).toBeNull();
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+      refreshedModelDownloadUrl = null;
     }
   });
 
