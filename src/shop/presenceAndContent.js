@@ -66,7 +66,7 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setBoundingSphere, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { findImplicitSets } from './implicitLodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -620,6 +620,25 @@ function fullTrianglesOf(object) {
 let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
 window.__testSetShopFullTriangleCap = (triangles) => { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; };
 
+// #4113: the read-out the issue asked for first: per set (and per item not in one), the version shown and
+// why, as of the last tick. e2e/console only; it costs nothing until it is asked for once.
+let tierReadoutOn = false;
+let lastTierReadout = null;
+window.__testShopSetTiers = () => {
+  tierReadoutOn = true;
+  if (!lastTierReadout) return [];
+  const groups = new Map();
+  for (const row of lastTierReadout.items) {
+    const key = row.object.userData.lodSetId ?? `item:${row.object.userData.instanceId ?? row.object.uuid}`;
+    let group = groups.get(key);
+    if (!group) groups.set(key, group = { set: row.object.userData.lodSetId ? key : null, members: 0, px: row.px, near: row.near, wanted: row.wanted, tiers: {}, reasons: {} });
+    group.members += 1;
+    group.tiers[row.tier] = (group.tiers[row.tier] ?? 0) + 1;
+    group.reasons[row.reason] = (group.reasons[row.reason] ?? 0) + 1;
+  }
+  return [...groups.values()].filter((g) => g.set).map((g) => ({ ...g, px: Math.round(g.px * 10) / 10 }));
+};
+
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
@@ -676,7 +695,7 @@ function updateInstanceLodTiers() {
       lodItemsScratch.push({
         px,
         protected: nearAvatar,
-        wanted: nearAvatar ? TIER_FULL : nextTier(currentTier, px),
+        wanted: nearAvatar ? TIER_FULL : (set ? nextSetTier(currentTier, px) : nextTier(currentTier, px)),
         tris: fullTrianglesOf(object), // #3920: the triangle budget counts protected items too
         dist: ownDistanceM,
         current: object.userData.lodApplied,
@@ -684,7 +703,9 @@ function updateInstanceLodTiers() {
       lodObjectsScratch.push({ entry, object });
     }
   }
-  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap);
+  const reasons = tierReadoutOn ? [] : null;
+  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap, reasons);
+  if (reasons) lastTierReadout = { items: lodObjectsScratch.map(({ object }, i) => ({ object, px: lodItemsScratch[i].px, near: lodItemsScratch[i].protected, wanted: lodItemsScratch[i].wanted, tier: tiers[i], reason: reasons[i] })) };
   // First note every item's wanted version (and ask for the reduced versions of
   // any that will need them); the ones due to change are collected to be applied
   // largest first.
@@ -711,9 +732,10 @@ function updateInstanceLodTiers() {
     const tier = tiers[i];
     object.userData.lodApplied = tier;
     // #3403: a batched placement changes version by moving between the batch's instanced sets.
-    // #4062: the ones that change dissolve from the old version to the new (a few at a time), except
-    // beside the avatar, where the real model is wanted at once.
-    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier, { instant: lodItemsScratch[i].protected });
+    // #4062: the ones that change dissolve from the old version to the new (a few at a time).
+    // #4113: no exception for what is beside the avatar any more: that was the one change a person saw most (the owner's
+    // wall went from flat to full in one frame at 10 m). The caps in batchCrossfade.js still swap what cannot fade.
+    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier);
     else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;

@@ -11655,6 +11655,22 @@ independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
 
+### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
+
+The dashboard's Video-to-3D jobs panel. The list returns the latest 50 jobs, newest first: `jobId`, `status`,
+`createdAt`, `finishedAt`, `username`, `message` (what the builder was told), `detail` (why it failed, admin
+only: `reason` is one of `download_refused`, `too_big`, `not_a_glb`, `no_model_url`, `store_error`, plus the HTTP
+status, byte count, content type, the validator's message and the keys the provider's output held) and `canCheck`.
+`detail` is stored in `video_generation_jobs.failure_detail` (migration 0234) and is never part of
+`GET /api/video-generation-jobs/:jobId`.
+
+`POST .../check` is for a `failed` job that reached the provider. It reads the provider's task (no charge) and runs
+the same download, size and GLB checks the save step runs, writing no model; it records the finding as the job's
+`detail` (`would_save_now` when saving would work) and one admin-log row (`video_job_result_checked`). The job's
+status and the builder's credit are not changed. Refused with 403 for a non-admin, 404 for an unknown job and 409
+for a job that did not fail or never reached the provider.
+
+
 ### Frontend wiring (#1620)
 
 `index.html`'s `#upload-modal` (`POST /api/models`'s existing wizard, see

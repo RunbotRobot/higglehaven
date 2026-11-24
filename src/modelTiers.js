@@ -154,7 +154,7 @@ function positionsAreFinite(geometry) {
 // stuck, or out of passes. Yields many times within every pass (#3483) so a
 // caller can enforce a frame budget. Never modifies or disposes the input; returns either the
 // input itself or a geometry this function created.
-export function* simplifyToTarget(geometry, targetTriangles) {
+export function* simplifyToTarget(geometry, targetTriangles, options = {}) {
   let current = geometry;
   // #3528: a pass that opens new holes in the mesh is not kept. A shopper saw a
   // toilet "all jagged with holes" from a distance: the full model is closed, its
@@ -170,7 +170,7 @@ export function* simplifyToTarget(geometry, targetTriangles) {
     let next = null;
     let nextBoundary = 0;
     for (const fraction of PASS_REMOVAL_FRACTIONS) {
-      const candidate = yield* simplifyGeometryOnePassSteps(current, targetTriangles, fraction);
+      const candidate = yield* simplifyGeometryOnePassSteps(current, targetTriangles, fraction, options);
       yield;
       if (!candidate) break;
       const count = yield* boundaryEdgeCountSteps(candidate);
@@ -376,7 +376,7 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
     if (total > target) {
       const meshTarget = Math.max(MID_MIN_TRIANGLES_PER_MESH, Math.round((triangles * target) / total));
       if (triangles > meshTarget) {
-        const simplified = yield* simplifyToTarget(geometry, meshTarget);
+        const simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders: options.lockBorders ?? true });
         if (simplified !== geometry) {
           cloneMesh.geometry = simplified;
           changed = true;

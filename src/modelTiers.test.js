@@ -279,6 +279,14 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(stats.mid).toBeLessThanOrEqual(stats.full);
   });
 
+  it('keeps the surface of an open scan in the mid version: borders stay put (#4114)', () => {
+    const full = noisyOpenScan();
+    const { mid } = buildModelTiersSync(full);
+    const report = silhouetteFidelity(fidelityBatches(full), fidelityBatches(mid.object));
+    expect(report.areaKept).toBeGreaterThanOrEqual(0.95);
+    expect(report.openGrowth).toBeLessThanOrEqual(1.15);
+  });
+
   it('draws the far version from both sides, so nothing the simplifier left facing away disappears', () => {
     const { far } = buildModelTiersSync(chair());
     const meshes = [];

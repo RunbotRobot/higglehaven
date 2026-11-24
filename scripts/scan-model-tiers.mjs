@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // #4062: reports every product in the catalogue whose stored mid or far version does not still read as the
-// model (src/tierFidelity.js: the silhouette from the six axes, the same check the generator now applies).
+// model (src/tierFidelity.js: the silhouette from the six axes, and for a mid version the surface it kept and
+// the open edges it grew, #4114: the same check the generator applies).
 // Read-only: it lists the public catalogue and downloads the public model files, one at a time with a short
 // pause, and writes nothing anywhere. Products with no stored versions are listed apart (the viewer makes
 // those itself); a model this reader cannot parse (skinned, compressed) is listed as skipped.
@@ -63,7 +64,7 @@ for (const template of templates) {
       if (!url) { row.tiers[tier] = { status: 'none' }; continue; }
       const parsed = await loadModel(url);
       const report = silhouetteFidelity(full.batches, parsed.batches);
-      row.tiers[tier] = { triangles: parsed.triangles, coverage: +report.coverage.toFixed(2), extra: +report.extra.toFixed(2), faithful: isFaithful(report, tier) };
+      row.tiers[tier] = { triangles: parsed.triangles, coverage: +report.coverage.toFixed(2), extra: +report.extra.toFixed(2), areaKept: +report.areaKept.toFixed(2), openGrowth: +report.openGrowth.toFixed(2), faithful: isFaithful(report, tier) }; // #4114: surface kept and open-edge growth beside the outline
     }
     row.fullTriangles = full.triangles;
     row.status = Object.values(row.tiers).every((t) => t.status === 'none' || t.faithful) ? 'ok' : 'FAILS';
@@ -76,7 +77,7 @@ for (const template of templates) {
 if (asJson) {
   console.log(JSON.stringify(rows, null, 2));
 } else {
-  const fmt = (t) => (t ? (t.status === 'none' ? 'none' : `${t.triangles} tris, covers ${t.coverage}, extra ${t.extra}${t.faithful ? '' : '  <-- fails'}`) : '');
+  const fmt = (t) => (t ? (t.status === 'none' ? 'none' : `${t.triangles} tris, covers ${t.coverage}, extra ${t.extra}, surface kept ${t.areaKept}, open edges x${t.openGrowth}${t.faithful ? '' : '  <-- fails'}`) : '');
   for (const row of rows) {
     console.log(`${row.status.padEnd(18)} ${row.name} (${row.templateId.slice(0, 8)})${row.fullTriangles ? `  full ${row.fullTriangles} tris` : ''}`);
     if (row.tiers.mid || row.tiers.far) console.log(`    mid: ${fmt(row.tiers.mid)}\n    far: ${fmt(row.tiers.far)}`);

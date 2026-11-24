@@ -17,7 +17,7 @@ import { controls } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import { fetchMyEquippedAvatar, fetchMyEquippedAnimation } from '../api.js';
 import {
-  shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature, setShopDomeMesh,
+  shopAvatarPosition, shopAvatarFacing, setShopActive, setShopEquippedAvatarSkeletonSignature, setShopDomeMesh,
   setShopControlsVisible, shopStatusEl,
 } from '../main.js';
 import {
@@ -30,6 +30,8 @@ import {
   updateShopMovementCore, beginShopStanding, isShopStandingSpotBlocked, releaseShopMovementInput,
 } from '../shop/flightMovement.js';
 import { mountShopAvatar } from '../shop/mountShopAvatar.js';
+import { beginAvatarSwapFog, beginAvatarFogHold } from '../shop/avatarSwapFog.js';
+import { createArrivalFog } from '../shop/arrivalEffect.js';
 import { setMovementWorld, createSellMovementWorld } from '../shop/movementWorld.js';
 import { createWorldEnclosure } from '../shop/enclosure.js';
 import { updateShopSky, currentShopSkyTimeS, shopDomeRiseM, growShopDomeIfNeeded } from '../shop/sky.js';
@@ -49,6 +51,7 @@ let groundBounds = null;
 // when the world view mounts (#3756).
 let modalOpen = true;
 let mounted = false;
+let activeAvatarSwap = null; // #4108: the fog over the seller's own avatar arriving, stepped each frame (same as Shop's)
 
 // #3502 (owner decision "A place outside the world still looks like the
 // world"): the showroom is a small, empty piece of the world, the standard
@@ -172,6 +175,10 @@ new MutationObserver(() => {
   setSellWorldModalOpen(sellerModalEl.classList.contains('visible'));
 }).observe(sellerModalEl, { attributes: true, attributeFilter: ['class'] });
 
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
 // Enters the Sell world view. Called from enterSellMode once the seller
 // identity is confirmed. Re-entrant (a second call re-mounts the avatar).
 // `onFrame(now)` is Sell's own per-frame side work (the Submit feedback ring
@@ -195,6 +202,33 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
     shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
     resetShopAvatarIdleState,
     onModelFailed: sayAvatarDidNotLoad, // #4067
+    // #4108: the seller's own avatar arrives through fog here too, the way it does in Shop (#4067, #3905):
+    // never the default body for a moment first. The same three hooks as src/shop/mode.js passes.
+    beginAvatarSwap: (commit) => {
+      activeAvatarSwap?.cancel();
+      const swap = beginAvatarSwapFog({
+        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
+        commit, nowMs: performance.now(), reducedMotion: prefersReducedMotion(),
+      });
+      activeAvatarSwap = swap.released ? null : swap;
+      return swap;
+    },
+    cancelAvatarSwap: () => { activeAvatarSwap?.cancel(); activeAvatarSwap = null; },
+    beginAvatarFogHold: () => {
+      activeAvatarSwap?.cancel();
+      const hold = beginAvatarFogHold({
+        createFog: createArrivalFog, parent: scene, getPosition: () => shopAvatarPosition,
+        nowMs: performance.now(), reducedMotion: prefersReducedMotion(),
+      });
+      activeAvatarSwap = hold.released ? null : hold;
+      return hold;
+    },
+    readWornHint: () => {
+      try { return localStorage.getItem(`hh-worn-avatar:${currentAuthUser?.userId ?? ''}`); } catch { return null; }
+    },
+    writeWornHint: (kind) => {
+      try { if (currentAuthUser?.userId) localStorage.setItem(`hh-worn-avatar:${currentAuthUser.userId}`, kind); } catch { /* remembered only when allowed */ }
+    },
   });
   mounted = true;
   fitEnclosureToPage();
@@ -208,6 +242,7 @@ export async function enterSellWorldView({ onFrame = null } = {}) {
   registerModeFrameUpdate((now) => {
     updateShopMovementCore(now);
     updateShopSky(now);
+    if (activeAvatarSwap?.step(now)) activeAvatarSwap = null; // #4108: the fog over the avatar's arrival
     onFrame?.(now);
   });
   registerFacingOverride(() => shopAvatarFacing);

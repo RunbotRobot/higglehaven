@@ -49,7 +49,7 @@ class SimplifyModifier {
 	// pieces of work, so a caller with a per-frame budget (src/modelTiers.js) can
 	// run it across frames instead of in one task of seconds on a large mesh.
 	// Returns the simplified geometry, exactly what modify() returns.
-	*modifySteps( geometry, count ) {
+	*modifySteps( geometry, count, options = {} ) {
 
 		geometry = geometry.clone();
 
@@ -155,6 +155,14 @@ class SimplifyModifier {
 		// of the seam and not the other, which opens a crack (a hole) in a closed
 		// model; a toilet's mid version had more than half its edges on cracks.
 		yield* markSeamVertices( vertices ); // SLICED
+
+		// #4114: optionally, a vertex on an open edge (the border of a patch, or of a hole) is locked too.
+		// A model that is a patchwork of pieces meeting at their borders (a scanned brick: 52 pieces, 2,450
+		// open edges) loses surface when each piece is simplified alone, because collapsing a border vertex
+		// pulls the piece's border back and the gaps between pieces open into holes (12% of the brick's
+		// surface at its mid version). Locked, the borders stay where they are and only the inside of a
+		// piece is simplified.
+		if ( options.lockBorders ) yield* markBorderVertices( vertices, faces ); // SLICED
 
 		for ( let i = 0, il = vertices.length; i < il; i ++ ) {
 
@@ -391,6 +399,87 @@ function* markSeamVertices( vertices ) {
 
 		}
 
+		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+	}
+
+}
+
+// #4114: locks every vertex that lies on an edge used by exactly one triangle, with vertices that share a
+// position counted as one (so a seam that only splits UVs or normals is not a border). Positions are compared
+// within a hundred-thousandth of the model's own size, the same tolerance as markSeamVertices.
+function* markBorderVertices( vertices, faces ) {
+
+	if ( vertices.length === 0 || faces.length === 0 ) return;
+
+	const min = new Vector3( Infinity, Infinity, Infinity );
+	const max = new Vector3( - Infinity, - Infinity, - Infinity );
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		min.min( vertices[ i ].position );
+		max.max( vertices[ i ].position );
+
+	}
+
+	const cell = Math.max( min.distanceTo( max ) * 1e-5, 1e-9 );
+	const ids = new Map();
+	const idOf = ( v ) => {
+
+		const p = v.position;
+		const key = Math.round( p.x / cell ) + ',' + Math.round( p.y / cell ) + ',' + Math.round( p.z / cell );
+		let id = ids.get( key );
+		if ( id === undefined ) {
+
+			id = ids.size;
+			ids.set( key, id );
+
+		}
+
+		return id;
+
+	};
+
+	const uses = new Map();
+
+	for ( let i = 0; i < faces.length; i ++ ) {
+
+		const a = idOf( faces[ i ].v1 );
+		const b = idOf( faces[ i ].v2 );
+		const c = idOf( faces[ i ].v3 );
+
+		if ( a !== b && b !== c && a !== c ) {
+
+			for ( const [ x, y ] of [ [ a, b ], [ b, c ], [ c, a ] ] ) {
+
+				const key = x < y ? x + '-' + y : y + '-' + x;
+				const entry = uses.get( key );
+				if ( entry ) entry.n ++; else uses.set( key, { n: 1, a: x, b: y } );
+
+			}
+
+		}
+
+		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+	}
+
+	const border = new Set();
+
+	for ( const { n, a, b } of uses.values() ) {
+
+		if ( n === 1 ) {
+
+			border.add( a );
+			border.add( b );
+
+		}
+
+	}
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		if ( border.has( idOf( vertices[ i ] ) ) ) vertices[ i ].locked = true;
 		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
 
 	}
