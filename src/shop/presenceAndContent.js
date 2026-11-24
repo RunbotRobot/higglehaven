@@ -66,8 +66,8 @@ import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
-import { findImplicitSets } from './implicitLodSets.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { buildLodSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -552,45 +552,15 @@ window.__testSetImplicitLodSets = (enabled) => {
 function lodSetsFor(entry) {
   if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken
     && entry.lodSetsVersion === implicitSetsVersion) return entry.lodSets;
-  const byGroup = new Map();
-  const loose = [];
-  for (const object of entry.objects) {
-    if (!hasLodTiers(object)) continue;
-    const groupId = object.userData.groupId;
-    object.userData.lodSetId = undefined;
-    if (!groupId) { loose.push(object); continue; }
-    let members = byGroup.get(groupId);
-    if (!members) byGroup.set(groupId, members = []);
-    members.push(object);
-  }
-  const sets = new Map();
-  const addSet = (setId, members) => {
-    const sphere = setBoundingSphere(members.map((object) => ({
-      x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object),
-    })));
-    for (const object of members) object.userData.lodSetId = setId;
-    // #4089: the biggest member, for a set too costly to be judged whole (setApparentPx).
-    let maxMemberRadiusM = 0;
-    for (const object of members) maxMemberRadiusM = Math.max(maxMemberRadiusM, lodRadiusM(object));
-    sets.set(setId, { members, sphere, maxMemberRadiusM, px: 0, near: false });
-  };
-  for (const [groupId, members] of byGroup) {
-    if (members.length < 2) continue; // a lone member is decided as a single item
-    addSet(groupId, members);
-  }
-  // #4063: loose placements that stand together (the same product, touching or a small gap apart) are a
-  // set for drawing too, so a wall the builder never bundled changes detail as one, exactly as the same
-  // wall bundled does. Nothing is stored or shown; this is worked out again whenever the landlet's
-  // objects change.
-  const looseItems = [];
-  const looseObjects = [];
-  for (const object of loose) {
-    const key = object.userData.template?.templateId;
-    if (!key) continue;
-    looseObjects.push(object);
-    looseItems.push({ key, x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object) });
-  }
-  (implicitSetsEnabled ? findImplicitSets(looseItems) : []).forEach((indices, n) => addSet(`auto:${n}`, indices.map((i) => looseObjects[i])));
+  // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
+  const sets = buildLodSets(entry.objects, {
+    hasTiers: hasLodTiers,
+    groupIdOf: (object) => object.userData.groupId,
+    templateKeyOf: (object) => object.userData.template?.templateId,
+    positionOf: (object) => object.position,
+    radiusOf: lodRadiusM,
+    implicit: implicitSetsEnabled,
+  });
   entry.lodSets = sets;
   entry.lodSetsObjectCount = entry.objects.length;
   entry.lodSetsVersion = implicitSetsVersion;

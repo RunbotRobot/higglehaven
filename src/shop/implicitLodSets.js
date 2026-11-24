@@ -32,13 +32,25 @@ function find(parent, i) {
 // (at least MIN_SET_MEMBERS each), in a stable order. Linear in the number of items (a spatial hash).
 export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
   const parent = items.map((_, i) => i);
-  let maxRadius = 0;
-  for (const item of items) if (item.radiusM > maxRadius) maxRadius = item.radiusM;
-  const cell = Math.max(2 * maxRadius + gapM, 0.1); // two items that can link are within one cell of each other
-  const grid = new Map();
+  // The grid is per product: two items of different products never link, so each product's cell is sized
+  // by its own largest item, and one big item of one product no longer widens the cell (and the number
+  // of neighbours checked) for every other product. The sets that come out, and their order, are the
+  // same as one grid for everything: only the items checked against each other changed.
+  const maxRadiusByKey = new Map();
+  for (const item of items) {
+    if (item.radiusM > (maxRadiusByKey.get(item.key) ?? 0)) maxRadiusByKey.set(item.key, item.radiusM);
+  }
+  const gridByKey = new Map();
   const cellKey = (cx, cy, cz) => `${cx},${cy},${cz}`;
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
+    let entry = gridByKey.get(item.key);
+    if (!entry) {
+      // two items that can link are within one cell of each other
+      entry = { cell: Math.max(2 * (maxRadiusByKey.get(item.key) ?? 0) + gapM, 0.1), grid: new Map() };
+      gridByKey.set(item.key, entry);
+    }
+    const { cell, grid } = entry;
     const cx = Math.floor(item.x / cell);
     const cy = Math.floor(item.y / cell);
     const cz = Math.floor(item.z / cell);
@@ -49,7 +61,6 @@ export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
           if (!others) continue;
           for (const j of others) {
             const other = items[j];
-            if (other.key !== item.key) continue;
             const reach = item.radiusM + other.radiusM + gapM;
             const ddx = item.x - other.x;
             const ddy = item.y - other.y;

@@ -5164,6 +5164,8 @@ window.__testBuildLodCounts = () => buildLod.counts();
 window.__testBuildArrivingCount = () => buildArrival.arrivingCount(); // e2e: items still dissolving in (not batched yet)
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
+window.__testSetBuildImplicitLodSets = (on) => buildLod.setImplicitSets(on); // #4115: loose items judged one by one again
+window.__testBuildLodSetCount = () => buildLod.setCount(); // #4115: how many sets (bundles and loose walls) the pass sees
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
 window.__testBuildRenderedCalls = () => renderer.info.render.calls; // the last frame's draw calls (#3929)
 window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
