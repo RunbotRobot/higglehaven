@@ -146,7 +146,8 @@ describe('Nearby chat conduct reports (#2956)', () => {
     const alice = await signupIdVerifiedBuilder('nearby-report-rate-limit-alice');
     const bob = await signupIdVerifiedBuilder('nearby-report-rate-limit-bob');
 
-    const bucketKey = `nearby-chat-report-create:${alice.builderId}`;
+    const aliceUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(alice.builderId).first()).user_id;
+    const bucketKey = `nearby-chat-report-create:${aliceUserId}`; // keyed on the account (#4268), so a profile reset cannot refill it
     const now = Date.now();
     await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
       'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
