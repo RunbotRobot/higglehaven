@@ -1031,6 +1031,11 @@ async function generateConceptImageBytes(env, prompt) {
 // the unauthenticated (no owning seller) path, same shape as
 // SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
 const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
+// #4287: seller-less (system/placeholder) creation needs no session, so it is limited per IP and a batch may carry
+// only so many of them. Generous on purpose: the test fixtures seed many of these from one address, each test file on
+// its own database. The real fix (admin-only, with an explicit test switch) is #4287 step 2.
+const CATALOG_ANONYMOUS_CREATE_RATE_LIMIT_MAX = 120;
+const CATALOG_ANONYMOUS_BATCH_MAX = 50;
 
 // Same unauthenticated-path gap as CATALOG_PATCH_RATE_LIMIT_MAX above, but
 // for DELETE (#520) — unlike PATCH, DELETE has no bootstrapping-trap reason
@@ -1147,6 +1152,12 @@ export async function handleCatalog(request, db, route, url, models, env) {
       ids.add(template.templateId);
     }
     const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
+    if (request.method === 'POST' && sellerIds.length < templates.length) {
+      if (templates.length - sellerIds.length > CATALOG_ANONYMOUS_BATCH_MAX) {
+        throw new HttpError(`A batch may create at most ${CATALOG_ANONYMOUS_BATCH_MAX} products without a seller`, 400);
+      }
+      await checkRateLimit(db, `catalog-create-anonymous:${clientIp(request)}`, CATALOG_ANONYMOUS_CREATE_RATE_LIMIT_MAX);
+    }
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     const existingOwnerRows = await db.prepare(`
       SELECT template_id, seller_id, width_m, depth_m, height_m, metadata_json FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
@@ -1657,6 +1668,9 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (existing) {
       if (templateContentMatches(existing, template)) return json({ template: templateFromRow(existing) });
       template.templateId = `template-${crypto.randomUUID()}`;
+    }
+    if (!template.sellerId) {
+      await checkRateLimit(db, `catalog-create-anonymous:${clientIp(request)}`, CATALOG_ANONYMOUS_CREATE_RATE_LIMIT_MAX);
     }
     if (template.sellerId) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
