@@ -28,6 +28,9 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   // #3948: refused before any card is charged, so each says so and what to do next.
   sold_out: 'That sold out before you could buy it. You were not charged.',
   not_for_sale: "That product isn't for sale right now. You were not charged. Try another product.",
+  // #4289: finalising a purchase before the card payment succeeded; the wording says whether the card was charged.
+  payment_incomplete: "Your payment didn't go through. You were not charged. Try again, or use another card.",
+  payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
 });
 
 // The player-facing text for a server error: the mapped copy for a known code,

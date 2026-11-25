@@ -148,7 +148,8 @@ async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = 
   }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
-    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400);
+    // #4289: the player copy for not_for_sale; the sentence here is for logs.
+    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400, { code: ERROR_CODES.NOT_FOR_SALE });
   }
   // #2989 (sub-issue of #2305): mirrors #2017's flagged_hidden_at check
   // above, but at the landlet-owner level rather than the template level --
@@ -547,7 +548,13 @@ export async function handlePurchaseFinalize(request, env) {
   }
   const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`);
   if (paymentIntent.status !== 'succeeded') {
-    throw new HttpError(`Payment has not completed yet (status: ${paymentIntent.status}).`, 400);
+    // #4289: a buyer reads the player copy (src/errorCopy.js), which says whether the card was charged; the Stripe
+    // status stays in this log sentence. `processing` is the one state where money may be in flight.
+    throw new HttpError(
+      `Payment has not completed yet (status: ${paymentIntent.status}).`,
+      400,
+      { code: paymentIntent.status === 'processing' ? ERROR_CODES.PAYMENT_PROCESSING : ERROR_CODES.PAYMENT_INCOMPLETE },
+    );
   }
   return finalizeSucceededPaymentIntent(env, paymentIntent);
 }
