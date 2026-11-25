@@ -43,6 +43,8 @@ export const ERROR_CODES = Object.freeze({
   OUTSIDE_LANDLET_OUTLINE: 'outside_landlet_outline', // #4198
   SOLD_OUT: 'sold_out', // #3948
   NOT_FOR_SALE: 'not_for_sale', // #3948
+  PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
+  PAYMENT_PROCESSING: 'payment_processing', // #4289
 });
 
 export class HttpError extends Error {

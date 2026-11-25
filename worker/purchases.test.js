@@ -1250,6 +1250,34 @@ describe('Simulated purchases', () => {
       expect(notConfigured.response.status).toBe(503);
     });
 
+    // #4289: finalising before the card payment succeeded answers with player copy that says whether the card was
+    // charged, never Stripe's status name. `processing` is the one state where money may be in flight.
+    it.each([
+      ['requires_payment_method', 'payment_incomplete'],
+      ['requires_action', 'payment_incomplete'],
+      ['canceled', 'payment_incomplete'],
+      ['processing', 'payment_processing'],
+    ])('answers a %s PaymentIntent with the code %s', async (status, code) => {
+      const originalFetch = globalThis.fetch;
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.startsWith('https://api.stripe.com/v1/payment_intents/')) {
+          return new Response(JSON.stringify({ id: `pi_4289_${status}`, status }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      };
+      let result;
+      try {
+        result = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({ paymentIntentId: `pi_4289_${status}` }) });
+      } finally {
+        globalThis.fetch = originalFetch;
+        env.STRIPE_SECRET_KEY = undefined;
+      }
+      expect(result.response.status).toBe(400);
+      expect(result.body.code).toBe(code);
+    });
+
     it('is idempotent for an already-finalized paymentIntentId, entirely without needing Stripe configured', async () => {
       const seller = await signupAdmin('checkout-idempotent-seller');
       await createGreenbeltLandletWithArea('checkout-idempotent-landlet', 1000);
