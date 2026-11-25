@@ -3501,6 +3501,15 @@
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
+      /* #4358: the browser's blue radio and black focus ring were the one browser-default look in this window; every
+         radio in the app takes the brand green, and the Name field wears the brand's ring when it has the keyboard. */
+      input[type="radio"] {
+        accent-color: var(--brand-green);
+      }
+      #bundle-name-input:focus-visible {
+        outline: 2px solid var(--brand-green);
+        outline-offset: 2px;
+      }
       #bundle-name-share-label {
         border: none;
         margin: 0;
