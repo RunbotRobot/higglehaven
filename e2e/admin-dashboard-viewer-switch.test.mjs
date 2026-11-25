@@ -97,6 +97,12 @@ const maskedEmailInTable = await viewerPage.evaluate(async () => {
 console.log('viewer dashboard:', JSON.stringify({ banner, submitDisabled, readStatus, writeAttempt, maskedEmailInTable }));
 const pageOpenLogged = localD1("SELECT count(*) AS n FROM admin_action_log WHERE action_type = 'admin_viewer_page_open'", { json: true })[0].results[0].n;
 
+// #4232: the admin pages' static files are served to an admin only.
+const staticFile = (cookie) => fetch(`${BASE_URL}/admin-dashboard-5.js`, { headers: cookie ? { cookie } : {} }).then((r) => r.status);
+const staticSignedOut = await staticFile(null);
+const staticAdmin = await staticFile(adminCookie);
+console.log('admin static file, signed out / admin (should be 404 / 200):', staticSignedOut, staticAdmin);
+
 // The dashboard page's own favicon request is a 404 here, the same one admin-dashboard-accounts-panel filters.
 errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
 
@@ -107,5 +113,6 @@ const pass = offeredToPerson === 0
   && flag(granted) === 1 && loggedGrant[0].results[0].n === 1 && flag(removed) === 0
   && /Look-only access/.test(banner) && submitDisabled && readStatus === 200
   && writeAttempt.status === 403 && /cannot change anything/.test(writeAttempt.error) && maskedEmailInTable && pageOpenLogged >= 1
+  && staticSignedOut === 404 && staticAdmin === 200
   && errors.length === 0;
 await finish(browser, { pass, label: 'Admin dashboard: the owner gives and removes look-only access from a fleet account (#4175)', errors });
