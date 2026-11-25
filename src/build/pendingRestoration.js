@@ -57,7 +57,7 @@ function renderSlots(slots) {
   latestCount = slots.length;
   if (slotsListener) slotsListener(slots);
   if (shouldNoteRemoved(slots.length, readSeenCount())) {
-    setBudWord('removed-items', 'Removed items', { open: openModal, label: 'Items were removed from your lándlet. Open the list.' });
+    setBudWord('removed-items', 'Removed items', { open: () => openModal(), label: 'Items were removed from your lándlet. Open the list.' });
   } else {
     clearBudWord('removed-items');
   }
@@ -149,16 +149,23 @@ function writeSeenCount(count) {
   try { localStorage.setItem(SEEN_KEY, String(count)); } catch { /* the note may come back; nothing is lost */ }
 }
 
-function openModal() {
+function openModal(snapshotId) {
   writeSeenCount(latestCount);
   clearBudWord('removed-items');
   modalEl.classList.add('visible');
   openModalA11y(modalEl, closeModal);
-  refresh();
+  refresh().then(() => {
+    // #4201: a tap on a ghost opens the list at that item's own row.
+    if (typeof snapshotId !== 'string') return;
+    const row = [...listEl.children].find((el) => el.dataset.snapshotId === snapshotId);
+    row?.scrollIntoView({ block: 'center' });
+  });
 }
+// #4201: tapping a ghost in the world opens the list at its row (the row says why it is gone and has Clear).
+export function openRemovedItemsAt(snapshotId) { openModal(snapshotId); }
 function closeModal() {
   modalEl.classList.remove('visible');
   closeModalA11y(modalEl);
 }
-buttonEl.addEventListener('click', openModal);
+buttonEl.addEventListener('click', () => openModal());
 closeBtn.addEventListener('click', closeModal);
