@@ -5,7 +5,7 @@
 // Nothing here changes a job's status or a credit, and nothing is ever returned to the builder. Built for today's
 // size: the latest 50 jobs, no paging, until there are enough jobs that 50 does not reach back a week.
 import { json, HttpError } from './http.js';
-import { requireAdmin } from './auth.js';
+import { requireAdminOrViewer } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { checkVideoGenerationJobResult } from './video-generation.js';
@@ -19,7 +19,7 @@ function parseDetail(text) {
 }
 
 export async function handleAdminVideoJobs(request, env, db, route) {
-  const admin = await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin gets the GET below and nothing else
 
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare(`

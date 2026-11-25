@@ -9,7 +9,7 @@
 // tokens (only how many are open), anything from a KYC form. Every field below has an honest source in
 // the schema; a field without one is left out rather than approximated.
 import { json } from './http.js';
-import { requireAdmin } from './auth.js';
+import { requireAdminOrViewer } from './auth.js';
 import { isAssistantUsername } from './fleet-agents.js';
 
 export const ADMIN_USERS_LIMIT = 1000;
@@ -97,7 +97,7 @@ function byKey(results, keyField = 'k') {
 }
 
 export async function handleAdminUsers(request, db) {
-  await requireAdmin(request, db);
+  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
   const nowIso = new Date().toISOString();
   const users = (await db.prepare(`
     SELECT users.user_id, users.email, users.username, users.email_verified_at, users.failed_login_attempts,
