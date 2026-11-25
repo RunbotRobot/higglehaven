@@ -170,6 +170,7 @@
         </div>
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
         <button class="secondary delete-account-btn" type="button">Delete account</button>
+        ${user.adminViewer || !user.adminViewerRefusal ? `<button class="secondary viewer-access-btn" type="button">${user.adminViewer ? 'Remove look-only access' : 'Give look-only access'}</button>` : ''}
         <h3 id="userLandletsHeading">Lándlets (${landlets.length})</h3>
         <table class="user-landlets" aria-labelledby="userLandletsHeading">
           <thead><tr><th>Name</th><th>Id</th><th>Where (x, y)</th><th>Published</th><th>Last changed</th><th></th></tr></thead>
@@ -183,6 +184,9 @@
       `;
       userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
       userDetailWrap.querySelector('.delete-account-btn').addEventListener('click', () => openDeleteAccount(user.userId));
+      // #4175: the owner's switch for the look-only admin role (public/admin-dashboard-10.js holds the dialog).
+      const viewerBtn = userDetailWrap.querySelector('.viewer-access-btn');
+      if (viewerBtn) viewerBtn.addEventListener('click', () => window.__adminOpenViewerDialog(user));
       userDetailWrap.querySelectorAll('.open-landlet-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelector('nav button[data-panel="landlets"]').click();

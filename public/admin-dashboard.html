@@ -303,6 +303,19 @@
       </form>
     </dialog>
 
+    <!-- #4175: giving or removing look-only admin access is confirmed in its own in-app dialog. -->
+    <dialog id="viewerAccessDialog" class="confirm-dialog" aria-labelledby="viewerAccessTitle">
+      <form method="dialog" id="viewerAccessForm">
+        <h3 id="viewerAccessTitle">Look-only access</h3>
+        <div id="viewerAccessBody"></div>
+        <p class="err" id="viewerAccessErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="viewerAccessCancel">Cancel</button>
+          <button type="submit" class="danger" id="viewerAccessConfirm">Confirm</button>
+        </div>
+      </form>
+    </dialog>
+
     <h2>Suspend account</h2>
     <p class="err" id="suspendErr" hidden></p>
     <p class="ok" id="suspendOk" hidden></p>
@@ -416,6 +429,7 @@
 <script src="/admin-dashboard-7.js"></script>
 <script src="/admin-dashboard-8.js"></script>
 <script src="/admin-dashboard-9.js"></script>
+<script src="/admin-dashboard-10.js"></script>
 <script src="/admin-tables.js"></script>
 </body>
 </html>
