@@ -163,9 +163,24 @@ const baselineFacingRad = (await page.evaluate(() => window.__shopAvatarOrientat
 // the written values -- and even those were too tight under current CI
 // load. The explicit `null` arg reaches the options slot, and the
 // timeouts are widened for real headroom.
-await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', null, { timeout: 60000 });
-await page.waitForFunction(() => window.__testShopLeanPose().blend > 0.9, null, { timeout: 60000 });
-
+// #4274: main was red on this wait twice in a day (and on PR runs). The idle timer and the eased blend run on the
+// page's own frames, and on a loaded software-rendered CI machine those can be too few for the 3 s idle delay and the
+// ease to finish in 60 s. The sit tests already drive the same code with simulated seconds
+// (window.__testAdvanceShopIdle, #3053): each poll advances the idle clock, so the episode picks its target (3.05 s)
+// and the blend eases in (0.5 s a poll) however many frames were drawn, and a real frame that resets the episode
+// only makes the next poll start it again. The real-frames episode is still checked by the sibling idle tests.
+// Driven from here (not from inside waitForFunction) so each step is a plain evaluate and a stall is visible.
+let engaged = false;
+for (let step = 0; step < 120 && !engaged; step += 1) {
+  engaged = await page.evaluate(() => {
+    const leaning = window.__testShopIdleInteractionTarget()?.kind === 'lean';
+    if (leaning && window.__testShopLeanPose().blend > 0.9) return true;
+    window.__testAdvanceShopIdle(leaning ? 0.5 : 3.05);
+    return false;
+  });
+  if (!engaged) await page.waitForTimeout(250);
+}
+console.log('lean pose reached through simulated idle time (should be true):', engaged);
 const engagedPose = await page.evaluate(() => window.__testShopLeanPose());
 const engagedOrientation = await page.evaluate(() => window.__shopAvatarOrientation);
 console.log('lean pose once substantially engaged (blend should be > 0.9):', engagedPose, engagedOrientation);
