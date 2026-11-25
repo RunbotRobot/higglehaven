@@ -329,7 +329,7 @@ export async function handleLogout(request, db, url) {
 
 const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 
-export async function handleDeleteAccount(request, db, url) {
+export async function handleDeleteAccount(request, db, url, env = null) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
   const input = await readJson(request);
@@ -338,7 +338,7 @@ export async function handleDeleteAccount(request, db, url) {
     throw new HttpError('Incorrect password', 401);
   }
 
-  await cascadeDeleteAccount(db, user.user_id);
+  await cascadeDeleteAccount(db, user.user_id, env);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
 }

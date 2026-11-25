@@ -79,7 +79,7 @@ export async function handleAdminDeleteAccountPreview(request, db, url) {
   });
 }
 
-export async function handleAdminDeleteAccount(request, db) {
+export async function handleAdminDeleteAccount(request, db, env = null) {
   const admin = await requireAdmin(request, db);
   const input = await readJson(request);
   const userId = typeof input.userId === 'string' ? input.userId : '';
@@ -91,7 +91,7 @@ export async function handleAdminDeleteAccount(request, db) {
     throw new HttpError('Type the account\'s username to confirm.', 400);
   }
 
-  await cascadeDeleteAccount(db, user.user_id);
+  await cascadeDeleteAccount(db, user.user_id, env);
 
   await adminActionLogStatement(db, admin.user_id, 'delete_account', 'user', user.user_id, {
     username: user.username,

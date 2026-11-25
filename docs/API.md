@@ -691,6 +691,14 @@ leaves literally everything untouched in one atomic transaction, not a
 separate check-then-act step. The response clears the request's own
 session cookie too. Returns `{ "accountDeleted": true }`.
 
+Bug reports the account submitted through Submit Feedback (#4266) keep
+their description but lose the person: in the same batch `user_id`,
+`user_agent`, `platform`, `render_state_buffer_json` and `screenshot_url`
+are cleared, and once the deletion has gone through each report's
+screenshot is removed from the FEEDBACK bucket (best-effort, logged on
+failure). The same holds for an admin deletion and a suspension that
+escalates into one.
+
 ### `GET /api/auth/me`
 
 Deliberately always `200`, never a `401` — even with no cookie or an
