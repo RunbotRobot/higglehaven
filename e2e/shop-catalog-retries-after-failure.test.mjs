@@ -75,7 +75,6 @@ for (let i = 0; i < ITEMS; i += 1) {
 // The first catalog request fails; every later one goes through.
 let catalogRequests = 0;
 let failed = 0;
-page.on('console', (m) => { if (/DBG4295/.test(m.text())) console.log(Date.now() % 100000, m.text()); });
 await page.route('**/api/catalog?*', (route) => {
   if (route.request().method() !== 'GET') return route.continue();
   catalogRequests += 1;
@@ -86,15 +85,21 @@ await page.route('**/api/catalog?*', (route) => {
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 15000 });
+// The avatar drifts on its opening flight and the landlet can leave range again a few seconds after it loaded, so
+// the number of placements drawn is watched from inside the page and the most seen is what counts.
+await page.evaluate(() => {
+  window.__maxDrawn = 0;
+  setInterval(() => { window.__maxDrawn = Math.max(window.__maxDrawn, window.__testShopLoadedInstanceCount()); }, 100);
+});
 await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y, 0); window.__testForceShopProximityCheck(); }, [landlet.center.x + 4, landlet.center.y]);
 
 let drawn = 0;
 for (let i = 0; i < 60 && drawn < ITEMS; i += 1) {
   await page.evaluate(() => window.__testForceShopProximityCheck());
   await page.waitForTimeout(500);
-  drawn = await page.evaluate(() => window.__testShopLoadedInstanceCount());
+  drawn = await page.evaluate(() => window.__maxDrawn);
 }
-console.log('placements drawn after the catalog was asked for again (should be', ITEMS + '):', drawn, '| catalog requests:', catalogRequests);
+console.log('most placements drawn after the catalog was asked for again (should be', ITEMS + '):', drawn, '| catalog requests:', catalogRequests);
 
 const pass = failed === Number(process.env.CATALOG_FAILS ?? 1) && drawn === ITEMS && catalogRequests >= 2;
 await finish(browser, {

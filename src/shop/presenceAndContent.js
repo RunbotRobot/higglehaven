@@ -1705,7 +1705,6 @@ export function updateOtherShopAvatars(now) {
 // meshes/signs/calendars/reviews rather than duplicating whatever the
 // current load already added.
 async function loadShopLandletInstances(entry, myToken) {
-  console.warn('DBG4295 load start', myToken, entry.loadToken);
   let instances;
   try {
     // #1282: entry.record is a one-time snapshot taken when Shop mode was
@@ -1735,7 +1734,6 @@ async function loadShopLandletInstances(entry, myToken) {
   // #4295: a load that was put away while its requests were in flight (an unload, then a newer load) must not go
   // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
   // stale, so nothing would be drawn at all.
-  console.warn('DBG4295 fetched', myToken, entry.loadToken, instances.length, findTemplate(instances[0]?.templateId) ? 'tmpl' : 'NO-TMPL');
   if (myToken !== entry.loadToken) return;
   // #3396: moving, looking and drawing never wait on loading. Each item is its
   // own small unit of work, run inside the per-frame time budget (see
@@ -1809,9 +1807,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
     return;
   }
   const template = findTemplate(members[0].templateId);
-  console.warn('DBG4295 batch start', members.length, myToken, entry.loadToken, !!template);
   const source = await loadBatchSource(template);
-  console.warn('DBG4295 batch source', !!source, myToken, entry.loadToken);
   if (!source) {
     for (const instance of members) {
       worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
@@ -1845,7 +1841,6 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
       return;
     }
   }
-  console.warn('DBG4295 batch attach', handles.length);
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
@@ -1916,7 +1911,6 @@ function instanceLoadPriority(entry, instance) {
 async function buildAndAttachInstance(entry, instance, myToken, run) {
   if (myToken !== entry.loadToken) return; // superseded while queued
   const object = await createMeshForInstance(instance);
-  console.warn('DBG4295 single built', !!object, myToken, entry.loadToken);
   if (!object) {
     run?.itemSettled(instance.instanceId); // never arrives; do not hold its fog
     return;
