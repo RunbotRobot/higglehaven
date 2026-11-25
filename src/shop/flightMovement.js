@@ -1915,6 +1915,14 @@ export function updateShopMovementCore(now) {
   shopAvatarPosition.z =
     shopFlightAltitudeM + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+  // #4225: rising narrows the dome the avatar stands in, and the pair slide (keepShopPairInside) only moves an
+  // avatar that is still inside its limit. At a low frame rate one frame's climb can carry the avatar past that
+  // limit at once, and it then rested outside the dome with the camera bounded alone (found on a slow CI
+  // runner, 8x CPU throttle locally). So a frame that rose brings the avatar back to its limit here, and the
+  // pair slide takes it from there exactly as it does for the small steps of a fast frame.
+  if (shopFlightState === 'flying' && (heightControl.rate() || keyboardRise(shopKeysDown))) {
+    clampShopRadius(shopAvatarPosition, shopAvatarLimitRadiusM(true));
+  }
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
   // a plain neutral pose instead (a real flight pose, arms/legs extended,
