@@ -150,6 +150,16 @@ await page.mouse.click(ghostPos.x, ghostPos.y);
 const tapOpenedList = await page.waitForSelector('#pending-restoration-modal.visible', { timeout: 5000 }).then(() => true, () => false);
 console.log('a tap on the ghost opens the Removed items list (should be true):', tapOpenedList);
 await page.click('#pending-restoration-close-btn');
+// A slot whose product is gone entirely (no template): an outline carrying its name, never a block (#4201 item 4).
+const goneOutline = await page.evaluate((landletId) => {
+  window.__testSetRemovedGhostSlots([{
+    snapshotId: 'gone-slot', landletId, templateId: 'template-that-is-gone', templateName: 'A product that is gone',
+    position: { x: 2, y: 2, z: 0.5 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, crop: null, label: null, template: null,
+  }]);
+  return { kinds: window.__testGhostKinds().removed, named: window.__testGhostNames() };
+}, landlet.landletId);
+console.log('a slot with no template is an outline with its name (should be outline, true):', goneOutline.kinds.join(), goneOutline.named.join());
+const goneIsNamedOutline = goneOutline.kinds.join() === 'outline' && goneOutline.named.join() === 'true';
 await page.click('#toggle-ghosts'); // #4201: the switch is "Faded items" in the Tools leaf
 await page.waitForFunction(() => window.__testRemovedGhostIds().length === 0, undefined, { timeout: 5000 });
 await page.keyboard.press('Escape');
@@ -187,6 +197,7 @@ const pass = placeRes.status === 201
   && rowCount === 1
   && ghostsBeforeToggle.length === 0
   && ghostIsModel
+  && goneIsNamedOutline
   && tapOpenedList
   && rowText.includes(PRODUCT_NAME)
   && emptyShown
