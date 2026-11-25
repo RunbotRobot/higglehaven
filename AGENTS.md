@@ -437,6 +437,23 @@ most likely to come up again.
   visibly placed for that builder (never for shoppers) so it can come
   back into stock — #1947's primary/backup pattern.
 
+- **A builder can see what is not live on their own lándlet, as a ghost,
+  with one switch for all of it.** (2026-11-24, #4201.) In Build's
+  Removed items list the owner could clear a removed product or wait for
+  it, but not see where it had stood: "We should also let the user see the
+  item in the lándlet, lower-opacity to clarify that it's not a live item.
+  I actually recall us planning a universal toggle to show or hide items
+  that are not currently live in the lándlet due to being out of stock.
+  This seems like the same interface could be extended to deleted or
+  suspended items." So in Build, and only for the builder, an item that is
+  out of stock, deleted, delisted or suspended can be shown where it stood
+  at lower opacity, and one toggle shows or hides every such item. This
+  does not change the two entries around it: shoppers never see any of
+  them, a ghost is never in a published version, and suspension still
+  takes the instance out of the world with its snapshot kept. It is "The
+  builder has full information and full autonomy" made visible: one kind
+  of state (not live) gets one treatment, whatever its cause.
+
 - **Suspension is a hard removal from the world, with a snapshot that
   restores on unsuspension.** (#2305 → #2986–#2988.) Out-of-stock is
   soft (stays placed, greyed out); suspension is not — placed instances
@@ -1381,6 +1398,28 @@ most likely to come up again.
   tap, and can be interrupted. (higglehaven1's readings, told to the owner:
   the petal of another mode takes you there; the petal of the mode you are in
   is only marked; the opening takes about half a second.)
+
+  **Four more notes on the flower and Build (2026-11-24, #4199 to #4202).**
+  On the row for what belongs to no mode: "The top menu items are pretty
+  universal icons. Maybe we don't need the text at all. In fact, we can
+  eliminate the big leafy button feel for them in favor of a more
+  traditional bar of icons. That being said, the bar should still be
+  on-brand." On the stem: "The menu leaves should attach to the stem at
+  their tips, not the middle of the wide of the leaf." On the head: "Let's
+  turn the bud so that it points down and to the right, toward the petals.
+  The top of the stem should still enter the bud at its base, at its new
+  upper-left." And on two things standing on the world in Build, the
+  Removed items pill ("looks off-brand the way it is drawn, with the
+  transparent background color") and the cap note ("more on-brand"). So:
+  the rule that an icon always carries its word is for icons a person has
+  to learn; the four known everywhere (person, bell, gear, question mark)
+  may stand without one, keeping the word as their accessible name, and a
+  familiar shape (a bar of icons) is right where the leaf shape only costs
+  room, as long as it wears the brand. A plant's parts join the way a
+  plant's do: a leaf by its tip, the stem at the head's base, the head
+  toward what opens from it. And a note or control in Build is held to the
+  same two tests as anywhere else: it wears the brand, and it does not
+  stand on the world.
 
 - **Nothing explains itself unasked; people find things out by curiosity.**
   (2026-11-24, #4179.) A plan to have the very first orb a person collects
