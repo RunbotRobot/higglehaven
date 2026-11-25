@@ -3887,6 +3887,23 @@ setPendingSlotsListener((slots) => {
   removedGhostSlots = slots;
   applyRemovedGhostVisibility();
 });
+// The ghost under the pointer (the raycaster is already aimed), unless a placed item is nearer.
+export function removedGhostUnderRay() {
+  if (removedGhostMeshes.size === 0) return null;
+  const ghostHit = raycaster.intersectObjects([...removedGhostMeshes.values()])[0];
+  if (!ghostHit) return null;
+  const productHit = raycaster.intersectObjects(productMeshes, true)[0];
+  if (productHit && productHit.distance < ghostHit.distance) return null;
+  return ghostHit.object.userData.removedSnapshotId ?? null;
+}
+// Where a ghost sits on screen, for the e2e that taps it.
+window.__testRemovedGhostScreenPos = (snapshotId) => {
+  const mesh = removedGhostMeshes.get(snapshotId);
+  if (!mesh) return null;
+  const point = mesh.getWorldPosition(new THREE.Vector3()).project(camera);
+  const rect = canvas.getBoundingClientRect();
+  return { x: rect.left + ((point.x + 1) / 2) * rect.width, y: rect.top + ((1 - point.y) / 2) * rect.height };
+};
 window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
 
 // Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called

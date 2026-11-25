@@ -355,10 +355,11 @@ import {
   measurePointA, measurePointB, updateMeasureResultText,
   syncUpdate, footprintsOverlap, footprintCorners,
   removeLowStockHighlight, landletElevationGroup, markBuildSceneReady,
+  removedGhostUnderRay,
 } from './build/scene.js';
 // #2987: builder-facing "Removed items" view of suspended-seller removals
 // (wires its own button/modal; enterBuildMode below triggers its load).
-import { refresh as refreshPendingRestorations } from './build/pendingRestoration.js';
+import { refresh as refreshPendingRestorations, openRemovedItemsAt } from './build/pendingRestoration.js';
 
 // Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
 // currentBundleTabList/bundle-tab-click handler need this same state; a
@@ -941,6 +942,12 @@ renderer.domElement.addEventListener('click', (event) => {
   // Object3D pushed into productMeshes.
   const hits = raycaster.intersectObjects(productMeshes, true);
   const hitRoot = hits.length > 0 ? findRootProduct(hits[0].object) : null;
+  // #4201: a tap on a removed item's ghost opens the Removed items list at its row.
+  const ghostId = removedGhostUnderRay();
+  if (ghostId) {
+    openRemovedItemsAt(ghostId);
+    return;
+  }
   if (multiSelectMode) {
     if (hitRoot) toggleInSelection(hitRoot);
   } else {
