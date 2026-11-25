@@ -71,6 +71,7 @@ import {
   fetchMyOwnedAvatars, equipAvatar, fetchMyOwnedAnimations, equipAnimation,
 } from '../api.js';
 import { createWorldEnclosure } from './enclosure.js';
+import { readWithRetry } from '../retryRead.js';
 import {
   SHOP_HIDDEN_BUILDER_UI_IDS, showShopAccessGate,
   shopStatusEl, setShopControlsVisible,
@@ -616,7 +617,9 @@ export async function enterShopMode() {
   const visibleOwnerBuilderIds = [...new Set(
     allLandlets.map((landlet) => landlet.ownerBuilderId).filter((id) => id),
   )];
-  fetchBuildersByIds(visibleOwnerBuilderIds)
+  // #4298: one failed read used to leave "an unknown builder" on every lándlet for the session, so it is asked
+  // again after a short wait (twice at most) before the fallback is accepted.
+  readWithRetry(() => fetchBuildersByIds(visibleOwnerBuilderIds))
     .then((builders) => {
       setShopBuilderLabels(new Map(builders.map((b) => [b.builderId, b.label])));
       // #1172: updateShopLandletInfo only re-renders on a landlet-transition
