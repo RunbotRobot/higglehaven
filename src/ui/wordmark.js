@@ -55,13 +55,16 @@ export function resolveWordmark({ styleId, colourId } = {}, offered = {}) {
   };
 }
 
-// One load per face for the page's life; a failed load is remembered as failed (the fallback stays).
+// One load per face for the page's life. #4316: a failed load is not remembered as the answer: the face is
+// asked for again after each pause below, and the CSS swaps it in by itself once it arrives (a name already
+// on screen in the fallback font changes without being redrawn).
+export const WORDMARK_RETRY_DELAYS_MS = [15000, 45000, 120000];
 const loads = new Map();
 // e2e only: how many faces were asked for and how long each took (the issue asks the renderer to report
 // its cost while a face loads). Read through window.__wordmarkStats.
 const stats = { requested: 0, loaded: 0, failed: 0, loadMs: [] };
 
-export function loadWordmarkFace(styleId, fontFaceApi = typeof FontFace === 'undefined' ? null : { FontFace, fonts: document.fonts }) {
+export function loadWordmarkFace(styleId, fontFaceApi = typeof FontFace === 'undefined' ? null : { FontFace, fonts: document.fonts }, attempt = 0) {
   const face = WORDMARK_FACES[styleId];
   if (!face || !fontFaceApi) return Promise.resolve(false);
   if (loads.has(styleId)) return loads.get(styleId);
@@ -81,6 +84,15 @@ export function loadWordmarkFace(styleId, fontFaceApi = typeof FontFace === 'und
     }
   })();
   loads.set(styleId, promise);
+  // #4316: forget a failure after a pause and try once more, a few times, so one dropped request does not
+  // leave a chosen lettering in the plain font for the whole visit.
+  promise.then((ok) => {
+    if (ok || attempt >= WORDMARK_RETRY_DELAYS_MS.length) return;
+    setTimeout(() => {
+      if (loads.get(styleId) === promise) loads.delete(styleId);
+      loadWordmarkFace(styleId, fontFaceApi, attempt + 1);
+    }, WORDMARK_RETRY_DELAYS_MS[attempt]);
+  });
   return promise;
 }
 
