@@ -62,6 +62,7 @@ describe('mountShopAvatar (#3294)', () => {
   it('falls back to the default avatar, without throwing, when the equipped-avatar fetch fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const t = setup({ avatar: new Error('boom') });
+    t.deps.equippedRetryDelaysMs = [];
     await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
     expect(t.getCurrent()).toBe(t.defaultAvatar);
     expect(t.deps.createCustomShopAvatar).not.toHaveBeenCalled();
@@ -307,6 +308,39 @@ describe('mountShopAvatar: fog, not a stand-in (#4067)', () => {
     await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
     expect(t.defaultAvatar.group.visible).toBe(true);
     expect(t.getCurrent()).toBe(t.defaultAvatar);
+    warn.mockRestore();
+  });
+
+  it('asks again when the read of what is worn fails once, and then shows the worn body (#4251)', async () => {
+    const custom = { group: { visible: true }, modelUrl: '/uploads/a.glb' };
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb' }, customAvatar: custom });
+    withGroup(t);
+    fakeHold(t);
+    t.deps.equippedRetryDelaysMs = [0, 0];
+    t.deps.writeWornHint = vi.fn();
+    const ok = t.deps.fetchMyEquippedAvatar.getMockImplementation();
+    t.deps.fetchMyEquippedAvatar.mockRejectedValueOnce(new Error('blip'));
+    t.deps.fetchMyEquippedAvatar.mockImplementation(ok);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).toHaveBeenCalledTimes(2);
+    expect(t.getCurrent()).toBe(custom);
+    expect(t.deps.writeWornHint).toHaveBeenCalledWith('custom');
+    expect(t.deps.writeWornHint).not.toHaveBeenCalledWith('default');
+    warn.mockRestore();
+  });
+
+  it('a read that keeps failing does not remember "wears the default" (#4251)', async () => {
+    const t = setup({ avatar: new Error('down') });
+    withGroup(t);
+    fakeHold(t);
+    t.deps.equippedRetryDelaysMs = [0, 0];
+    t.deps.writeWornHint = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).toHaveBeenCalledTimes(3);
+    expect(t.deps.writeWornHint).not.toHaveBeenCalled();
+    expect(t.defaultAvatar.group.visible).toBe(true); // a failure is not an invisible person
     warn.mockRestore();
   });
 });

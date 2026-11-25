@@ -1867,7 +1867,7 @@ function renderSellerList() {
       digitalGoodText, digitalGoodToggle, digitalGoodPanel,
       noReturnsText, noReturnsToggle, noReturnsPanel,
       domesticOnlyText, domesticOnlyToggle, domesticOnlyPanel,
-      sizeToggle, sizePanel, priceToggle, pricePanel,
+      sizeToggle, sizePanel,
       extensibilityToggle, extensibilityPanel, sitLeanToggle, sitLeanPanel,
     ];
     const moreToggle = document.createElement('button');
@@ -1879,6 +1879,10 @@ function renderSellerList() {
     moreBox.className = 'seller-more-settings';
     moreBox.hidden = true;
     // Where the first setting stood: after the product's own facts, before reviews and sales.
+    // #3584: the price is the setting a seller changes most, and "Not priced" is what stops a product selling, so
+    // its control stays out in the open, right under the price it changes, not among the settings nobody touches.
+    details.insertBefore(priceToggle, settingsEls[0]);
+    details.insertBefore(pricePanel, settingsEls[0]);
     details.insertBefore(moreToggle, settingsEls[0]);
     details.insertBefore(moreBox, settingsEls[0]);
     // #3702 slice C: Preview, Duplicate and Flooring are secondary to Rename/Delete, so they
