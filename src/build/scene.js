@@ -4193,7 +4193,10 @@ export function updateSelectionUI() {
   // #3689/#3573: the name is the item card's title now, beside the item; the pill
   // at the top of the screen is left for Measure and Copy's confirmations.
   setProductInfo('');
-  showItemCard(count === 1 ? singleSelectionInfo : `${count} items selected`, { passThrough: multiSelectMode });
+  // #4335: exactly one bundle is one item to the builder ("a placed bundle is one item"), so its card says so rather
+  // than counting its members. While a bundle is being edited its members are the selection and are counted.
+  const wholeBundle = count > 1 && !editingGroupId && isSingleBundleSelection();
+  showItemCard(count === 1 ? singleSelectionInfo : (wholeBundle ? 'Bundle' : `${count} items selected`), { passThrough: multiSelectMode });
   modeControlsEl.classList.add('visible');
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   refreshCardNumbers(singleMesh);
@@ -4232,7 +4235,8 @@ export function updateSelectionUI() {
   // selection to include at least one already-grouped item (every member
   // of that group is in the selection too, per selectOnly/toggleInSelection's
   // own expansion above, so this always targets a whole group).
-  groupBtn.disabled = count < 2;
+  // #4335: a selection that is already exactly one bundle has nothing to bundle either (Bundle would change nothing).
+  groupBtn.disabled = count < 2 || (!editingGroupId && isSingleBundleSelection());
   // #3574 -- nothing to bundle with one item: leave the control out.
   groupBtn.hidden = groupBtn.disabled;
   ungroupBtn.disabled = ![...selectedMeshes].some((mesh) => mesh.userData.groupId);

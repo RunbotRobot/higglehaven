@@ -107,7 +107,7 @@ await page.waitForTimeout(300);
 await page.mouse.click(210, 550);
 await page.waitForTimeout(1000);
 const infoAfterBundlePlacement = await page.textContent('#item-card-name');
-console.log('selection after placing the bundle (should say 2 items selected):', infoAfterBundlePlacement);
+console.log('selection after placing the bundle (should say Bundle, #4335):', infoAfterBundlePlacement);
 
 // #2766: the bundle's newly-placed instances should default to grouped
 // (Ungroup enabled right away, and both instances share one non-null
@@ -141,7 +141,7 @@ const pass = bundleSectionHiddenInitially &&
   ungroupEnabledAfterBundlePlacement &&
   !!bundleGroupFetch.groupIdA && bundleGroupFetch.groupIdA === bundleGroupFetch.groupIdB &&
   bundleTileTextAfterRename.includes('Renamed Bundle') &&
-  infoAfterBundlePlacement.includes('2 items selected') &&
+  infoAfterBundlePlacement === 'Bundle' &&
   bundleSectionHiddenAfterDelete &&
   errors.length === 0;
 await finish(browser, { pass, label: 'save/place/delete a Bundle', errors });
