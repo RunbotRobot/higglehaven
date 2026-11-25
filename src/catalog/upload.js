@@ -59,6 +59,7 @@ import { refreshSellerShowcase } from '../sell/showcase.js';
 // #2558: closeCatalogPicker/buildCatalogPickerButtons now live in
 // src/catalog/picker.js (extracted after this module) rather than main.js.
 import { closeCatalogPicker, buildCatalogPickerButtons } from './picker.js';
+import { hasFractionOfACent, FRACTION_OF_A_CENT_MESSAGE } from '../priceInput.js';
 
 // Custom product upload: a builder's own model (photogrammetry scan,
 // etc.) becomes a real catalog_templates row via two independent backend
@@ -742,6 +743,11 @@ function validateUploadPrice() {
   const dollars = parsePriceInputDollars(priceInput);
   if (!Number.isFinite(dollars) || dollars < 0) {
     setUploadStatus('Price must be a non-negative number.', true);
+    uploadPriceInput.focus();
+    return null;
+  }
+  if (hasFractionOfACent(priceInput)) {
+    setUploadStatus(FRACTION_OF_A_CENT_MESSAGE, true);
     uploadPriceInput.focus();
     return null;
   }

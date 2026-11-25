@@ -85,6 +85,7 @@ import { camera as worldCamera } from '../world/scene.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
 import { duplicateName } from './duplicateName.js';
+import { hasFractionOfACent, FRACTION_OF_A_CENT_MESSAGE } from '../priceInput.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -475,6 +476,7 @@ export async function saveSellerPrice(template, text) {
     if (!Number.isFinite(dollars) || dollars < 0) {
       return { error: 'Price must be a non-negative number, or left blank.' };
     }
+    if (hasFractionOfACent(trimmed)) return { error: FRACTION_OF_A_CENT_MESSAGE };
     if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
       return { error: `Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.` };
     }
@@ -2386,6 +2388,11 @@ async function submitAttachListing(event) {
   const dollars = parsePriceInputDollars(sellThisTooPriceInput.value);
   if (!Number.isFinite(dollars) || dollars < 0) {
     fail('Enter a price of 0 or more.');
+    sellThisTooPriceInput.focus();
+    return;
+  }
+  if (hasFractionOfACent(sellThisTooPriceInput.value)) {
+    fail(FRACTION_OF_A_CENT_MESSAGE);
     sellThisTooPriceInput.focus();
     return;
   }
