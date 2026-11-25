@@ -157,6 +157,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 1. Tap the round logo at the top left to open the menu, then tap "Notices" or "My lándlets".
 2. A person with nothing to read in "Notices" sees "Nothing new. Updates about your products, your lándlet and your account will show up here."
 3. A person who has not claimed a lándlet sees, in "My lándlets", "You don't own a lándlet yet. Claim one in Build mode to start building." (The steps for claiming are in "How do I get my own lándlet?".)
+4. "My lándlets" also shows a small bar for how much ground they hold: a line such as "You hold 400 m² of the 900 m² you may hold." and the words "The cap grows as your products earn higgles." Read out the numbers on their own screen, because the cap changes.
 
 **You will see:** one plain sentence saying what will appear there. An empty list is not a fault.
 
@@ -166,6 +167,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 ```controls any
 #notifications-btn | Notices
 #my-lands-btn | My lándlets
+#my-lands-cap-note | The cap grows as your products earn higgles.
 ```
 
 ### How do I wear an avatar I bought, or apply an animation?
@@ -763,6 +765,8 @@ go. It stops at the edge of how far you can go and never turns upside down.
   or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
   or lower it, with its height shown beside the word "Nudge". If a press does nothing, a line says why:
   the edge of the lándlet, the floor, or something in the way.
+- A note says "Part of this is off your lándlet. Move it back to keep editing it.": the item reaches past the
+  edge of the lándlet. Drag it back inside. A save can also say "That's past the edge of this lándlet."
 
 ```controls build
 #toggle-snap | Snap
@@ -828,13 +832,35 @@ single item.
 **If something goes wrong:**
 - It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back. On a keyboard, press Ctrl and Z (Cmd and Z on a Mac), and Ctrl, Shift and Z to redo.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
-  itself (for example because their seller was suspended) wait under "Removed
-  Items". If that button shows, tap it. Otherwise offer to pass it to the team.
+  itself (for example because their seller was suspended) wait under "Removed items".
+  Tap the round logo, the Build petal, then "Tools": "Removed items" is in that sheet, and it only shows
+  while something is waiting (it then reads "Removed items" with the number in brackets). Tap it to see
+  the list. If it is not there, offer to pass it to the team.
+- They want to see where something stood: "Faded items" in the same "Tools" sheet (see "How do I see
+  items that are not live?").
 
 ```controls build
 #delete-item | Delete
 #undo-btn | Undo
 #pending-restoration-btn | Removed items
+```
+
+### How do I see items that are not live?
+
+1. Tap the round logo at the top left, the Build petal, then "Tools", then "Faded items".
+2. Everything that is not live on their lándlet (sold out, removed, taken off by a suspension) now shows as a
+   faint copy of itself where it stood. Tap "Faded items" again to hide them.
+3. Tap a faint item to open the "Removed items" list at its row, when it was removed.
+
+**You will see:** faint, see-through copies in the places those items stood; the button reads as switched on
+while they show. Only the builder sees them, never a shopper, and the choice is remembered.
+
+**If something goes wrong:**
+- Nothing fades in: nothing on their lándlet is out of stock or removed right now. That is not a fault.
+- An item with no model to show is drawn as a faint outline carrying its name.
+
+```controls build
+#toggle-ghosts | Faded items
 ```
 
 ### How do I undo a mistake, or redo it?
@@ -1032,6 +1058,9 @@ your "My products" list).
 - You are on the file way and have no model file: tap "Make a model from a video instead" under
   the file picker. It takes a short video of one object and uses one of your video credits, which
   the video part of the window shows. "Upload a model file I already have" goes back to the file.
+- The model was made but the app says "The model was made, but it came out too large for us to keep. Your
+  credit has been returned. We've been told, so please wait before trying again.": a second try would come
+  back the same size, so do not tell them to retry now. Their credit is back; offer to pass it to the team.
 - Turning a video into a model is not switched on: the window opens on the file way, has no
   "Make a model from a video" button, and says "Turning a video into a model is not switched on
   yet." Tell the person it is not available yet and that uploading a model file still works.
