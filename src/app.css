@@ -2208,6 +2208,12 @@
       body:has(#catalog-picker.visible) #item-card {
         visibility: hidden;
       }
+      /* #4357: a leaf is what the person has just asked for; the item card of the selected item stands aside while one
+         is open (the item stays selected) and is back where it was when the leaf folds. Without this the two drew
+         over each other and showed through. */
+      body:has(.bud-leaf:not(.bud-leaf-folding)) #item-card {
+        visibility: hidden;
+      }
       /* #3575: Move, Rotate and Trim are a row of the item's own card, under its name, not a
          row standing on the world (see index.html). Same element and ids. */
       #gizmo-mode-controls {
