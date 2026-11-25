@@ -110,8 +110,31 @@ const restsWhereTheCameraStops = Math.abs(second.pivotRadiusM - expectedRestM) <
 const restsFarther = second.pivotRadiusM < outward.pivotRadiusM - 0.5 && restsWhereTheCameraStops;
 console.log(`facing centre: ${facingCentre}, stopped: ${stopped}, distance held (turn worst err ${worstTurnDistanceErr.toFixed(2)}): ${distanceHeld}, both inside: ${bothInside}, rests ${(outward.pivotRadiusM - second.pivotRadiusM).toFixed(2)}m farther from the dome than facing out, where the camera stops (expected ${expectedRestM.toFixed(2)}): ${restsFarther}`);
 
+// #4193: flight is level, so a person can rise while looking straight down, which puts the camera above the
+// avatar. The ceiling is the pair's: the camera reaches the dome first, so the avatar must stop there too,
+// and keep the follow distance, instead of rising past the camera and out of the picture.
+await page.evaluate(() => window.__testSetShopPitch(-1.3)); // looking steeply down
+await page.waitForTimeout(300);
+const downBefore = await state();
+await page.keyboard.down('PageUp');
+const riseSamples = [];
+for (let i = 0; i < 40; i += 1) {
+  await page.waitForTimeout(250);
+  riseSamples.push(await state());
+}
+await page.keyboard.up('PageUp');
+await page.waitForTimeout(500);
+const risen = await state();
+console.log('looking down, after rising to the limit:', JSON.stringify(risen));
+const lookingDown = downBefore.cameraZ > downBefore.avatarZ;
+const worstRiseDistanceErr = Math.max(...riseSamples.map((r) => Math.abs(r.anchorToCameraM - FOLLOW_M)));
+const worstRiseCameraMargin = Math.min(...riseSamples.map((r) => r.cameraMarginM));
+const rose = risen.avatarZ > downBefore.avatarZ + 1 || riseSamples.some((r) => r.avatarZ > downBefore.avatarZ + 1);
+const riseHeld = worstRiseDistanceErr < 0.15 && worstRiseCameraMargin >= -0.05 && risen.bodyMarginM >= -0.05;
+console.log(`looking down: camera above avatar ${lookingDown}, avatar rose ${rose}, distance held (worst err ${worstRiseDistanceErr.toFixed(2)}) and inside: ${riseHeld}`);
+
 await finish(browser, {
-  pass: facingCentre && stopped && distanceHeld && bothInside && restsFarther && errors.length === 0,
+  pass: facingCentre && stopped && distanceHeld && bothInside && restsFarther && lookingDown && rose && riseHeld && errors.length === 0,
   label: '#3385: at the dome the avatar-to-camera distance holds, both ends stay inside, and the avatar rests farther in with the camera on the outer side',
   errors,
 });
