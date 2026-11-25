@@ -108,17 +108,24 @@ async function placeAt(x, y, settleMs = 800) {
   await page.waitForTimeout(settleMs);
 }
 
+// #4253: the box is only for now: a background retry (shortened here) brings the real model into it.
+await page.evaluate(() => { window.__testModelRecoveryDelaysMs = [500, 500, 500]; });
+
 // 1s retry delay (#3254) + the second failed fetch, so wait past both.
 await placeAt(160, 400, 3000);
 const warningsAfterFirst = boxFallbackWarnings.length;
 console.log('box-fallback warnings after the first placement (forced failure, expect exactly 1):', warningsAfterFirst);
+
+await page.waitForFunction(() => window.__modelRecoveryStats?.recovered >= 1, undefined, { timeout: 15000 }).catch(() => {});
+const recoveryStats = await page.evaluate(() => ({ ...window.__modelRecoveryStats }));
+console.log('the failed model was brought back by the background retry (recovered 1, pending 0):', recoveryStats);
 
 await placeAt(260, 400);
 const warningsAfterSecond = boxFallbackWarnings.length;
 console.log('box-fallback warnings after the second placement (same model, untouched by the route handler, should load for real — still expect exactly 1):', warningsAfterSecond);
 
 const newErrors = errors.slice(errorsBeforeFailureSimulation.length);
-const pass = warningsAfterFirst === 1 && warningsAfterSecond === 1
+const pass = recoveryStats.recovered === 1 && recoveryStats.pending === 0 && warningsAfterFirst === 1 && warningsAfterSecond === 1
   && newErrors.length === 2 && newErrors.every((e) => e.includes('net::ERR_FAILED'));
 await finish(browser, {
   pass,
