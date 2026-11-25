@@ -7,6 +7,7 @@
 // these three badges directly after resolving builderId; everything else
 // below is only ever reached from inside this module's own account-menu
 // panel/modals.
+import { scheduleRetry } from '../retryRead.js';
 import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { createPurchaseRow } from './myPurchases.js';
@@ -91,6 +92,12 @@ const budShowsNotes = () => document.body.dataset.mode !== 'layoutPreview';
 const canReadMenuCounts = () => Boolean(currentAuthUser?.ageAttested) && currentAuthUser.trustTier !== 'none';
 
 export async function refreshNotificationsBadge() {
+  return refreshNotificationsBadgeAttempt(0);
+}
+
+// #4317: a failed read is asked again in the background (after 2 s, then 8 s) instead of being kept as the answer,
+// so one network blip at start-up does not leave the head without its notices dot for the whole visit.
+async function refreshNotificationsBadgeAttempt(attempt) {
   if (!canReadMenuCounts()) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
@@ -106,6 +113,7 @@ export async function refreshNotificationsBadge() {
     else clearBudWord('notices');
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
+    scheduleRetry(refreshNotificationsBadgeAttempt, attempt);
   }
 }
 
@@ -625,6 +633,10 @@ dmComposeForm.addEventListener('submit', async (event) => {
 });
 
 export async function refreshFriendsBadge() {
+  return refreshFriendsBadgeAttempt(0);
+}
+
+async function refreshFriendsBadgeAttempt(attempt) { // #4317: as refreshNotificationsBadgeAttempt
   if (!canReadMenuCounts()) return; // #3774: as above
   try {
     const friendships = await fetchFriendships();
@@ -636,6 +648,7 @@ export async function refreshFriendsBadge() {
     else clearBudWord('friend-requests');
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
+    scheduleRetry(refreshFriendsBadgeAttempt, attempt);
   }
 }
 
