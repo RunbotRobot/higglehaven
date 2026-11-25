@@ -30,7 +30,7 @@ import {
   apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, TIER_FULL, TIER_MID, TIER_FAR,
   MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready, setApparentPx,
 } from '../shop/lodTier.js';
-import { startLodSetsJob, stepLodSetsJob } from '../shop/lodSets.js';
+import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from '../shop/lodSets.js';
 import { attachInstanceTiers, setInstanceLodState, setLodChildHitTestable, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
 
 export const BUILD_LOD_INTERVAL_MS = 250;
@@ -111,6 +111,10 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   // #4189: the sets are worked out in slices of BUILD_SETS_SLICE_MS a tick, not in one frame; the sets in use stay
   // the previous ones until the new ones are complete, then change at once.
   let setsJob = null; // { job, signature } while one is running
+  // #4208: an item no finished set job has looked at (entering Build, a paste, anything placed since) keeps the version it
+  // has and is not judged alone: judged alone it would take a different version from the set it is about to join, and a
+  // person would see the change when the job finishes (the same hold Shop has, #4195). A failed job releases the hold.
+  let setsFailed = false;
   let wholeIds = new Set(); // the sets held whole at full detail last pass
   const accs = new Map(); // setId -> what this pass has found out about the members it saw
 
@@ -242,7 +246,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         px,
         protected: own,
         selected: selectedItem,
-        wanted: own ? TIER_FULL : nextTier(data.lodTier, px),
+        wanted: own ? TIER_FULL : isHeldForSets(object, setsFailed) ? (data.lodTier ?? TIER_FULL) : nextTier(data.lodTier, px),
         tris: fullTriangles,
         dist: groundDistanceM,
         current: data.lodApplied ?? TIER_FULL,
@@ -296,6 +300,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const done = stepLodSetsJob(setsJob.job, BUILD_SETS_SLICE_MS);
       if (done) {
         sets = done;
+        setsFailed = setsJob.job.failed === true;
         setsSignature = setsJob.signature;
         setsJob = null;
         wholeIds = new Set(); // set ids are worked out again

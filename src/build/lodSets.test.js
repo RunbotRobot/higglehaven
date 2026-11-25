@@ -164,21 +164,23 @@ describe('Build judges a wall as one set (#4115)', () => {
     const right = wall('stone', 16, 16, { x0: 20 });
     const objects = [...left, ...right];
     const { look, tick } = setup(objects);
-    look(10, -90, 40); // far away: both on far
-    tick(3);
-    expect(tiersOf(objects)).toEqual(new Set(['far']));
+    look(10, -90, 40); // far away: both walls settle on one and the same reduced version
+    tick(12); // 512 bricks is a job of several slices: every brick keeps the version it has until it finishes (#4208)
+    const settled = [...tiersOf(objects)];
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).not.toBe('full');
     // Every call to the clock advances 50 ms, so a pass is out of slice after its first set.
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => (now += 50));
-    look(10, -14, 6); // close: both want to change
+    look(17.5, -5, 3); // between the two walls, close to both: both want to change
     let passes = 0;
-    for (let n = 0; n < 40 && !(tiersOf(left).size === 1 && tiersOf(right).size === 1 && !tiersOf(objects).has('far')); n++) {
+    for (let n = 0; n < 40 && !(tiersOf(left).size === 1 && tiersOf(right).size === 1 && !tiersOf(objects).has(settled[0])); n++) {
       tick(1);
       passes += 1;
       expect(tiersOf(left).size).toBe(1); // never part way over
       expect(tiersOf(right).size).toBe(1);
     }
-    expect(tiersOf(objects).has('far')).toBe(false);
+    expect(tiersOf(objects).has(settled[0])).toBe(false);
     expect(passes).toBeGreaterThan(1); // the second set did wait for a later pass
   });
 
@@ -337,5 +339,49 @@ describe('Build judges a wall as one set (#4115)', () => {
     for (const object of objects) expect(object.userData.groupId).toBeUndefined();
     expect(objects.map((object) => object.userData.instanceId)).toEqual(ids);
     expect(objects.every((object) => object.parent !== null)).toBe(true);
+  });
+});
+
+// #4208: Shop holds an item's version until a set job has looked at it (#4195); Build does the same, so the
+// first passes after entering Build or after a paste never judge a loose wall brick by brick (a diagonal edge
+// that would flip when the job finishes: a change of version is never something a person can see).
+describe('Build holds an item\'s version until a set job has looked at it (#4208)', () => {
+  const far = [[0, -12, 0], [0, -14, 6], [3, -16, 12], [10, -20, 18], [19, -25, 3], [-6, -10, 8]];
+
+  it('keeps every brick of a loose wall on the version it has on the first pass, then moves the wall as one', () => {
+    for (const position of far) {
+      const objects = wall('brick', 20, 20);
+      const { look, tick } = setup(objects);
+      look(...position);
+      tick(1); // the first pass: no finished set job has seen these bricks
+      expect(tiersOf(objects)).toEqual(new Set(['full']));
+      tick(3);
+      expect(tiersOf(objects).size).toBe(1); // the wall is judged as one, never an edge through it
+    }
+  });
+
+  it('never shows an edge on the way: no pass between entering and settling has two versions at once', () => {
+    for (const position of far) {
+      const objects = wall('brick', 20, 20);
+      const { look, tick } = setup(objects);
+      look(...position);
+      for (let pass = 0; pass < 5; pass++) {
+        tick(1);
+        expect(tiersOf(objects).size).toBe(1);
+      }
+    }
+  });
+
+  it('holds a newly placed brick at the version it has until a job has seen it, not judging it alone', () => {
+    const objects = wall('brick', 20, 20);
+    const { look, tick, place } = setup(objects);
+    look(...far[3]);
+    tick(4); // settled: the wall is on one version, every brick seen
+    const wallTier = [...tiersOf(objects)][0];
+    const fresh = brick('brick', 20, 0, 0);
+    place([fresh]);
+    tick(1); // placed this pass: no job has seen it yet
+    expect(tierOf(fresh)).toBe('full'); // held at the version it arrived with, not judged alone
+    expect([...tiersOf(objects.slice(0, 400))]).toEqual([wallTier]); // and the wall did not change
   });
 });
