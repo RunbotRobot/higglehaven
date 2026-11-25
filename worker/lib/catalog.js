@@ -1841,7 +1841,23 @@ export async function handleCatalog(request, db, route, url, models, env) {
       `).bind(productId).first();
       if (sibling) ({ image_url: imageUrl, image_embedding: imageEmbedding } = sibling);
     }
-    const templateId = `template-${crypto.randomUUID()}`;
+    // #4346: a lost response, then a resubmit of the same form, used to create a second listing of the same product.
+    // With an idempotencyKey (the client keeps one per open form, as the single-item create does since #1728) the
+    // listing gets a stable id: the same attempt returns the row it already made, and a changed price or stock on the
+    // resubmit is a genuinely new attempt, which mints a fresh id.
+    let templateId = `template-${crypto.randomUUID()}`;
+    const idempotentId = await catalogTemplateIdempotencyKey(sessionSeller.seller_id, `listing:${productId}`, input.idempotencyKey);
+    if (idempotentId) {
+      const already = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(idempotentId).first();
+      if (already) {
+        if (already.seller_id === sessionSeller.seller_id && already.price_cents === priceCents
+          && (already.stock_quantity ?? null) === (stockQuantity ?? null)) {
+          return json({ template: templateFromRow(already) });
+        }
+      } else {
+        templateId = idempotentId;
+      }
+    }
     await db.prepare(`
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m,

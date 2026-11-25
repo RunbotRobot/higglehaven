@@ -835,7 +835,10 @@ export async function handleSellerPayouts(request, env, db) {
     );
     if (included.length === 0) {
       if (skippedForTax) throw taxThresholdPayoutBlockedError();
-      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+      // #4346: our own hold has lifted, so what is left is Stripe's own delay before a sale shows as available on the
+      // account. Stripe does not give a date for it (the balance only has amounts), so the words say what it usually
+      // is rather than invent a time.
+      throw new HttpError('Your sales are still clearing with Stripe, which usually takes about two days after a sale. Try cashing out again then.', 400);
     }
 
     // Claimed BEFORE calling Stripe, not after — the actual money-moving
@@ -846,7 +849,8 @@ export async function handleSellerPayouts(request, env, db) {
     const nowIso = new Date().toISOString();
     const claimed = await claimPurchasesForPayout(db, included, nowIso);
     if (claimed.length === 0) {
-      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+      // #4346: losing the claim means these sales changed while the request ran (another cash-out took them, or one was refunded); "still clearing" was wrong.
+      throw new HttpError('These sales changed while your cash-out was starting, by another cash-out or a refund. Check Payouts, then try again.', 409);
     }
     const claimedCents = claimed.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
 
