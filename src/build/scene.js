@@ -4201,10 +4201,11 @@ export function updateSelectionUI() {
   // #3574 -- a mode this item cannot use is left out, not greyed (the "gone when not needed" rule).
   modeTrimBtn.hidden = modeTrimBtn.disabled;
   // Community sign (docs/API.md's "Community signs") only makes sense for
-  // one specific placed object at a time, same reasoning as Trim above —
-  // disabled (not hidden) for a multi-item selection so the button row
-  // doesn't reflow.
+  // one specific placed object at a time, same reasoning as Trim above.
+  // #4336 (#3574: a control a person can only be refused is left out): it is hidden, not greyed, for a
+  // multi-item selection; the comment that said "disabled so the row does not reflow" predates #3574.
   communitySignBtn.disabled = !singleMesh;
+  communitySignBtn.hidden = communitySignBtn.disabled;
   const isCommunitySign = !!singleMesh?.userData.isCommunitySign;
   communitySignBtn.classList.toggle('active', isCommunitySign);
   communitySignBtn.setAttribute('aria-pressed', String(isCommunitySign));
@@ -4219,6 +4220,7 @@ export function updateSelectionUI() {
   // reasoning and same toggle-then-manage button design as Community sign
   // just above, independent of it.
   communityCalendarBtn.disabled = !singleMesh;
+  communityCalendarBtn.hidden = communityCalendarBtn.disabled; // #4336
   const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
@@ -4228,6 +4230,7 @@ export function updateSelectionUI() {
   // same single-selection-only gating as Trim/Community sign/Calendar
   // above, but no toggle/active state of its own to reflect.
   backupChainBtn.disabled = !singleMesh;
+  backupChainBtn.hidden = backupChainBtn.disabled; // #4336
   // #2764: Group needs 2+ items to form anything; Ungroup needs the
   // selection to include at least one already-grouped item (every member
   // of that group is in the selection too, per selectOnly/toggleInSelection's
