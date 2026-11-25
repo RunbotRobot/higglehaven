@@ -97,6 +97,19 @@ async function tripoUploadFile(env, bytes, filename, contentType) {
 // the owner's call, not a code detail.
 const TRIPO_MODEL_VERSION = 'v3.0-20250812';
 
+// #4122: the owner's first real generation came back as a 30.06 MB GLB against our 20 MB cap and was lost. Left to
+// itself the provider picks "adaptive topology" (no face cap; the documented ceiling for this model version is a
+// million triangles), which is far more than a phone draws: the shop's own middle version is built to 4,000
+// triangles. So the request now asks for a face cap and says the texture quality, both documented fields of the
+// multiview task (developers.tripo3d.com, generation-multiview-to-model). 50,000 is the top of Tripo's own
+// "web/mobile" range of 10,000 to 50,000 faces. `texture_quality: "standard"` is the documented default, sent
+// explicitly so a provider-side change of default cannot make the file larger. Neither is a listed add-on on the
+// price page (the base price above stays as it is: HD and Ultra texture, quad and low-poly are the priced extras);
+// the first generation after this ships is the check, and `compress: "geometry"` is left off on purpose: it
+// returns a meshopt GLB that the viewer's loader and the version generator cannot read yet.
+export const TRIPO_FACE_LIMIT = 50000;
+export const TRIPO_TEXTURE_QUALITY = 'standard';
+
 // A real (non-trivial) per-call cost -- ~$0.20-0.30/generation per #1617's
 // own research -- same reasoning as DIDIT_SESSION_RATE_LIMIT_MAX
 // (worker/lib/didit.js), bucketed per-builder since this is a session-gated
@@ -661,6 +674,8 @@ export async function handleVideoGenerationJobCreate(request, env, db) {
     const task = await tripoRequest(env, 'POST', 'generation/multiview-to-model', {
       inputs,
       model: TRIPO_MODEL_VERSION,
+      face_limit: TRIPO_FACE_LIMIT,
+      texture_quality: TRIPO_TEXTURE_QUALITY,
     });
     if (!task?.task_id) {
       throw new HttpError('Video-to-3D job creation failed. Try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
