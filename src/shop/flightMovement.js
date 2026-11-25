@@ -1915,6 +1915,13 @@ export function updateShopMovementCore(now) {
   shopAvatarPosition.z =
     shopFlightAltitudeM + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+  // #4193 (owner rule from #3374): the avatar's own radial limit above only runs when there is horizontal input, but
+  // the dome narrows with height, so rising straight up beside the wall carried the avatar's body through it (seen
+  // on CI: a pair rising to the ceiling from 8.6 m out, its body 1 m outside). While flying with no horizontal
+  // input the avatar now slides inward just far enough at its new height, the way it does when it is steered.
+  if (shopFlightState === 'flying' && moveMagnitude === 0 && !shopGoToLastLocationPhase && !shopSpawnRotating) {
+    clampShopRadius(shopAvatarPosition, shopAvatarLimitRadiusM(true));
+  }
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
   // a plain neutral pose instead (a real flight pose, arms/legs extended,
