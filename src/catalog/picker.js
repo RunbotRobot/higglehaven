@@ -407,10 +407,51 @@ export function bumpBundlePickerLoadToken() {
   return ++bundlePickerLoadToken;
 }
 
+// #4314: the one request that fills myBundles/communityBundles used to log a warning and leave both empty on a
+// failure, so the picker hid the whole section and a builder concluded they had no bundles. A failure is now kept as a
+// failure: the section shows that the bundles could not be loaded, with a button that asks again, and opening the
+// picker asks again by itself.
+let bundlesLoadFailed = false;
+
+// Fetches the builder's own and the shared bundles and redraws the picker. Shares bundlePickerLoadToken with Save
+// bundle and the rename/share/delete handlers: a newer action that bumped the token owns the picker, and this
+// (slower, stale) answer is dropped.
+export async function loadBundlesIntoPicker() {
+  const loadToken = bumpBundlePickerLoadToken();
+  try {
+    const [bundles, shared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
+    if (loadToken !== bundlePickerLoadToken) return;
+    bundlesLoadFailed = false;
+    setMyBundles(bundles);
+    setCommunityBundles(shared);
+  } catch (err) {
+    console.warn('Could not load bundles:', err);
+    if (loadToken !== bundlePickerLoadToken) return;
+    bundlesLoadFailed = true;
+  }
+  renderBundlePicker();
+}
+
 // Exported for main.js's own Save bundle flow and bundle-list refresh
 // (not yet extracted) -- also still used directly here.
 export function renderBundlePicker() {
   const hasAnyBundles = myBundles.length > 0 || communityBundles.length > 0;
+  if (bundlesLoadFailed && !hasAnyBundles) {
+    bundlePickerSectionEl.hidden = catalogSearchScope === 'products';
+    if (bundlePickerSectionEl.hidden) return;
+    bundlePickerGridEl.replaceChildren();
+    const message = document.createElement('span');
+    message.textContent = "Couldn't load your bundles. ";
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.id = 'bundle-picker-retry';
+    retry.className = 'bundle-tab-btn';
+    retry.textContent = 'Try again';
+    retry.addEventListener('click', () => { loadBundlesIntoPicker(); });
+    bundlePickerEmptyEl.replaceChildren(message, retry);
+    bundlePickerEmptyEl.hidden = false;
+    return;
+  }
   bundlePickerSectionEl.hidden = catalogSearchScope === 'products' || !hasAnyBundles;
   if (bundlePickerSectionEl.hidden) return;
 
@@ -709,5 +750,6 @@ addItemBtn.addEventListener('click', () => {
   orderTilesByRecent();
   setCatalogStrip(true);
   openModalA11y(catalogPickerEl, closeCatalogPicker);
+  if (bundlesLoadFailed) loadBundlesIntoPicker(); // #4314: the earlier request failed; ask again now
 });
 catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
