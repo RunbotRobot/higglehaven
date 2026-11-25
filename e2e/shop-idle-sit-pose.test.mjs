@@ -8,7 +8,7 @@
 // to its fully-blended values, then that a brief joystick deflection hard-
 // cuts it back to 0 on the very next frame (the same instant-ease-out
 // discipline every other idle blend in this file already follows).
-import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox, startIdleEpisodeAt } from './helpers.mjs';
 
 const LABEL = 'Idle Sit Pose Builder';
 const LANDLET_ID = 'idle-sit-pose-landlet';
@@ -136,6 +136,9 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [AVATAR_X, AVATAR_Y]);
 await page.waitForTimeout(500); // lets the just-forced landlet instance load actually finish
+// #4281: a fresh idle episode with the avatar standing still at its spot (a deflection keeps carrying it for a
+// moment, and an episode that starts out of the chair's reach never sits).
+await startIdleEpisodeAt(page, { deflect: deflectMoveJoystick, x: AVATAR_X, y: AVATAR_Y, kind: 'sit' });
 
 // The avatar's own facing right after the teleport/deflection above settled
 // (__testTeleportShopAvatar itself doesn't set facing, and the preceding
@@ -157,7 +160,6 @@ const baselineFacingRad = (await page.evaluate(() => window.__shopAvatarOrientat
 // the written values -- and even those were too tight under current CI
 // load. The explicit `null` arg reaches the options slot, and the
 // timeouts are widened for real headroom.
-await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 60000 });
 await page.waitForFunction(() => window.__testShopSitPose().blend > 0.9, null, { timeout: 60000 });
 
 const engagedPose = await page.evaluate(() => window.__testShopSitPose());

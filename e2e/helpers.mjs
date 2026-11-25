@@ -1132,3 +1132,32 @@ export function localD1(sql, { json = false, attempts = 8 } = {}) {
     }
   }
 }
+
+// #4281 (from #4274): start a fresh idle episode with the avatar standing at (x, y) and wait until it has picked a
+// target of `kind` ('lean' or 'sit'). The episode looks for its target once, when the idle delay is crossed, at
+// wherever the avatar then stands, and keeps that answer. A joystick deflection keeps carrying the avatar for a
+// moment after release (more frames of walking the slower the machine), so a teleport made while it still moves
+// lets it drift out of reach and the episode starts empty. So: `deflect` (the test's own real-input helper), wait
+// until the avatar stands still, put it back, and wait for the target; if the episode began empty anyway, start
+// another. Returns true when the target was picked.
+export async function startIdleEpisodeAt(page, { deflect, x, y, kind, tries = 6, waitMs = 15000 }) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    await deflect(page);
+    let last = await page.evaluate(() => window.__testShopAvatarPosition());
+    for (let i = 0; i < 40; i += 1) {
+      await page.waitForTimeout(300);
+      const now = await page.evaluate(() => window.__testShopAvatarPosition());
+      const still = Math.hypot(now.x - last.x, now.y - last.y) < 0.005;
+      last = now;
+      if (still) break;
+    }
+    await page.evaluate(([px, py]) => {
+      window.__testTeleportShopAvatar(px, py, 0);
+      window.__testForceShopProximityCheck();
+    }, [x, y]);
+    const picked = await page.waitForFunction((k) => window.__testShopIdleInteractionTarget()?.kind === k, kind, { timeout: waitMs })
+      .then(() => true, () => false);
+    if (picked) return true;
+  }
+  throw new Error(`#4281: the idle episode never picked a ${kind} target at (${x}, ${y}) in ${tries} tries`);
+}

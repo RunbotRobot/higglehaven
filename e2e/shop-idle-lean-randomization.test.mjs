@@ -8,7 +8,7 @@
 // instant. Target-selection randomization itself (findShopIdleInteractionTarget)
 // is already proven kind-agnostic by the sit test, so this file only
 // covers the settle-delay timing half, for lean.
-import { launchPage, chooseIdentity, finish, shopStickBox } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox, startIdleEpisodeAt } from './helpers.mjs';
 
 const LABEL = 'Idle Lean Randomization Builder';
 const LANDLET_ID = 'idle-lean-randomization-landlet';
@@ -124,23 +124,10 @@ const EPISODE_SAMPLES = 6;
 const settleDelays = new Set();
 let sawBlendHeldAtZeroDuringSettle = false;
 for (let i = 0; i < EPISODE_SAMPLES; i++) {
-  await deflectMoveJoystick(page); // ends the previous episode, re-arms the idle timer
-  // Re-teleported back to the exact same spot each iteration -- the real
-  // movement input deflectMoveJoystick drives above displaces the avatar
-  // by a small real amount each time (not just a keypress with zero
-  // displacement), and this spot's own margin to the 3m search radius
-  // (0.7m) is tight enough that a few iterations of accumulated drift
-  // would otherwise walk the avatar out of range, as discovered by this
-  // test actually doing that reliably (3/3 standalone runs failed with a
-  // waitForFunction timeout here before this fix).
-  await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y, 0), [AVATAR_X, AVATAR_Y]);
-  // #2598: waitForFunction's signature is (pageFunction, arg, options) --
-  // this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
-  // real applied timeout was always Playwright's own default (30000ms),
-  // not 15000ms -- and even the intended 15000ms wasn't enough margin
-  // under current CI load. The explicit `null` arg reaches the options
-  // slot, and the timeout is widened for real headroom.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', null, { timeout: 60000 });
+  // #4281: ends the previous episode with a real deflection, waits for the avatar to stand still, puts it back at the
+  // exact same spot (the deflection displaces it by a small real amount, and this spot's margin to the 3 m search radius
+  // is only 0.7 m), and waits for this fresh episode to pick the wall; an episode that started empty is started again.
+  await startIdleEpisodeAt(page, { deflect: deflectMoveJoystick, x: AVATAR_X, y: AVATAR_Y, kind: 'lean' });
   const rightAfterSelection = await page.evaluate(() => window.__testShopLeanPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
