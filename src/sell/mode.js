@@ -38,6 +38,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { registerBudPetals, openLeaf } from '../ui/bud.js';
 import { openPayoutsLeaf } from './payoutsLeaf.js';
+import { parseStockInput } from '../../worker/stockLimit.js';
 import { buildSaleRow } from './saleRow.js';
 import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openOrdersLeaf } from './ordersLeaf.js';
@@ -497,14 +498,10 @@ export async function saveSellerPrice(template, text) {
 // number of 0 or more is what is left to sell. Same busy guard and error wording style as the price.
 export async function saveSellerStock(template, text) {
   if (metadataSaveBusyByTemplateId.get(template.templateId) === true) return { busy: true };
-  const trimmed = String(text ?? '').trim();
-  let stockQuantity = null;
-  if (trimmed) {
-    stockQuantity = Number(trimmed);
-    if (!Number.isSafeInteger(stockQuantity) || stockQuantity < 0) {
-      return { error: 'Stock must be a whole number of 0 or more, or left blank for no limit.' };
-    }
-  }
+  // #4343: the limit (and its wording) is the server's own, from worker/stockLimit.js.
+  const parsedStock = parseStockInput(text, { blankMeansNoLimit: true });
+  if (parsedStock.error) return { error: parsedStock.error };
+  const stockQuantity = parsedStock.quantity;
   if (stockQuantity === (template.stockQuantity ?? null)) return { noChange: true };
   metadataSaveBusyByTemplateId.set(template.templateId, true);
   syncMetadataSaveButtonsDisabled(template.templateId);
@@ -2398,15 +2395,15 @@ async function submitAttachListing(event) {
   }
   const priceCents = Math.round(dollars * 100);
   const trimmedStock = sellThisTooStockInput.value.trim();
-  let stockQuantity;
-  if (trimmedStock) {
-    stockQuantity = Number(trimmedStock);
-    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
-      fail('Stock must be a whole number of 0 or more, or left blank.');
-      sellThisTooStockInput.focus();
-      return;
-    }
+  // #4343: same limit and wording as the server (worker/stockLimit.js). Blank here means the listing has no stock
+  // number (unlimited), so stockQuantity stays undefined and is not sent.
+  const parsedStock = parseStockInput(trimmedStock);
+  if (parsedStock.error) {
+    fail(parsedStock.error);
+    sellThisTooStockInput.focus();
+    return;
   }
+  const stockQuantity = parsedStock.quantity ?? undefined;
   attachListingInFlight = true;
   sellThisTooAddBtn.disabled = true;
   try {

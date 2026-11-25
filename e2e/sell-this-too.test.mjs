@@ -90,6 +90,13 @@ const emptyPriceRefused = await sellerBSession.page.locator('#sell-this-too-form
 console.log('price starts empty, no placeholder (should be true):', priceStartsEmpty);
 console.log('an empty price is refused in place with a message (should be true):', emptyPriceRefused);
 await sellerBSession.page.fill('#sell-this-too-price-input', '24.99');
+// #4343: a stock over the server's limit is refused in place, saying the limit, before anything is sent.
+await sellerBSession.page.fill('#sell-this-too-stock-input', '1000001');
+await sellerBSession.page.click('#sell-this-too-add-btn');
+const overLimitMessage = await sellerBSession.page.locator('#sell-this-too-form-error').innerText();
+const overLimitRefused = overLimitMessage.includes('1,000,000') &&
+  await sellerBSession.page.locator('#sell-this-too-modal.visible').count() === 1;
+console.log('stock over the limit is refused in place, naming the limit (should be true):', overLimitRefused);
 await sellerBSession.page.fill('#sell-this-too-stock-input', '5');
 await sellerBSession.page.click('#sell-this-too-add-btn');
 
@@ -127,6 +134,7 @@ const pass =
   dialogMessages.length === 0 &&
   priceStartsEmpty &&
   emptyPriceRefused &&
+  overLimitRefused &&
   Boolean(sellerBListing) &&
   sellerBListing?.productId === productId &&
   sellerBListing?.priceCents === 2499 &&
