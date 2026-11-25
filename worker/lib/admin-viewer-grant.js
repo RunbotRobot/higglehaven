@@ -7,7 +7,7 @@
 // (which reads shoppers' text) and an admin (who has more already) are refused, each with its reason.
 import { HttpError, json } from './http.js';
 import { readJson } from './validation.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireAdminOrViewer } from './auth.js';
 import { isAssistantUsername } from './fleet-agents.js';
 import { adminActionLogStatement } from './admin-log.js';
 
@@ -43,4 +43,13 @@ export async function handleAdminSetViewer(request, db) {
     adminActionLogStatement(db, admin.user_id, input.enabled ? 'admin_viewer_granted' : 'admin_viewer_removed', 'user', userId, { username: user.username }),
   ]);
   return json({ userId, adminViewer: input.enabled, changed: true });
+}
+
+// GET /api/auth/admin-role: which dashboard this caller has. The page asks once when it opens; a viewer's
+// ask is the "page open" line in the admin log (the dashboard route itself hands off to a static file).
+export async function handleAdminRole(request, db) {
+  const user = await requireAdminOrViewer(request, db);
+  if (!user.adminViewer) return json({ role: 'admin' });
+  await adminActionLogStatement(db, user.user_id, 'admin_viewer_page_open', 'page', '/admin/dashboard', { username: user.username }).run();
+  return json({ role: 'viewer' });
 }

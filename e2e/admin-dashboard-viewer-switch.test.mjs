@@ -69,6 +69,34 @@ await page.click('#viewerAccessConfirm');
 await page.waitForFunction(() => document.querySelector('.viewer-access-btn')?.textContent.includes('Give'), null, { timeout: 10000 });
 const removed = localD1(`SELECT is_admin_viewer FROM users WHERE user_id = '${fleet.userId}'`, { json: true });
 
+// --- The look-only admin's own dashboard (slice d) ---
+const viewerStamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+const viewerEmail = `e2e-viewer-seat-${viewerStamp}@example.com`;
+const viewerSignup = await api('/auth/signup', null, { method: 'POST', body: JSON.stringify({ email: viewerEmail, password: 'a fine long password', username: `e2e-viewer-seat-${viewerStamp}`, ageAttested: true }) });
+if (viewerSignup.response.status !== 201) throw new Error(`viewer signup failed (${viewerSignup.response.status})`);
+const viewerToken = /hh_session=([^;]+)/.exec(viewerSignup.response.headers.get('set-cookie') || '')?.[1];
+// Set directly (the owner's switch only gives it to a fleet account; this test needs a session it can open the page with).
+localD1(`UPDATE users SET is_admin_viewer = 1 WHERE email = '${viewerEmail}'`);
+const viewerPage = await browser.newPage();
+viewerPage.on('pageerror', (err) => errors.push(err.message));
+await viewerPage.context().addCookies([{ name: 'hh_session', value: viewerToken, url: BASE_URL }]);
+await viewerPage.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
+await viewerPage.waitForSelector('.viewer-banner', { timeout: 10000 }).catch(() => {});
+const banner = (await viewerPage.textContent('.viewer-banner').catch(() => '')) || '';
+await viewerPage.click('button[data-panel="accounts"]');
+const submitDisabled = await viewerPage.locator('#suspendForm button[type="submit"]').isDisabled();
+const readStatus = await viewerPage.evaluate(async () => (await fetch('/api/auth/admin-users')).status);
+const writeAttempt = await viewerPage.evaluate(async () => {
+  const response = await fetch('/api/auth/suspend-account', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  return { status: response.status, error: (await response.json()).error };
+});
+const maskedEmailInTable = await viewerPage.evaluate(async () => {
+  const body = await (await fetch('/api/auth/admin-users')).json();
+  return body.users.every((u) => !u.email.includes('@example.com') || u.email.includes('***'));
+});
+console.log('viewer dashboard:', JSON.stringify({ banner, submitDisabled, readStatus, writeAttempt, maskedEmailInTable }));
+const pageOpenLogged = localD1("SELECT count(*) AS n FROM admin_action_log WHERE action_type = 'admin_viewer_page_open'", { json: true })[0].results[0].n;
+
 // The dashboard page's own favicon request is a 404 here, the same one admin-dashboard-accounts-panel filters.
 errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
 
@@ -77,5 +105,7 @@ const pass = offeredToPerson === 0
   && /Give look-only access/.test(labelBefore) && /Remove look-only access/.test(labelAfter)
   && /open the admin dashboard/.test(dialogText) && /cannot change anything/.test(dialogText)
   && flag(granted) === 1 && loggedGrant[0].results[0].n === 1 && flag(removed) === 0
+  && /Look-only access/.test(banner) && submitDisabled && readStatus === 200
+  && writeAttempt.status === 403 && /cannot change anything/.test(writeAttempt.error) && maskedEmailInTable && pageOpenLogged >= 1
   && errors.length === 0;
 await finish(browser, { pass, label: 'Admin dashboard: the owner gives and removes look-only access from a fleet account (#4175)', errors });

@@ -2,6 +2,7 @@
 // only for a fleet account that is not an assistant, and each change is in the admin log.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { SELF } from 'cloudflare:test';
 import { api, signupBuilder, signupAdmin } from './test-helpers.js';
 
 let admin;
@@ -101,5 +102,41 @@ describe('POST /auth/admin-set-viewer (#4175)', () => {
     const fleet = await fleetAccount('viewer-grant-input');
     expect((await post(admin, { userId: await idOf(fleet), enabled: 'yes' })).response.status).toBe(400);
     expect((await post(admin, { userId: 'no-such-user', enabled: true })).response.status).toBe(404);
+  });
+});
+
+describe('the look-only admin on the dashboard page (#4175, slice d)', () => {
+  const page = (who, path = '/admin/dashboard') => SELF.fetch(`https://higglehaven.test${path}`, who.session());
+  const opens = async (id) => (await env.DB.prepare("SELECT count(*) AS n FROM admin_action_log WHERE action_type = 'admin_viewer_page_open' AND admin_user_id = ? AND target_id = '/admin/dashboard'").bind(id).first()).n;
+
+  it('is let past the dashboard gate only once given the role', async () => {
+    const fleet = await fleetAccount('viewer-page-fleet');
+    expect((await page(fleet)).status).toBe(403);
+    await post(admin, { userId: await idOf(fleet), enabled: true });
+    const opened = await page(fleet);
+    expect(opened.status).not.toBe(401);
+    expect(opened.status).not.toBe(403);
+  });
+
+  it('is told which dashboard it has, and each ask by a viewer is written to the admin log', async () => {
+    const fleet = await fleetAccount('viewer-page-role');
+    const id = await idOf(fleet);
+    expect((await api('/auth/admin-role', fleet.session())).response.status).toBe(403);
+    await post(admin, { userId: id, enabled: true });
+    const asked = await api('/auth/admin-role', fleet.session());
+    expect(asked.body).toEqual({ role: 'viewer' });
+    expect(await opens(id)).toBe(1);
+    await api('/auth/admin-role', fleet.session());
+    expect(await opens(id)).toBe(2);
+    // An admin is told so and is not logged as a viewer.
+    expect((await api('/auth/admin-role', admin.session())).body).toEqual({ role: 'admin' });
+    expect(await opens(await idOf(admin))).toBe(0);
+  });
+
+  it('is not let into the other admin pages', async () => {
+    const fleet = await fleetAccount('viewer-page-other');
+    await post(admin, { userId: await idOf(fleet), enabled: true });
+    expect((await page(fleet, '/admin/control-room')).status).toBe(403);
+    expect((await page(fleet, '/admin/action-log')).status).toBe(403);
   });
 });

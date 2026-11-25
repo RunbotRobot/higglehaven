@@ -8,7 +8,7 @@
 import { json, HttpError, htmlResponse } from './http.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
-import { currentUser, requireAdmin } from './auth.js';
+import { currentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
 import { tellShopperWhatBecameOfCard } from './assistant-chat.js';
 
 // N31 (owner, Control Room, 2026-09-11): "I must insist that we move this
@@ -209,12 +209,28 @@ export async function handleAdminActionLogPage(request, env) {
 export async function handleAdminDashboardPage(request, env) {
   if (request.method !== 'GET') return json({ error: 'Not found' }, 404);
   try {
-    await requireAdmin(request, env.DB);
+    await requireAdminOrViewer(request, env.DB);
   } catch (error) {
     if (!(error instanceof HttpError)) throw error;
     return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Dashboard'), error.status);
   }
+  // #4175: a look-only admin is let in too. The page tells itself apart (GET /api/auth/admin-role, which is also
+  // where each open by a viewer is written to the admin log), because this route hands off to the static file.
+  // #4232: the extensionless path, which the binding serves with 200 (the .html form answers a 307).
   return env.ASSETS.fetch(new Request(new URL('/admin-dashboard', request.url), request));
+}
+
+// #4232: the admin tools' scripts and styles (public/admin-*.js, admin-*.css) are gated like the dashboard page
+// they belong to: an admin or the look-only role, never a signed-out visitor, who gets a plain 404 (they are
+// static files, so there is no sign-in page to show). Lives here so the look-only opt-in stays in this file.
+export async function handleAdminStaticFile(request, env) {
+  try {
+    await requireAdminOrViewer(request, env.DB);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return json({ error: 'Not found' }, 404);
+  }
+  return env.ASSETS.fetch(request);
 }
 
 export async function handleControlRoom(request, env, route, url) {
