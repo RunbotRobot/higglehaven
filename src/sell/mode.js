@@ -2519,7 +2519,7 @@ function renderSellerIdentityField(container, rerender) {
     // of deleting while a real purchase's proceeds are still unpaid, so
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
-    deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete account under Account above to delete that too.',
+    deleteWarning: 'Reset your seller profile? Your products come off sale and leave every lándlet they stand on. This cannot be undone. Your login stays active either way; to delete that too, use Delete account under the account icon at the top.',
     onDeleted: () => { setSellerId(null); },
   });
 }
