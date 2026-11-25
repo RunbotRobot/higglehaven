@@ -428,10 +428,15 @@ function drawStem(host, first, last) {
   const head = toggle()?.getBoundingClientRect();
   if (!head || head.height <= 0) return;
   const stemX = parseFloat(getComputedStyle(host).getPropertyValue('--stem-x')) || 88;
-  const x0 = Math.round(head.left + head.width / 2 - hostBox.left); // the head's own centre line
-  const y0 = Math.round(head.top + head.height / 2 - hostBox.top); // under the head, so it comes out of its base
+  // #4200: the head is turned to point down and to the right, toward the petals, so its base is at its upper left
+  // (public/bud-head.svg: the bud is rotated 135 degrees, the logo stays upright). The stem enters the head there
+  // and runs down the left behind it (the head is drawn above the stem), so it never crosses the logo.
+  const x0 = Math.round(head.left + head.width * 0.19 - hostBox.left); // the head's base, at its upper left
+  const y0 = Math.round(head.top + head.height * 0.19 - hostBox.top);
   const firstTop = first.getBoundingClientRect().top - hostBox.top;
-  const lastMid = Math.round(last.getBoundingClientRect().top + last.getBoundingClientRect().height / 2 - hostBox.top);
+  // #4200: leaves join at their tips (their top corner on the stem), so the stem ends just below the last tip, not half way down
+  // the last leaf (the notes under the leaves, the lándlet cap, are not struck through either way).
+  const lastMid = Math.round(last.getBoundingClientRect().top + 6 - hostBox.top);
   // The curve takes the room above the first leaf (at most 56px); a shorter run still curves, just tighter.
   const curve = Math.max(16, Math.min(56, firstTop - y0 - 24));
   const y2 = Math.round(firstTop - 6); // where it is on the leaves' line
