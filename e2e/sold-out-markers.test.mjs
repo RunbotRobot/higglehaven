@@ -108,6 +108,22 @@ await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 
 const afterUntoggle = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
 console.log('ghost-box markers rendered after unchecking the toggle (should be empty):', afterUntoggle);
 
+// #4315: a failed read of the sold-out list is asked for again while the switch stays on, not kept as "none".
+await page.evaluate(() => { window.__testGhostRetryWaitsMs = [300, 300]; });
+let markerReads = 0;
+await page.route('**/sold-out-markers', async (route) => {
+  if (route.request().method() !== 'GET') { await route.continue(); return; }
+  markerReads += 1;
+  if (markerReads === 1) { await route.abort('failed'); return; }
+  await route.continue();
+});
+await page.click('#toggle-ghosts');
+await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 1, undefined, { timeout: 8000 });
+console.log('the marker shows after one failed read (reads should be 2 or more):', markerReads);
+await page.click('#toggle-ghosts');
+await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 0, undefined, { timeout: 5000 });
+await page.unroute('**/sold-out-markers');
+
 // Re-check it, then dismiss via the list's own button -- both the row and
 // the ghost box should disappear together, and the real DELETE should have
 // actually landed server-side (re-fetchable via GET, confirmed below).
@@ -134,7 +150,8 @@ const pass = purchased.status === 201
   && afterDismiss.length === 0
   && emptyNoteVisible === true
   && refetched.body.markers.length === 0
-  && errors.length === 0;
+  && markerReads >= 2
+  && errors.every((e) => e.includes('net::ERR_FAILED')); // the one read aborted on purpose (#4315)
 await finish(browser, {
   pass,
   label: '#2068: Build-mode sold-out markers toggle on/off as grayed-out ghost boxes and can be dismissed from the Settings panel',
