@@ -37,6 +37,13 @@ await press('Shift+ArrowLeft', 3);
 after = await item();
 check(moved(before, after) > 0.15, 'Shift+Left slides it back');
 
+// A press that worked says what it did for a screen reader (the hidden live region).
+const said = () => page.evaluate(() => document.getElementById('build-select-status').textContent.replace(/\u200b/g, ''));
+await press('Shift+ArrowLeft');
+check(/^Moved .* to the left\.$/.test(await said()), `a nudge is announced (${JSON.stringify(await said())})`);
+await press('Shift+KeyQ');
+check(/^Turned 5 degrees left\.$/.test(await said()), `a turn is announced (${JSON.stringify(await said())})`);
+
 // Forward and back move it along the ground the other way.
 const startFwd = await item();
 await press('Shift+ArrowUp', 2);

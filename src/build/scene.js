@@ -86,7 +86,7 @@ import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
 import { stepBuildCamera } from './keyboardCamera.js';
 import { buildEditKeyAction } from './keyboardEdit.js';
-import { buildItemKeyAction, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
+import { buildItemKeyAction, itemKeyAnnouncement, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -5288,6 +5288,7 @@ window.addEventListener('keydown', (event) => {
 // #4162 (leaf 4 of #4158): Shift with the arrows, Page Up and Page Down, Q and E moves and turns the one
 // selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
 let lastItemKeyAt = 0;
+let itemKeyAnnounceFlip = false;
 function turnSelectedItem(degrees) {
   if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
   const [mesh] = selectedMeshes;
@@ -5303,8 +5304,17 @@ window.addEventListener('keydown', (event) => {
   const now = performance.now();
   if (now - lastItemKeyAt < ITEM_KEY_MIN_GAP_MS) return;
   lastItemKeyAt = now;
+  const [item] = selectedMeshes;
+  const was = { position: item.position.clone(), quaternion: item.quaternion.clone() };
   if (action.type === 'nudge') nudgeSelectedItem(action.direction);
   else turnSelectedItem(action.degrees);
+  // A press that did something says so for a screen reader; one that did nothing already said why.
+  const did = action.type === 'nudge' ? item.position.distanceTo(was.position) > 1e-4 : item.quaternion.angleTo(was.quaternion) > 1e-4;
+  if (did && buildSelectStatusEl) {
+    // The same sentence twice in a row is not read again, so every other press carries an invisible mark.
+    itemKeyAnnounceFlip = !itemKeyAnnounceFlip;
+    buildSelectStatusEl.textContent = itemKeyAnnouncement(action, getUnits()) + (itemKeyAnnounceFlip ? '\u200b' : '');
+  }
 });
 window.addEventListener('blur', () => { buildKeysDown.clear(); });
 function applyBuildKeyboardCamera(now) {
