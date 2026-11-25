@@ -1,7 +1,7 @@
 // #3782: which lettering a stored choice draws, and that a face is fetched once and only when asked for.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_WORDMARK_ID } from '../../shared/wordmark-set.js';
-import { WORDMARK_FACES, WORDMARK_COLOUR_PAIRS, resolveWordmark, renderWordmark, loadWordmarkFace } from './wordmark.js';
+import { WORDMARK_FACES, WORDMARK_COLOUR_PAIRS, resolveWordmark, renderWordmark, loadWordmarkFace, WORDMARK_RETRY_DELAYS_MS } from './wordmark.js';
 
 const all = { styles: [DEFAULT_WORDMARK_ID, ...Object.keys(WORDMARK_FACES)], colours: [DEFAULT_WORDMARK_ID, ...Object.keys(WORDMARK_COLOUR_PAIRS)] };
 
@@ -73,6 +73,25 @@ describe('loading a face (#3782)', () => {
   it('answers false, and keeps the fallback, when a face cannot load', async () => {
     const api = { FontFace: class { async load() { throw new Error('404'); } }, fonts: { add() {} } };
     expect(await loadWordmarkFace('round', api)).toBe(false);
+  });
+  describe('after one failed load (#4316)', () => {
+    afterEach(() => { vi.useRealTimers(); });
+    it('asks again after a pause and registers the face when it arrives', async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const added = [];
+      const api = {
+        FontFace: class { constructor(family) { this.family = family; } async load() { calls += 1; if (calls === 1) throw new Error('offline'); return this; } },
+        fonts: { add: (font) => added.push(font.family) },
+      };
+      expect(await loadWordmarkFace('script', api)).toBe(false);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(WORDMARK_RETRY_DELAYS_MS[0] + 1);
+      expect(calls).toBe(2);
+      expect(added).toEqual([WORDMARK_FACES.script.family]);
+      expect(await loadWordmarkFace('script', api)).toBe(true);
+      expect(calls).toBe(2);
+    });
   });
   it('asks for no face for the default or an unknown id', async () => {
     const log = [];
