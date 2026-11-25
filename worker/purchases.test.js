@@ -1058,6 +1058,9 @@ describe('Simulated purchases', () => {
     const purchased = await api('/instances/purchase-no-returns-instance/purchase', seller.session({ method: 'POST' }));
     const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
+    // #4341: it names the setting and where the seller changes it, not "the seller's" rule.
+    expect(rejected.body.error).toMatch(/set to not accept returns.*Edit returns policy/);
+    expect(rejected.body.error).not.toMatch(/seller does not/);
   });
 
   it('rejects a non-boolean metadata.noReturns', async () => {
