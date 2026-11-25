@@ -1048,6 +1048,29 @@ rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 // #3376: `dragAxis: true` also tells the gizmo which ring is being turned, the
 // way a real drag does, so Snap / settle apply; without it the raw angle is used.
 window.__testRotateRingsShown = () => ({ x: rotateControls.showX, y: rotateControls.showY, z: rotateControls.showZ }); // e2e (#4118): which rings the selected item wears
+// e2e (#4118): where on the screen (client pixels) each of the three rings can be grabbed, so a test can put a real
+// finger on the red, green or blue ring of the selected item. A point on the middle of the ring's pick area, kept
+// only if it is on screen; null for a ring that is not offered.
+window.__testRotateRingPoints = () => {
+  const out = {};
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const pickers = rotateControls._gizmo.picker.rotate.children.filter((p) => ['X', 'Y', 'Z'].includes(p.name) && p.visible);
+  for (const picker of pickers) {
+    const position = picker.geometry.attributes.position;
+    const points = [];
+    // a spread of points along the ring's pick area that are on screen; the test presses on them until the gizmo
+    // itself says this ring is the one under the finger (the rings cross, and a point where two meet picks one)
+    for (let i = 0; i < position.count; i += Math.max(1, Math.floor(position.count / 40))) {
+      v.fromBufferAttribute(position, i).applyMatrix4(picker.matrixWorld).project(camera);
+      if (Math.abs(v.x) > 0.9 || Math.abs(v.y) > 0.9 || v.z > 1) continue;
+      points.push({ x: Math.round(rect.left + ((v.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - v.y) / 2) * rect.height) });
+    }
+    out[picker.name.toLowerCase()] = points;
+  }
+  return out;
+};
+window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
