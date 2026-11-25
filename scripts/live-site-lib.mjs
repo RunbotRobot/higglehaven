@@ -233,6 +233,17 @@ function parseStepWithoutBurst(token, command, args) {
       if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": item needs a whole number from 1 (which placed item, left to right)`);
       return { command, args: [n] };
     }
+    case 'dragitem': {
+      // #4198: dragitem:<n>:<dx>:<dy>: select the n-th placed item on screen in Build and drag it dx, dy pixels.
+      need(3);
+      const n = Number(args[0]);
+      const dx = Number(args[1]);
+      const dy = Number(args[2]);
+      if (!Number.isInteger(n) || n < 1 || !Number.isFinite(dx) || !Number.isFinite(dy) || args.length !== 3) {
+        throw new Error(`step "${token}": dragitem needs an item number from 1 and two pixel distances (dragitem:2:250:0)`);
+      }
+      return { command, args: [n, dx, dy] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -301,7 +312,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
   }
 }
 
