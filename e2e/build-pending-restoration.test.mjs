@@ -113,7 +113,16 @@ if (suspend.response.status !== 200) {
 }
 console.log('instances removed by the suspension (should be 1):', suspend.body.instancesRemoved);
 
+// #4297: the first read of the removed items fails; the list must be asked for again, not shown as "nothing removed".
+await page.addInitScript(() => { window.__testPendingRetryDelaysMs = [500, 500, 500]; });
+let pendingReads = 0;
+await page.route('**/api/instances/pending-restoration', async (route) => {
+  pendingReads += 1;
+  if (pendingReads === 1) { await route.abort('failed'); return; }
+  await route.continue();
+});
 await reloadBuildMode();
+console.log('reads of the removed items (first aborted, then asked again; should be 2 or more):', pendingReads);
 // #4201: the head wears a note for newly removed items (one tap opens the list), and says nothing once the list has been opened.
 const noteBefore = await page.evaluate(() => {
   const note = document.getElementById('bud-note');
@@ -206,6 +215,7 @@ const pass = placeRes.status === 201
   && buttonDressOk
   && rowCount === 1
   && ghostsBeforeToggle.length === 0
+  && pendingReads >= 2
   && ghostIsModel
   && goneIsNamedOutline
   && tapOpenedList
@@ -214,7 +224,7 @@ const pass = placeRes.status === 201
   && buttonHiddenAfterClear
   && unsuspend.body.instancesRestored === 0
   && stillGone
-  && errors.length === 0;
+  && errors.every((e) => e.includes('net::ERR_FAILED')); // the one read aborted on purpose above (#4297)
 await sellerBrowser.close();
 await finish(browser, {
   pass,

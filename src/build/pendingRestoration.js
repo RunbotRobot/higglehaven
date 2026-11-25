@@ -124,17 +124,31 @@ function renderSlots(slots) {
 // #3192 -- two tab-focus handlers refresh at nearly the same moment, and
 // handing the loser null made it conclude "nothing was removed" and skip
 // telling the builder why items had left their land.
+let retryAttempt = 0;
+let retryTimer = null;
+const RETRY_DELAYS_MS = [5000, 15000, 45000, 120000];
+function scheduleRetry() {
+  const delay = window.__testPendingRetryDelaysMs || RETRY_DELAYS_MS;
+  if (retryTimer || retryAttempt >= delay.length) return;
+  retryTimer = setTimeout(() => { retryTimer = null; retryAttempt += 1; refresh(); }, delay[Math.min(retryAttempt, delay.length - 1)]);
+}
+
 export async function refresh() {
   const myLoadToken = ++loadToken;
   let slots;
   try {
     slots = await fetchPendingRestorations();
-  } catch {
-    // Signed out, no builder profile, or a transient failure: nothing to
-    // show, and nothing here is worth interrupting Build mode for.
-    if (myLoadToken === loadToken) renderSlots([]);
+  } catch (err) {
+    // #4297: signed out or no builder profile (a 4xx) is a real "none"; a network failure or a 5xx is not, and showing it
+    // as "nothing removed" told a builder whose items were waiting that there were none. Keep what was shown and ask again.
+    if (typeof err?.status === 'number' && err.status < 500) {
+      if (myLoadToken === loadToken) renderSlots([]);
+    } else {
+      scheduleRetry();
+    }
     return null;
   }
+  retryAttempt = 0;
   if (myLoadToken !== loadToken) return slots; // superseded: the newer refresh renders, this data is still valid
   renderSlots(slots);
   return slots;
