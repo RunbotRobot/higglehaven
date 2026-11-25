@@ -6677,6 +6677,12 @@
       .world-card[data-side='below'] {
         transform-origin: center top;
       }
+      /* #4242: while a ring or arrow on the selected thing is held the card stays where it is, fainter, and lets every touch
+         through to the thing, so it is never in the way of the handle being dragged. */
+      .world-card[data-held='true'] {
+        opacity: 0.4;
+        pointer-events: none;
+      }
       .world-card[hidden] {
         display: none;
       }

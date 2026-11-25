@@ -5497,7 +5497,7 @@ export function buildModeFrameUpdate(now) {
   // only on selection change (#3324: one union box per bundle, the fill
   // reading the very same box so the two never drift apart).
   updateSelectionBoxes();
-  updateItemCard(selectionBounds);
+  updateItemCard(selectionBounds, { holding: translateControls.dragging || rotateControls.dragging || trimControls.dragging });
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its

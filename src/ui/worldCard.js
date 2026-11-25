@@ -20,6 +20,11 @@ import { clampAnchorRadius, placeProductCard } from '../shop/productCardLayout.j
 // skips animations, a hidden tab).
 const BLOOM_FALLBACK_MS = 800;
 
+// #4242: a thing whose on-screen radius is at least this share of the screen's width fills the view.
+let fillsViewShare = 0.4;
+// e2e only: a catalog item small enough never reaches the real share at the camera's closest, so a test lowers it.
+window.__testSetCardFillsViewShare = (share) => { fillsViewShare = share; };
+
 const scratchRight = new THREE.Vector3();
 const scratchForward = new THREE.Vector3();
 const scratchProjected = new THREE.Vector3();
@@ -32,6 +37,7 @@ export function createWorldCard(cardEl) {
   // Where the last frame put the thing on screen. Read only by e2e hooks;
   // recomputed every frame the card is open.
   let lastAnchor = null;
+  let held = false;
 
   function setBloomState(state) {
     clearTimeout(bloomTimer);
@@ -69,6 +75,12 @@ export function createWorldCard(cardEl) {
     anchor() {
       return lastAnchor;
     },
+    // #4242: a handle on the thing is being dragged: freeze the card's place and let touches through it.
+    hold(on) {
+      if (held === on) return;
+      held = on;
+      cardEl.dataset.held = on ? 'true' : 'false';
+    },
     // Restart the bloom, also for a different thing while a card is open.
     bloom() {
       setBloomState('closed');
@@ -77,6 +89,8 @@ export function createWorldCard(cardEl) {
       setBloomState('blooming');
     },
     close() {
+      held = false;
+      cardEl.dataset.held = 'false';
       lastPlacement = null;
       lastAnchor = null;
       clearTimeout(bloomTimer);
@@ -88,6 +102,9 @@ export function createWorldCard(cardEl) {
     // minRadiusPx (optional): a clear space to keep round the thing, for a card whose thing wears
     // handles that reach past its own size (Build's rings, #4118): the card sits beyond it.
     place(worldPosition, halfSize, minRadiusPx = 0) {
+      // #4242: while a ring or arrow is held the card stays exactly where it is (and out of the way, see
+      // [data-held] in app.css); it does not move under the finger.
+      if (held) return;
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       camera.getWorldDirection(scratchForward);
       const behind = scratchProjected.copy(worldPosition).sub(camera.position).dot(scratchForward) <= camera.near;
@@ -102,7 +119,9 @@ export function createWorldCard(cardEl) {
         // sideways to the camera, lands from its centre.
         scratchRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(halfSize).add(worldPosition).project(camera);
         const rightX = (scratchRight.x * 0.5 + 0.5) * viewport.width;
-        anchor = { x, y, radius: clampAnchorRadius(Math.max(Math.abs(rightX - x), minRadiusPx)), behind: false };
+        const rawRadius = Math.max(Math.abs(rightX - x), minRadiusPx);
+        // #4242: a thing that covers most of the screen's width has no clear place beside it; the card docks.
+        anchor = { x, y, radius: clampAnchorRadius(rawRadius), behind: false, fills: rawRadius >= viewport.width * fillsViewShare };
       }
       lastAnchor = anchor;
 
