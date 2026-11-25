@@ -24,6 +24,7 @@
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
 //                                         `tap:text=Orders` works on a label too)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
+//   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
@@ -627,6 +628,32 @@ async function runStepAction(step, index) {
       await page.waitForTimeout(400);
       return spot;
     }
+    case 'dragitem': {
+      // #4198: Build: select the n-th placed item on screen (left to right) with a real tap, then drag it by
+      // dx, dy pixels with a real mouse and report where it stood before and after (lándlet-local metres), so
+      // a drag toward a slanted edge can be seen stopping at it. Moves the item: use it on the fleet's own
+      // lándlet (sign in as higglehaven0) and drag it back.
+      const dx = Number(step.args[1]);
+      const dy = Number(step.args[2]);
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error(`step "dragitem:${a}:<dx>:<dy>": dx and dy are pixels`);
+      const spots = await page.evaluate(() => (window.__testProductScreenPositions?.() ?? [])
+        .filter((p) => p && p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)
+        .map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })));
+      spots.sort((l, r) => l.x - r.x);
+      const spot = spots[a - 1];
+      if (!spot) throw new Error(`step "dragitem:${a}": ${spots.length} placed item(s) on screen in Build`);
+      await (device.hasTouch ? page.touchscreen.tap(spot.x, spot.y) : page.mouse.click(spot.x, spot.y));
+      await page.waitForTimeout(500);
+      const stateBefore = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      await page.mouse.move(spot.x, spot.y);
+      await page.mouse.down();
+      await page.mouse.move(spot.x + dx, spot.y + dy, { steps: 20 });
+      await page.waitForTimeout(300);
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
+    }
     case 'mode': {
       const before = await page.evaluate(() => document.body.dataset.mode);
       await clickModeButton(page, a);
@@ -818,7 +845,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' ? { drag: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

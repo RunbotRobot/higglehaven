@@ -65,7 +65,7 @@ Steps: `walk:<forward|back|left|right>[:ms]`,
 `aim:<up|down|left|right>[:ms]` (holds the look joystick, which is what steers
 the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
 looks at the sky (flight is level, so it does not climb: height is the right-edge slide, #4105); `look` drags the page and does not turn the camera in Shop),
-`rise:<up|down>[:ms]` (a finger sliding along the right edge while flying: up rises, down sinks, #4105), `look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `mode:<shop|build|sell>`, `fly`,
+`rise:<up|down>[:ms]` (a finger sliding along the right edge while flying: up rises, down sinks, #4105), `look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `dragitem:<n>:<dx>:<dy>` (in Build, selects the n-th item and drags it dx, dy pixels with a real mouse, and reports where it stood before and after in lándlet metres, #4198; it moves the item, so use it on the fleet's lándlet or a local world and drag it back), `mode:<shop|build|sell>`, `fly`,
 `land` (every Shop arrival starts in flight 80 m up looking down, by design, and walking
 forward there descends; put `land` first to walk on the ground),
 `menu` (open the flower's general menu if it is closed),
