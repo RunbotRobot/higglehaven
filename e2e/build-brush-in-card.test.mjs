@@ -52,6 +52,9 @@ await page.waitForTimeout(400);
 check((await title()).includes('2 items selected'), `two items are selected (${await title()})`);
 check(await inCard(), 'the slider is in the card beside the selection');
 check(await drawn('#multiselect-brush-size-input'), 'the slider is drawn in the card');
+// The slider wears the brand green, not the browser's blue (the #4275 walk).
+const sliderAccent = await page.evaluate(() => getComputedStyle(document.getElementById('multiselect-brush-size-input')).accentColor);
+check(sliderAccent && sliderAccent !== 'auto', `the slider takes the brand's accent colour, not the browser's (${sliderAccent})`);
 const geometry = await page.evaluate(() => {
   const card = document.getElementById('item-card').getBoundingClientRect();
   const slider = document.getElementById('multiselect-brush-size-input').getBoundingClientRect();

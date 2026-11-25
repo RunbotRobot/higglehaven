@@ -3516,6 +3516,12 @@
       input[type="radio"] {
         accent-color: var(--brand-green);
       }
+      /* The Brush slider (the only range input) and any checkbox took the browser's blue the same way (found in the
+         #4275 walk): one rule, so every native control wears the brand green. */
+      input[type="range"],
+      input[type="checkbox"] {
+        accent-color: var(--brand-green);
+      }
       #bundle-name-input:focus-visible {
         outline: 2px solid var(--brand-green);
         outline-offset: 2px;
