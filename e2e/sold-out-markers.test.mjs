@@ -6,7 +6,7 @@
 // uses for otherwise-unreachable 3D scene state, e.g.
 // window.__testLowStockHighlightedInstanceIds for #1950's sibling panel),
 // not DOM/pixel inspection, plus a real click through the Settings > Build
-// panel's toggle and per-marker Dismiss button.
+// panel's per-marker Dismiss button and the Tools leaf's "Faded items" switch (#4201: it moved there from Settings).
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, openBuildMoreFold } from './helpers.mjs';
 
 const LABEL = 'Sold Out Marker Tester';
@@ -61,6 +61,20 @@ await page.reload();
 await page.waitForFunction(() => typeof window.__testSoldOutMarkerMeshIds === 'function', undefined, { timeout: 20000 });
 await page.waitForTimeout(500);
 
+// #4201: the switch is "Faded items" in the Tools leaf; Settings keeps the Dismiss list.
+const closeSettings = async () => {
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+};
+const reopenSettings = async () => {
+  await openAccountMenu(page);
+  await page.click('#settings-btn');
+  await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+  await page.click('.settings-tab-btn[data-section="build"]');
+  await openBuildMoreFold(page);
+  await page.waitForSelector('.sold-out-marker-row', { timeout: 10000 });
+};
+
 const beforeToggle = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
 console.log('ghost-box markers rendered before opening Settings/toggling on (should be empty):', beforeToggle);
 
@@ -79,13 +93,17 @@ console.log('sold-out marker row text (should mention the product name):', rowTe
 const stillBeforeToggle = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
 console.log('ghost-box markers rendered with the list visible but the toggle still off (should be empty):', stillBeforeToggle);
 
-await page.click('#sold-out-marker-toggle');
-await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 1, undefined, { timeout: 5000 });
+await closeSettings();
+await page.click('#toggle-ghosts');
+await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 1, undefined, { timeout: 8000 });
 const afterToggle = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
 console.log('ghost-box markers rendered after checking the toggle (should be exactly one):', afterToggle);
+// #4201: the setting is remembered on the device.
+const rememberedOn = await page.evaluate(() => localStorage.getItem('hh_build_show_ghosts'));
+console.log('the switch is remembered (should be 1):', rememberedOn);
 
 // Unchecking removes the ghost box again without needing to reload the list.
-await page.click('#sold-out-marker-toggle');
+await page.click('#toggle-ghosts');
 await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 0, undefined, { timeout: 5000 });
 const afterUntoggle = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
 console.log('ghost-box markers rendered after unchecking the toggle (should be empty):', afterUntoggle);
@@ -93,8 +111,9 @@ console.log('ghost-box markers rendered after unchecking the toggle (should be e
 // Re-check it, then dismiss via the list's own button -- both the row and
 // the ghost box should disappear together, and the real DELETE should have
 // actually landed server-side (re-fetchable via GET, confirmed below).
-await page.click('#sold-out-marker-toggle');
-await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 1, undefined, { timeout: 5000 });
+await page.click('#toggle-ghosts');
+await page.waitForFunction(() => window.__testSoldOutMarkerMeshIds().length === 1, undefined, { timeout: 8000 });
+await reopenSettings();
 await page.click('.sold-out-marker-row-dismiss');
 await page.waitForFunction(() => document.querySelectorAll('.sold-out-marker-row').length === 0, undefined, { timeout: 5000 });
 const afterDismiss = await page.evaluate(() => window.__testSoldOutMarkerMeshIds());
@@ -110,6 +129,7 @@ const pass = purchased.status === 201
   && rowText.includes('Marker Fixture Product')
   && stillBeforeToggle.length === 0
   && afterToggle.length === 1
+  && rememberedOn === '1'
   && afterUntoggle.length === 0
   && afterDismiss.length === 0
   && emptyNoteVisible === true

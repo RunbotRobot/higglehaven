@@ -410,7 +410,7 @@ export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
 }
 // #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
 // they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
-const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
+const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#toggle-ghosts', '#paste-btn', '#multiselect-brush-size-input']);
 // #3693: Community sign, Community calendar and Backup chain sit in the item card's More, so they
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
