@@ -661,9 +661,29 @@ function showNote(entry) {
   }
 }
 
+// #4199 (area 13): a word the head puts on (an orb limit, a reply, Removed items) changes only the head's name,
+// which a screen reader reads when the head is focused, so a person who cannot see the head was never told. One
+// polite, visually hidden live region says it once when it is set. (The sentence itself is behind the word.)
+let wordLiveEl = null;
+function announceWord(entry) {
+  if (typeof document === 'undefined' || !document.body) return;
+  if (!wordLiveEl) {
+    wordLiveEl = document.createElement('div');
+    wordLiveEl.id = 'bud-word-live';
+    wordLiveEl.setAttribute('role', 'status');
+    wordLiveEl.setAttribute('aria-live', 'polite');
+    wordLiveEl.style.cssText = 'position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;';
+    document.body.appendChild(wordLiveEl);
+  }
+  wordLiveEl.textContent = entry.label || entry.text;
+}
+
 export function setBudWord(key, text, { open = null, label = '' } = {}) {
-  words.set(key, { text: String(text), open: typeof open === 'function' ? open : null, label: String(label || '') });
+  const entry = { text: String(text), open: typeof open === 'function' ? open : null, label: String(label || '') };
+  const before = words.get(key);
+  words.set(key, entry);
   showWord();
+  if (!before || before.text !== entry.text || before.label !== entry.label) announceWord(entry);
 }
 
 export function clearBudWord(key) {
