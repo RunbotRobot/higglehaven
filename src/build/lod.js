@@ -278,6 +278,10 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     }
     // #4115: the layout stood still for a tick: work the sets out again. (The first time, at once.)
     const signature = `${objects.length}:${signatureHash >>> 0}`;
+    // #4208: until one job has finished, this pass saw no sets (every item looks loose), so nothing changes version
+    // yet: a wall judged brick by brick for a tick would show the diagonal edge, then flip when the sets arrive.
+    // A failed job counts as finished (its empty sets are the answer), so the hold always ends.
+    const setsKnown = setsSignature !== null;
     if (setsJob && setsJob.signature !== signature) setsJob = null; // the layout changed under it: start over
     if (signature !== setsSignature && !setsJob && (signature === lastSignature || setsSignature === null)) {
       setsJob = {
@@ -395,6 +399,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       const tier = tiers[i];
       object.userData.lodTier = tier;
       if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
+      if (!setsKnown) continue; // #4208: held at what is drawn now until the first set job has answered (versions still load)
       if (object.userData.lodTiersState !== 'ready' || tier === (object.userData.lodApplied ?? TIER_FULL)) continue;
       if (object.userData.lodSetId !== undefined && !items[i].selected && blocked.has(object.userData.lodSetId)) continue;
       flips.push(i);

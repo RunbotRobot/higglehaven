@@ -315,6 +315,18 @@ describe('Build judges a wall as one set (#4115)', () => {
     expect([...tiersOf(objects.slice(0, 36))]).toEqual(before);
   });
 
+  // #4208: the first pass has found no sets yet, so no item changes version in it; the wall then changes as one.
+  it('changes nothing in the first pass, then gives the whole wall one version', () => {
+    const objects = wall('brick', 20, 20);
+    const { lod, look, tick } = setup(objects);
+    look(0, -12, 0);
+    tick(1);
+    expect(tiersOf(objects)).toEqual(new Set(['full']));
+    tick(3);
+    expect(lod.setCount()).toBe(1);
+    expect(tiersOf(objects).size).toBe(1);
+  });
+
   it('works the sets out again after the layout changes and stands still', () => {
     const objects = wall('brick', 6, 6);
     const { lod, look, tick, place } = setup(objects);

@@ -89,9 +89,13 @@ console.log('judged one by one:', JSON.stringify([...alone]), JSON.stringify(awa
 check(alone.size > 1, `judged one by one the wall is on more than one version (${[...alone]})`);
 check((await page.evaluate(() => window.__testBuildLodSetCount())) === 0, 'and there is no set');
 
+const beforeSets = await tiers();
 await page.evaluate(() => window.__testSetBuildImplicitLodSets(true));
-// The layout has stood still: the sets are worked out on the next pass.
+// #4208: the first pass after the sets are asked for again has found none yet, so no placement changes version in
+// it (a wall judged brick by brick for a pass would show the edge, then flip when the sets arrive).
 await tick();
+check(JSON.stringify(await tiers()) === JSON.stringify(beforeSets), 'no placement changes version in the first pass, before the sets are known');
+// The layout has stood still: the sets are worked out on the next pass.
 await tick();
 await settle(() => true, 'a pass after the sets are worked out');
 const together = new Set(await tiers());
