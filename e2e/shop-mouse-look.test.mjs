@@ -30,6 +30,16 @@ if (await flying()) {
   await wait(2600);
 }
 check(!(await flying()), 'grounded before the mouse is used');
+// (flake, area 14) The fixed wait above is a guess at how long the landing takes; on a slow runner the avatar was
+// still settling at the first drag (the first attempt failed "does not walk" on CI, the retry passed). Wait until
+// it has stopped moving instead of counting seconds.
+for (let i = 0, last = await pos(); i < 60; i += 1) {
+  await wait(400);
+  const now = await pos();
+  const still = Math.hypot(now.x - last.x, now.y - last.y, (now.z ?? 0) - (last.z ?? 0)) < 0.02;
+  last = now;
+  if (still) break;
+}
 
 async function drag(fromX, fromY, toX, toY) {
   await page.mouse.move(fromX, fromY);
@@ -47,7 +57,8 @@ for (const [name, x] of [['right half', 900], ['left half', 300]]) {
   const where = await pos();
   await drag(x, 500, x + 160, 500);
   check(before !== await view(), `a mouse drag from the ${name} turns the view`);
-  check(dist(where, await pos()) < 0.3, `a mouse drag from the ${name} does not walk the avatar`);
+  const walked = dist(where, await pos());
+  check(walked < 0.3, `a mouse drag from the ${name} does not walk the avatar (it moved ${walked.toFixed(2)} m, from ${JSON.stringify(where)})`);
 }
 
 // A vertical drag looks up or down. The spawn leaves the camera tilted down as far as it goes, so
