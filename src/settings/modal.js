@@ -24,6 +24,7 @@
 // trimUnitLabelEls stays declared in main.js (it also needs an independent,
 // Settings-unrelated initial paint there at load) -- exported, imported
 // back here for refreshUnitDisplays' own repaint.
+import { firstBlankFieldMessage, plainPayoutMessage } from '../payoutFormText.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
@@ -486,13 +487,20 @@ async function renderTaxPaperworkField() {
       const payload = { formType };
       for (const [key] of commonFields) payload[key] = inputs[key].value;
       for (const [key] of specificFields) payload[key] = inputs[key].value;
+      // #4339: a blank field is refused here, by its label, before anything is sent.
+      const blank = firstBlankFieldMessage([...commonFields, ...specificFields].map(([key, label]) => [key, label]), payload);
+      if (blank) {
+        formStatus.textContent = blank;
+        formStatus.classList.add('error');
+        return;
+      }
       const result = await submitTaxIdForm(payload);
       setCurrentAuthUser({ ...currentAuthUser, taxFormType: result.taxFormType, taxFormCompletedAt: result.taxFormCompletedAt });
       refreshStatusNote();
       submitBtn.textContent = 'Update tax paperwork';
       formStatus.textContent = 'Submitted.';
     } catch (err) {
-      formStatus.textContent = err.message || 'Couldn\'t submit — check the fields above.';
+      formStatus.textContent = plainPayoutMessage(err.message) || 'Couldn\'t submit — check the fields above.';
       formStatus.classList.add('error');
     } finally {
       submitBtn.disabled = false;

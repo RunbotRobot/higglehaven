@@ -17,6 +17,7 @@
 // button in every state (it used to be the first screen for a seller who had not set up payouts, a request for
 // the last four digits of an SSN before any word about money). The same calls, fields and words as before.
 import { openLeaf } from '../ui/bud.js';
+import { firstBlankFieldMessage, plainPayoutMessage } from '../payoutFormText.js';
 import {
   fetchSellerStripeAccount, submitSellerStripeAccount, fetchSellerPayouts, requestSellerPayout,
 } from '../api.js';
@@ -65,6 +66,17 @@ function field(label, type, extra = {}) {
   wrap.append(input);
   return { wrap, input };
 }
+
+// #4339: required fields by step, in the order they appear (the date of birth is three boxes).
+const STEP_ONE_FIELDS = [
+  ['firstName', 'First name'], ['lastName', 'Last name'], ['dobMonth', 'Birth month'], ['dobDay', 'Birth day'],
+  ['dobYear', 'Birth year'], ['ssnLast4', 'SSN (last 4 digits)'], ['phone', 'Phone number'],
+];
+const STEP_TWO_FIELDS = [
+  ['addressLine1', 'Street address'], ['addressCity', 'City'], ['addressState', 'State'], ['addressPostalCode', 'ZIP code'],
+  ['addressCountry', 'Country'], ['routingNumber', 'Bank routing number'], ['accountNumber', 'Bank account number'],
+];
+const valuesOf = (inputs) => Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
 
 function buildForm(account, onSubmitted) {
   const inputs = {};
@@ -158,12 +170,20 @@ function buildForm(account, onSubmitted) {
     formStatus.classList.remove('error');
     (second ? inputs.addressLine1 : inputs.firstName).focus({ preventScroll: true });
   };
-  nextBtn.addEventListener('click', () => showStep(true));
+  // #4339: a blank or impossible field is refused on the step that holds it, in the label's own words.
+  const showFormError = (text) => { formStatus.textContent = text; formStatus.classList.add('error'); };
+  nextBtn.addEventListener('click', () => {
+    const blank = firstBlankFieldMessage(STEP_ONE_FIELDS, valuesOf(inputs));
+    if (blank) { showFormError(blank); return; }
+    showStep(true);
+  });
   backBtn.addEventListener('click', () => showStep(false));
 
   submitBtn.addEventListener('click', async () => {
     formStatus.textContent = '';
     formStatus.classList.remove('error');
+    const blank = firstBlankFieldMessage(STEP_TWO_FIELDS, valuesOf(inputs));
+    if (blank) { showFormError(blank); return; }
     submitBtn.disabled = true;
     backBtn.disabled = true;
     try {
@@ -193,8 +213,8 @@ function buildForm(account, onSubmitted) {
       onSubmitted(updated);
       return;
     } catch (err) {
-      // The server names the field; going Back is how to reach it from the second step.
-      formStatus.textContent = err.message || 'Couldn\'t submit — check the fields and go Back to fix them.';
+      // The server names the field by its API name; say it by the label, and Back reaches the first step.
+      formStatus.textContent = plainPayoutMessage(err.message) || 'Couldn\'t submit — check the fields and go Back to fix them.';
       formStatus.classList.add('error');
     } finally {
       submitBtn.disabled = false;

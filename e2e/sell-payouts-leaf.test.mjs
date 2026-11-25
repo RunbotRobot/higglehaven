@@ -41,6 +41,13 @@ const inView = async (text) => leaf.locator('button', { hasText: text }).first()
 });
 const next = await inView('Next');
 console.log('Next is on screen at 390x844 (should be true):', next);
+// #4339: Next refuses a blank step in the label's own words and stays on the step.
+await leaf.locator('button', { hasText: 'Next' }).click();
+const blankMessage = (await leaf.locator('.payout-form .error, .payout-form [role="status"].error').first().textContent().catch(() => '')) || '';
+const stillOnStepOne = await leaf.locator('label', { hasText: 'First name' }).locator('input').isVisible();
+console.log('Next on a blank step says what is missing and stays (should be true, true):', /^First name is required\.$/.test(blankMessage.trim()), stillOnStepOne);
+const fills = [['First name', 'Test'], ['Last name', 'Person'], ['Month', '5'], ['Day', '17'], ['Year', '1990'], ['SSN (last 4 digits)', '1234'], ['Phone number', '2025550100']];
+for (const [label, value] of fills) await leaf.locator('label', { hasText: label }).locator('input').first().fill(value);
 await leaf.locator('button', { hasText: 'Next' }).click();
 const back = await inView('Back');
 const submit = await inView('Set up payout account');
@@ -49,5 +56,5 @@ await leaf.locator('button', { hasText: 'Back' }).click();
 const firstName = await leaf.locator('label', { hasText: 'First name' }).locator('input').isVisible();
 console.log('Back returns to About you (should be true):', firstName);
 
-const pass = firstScreenOk && next && back && submit && firstName && errors.length === 0;
+const pass = /^First name is required\.$/.test(blankMessage.trim()) && stillOnStepOne && firstScreenOk && next && back && submit && firstName && errors.length === 0;
 await finish(browser, { pass, label: '#3704: the Payouts leaf opens from the Sell bud and its two steps fit the phone screen', errors });
