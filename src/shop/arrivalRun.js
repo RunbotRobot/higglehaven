@@ -101,6 +101,7 @@ export function createArrivalRun({
     }
     const state = {
       pending: new Set(cluster.ids),
+      ids: cluster.ids, // #4250: so finish() can forget them
       dissolves: [],
       readyAtMs: null,
       fog: null,
@@ -141,6 +142,11 @@ export function createArrivalRun({
     state.dissolves.length = 0;
     const at = states.indexOf(state);
     if (at >= 0) states.splice(at, 1);
+    // #4250: a finished cluster owns nothing any more. Without this a late
+    // itemReady (a model that took longer than ARRIVAL_MAX_WAIT_S) found the
+    // finished state, made a dissolve at level 0 that update() and dispose()
+    // never walk again, and the item stayed undrawn for good.
+    for (const id of state.ids) stateById.delete(id);
     finished += 1;
   }
 
