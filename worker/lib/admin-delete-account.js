@@ -18,6 +18,7 @@
 import { HttpError, json } from './http.js';
 import { readJson } from './validation.js';
 import { requireAdmin, requireAdminOrViewer } from './auth.js';
+import { emailFor } from './admin-viewer-mask.js';
 import { isAssistantUsername } from './fleet-agents.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { cascadeDeleteAccount } from '../index.js';
@@ -70,7 +71,7 @@ export async function handleAdminDeleteAccountPreview(request, db, url) {
   const { user, counts } = await targetAndCounts(db, userId);
   const fleet = user.is_fleet === 1 && user.is_admin !== 1;
   return json({
-    account: { userId: user.user_id, username: user.username, email: user.email, kind: kindOf(user) },
+    account: { userId: user.user_id, username: user.username, email: emailFor(admin, user.email), kind: kindOf(user) },
     counts,
     refusal: refusalFor(admin, user, counts, false),
     // Whether the only thing in the way is the explicit tick for a fleet account or assistant.

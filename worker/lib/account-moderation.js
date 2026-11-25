@@ -7,6 +7,7 @@ import { json, HttpError, clientIp } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
 import { requireCurrentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
+import { emailFor, isViewer } from './admin-viewer-mask.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
@@ -790,7 +791,9 @@ export async function handleSuspensionStatus(request, db, url) {
 const ADMIN_USER_SEARCH_RESULT_LIMIT = 25;
 
 export async function handleAdminUserSearch(request, db, url) {
-  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it, with details masked
+  // A viewer's search matches usernames only: searching by email would reveal which addresses exist.
+  const viewer = isViewer(admin);
   const q = (url.searchParams.get('q') || '').trim();
   if (!q) throw new HttpError('q query parameter is required', 400);
   // Substring search via instr(), not LIKE -- confirmed directly against a
@@ -820,15 +823,15 @@ export async function handleAdminUserSearch(request, db, url) {
     LEFT JOIN builders ON builders.user_id = users.user_id
     LEFT JOIN sellers ON sellers.user_id = users.user_id
     WHERE instr(lower(users.username), ?) > 0
-       OR instr(lower(users.email), ?) > 0
+       OR (? = 0 AND instr(lower(users.email), ?) > 0)
     ORDER BY users.username COLLATE NOCASE ASC
     LIMIT ?
-  `).bind(needle, needle, ADMIN_USER_SEARCH_RESULT_LIMIT).all();
+  `).bind(needle, viewer ? 1 : 0, needle, ADMIN_USER_SEARCH_RESULT_LIMIT).all();
   return json({
     users: results.map((row) => ({
       userId: row.user_id,
       username: row.username,
-      email: row.email,
+      email: emailFor(admin, row.email),
       trustTier: row.trust_tier,
       createdAt: row.created_at,
       hasBuilderProfile: row.builder_id !== null,
@@ -839,7 +842,8 @@ export async function handleAdminUserSearch(request, db, url) {
 }
 
 export async function handleAdminUserDetail(request, db, url) {
-  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it, with details masked
+  const viewer = isViewer(admin);
   const userId = (url.searchParams.get('userId') || '').trim();
   if (!userId) throw new HttpError('userId query parameter is required', 400);
   const row = await db.prepare(
@@ -876,11 +880,11 @@ export async function handleAdminUserDetail(request, db, url) {
     user: {
       userId: row.user_id,
       username: row.username,
-      email: row.email,
+      email: emailFor(admin, row.email),
       trustTier: row.trust_tier,
       createdAt: row.created_at,
       emailVerifiedAt: row.email_verified_at,
-      cardRefusal: row.card_refusal_count > 0 ? {
+      cardRefusal: !viewer && row.card_refusal_count > 0 ? {
         code: row.card_refusal_code,
         declineCode: row.card_refusal_decline_code,
         at: row.card_refusal_at,
@@ -905,7 +909,7 @@ export async function handleAdminUserDetail(request, db, url) {
       suspensionId: s.suspension_id,
       adminUserId: s.admin_user_id,
       reason: s.reason,
-      evidenceNote: s.evidence_note,
+      evidenceNote: viewer ? null : s.evidence_note, // #4175: free text an admin wrote; not for a look-only admin
       suspendedAt: s.suspended_at,
       gracePeriodEndsAt: s.grace_period_ends_at,
       liftedAt: s.lifted_at,
