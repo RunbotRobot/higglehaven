@@ -140,11 +140,31 @@ await page.waitForTimeout(500); // lets the just-forced landlet instance load ac
 // the wall to be really findable, then give a real input to start a fresh idle episode with it loaded, and
 // put the avatar back exactly where it was.
 await page.waitForFunction(([x, y]) => window.__testFindShopIdleInteractionTarget(x, y)?.kind === 'lean', [AVATAR_X, AVATAR_Y], { timeout: 60000 });
-await deflectMoveJoystick(page);
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y, 0);
-  window.__testForceShopProximityCheck();
-}, [AVATAR_X, AVATAR_Y]);
+// #4274: the deflection above keeps carrying the avatar for a moment after the button is released (more
+// frames of walking the slower the machine), and a teleport made while it still moves lets it drift out of the
+// wall's 3 m reach before the idle lookup runs: the episode then starts with no target and never leans (seen on
+// main's CI, and on a one-core machine under load: the avatar 1 m off its spot). So: deflect, wait for the
+// avatar to stand still, put it back, and wait for the episode to find the wall; if it started empty anyway,
+// start a fresh one.
+let leaning = false;
+for (let attempt = 0; attempt < 6 && !leaning; attempt += 1) {
+  await deflectMoveJoystick(page);
+  let last = await page.evaluate(() => window.__testShopAvatarPosition());
+  for (let i = 0; i < 40; i += 1) {
+    await page.waitForTimeout(300);
+    const now = await page.evaluate(() => window.__testShopAvatarPosition());
+    const still = Math.hypot(now.x - last.x, now.y - last.y) < 0.005;
+    last = now;
+    if (still) break;
+  }
+  await page.evaluate(([x, y]) => {
+    window.__testTeleportShopAvatar(x, y, 0);
+    window.__testForceShopProximityCheck();
+  }, [AVATAR_X, AVATAR_Y]);
+  leaning = await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', null, { timeout: 15000 })
+    .then(() => true, () => false);
+}
+if (!leaning) throw new Error('#4274: the idle episode never picked the wall as its lean target in 6 tries');
 
 // Captured once here as the real baseline for the expected position/yaw-
 // offset math below, same reasoning shop-idle-sit-pose.test.mjs's own
