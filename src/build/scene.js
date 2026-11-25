@@ -61,6 +61,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
+import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -200,7 +201,15 @@ function itemCentreZRange() {
 // once per hit, not once per frame.
 let levelLimitHit = null;
 let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
+// #4198: set when a move was stopped at the lándlet's outline; said once per hit like the level limits.
+let outlineLimitHit = false;
 function announceLevelLimit() {
+  const outlineHit = outlineLimitHit;
+  outlineLimitHit = false;
+  if (outlineHit && !levelLimitHit) {
+    levelLimitAnnounced = true;
+    showSelectionActionStatus("That's the edge of this lándlet.");
+  }
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
@@ -466,6 +475,23 @@ function clampToLandlet(mesh, x, y, z) {
   const clampedZ = THREE.MathUtils.clamp(z, lowestZ, highestZ);
   if (z > highestZ && highestZ === maxZ) levelLimitHit = 'top';
   else if (z < lowestZ && lowestZ === minZ) levelLimitHit = 'bottom';
+  // #4198: a lándlet's real outline, not a square, is where an item may stand (shared/landlet-outline.js, the
+  // same rule the Worker applies). Without a usable outline (a placeholder lándlet) the square below stays.
+  const outline = getBuildOutline();
+  if (outline) {
+    const item = { width, depth, rotationZ: mesh.rotation.z };
+    const previous = mesh.userData.safePosition;
+    let moved = previous
+      ? limitItemMove(outline, item, previous, { x, y }, clampedZ, footprintScaleAtHeight)
+      : limitItemPlacement(outline, item, { x, y }, clampedZ, footprintScaleAtHeight);
+    if (!itemLegalAt(outline, item, moved.x, moved.y, clampedZ, footprintScaleAtHeight)) {
+      // Where it was no longer fits (a trim made it bigger, or it was stored off the lándlet): the nearest legal
+      // place on the line from the centre.
+      moved = limitItemPlacement(outline, item, { x: moved.x, y: moved.y }, clampedZ, footprintScaleAtHeight);
+    }
+    if (moved.limited) outlineLimitHit = true;
+    return { x: moved.x, y: moved.y, z: clampedZ };
+  }
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -777,12 +803,14 @@ translateControls.addEventListener('objectChange', () => {
     for (const mesh of meshes) {
       const start = groupMoveStartPositions.get(mesh);
       const { width, depth, height } = meshDimensions(mesh);
-      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
-      maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
-      minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
-      maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      if (!getBuildOutline()) {
+        const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+        const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+        minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
+        maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
+        minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
+        maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      }
       // issue #169: bounded by whichever level is currently being viewed/
       // edited, same as clampToLandlet's own single-item case.
       minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
@@ -804,6 +832,20 @@ translateControls.addEventListener('objectChange', () => {
       THREE.MathUtils.clamp(totalOffset.y, minOffsetY, maxOffsetY),
       THREE.MathUtils.clamp(totalOffset.z, minOffsetZ, maxOffsetZ),
     );
+    // #4198: the bundle moves as one rigid body inside the lándlet's outline: every member must stay on it, so the
+    // whole bundle stops, or slides along the edge, when its first member would cross.
+    const groupOutline = getBuildOutline();
+    if (groupOutline && meshes.length > 0) {
+      const members = meshes.map((mesh) => {
+        const start = groupMoveStartPositions.get(mesh);
+        const { width, depth } = meshDimensions(mesh);
+        return { item: { width, depth, rotationZ: mesh.rotation.z }, start: { x: start.x, y: start.y }, z: start.z + offset.z };
+      });
+      const limited = limitGroupOffset(groupOutline, members, { x: totalOffset.x, y: totalOffset.y }, footprintScaleAtHeight);
+      offset.x = limited.x;
+      offset.y = limited.y;
+      if (limited.limited) outlineLimitHit = true;
+    }
     if (snapToSurfaces) {
       // Same idea as resolveByAxis for a single item, but resolved for the
       // whole group at once per axis (resolveGroupAxisDelta) so the group's
@@ -1324,6 +1366,8 @@ trimControls.addEventListener('dragging-changed', (event) => {
 // now live in src/world/models.js (#2553); shapeForLandlet is still here,
 // pending claim/flow.js's own extraction of it.
 export function applyLandletShape(landletRecord) {
+  // #4198: the polygon that draws the ground is also where an item may stand.
+  setBuildOutline(landletRecord.polygon);
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
   normalizeGroundShapeUVs(landlet.geometry);
