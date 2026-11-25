@@ -607,7 +607,12 @@ by touching the world. The module is `src/ui/bud.js`:
   never a tooltip. Icons are inline SVG in src/ui/budIcons.js, one line weight, drawn in the ink
   colour; a leaf with no icon there gets a plain leaf and a console warning, so a new leaf cannot
   ship as words only. src/ui/bud.js places the stem by walking the *visible* leaves (never
-  :nth-child) and again whenever one is added, shown, hidden or has its text replaced. The stem
+  :nth-child) and again whenever one is added, shown, hidden or has its text replaced. **(#4200)** Each leaf
+  joins the stem at its tip, not along its side: a right leaf's pointed upper-left corner is on the stem and it
+  opens down and away to the right, a left leaf is the mirror image, with a small knob where the tip meets the
+  stem; the icon and word stay upright. The head is turned to point down and to the right, toward the petals,
+  so its base is at its upper left, where the stem enters it and runs down the left behind it (the logo inside
+  stays upright; public/bud-head.svg rotates only the bud). The stem
   grows from the head and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.

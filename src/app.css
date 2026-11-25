@@ -925,25 +925,31 @@
         animation-delay: calc(var(--delay-open-leaves) + var(--leaf-i, 0) * var(--step-open-leaf));
       }
       body[data-bud="on"] #account-menu-panel > .bud-pair { width: 88px; gap: 0; }
-      body[data-bud="on"] #account-menu-panel [data-side="right"] { margin-left: calc(var(--stem-x) + 4px); transform-origin: left center; }
-      body[data-bud="on"] #account-menu-panel [data-side="left"] { margin-left: calc(var(--stem-x) - var(--leaf-w) - 4px); transform-origin: right center; }
-      body[data-bud="on"] #account-menu-panel > .bud-pair[data-side="left"] { margin-left: calc(var(--stem-x) - 92px); }
+      /* #4200: a leaf joins the stem at its tip, not along its side. A right leaf's pointed corner is its upper
+         left, which sits on the stem, and it opens down and away to the right; a left leaf is the mirror image
+         (the radii are swapped from the side-on leaf of #3761: the pointed corners are now the tip at the stem
+         and the one opposite it). The icon and its word stay upright inside. */
+      body[data-bud="on"] #account-menu-panel [data-side="right"] { margin-left: var(--stem-x); transform-origin: left top; }
+      body[data-bud="on"] #account-menu-panel [data-side="left"] { margin-left: calc(var(--stem-x) - var(--leaf-w)); transform-origin: right top; }
+      body[data-bud="on"] #account-menu-panel > .bud-pair[data-side="left"] { margin-left: calc(var(--stem-x) - 88px); }
       body[data-bud="on"] #account-menu-panel [data-side="left"],
-      body[data-bud="on"] #account-menu-panel [data-side="left"] button { border-radius: var(--radius-leaf-flip); }
+      body[data-bud="on"] #account-menu-panel [data-side="left"] button { border-radius: var(--radius-leaf); }
       body[data-bud="on"] #account-menu-panel [data-side="right"],
-      body[data-bud="on"] #account-menu-panel [data-side="right"] button { border-radius: var(--radius-leaf); }
+      body[data-bud="on"] #account-menu-panel [data-side="right"] button { border-radius: var(--radius-leaf-flip); }
+      /* the small knob where the tip meets the stem, on the stem's centre line */
       body[data-bud="on"] #account-menu-panel [data-side]::before {
         content: '';
         position: absolute;
-        top: 50%;
-        width: 6px;
-        height: 6px;
-        margin-top: -3px;
+        top: 0;
+        width: 8px;
+        height: 8px;
+        margin-top: -1px;
+        border-radius: var(--radius-round);
         background: var(--brand-green);
         box-shadow: 0 0 0 2px rgb(var(--panel-rgb) / 0.95);
       }
-      body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -6px; }
-      body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -6px; }
+      body[data-bud="on"] #account-menu-panel [data-side="right"]::before { left: -4px; }
+      body[data-bud="on"] #account-menu-panel [data-side="left"]::before { right: -4px; }
       body[data-bud="on"] #account-menu-panel > button,
       body[data-bud="on"] #account-menu-panel .bud-pair button,
       body[data-bud="on"] #bud-row button {
