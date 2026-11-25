@@ -74,6 +74,39 @@ describe('loading a face (#3782)', () => {
     const api = { FontFace: class { async load() { throw new Error('404'); } }, fonts: { add() {} } };
     expect(await loadWordmarkFace('round', api)).toBe(false);
   });
+  it('asks again for a face that failed once, after the wait, and stops after three tries in all (#4316)', async () => {
+    let tries = 0;
+    const api = { FontFace: class { async load() { tries += 1; throw new Error('blip'); } }, fonts: { add() {} } };
+    let clock = 0;
+    const now = () => clock;
+    expect(await loadWordmarkFace('serif', api, now)).toBe(false);
+    clock = 10000; // too soon
+    expect(await loadWordmarkFace('serif', api, now)).toBe(false);
+    expect(tries).toBe(1);
+    clock = 50000;
+    await loadWordmarkFace('serif', api, now);
+    expect(tries).toBe(2);
+    clock = 100000;
+    await loadWordmarkFace('serif', api, now);
+    expect(tries).toBe(3);
+    clock = 200000; // used up
+    await loadWordmarkFace('serif', api, now);
+    expect(tries).toBe(3);
+  });
+  it('a face that loads on the second try is kept and not asked for again (#4316)', async () => {
+    let attempts = 0;
+    const added = [];
+    const api = { FontFace: class { constructor(family) { this.family = family; } async load() { attempts += 1; if (attempts === 1) throw new Error('blip'); return this; } }, fonts: { add: (f) => added.push(f.family) } };
+    let clock = 0;
+    const now = () => clock;
+    expect(await loadWordmarkFace('stencil', api, now)).toBe(false);
+    clock = 60000;
+    expect(await loadWordmarkFace('stencil', api, now)).toBe(true);
+    clock = 200000;
+    expect(await loadWordmarkFace('stencil', api, now)).toBe(true);
+    expect(attempts).toBe(2);
+    expect(added).toEqual(['WM Stencil']);
+  });
   it('asks for no face for the default or an unknown id', async () => {
     const log = [];
     expect(await loadWordmarkFace(DEFAULT_WORDMARK_ID, fakeApi(log))).toBe(false);

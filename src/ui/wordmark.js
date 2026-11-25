@@ -55,16 +55,31 @@ export function resolveWordmark({ styleId, colourId } = {}, offered = {}) {
   };
 }
 
-// One load per face for the page's life; a failed load is remembered as failed (the fallback stays).
+// One load per face for the page's life while it works. #4316: a failed load used to be remembered as failed for
+// the rest of the visit, so one network blip left a lándlet's name in the plain font until reload. A failed face
+// is asked for again by the next name that wants it once FACE_RETRY_AFTER_MS has passed, at most FACE_MAX_TRIES
+// times in all; until then the plain fallback stays (a name drawn meanwhile swaps by itself when a later load
+// adds the face, as any FontFace added to document.fonts does).
+const FACE_RETRY_AFTER_MS = 45000;
+const FACE_MAX_TRIES = 3;
 const loads = new Map();
+const failures = new Map(); // styleId -> { tries, at }
 // e2e only: how many faces were asked for and how long each took (the issue asks the renderer to report
 // its cost while a face loads). Read through window.__wordmarkStats.
 const stats = { requested: 0, loaded: 0, failed: 0, loadMs: [] };
 
-export function loadWordmarkFace(styleId, fontFaceApi = typeof FontFace === 'undefined' ? null : { FontFace, fonts: document.fonts }) {
+export function loadWordmarkFace(
+  styleId,
+  fontFaceApi = typeof FontFace === 'undefined' ? null : { FontFace, fonts: document.fonts },
+  now = () => Date.now(),
+) {
   const face = WORDMARK_FACES[styleId];
   if (!face || !fontFaceApi) return Promise.resolve(false);
-  if (loads.has(styleId)) return loads.get(styleId);
+  if (loads.has(styleId)) {
+    const failure = failures.get(styleId);
+    // Still loading or loaded, or failed too recently / too often to ask again: the answer already given stands.
+    if (!failure || failure.tries >= FACE_MAX_TRIES || now() - failure.at < FACE_RETRY_AFTER_MS) return loads.get(styleId);
+  }
   stats.requested += 1;
   const started = typeof performance === 'undefined' ? 0 : performance.now();
   const promise = (async () => {
@@ -72,11 +87,13 @@ export function loadWordmarkFace(styleId, fontFaceApi = typeof FontFace === 'und
       const font = new fontFaceApi.FontFace(face.family, `url(${FACE_DIR}${face.file}) format("woff2")`, { weight: face.weight, display: 'swap' });
       await font.load();
       fontFaceApi.fonts.add(font);
+      failures.delete(styleId);
       stats.loaded += 1;
       stats.loadMs.push(Math.round((typeof performance === 'undefined' ? 0 : performance.now()) - started));
       return true;
     } catch {
       stats.failed += 1;
+      failures.set(styleId, { tries: (failures.get(styleId)?.tries ?? 0) + 1, at: now() });
       return false;
     }
   })();
