@@ -2490,6 +2490,9 @@
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
+      #level-nav[hidden] {
+        display: none;
+      }
       #level-nav button {
         border: none;
         background: none;

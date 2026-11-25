@@ -41,6 +41,9 @@ console.log('Levels leaf before/after opening (should be 0, then label and panel
 
 const initialLabel = await levelLabel();
 const removeHiddenAtGround = await removeHidden();
+// #4275: with only the Ground level the up and down arrows can only refuse, so they are not drawn.
+const navHiddenAtGroundOnly = await page.isHidden('#level-nav');
+console.log('up/down arrows hidden while Ground is the only level (should be true):', navHiddenAtGroundOnly);
 const buildBtnAtGround = await page.textContent('#level-build-btn');
 console.log('initial level label (should be Ground):', initialLabel);
 console.log('Remove button hidden at ground (should be true):', removeHiddenAtGround);
@@ -86,6 +89,8 @@ await page.waitForTimeout(800);
 const digEnabledAfterBuild = !(await page.isDisabled('#level-dig-btn'));
 console.log('Dig button re-enabled after Build settles (should be true):', digEnabledAfterBuild);
 const labelAfterBuild = await levelLabel();
+const navShownWithTwoLevels = await page.isVisible('#level-nav');
+console.log('up/down arrows drawn once there is a second level (should be true):', navShownWithTwoLevels);
 const removeVisibleAfterBuild = !(await removeHidden());
 console.log('level label after building up (should be Level +1):', labelAfterBuild);
 console.log('Remove button visible after building (should be true):', removeVisibleAfterBuild);
@@ -196,6 +201,8 @@ const pass =
   leafAfterOpen.label && leafAfterOpen.panel &&
   initialLabel === 'Ground' &&
   removeHiddenAtGround &&
+  navHiddenAtGroundOnly &&
+  navShownWithTwoLevels &&
   buildBtnAtGround.includes('m²') &&
   labelAfterBuild === 'Level +1' &&
   digDisabledMidFlight &&
