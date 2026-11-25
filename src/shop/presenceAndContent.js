@@ -65,7 +65,7 @@ import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTier
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
-import { advanceBatchEnclosure, batchFullLooksSolid, MIN_ENCLOSURE_BATCH } from './enclosedBatch.js';
+import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
@@ -685,23 +685,24 @@ window.__testShopDrawEnclosed = (on) => {
   }
   return drawn;
 };
-function updateBatchEnclosure(entry) {
+// One deadline serves every batch of every landlet for the tick (a shared ENCLOSURE_SLICE_MS, not one slice each).
+function updateBatchEnclosure(entry, deadline) {
   if (!enclosureEnabled) return;
   for (const batch of entry.batches) {
     if (batch.enclosure?.state === 'done' || batch.enclosure?.state === 'off') continue;
     if (batch.handles.length < MIN_ENCLOSURE_BATCH) continue;
-    if (!batchFullLooksSolid(batch)) { batch.enclosure = { state: 'off' }; continue; }
-    if (batch.tiersState === undefined) requestBatchTiers(entry, batch);
-    advanceBatchEnclosure(batch);
+    if (performance.now() >= deadline) return;
+    if (advanceBatchEnclosure(batch, { deadline }) === 'needTiers') requestBatchTiers(entry, batch);
   }
 }
 
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
+  const enclosureDeadline = performance.now() + ENCLOSURE_SLICE_MS;
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
-    updateBatchEnclosure(entry);
+    updateBatchEnclosure(entry, enclosureDeadline);
     // #3443: a bundle changes detail as one set, from the set's size on screen,
     // and is protected as a whole when any member is beside the avatar.
     const sets = lodSetsFor(entry);
@@ -717,7 +718,9 @@ function updateInstanceLodTiers() {
       // #4089: one pass over the members also finds the nearest one and what the set costs whole.
       let nearestSquared = Infinity;
       let fullTriangles = 0;
+      set.shownMember = undefined; // #4365: the set's current version is read from its first member that is drawn
       for (const member of set.members) {
+        if (!set.shownMember && member.userData.batchTier !== 'hidden') set.shownMember = member;
         if (!set.near && isNearFullDetail(horizontalDistanceM(
           entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
           shopAvatarPosition.x, shopAvatarPosition.y,
@@ -735,6 +738,9 @@ function updateInstanceLodTiers() {
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
+      // #4365: a placement left out of every set draws nothing: it spends none of the full-detail budget and is not
+      // flipped. It stays in the set above (nearness, size on screen) and in entry.objects, so nothing else changes.
+      if (object.userData.batchTier === 'hidden') continue;
       // #4189: an item no finished set job has looked at yet (first load, a reload, anything added since) keeps the
       // version it has and is not judged: judged alone it would take a different version from the set it is
       // about to join, and a person would see the change when the job finishes. A failed job releases the hold.
@@ -753,7 +759,7 @@ function updateInstanceLodTiers() {
       // applies to the set as a whole rather than to each member's own state;
       // every member of a set carries the set's size, so the budget drops or
       // keeps the set together.
-      const currentTier = set ? set.members[0].userData.lodTier : object.userData.lodTier;
+      const currentTier = set ? (set.shownMember ?? set.members[0]).userData.lodTier : object.userData.lodTier;
       lodItemsScratch.push({
         px,
         protected: nearAvatar,

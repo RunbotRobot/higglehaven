@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch, batchTierCounts, batchHiddenCount, hideBatchHandle, BATCH_TIER_HIDDEN, BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR } from './batchTiers.js';
 import { createBatchCrossfades } from './batchCrossfade.js';
-import { advanceBatchEnclosure, batchFullLooksSolid, batchSolidBox, MIN_ENCLOSURE_BATCH } from './enclosedBatch.js';
+import { advanceBatchEnclosure, batchSolidBox, materialIsOpaque, MIN_ENCLOSURE_BATCH } from './enclosedBatch.js';
 
 const identity = () => new THREE.Matrix4();
 const boxPart = (n, size = 0.5) => ({ geometry: new THREE.BoxGeometry(size, size, size, n, n, n), material: new THREE.MeshStandardMaterial(), matrix: identity() });
@@ -30,7 +30,7 @@ function makeBatch(count, { parts = () => boxPart(2), mid = () => boxPart(1), fa
   batch.tiersState = withTiers ? 'ready' : 'none';
   return { batch, handles };
 }
-const runToEnd = (batch) => { let state; for (let i = 0; i < 100; i++) { state = advanceBatchEnclosure(batch, { sliceMs: 1000 }); if (state === 'done' || state === 'off') break; } return state; };
+const runToEnd = (batch) => { let state; for (let i = 0; i < 100; i++) { state = advanceBatchEnclosure(batch, { deadline: Infinity }); if (state === 'done' || state === 'off') break; } return state; };
 
 describe('batchSolidBox', () => {
   it('is a box when every version is a closed box of the same size', () => {
@@ -48,8 +48,53 @@ describe('batchSolidBox', () => {
     expect(batchSolidBox(batch).box).toBe(false);
   });
   it('is not for a round product, which never asks for its versions', () => {
-    const { batch } = makeBatch(MIN_ENCLOSURE_BATCH, { parts: spherePart });
-    expect(batchFullLooksSolid(batch)).toBe(false);
+    const { batch } = makeBatch(64, { parts: spherePart, withTiers: false });
+    batch.tiersState = undefined;
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('off'); // never 'needTiers': nothing is downloaded for it
+  });
+
+  it('asks for the reduced versions only after the full model has passed', () => {
+    const { batch } = makeBatch(64);
+    batch.tiersState = undefined;
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('needTiers');
+    batch.tiersState = 'loading';
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('full-ok');
+  });
+});
+
+describe('opacity: a see-through neighbour hides nothing behind it', () => {
+  const makers = {
+    transparent: () => new THREE.MeshStandardMaterial({ transparent: true, opacity: 0.5 }),
+    'transparent flag alone': () => new THREE.MeshStandardMaterial({ transparent: true }),
+    'opacity under 1': () => new THREE.MeshStandardMaterial({ opacity: 0.9 }),
+    'alpha test (a cut-out)': () => new THREE.MeshStandardMaterial({ alphaTest: 0.5 }),
+    'alpha map': () => new THREE.MeshStandardMaterial({ alphaMap: new THREE.Texture() }),
+    transmission: () => new THREE.MeshPhysicalMaterial({ transmission: 0.6 }),
+    'depth write off': () => new THREE.MeshStandardMaterial({ depthWrite: false }),
+  };
+  it('recognises an opaque material and each kind of see-through one', () => {
+    expect(materialIsOpaque(new THREE.MeshStandardMaterial())).toBe(true);
+    for (const [name, make] of Object.entries(makers)) expect(materialIsOpaque(make()), name).toBe(false);
+    expect(materialIsOpaque([new THREE.MeshStandardMaterial(), makers.transparent()])).toBe(false);
+    expect(materialIsOpaque([])).toBe(false);
+  });
+  for (const [name, make] of Object.entries(makers)) {
+    it(`a batch whose full model is ${name} culls nothing and never asks for its versions`, () => {
+      const { batch } = makeBatch(64, { parts: () => ({ ...boxPart(2), material: make() }), withTiers: false });
+      batch.tiersState = undefined;
+      expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('off');
+      expect(batch.enclosure.state).toBe('off');
+    });
+  }
+  it('a batch whose far version is see-through culls nothing', () => {
+    const { batch } = makeBatch(64, { far: () => ({ ...boxPart(1), material: makers.transparent() }) });
+    expect(runToEnd(batch)).toBe('off');
+    expect(batchHiddenCount(batch)).toBe(0);
+  });
+  it('a batch whose mid version is see-through culls nothing', () => {
+    const { batch } = makeBatch(64, { mid: () => ({ ...boxPart(2), material: makers['alpha test (a cut-out)']() }) });
+    expect(runToEnd(batch)).toBe('off');
+    expect(batchHiddenCount(batch)).toBe(0);
   });
 });
 
@@ -87,10 +132,10 @@ describe('advanceBatchEnclosure', () => {
   it('waits for the batch\'s versions to be known and for its arrival to finish', () => {
     const { batch } = makeBatch(64);
     batch.tiersState = 'loading';
-    expect(advanceBatchEnclosure(batch)).toBe('new');
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('full-ok');
     batch.tiersState = 'ready';
     batch.arrivalRun = { settled: () => false };
-    expect(advanceBatchEnclosure(batch)).toBe('new');
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('full-ok');
     expect(batchHiddenCount(batch)).toBe(0);
     batch.arrivalRun = { settled: () => true };
     expect(runToEnd(batch)).toBe('done');
@@ -103,7 +148,7 @@ describe('advanceBatchEnclosure', () => {
     const now = () => (t += 0.4);
     let slices = 0;
     let state = 'new';
-    while (state !== 'done') { state = advanceBatchEnclosure(batch, { sliceMs: 1, now }); slices++; if (state !== 'done') expect(batchHiddenCount(batch)).toBe(0); }
+    while (state !== 'done') { state = advanceBatchEnclosure(batch, { now, deadline: t + 1 }); slices++; if (state !== 'done') expect(batchHiddenCount(batch)).toBe(0); }
     expect(slices).toBeGreaterThan(3);
     expect(batchHiddenCount(batch)).toBe(8);
   });
@@ -113,10 +158,10 @@ describe('advanceBatchEnclosure', () => {
     const inside = handles.filter((h) => { const p = h.position; return p.x > 0 && p.x < 1.5 && p.y > 0 && p.y < 1.5 && p.z > 0 && p.z < 1.5; });
     expect(inside).toHaveLength(8);
     inside[0].userData.batchFade = {};
-    expect(advanceBatchEnclosure(batch, { sliceMs: 1000 })).toBe('applying');
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('applying');
     expect(batchHiddenCount(batch)).toBe(7);
     inside[0].userData.batchFade = undefined;
-    expect(advanceBatchEnclosure(batch)).toBe('done');
+    expect(advanceBatchEnclosure(batch, { deadline: Infinity })).toBe('done');
     expect(batchHiddenCount(batch)).toBe(8);
   });
 });
@@ -148,5 +193,44 @@ describe('a left-out placement stays out', () => {
       tier.live.forEach((handle, slot) => expect(handle.userData.batchSlot).toBe(slot));
       expect(tier.meshes[0].count).toBe(tier.live.length);
     }
+  });
+});
+
+describe('the work never holds a frame', () => {
+  it('every stage is sliced: a big batch (1,650 bricks, three versions) takes many slices, each of bounded real time', () => {
+    const { batch } = makeBatch(1650, { parts: () => boxPart(21), mid: () => boxPart(10), far: () => boxPart(1), side: 55 });
+    let worst = 0;
+    let slices = 0;
+    let state = 'new';
+    while (state !== 'done' && state !== 'off' && slices < 5000) {
+      const start = performance.now();
+      state = advanceBatchEnclosure(batch, { deadline: start + 1.5 });
+      worst = Math.max(worst, performance.now() - start);
+      slices++;
+    }
+    expect(state).toBe('done');
+    expect(slices).toBeGreaterThan(10);
+    expect(worst).toBeLessThan(30); // a slice is about 1.5 ms; a generous ceiling for a loaded test machine
+  });
+
+  it('a spent deadline does no work at all (the budget is shared by every batch of the tick)', () => {
+    const { batch } = makeBatch(64);
+    const t = performance.now();
+    expect(advanceBatchEnclosure(batch, { deadline: t - 1 })).toBe('new');
+    expect(batch.enclosure.state).toBe('new');
+    expect(batch.enclosure.job).toBeNull();
+  });
+
+  it('two batches share one deadline: the second only gets what the first left', () => {
+    const a = makeBatch(64).batch;
+    const b = makeBatch(64).batch;
+    let t = 0;
+    const now = () => t;
+    const deadline = 1; // one unit of time
+    // The first batch spends the whole slice (each read of the clock advances it by a full unit).
+    const spend = () => { t += 1; return t; };
+    advanceBatchEnclosure(a, { now: spend, deadline });
+    expect(advanceBatchEnclosure(b, { now, deadline })).toBe('new');
+    expect(b.enclosure.job).toBeNull();
   });
 });

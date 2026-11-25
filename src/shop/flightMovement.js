@@ -727,6 +727,8 @@ window.__testToggleShopFlight = () => toggleShopFlight();
 // #3769: e2e-only. Sets the view's pitch exactly (radians, positive is up), so a test can
 // fly level or at a known angle without timing a look key.
 window.__testSetShopPitch = (rad) => { shopPitch = rad; applyShopCameraOrientation(); };
+// #4365: e2e-only. Turns the view to an exact heading (radians), so a test can look at a block from every side.
+window.__testSetShopYaw = (rad) => { shopYaw = rad; setShopAvatarFacing(shopYaw); applyShopCameraOrientation(); };
 window.__testWorldGestureFingers = () => (worldGestures ? worldGestures.activeFingers() : 0);
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.

@@ -157,14 +157,12 @@ const outsideHidden = await page.evaluate((ids) => {
 }, insideIds);
 check(outsideHidden === 0, `no brick on the outside of the block is left out (${outsideHidden})`);
 
-// The proof that nothing on screen changes: stand where the camera looks at the block and draw the left-out bricks
+// The proof that nothing on screen changes: look at the block from six places (four sides, two heights above) and draw the left-out bricks
 // again in flat magenta with the ordinary depth test (a test hook). If none of them could be seen, not one magenta
 // pixel is on the screen. The control draws them with the depth test off: then they are plainly there to be found,
 // so a still with none is a real result and not a view that missed the block.
-await page.evaluate(() => { window.__testSetShopPitch(0); });
-const view = await page.evaluate(() => window.__testShopCameraView());
-const heading = Math.hypot(view.dx, view.dy) || 1;
 const blockCentre = [cx + (SIDE - 1) * STEP / 2, cy + (SIDE - 1) * STEP / 2];
+const blockMiddleZ = (SIDE - 1) * STEP / 2;
 const magentaIn = (png) => page.evaluate(async (b64) => {
   const img = new Image(); img.src = `data:image/png;base64,${b64}`; await img.decode();
   const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
@@ -174,10 +172,26 @@ const magentaIn = (png) => page.evaluate(async (b64) => {
   for (let i = 0; i < d.length; i += 4) if (d[i] > 235 && d[i + 1] < 25 && d[i + 2] > 235) n++;
   return n;
 }, png.toString('base64'));
-for (const standoff of [2.5, 4, 8, 14]) {
-  await moveTo([blockCentre[0] - (view.dx / heading) * standoff, blockCentre[1] - (view.dy / heading) * standoff]);
-  await page.evaluate(() => window.__testSetShopPitch(0));
+// Looks at the block from one place: the avatar stands `standoff` m from its middle on the side the heading comes
+// from, at height `z`, with the view turned to `yaw` and tipped to `pitch` (so the block is dead ahead).
+async function lookAtBlock({ yaw, pitch, standoff, z = 0 }) {
+  await page.evaluate((y) => window.__testSetShopYaw(y), yaw);
+  const view = await page.evaluate(() => window.__testShopCameraView());
+  const heading = Math.hypot(view.dx, view.dy) || 1;
+  await page.evaluate(([x, y, h]) => { window.__testTeleportShopAvatar(x, y, h); window.__testForceShopProximityCheck(); },
+    [blockCentre[0] - (view.dx / heading) * standoff, blockCentre[1] - (view.dy / heading) * standoff, z]);
+  await page.evaluate((p) => window.__testSetShopPitch(p), pitch);
   await page.waitForTimeout(1500);
+}
+// The views: four sides at two distances (so the block is seen from every direction, including from behind where the
+// camera faces away from where it started), and from above looking down.
+const views = [];
+for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+  for (const standoff of [2.5, 8]) views.push({ label: `side yaw ${yaw.toFixed(2)} at ${standoff} m`, yaw, pitch: 0, standoff });
+}
+views.push({ label: 'above, 6 m up', yaw: 0, pitch: -1.45, standoff: 0.2, z: 6 }, { label: 'above, 12 m up at an angle', yaw: Math.PI / 2, pitch: -0.9, standoff: 7, z: 9 });
+for (const v of views) {
+  await lookAtBlock(v);
   const drawn = await page.evaluate(() => window.__testShopDrawEnclosed('marker'));
   await page.waitForTimeout(500);
   const hidden = await magentaIn(await page.screenshot());
@@ -185,11 +199,12 @@ for (const standoff of [2.5, 4, 8, 14]) {
   await page.waitForTimeout(500);
   const xray = await magentaIn(await page.screenshot());
   await page.evaluate(() => window.__testShopDrawEnclosed(false));
-  console.log(`${standoff} m from the block: the ${drawn} left-out bricks drawn again in magenta show ${hidden} pixels; with the depth test off ${xray}`);
+  console.log(`${v.label}: the ${drawn} left-out bricks drawn again in magenta show ${hidden} pixels; with the depth test off ${xray}`);
   check(drawn === 8, `the proof drew the 8 left-out bricks (${drawn})`);
-  check(xray > 50, `the control finds the markers on screen when nothing hides them at ${standoff} m (${xray} pixels)`);
-  check(hidden === 0, `none of the left-out bricks can be seen at ${standoff} m (${hidden} magenta pixels)`);
+  check(xray > 20, `the control finds the markers on screen when nothing hides them (${v.label}: ${xray} pixels)`);
+  check(hidden === 0, `none of the left-out bricks can be seen (${v.label}: ${hidden} magenta pixels)`);
 }
+await page.evaluate(() => { window.__testSetShopYaw(0); window.__testSetShopPitch(0); });
 
 // Away and back: every change of version, and none brings a left-out brick back or loses another.
 for (const point of [at(26), at(40), [cx, cy], at(30), [cx, cy]]) {

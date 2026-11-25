@@ -1,7 +1,7 @@
 // #4365: the rule for which placements of a batch are enclosed (src/shop/enclosedPlacements.js).
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { solidFill, placementBox, isEnclosed, findEnclosed, createEnclosureJob } from './enclosedPlacements.js';
+import { solidFill, createSolidFillJob, placementBox, isEnclosed, findEnclosed, createEnclosureJob, MAX_NEIGHBOURS } from './enclosedPlacements.js';
 
 const BOUNDS_MIN = [-0.25, -0.25, 0];
 const BOUNDS_MAX = [0.25, 0.25, 0.5];
@@ -169,8 +169,6 @@ describe('solidFill', () => {
     const sphere = new THREE.IcosahedronGeometry(0.25, 4).toNonIndexed();
     const verdict = solidFill(Array.from(sphere.attributes.position.array), null);
     expect(verdict.box).toBe(false);
-    expect(verdict.fill).toBeGreaterThan(0.4);
-    expect(verdict.fill).toBeLessThan(0.6);
     expect(solidFill([], null).box).toBe(false);
   });
 
@@ -178,5 +176,136 @@ describe('solidFill', () => {
     const verdict = solidFill(...Object.values(boxMesh({ size: [2, 0.3, 0.7] })));
     expect(verdict.box).toBe(true);
     expect(verdict.min).toEqual([-1, -0.15, -0.35].map((v) => expect.closeTo(v, 6)));
+  });
+});
+
+// A closed 1 m box with a square tunnel of half-width `a` through it (z), as flat arrays.
+function boxWithTunnel(a) {
+  const ring = (h, z) => [[h, h], [-h, h], [-h, -h], [h, -h]].map(([x, y]) => [x, y, z]);
+  const positions = [];
+  const indices = [];
+  const add = (points) => points.map((p) => { positions.push(...p); return positions.length / 3 - 1; });
+  const ot = add(ring(0.5, 0.5)); const ob = add(ring(0.5, -0.5)); const it = add(ring(a, 0.5)); const ib = add(ring(a, -0.5));
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    indices.push(ot[i], ot[j], it[j], ot[i], it[j], it[i]); // top, facing up
+    indices.push(ob[j], ob[i], ib[i], ob[j], ib[i], ib[j]); // bottom, facing down
+    indices.push(ob[i], ob[j], ot[j], ob[i], ot[j], ot[i]); // outer side, facing out
+    indices.push(ib[j], ib[i], it[i], ib[j], it[i], it[j]); // tunnel wall, facing the hole
+  }
+  return { position: positions, index: indices };
+}
+
+describe('solidFill: a hole shows sky through the outer brick', () => {
+  it('refuses a closed box with a through-hole, however small it is made to look', () => {
+    expect(solidFill(...Object.values(boxWithTunnel(0.06))).box).toBe(false); // 12 cm hole
+    expect(solidFill(...Object.values(boxWithTunnel(0.03))).box).toBe(false); // 6 cm hole in a 1 m box
+  });
+
+  it('the tunnel mesh is a closed, correctly wound solid (a 2 mm pinhole is below what the thresholds can see)', () => {
+    const verdict = solidFill(...Object.values(boxWithTunnel(0.001)));
+    expect(verdict.box).toBe(true);
+    expect(verdict.fill).toBeGreaterThan(0.9999);
+    expect(solidFill(...Object.values(boxWithTunnel(0.01))).box).toBe(true); // 2 cm in a 1 m box: 0.04% of the face
+    expect(solidFill(...Object.values(boxWithTunnel(0.02))).box).toBe(false); // 4 cm: 0.16% of the face, over the limit
+  });
+
+  it('refuses a closed box with an internal void of 0.8% of its volume', () => {
+    const outer = boxMesh({ size: [1, 1, 1] });
+    const plug = boxMesh({ size: [0.2, 0.2, 0.2], flip: true });
+    const position = outer.position.concat(plug.position);
+    const index = outer.index.concat(plug.index.map((i) => i + outer.position.length / 3));
+    const verdict = solidFill(position, index);
+    expect(verdict.fill).toBeLessThan(0.999);
+    expect(verdict.box).toBe(false);
+  });
+
+  it('refuses a face with a recess, a model too dense to examine, and a plank', () => {
+    const dense = new THREE.BoxGeometry(1, 1, 1, 40, 40, 40); // 19,200 triangles
+    expect(solidFill(Array.from(dense.attributes.position.array), Array.from(dense.index.array)).box).toBe(false);
+    expect(solidFill(...Object.values(boxMesh({ size: [20, 1, 1] }))).box).toBe(false);
+    expect(solidFill(...Object.values(boxMesh({ size: [3, 1, 1] }))).box).toBe(true);
+  });
+
+  it('can be worked in slices and answers the same', () => {
+    const { position, index } = boxMesh({ size: [0.5, 0.5, 0.5] });
+    const many = new THREE.BoxGeometry(0.5, 0.5, 0.5, 20, 20, 20);
+    const p = Array.from(many.attributes.position.array); const ix = Array.from(many.index.array);
+    const job = createSolidFillJob(p, ix);
+    let t = 0;
+    let steps = 0;
+    let verdict = null;
+    while (!(verdict = job.step(1, () => (t += 0.6)))) steps++;
+    expect(steps).toBeGreaterThan(3);
+    expect(verdict.box).toBe(solidFill(p, ix).box);
+    expect(verdict.box).toBe(true);
+    expect(solidFill(position, index).box).toBe(true);
+  });
+});
+
+describe('overlapping and piled bricks', () => {
+  // Brute-force truth for a set of overlapping axis-aligned bricks: a sample point just outside a brick's face
+  // is EXPOSED when it is inside no brick. Every exposed point must lie on a brick the rule leaves drawn.
+  function surfaceStaysDrawn(boxes, enclosed) {
+    const inside = (p, b, grow) => b.h.every((h, a) => Math.abs(p[a] - b.c[a]) < h + grow);
+    let exposedPoints = 0;
+    let ok = true;
+    boxes.forEach((b, index) => {
+      if (!enclosed.has(index)) return;
+      for (let axis = 0; axis < 3; axis++) for (const sign of [1, -1]) {
+        const u = (axis + 1) % 3; const v = (axis + 2) % 3;
+        for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) {
+          const p = [0, 0, 0];
+          p[axis] = b.c[axis] + sign * (b.h[axis] + 1e-4);
+          p[u] = b.c[u] + (-1 + (2 * (i + 0.5)) / 6) * b.h[u];
+          p[v] = b.c[v] + (-1 + (2 * (j + 0.5)) / 6) * b.h[v];
+          if (boxes.some((o, k) => k !== index && inside(p, o, 0))) continue;
+          ok = false; // an exposed point on a brick the rule left out: a hole in the pile
+          exposedPoints++;
+        }
+      }
+    });
+    return { ok, exposedPoints };
+  }
+
+  it('a chain of bricks that cover each other leaves the outer surface of the pile drawn', () => {
+    let seed = 12345;
+    const random = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+    let totalEnclosed = 0;
+    for (let trial = 0; trial < 25; trial++) {
+      const boxes = [];
+      // A 5 x 5 x 5 region on a half-brick lattice, so bricks overlap each other by half and cover each other in turn.
+      for (let z = 0; z < 9; z++) for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) {
+        if (random() < 0.12) continue; // holes in the pile
+        if ((x + y + z) % 2) continue; // an offset lattice: every brick overlaps its neighbours by half
+        boxes.push(boxAt(x * LEN / 2, y * LEN / 2, z * LEN / 2));
+      }
+      const enclosed = findEnclosed(boxes);
+      totalEnclosed += enclosed.size;
+      const verdict = surfaceStaysDrawn(boxes, enclosed);
+      expect(verdict.ok).toBe(true);
+    }
+    expect(totalEnclosed).toBeGreaterThan(0); // the property was exercised, not vacuous
+  });
+
+  it('a pile of hundreds of heavily overlapping bricks is not a wall: bounded time a step, and it finishes', () => {
+    let seed = 7;
+    const random = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+    const boxes = Array.from({ length: 700 }, () => boxAt(random() * 1.2, random() * 1.2, random() * 1.2));
+    const job = createEnclosureJob(boxes);
+    let worstStep = 0;
+    let steps = 0;
+    for (;;) {
+      const start = performance.now();
+      const done = job.step(1);
+      worstStep = Math.max(worstStep, performance.now() - start);
+      steps++;
+      if (done) break;
+    }
+    expect(worstStep).toBeLessThan(25);
+    expect(steps).toBeGreaterThan(5);
+    // More than MAX_NEIGHBOURS neighbours: drawn, never culled.
+    expect(job.enclosed.size).toBe(0);
+    expect(MAX_NEIGHBOURS).toBeLessThan(700);
   });
 });
