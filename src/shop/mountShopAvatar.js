@@ -38,6 +38,8 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     // this browser, whether the person wears 'custom' or 'default', so someone who wears the default is
     // shown it at once instead of waiting in fog for an answer that is almost always "the default".
     beginAvatarFogHold = null, readWornHint = () => null, writeWornHint = () => {},
+    // #4251: a failed read of what is worn is asked again after each of these waits (ms) before giving up.
+    equippedRetryDelaysMs = [400, 1200],
     // #4067: optional. Called once when the worn model cannot be loaded and the default body is what is left, so
     // the person is told in plain words (src/shop/avatarLoadNotice.js) rather than left with a console line.
     onModelFailed = () => {},
@@ -97,16 +99,24 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     // whether the animation's clips apply (#1162's compatibility check) or the
     // avatar falls back to its own.
     let equippedAnimation = null;
+    let equippedKnown = !loggedIn(); // #4251: true only once the answer (a model, or "nothing") has actually come back
     if (loggedIn()) {
-      try {
-        const avatar = await fetchMyEquippedAvatar();
-        equippedAvatarModelUrl = avatar.modelUrl;
-        equippedAvatarClipRoles = avatar.clipRoles ?? null;
-        setEquippedAvatarSkeletonSignature(avatar.skeletonSignature);
-      } catch (err) {
-        console.warn('Could not fetch equipped avatar, using the default avatar:', err);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const avatar = await fetchMyEquippedAvatar();
+          equippedAvatarModelUrl = avatar.modelUrl;
+          equippedAvatarClipRoles = avatar.clipRoles ?? null;
+          setEquippedAvatarSkeletonSignature(avatar.skeletonSignature);
+          equippedKnown = true;
+          break;
+        } catch (err) {
+          console.warn('Could not fetch equipped avatar:', err);
+          if (attempt >= equippedRetryDelaysMs.length) break;
+          await new Promise((resolve) => setTimeout(resolve, equippedRetryDelaysMs[attempt]));
+          if (!loggedIn()) break;
+        }
       }
-      if (loggedIn()) {
+      if (loggedIn() && equippedKnown) {
         try {
           const animation = await fetchMyEquippedAnimation();
           if (animation.equippedTemplateId) equippedAnimation = animation;
@@ -116,8 +126,9 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
       }
     }
     if (!equippedAvatarModelUrl) {
-      // Nothing equipped: the default avatar is theirs (shown from the fog if it was held).
-      if (loggedIn()) writeWornHint('default');
+      // Nothing equipped: the default avatar is theirs (shown from the fog if it was held). A failed read says
+      // nothing about what is worn, so it leaves the remembered hint as it was (#4251).
+      if (loggedIn() && equippedKnown) writeWornHint('default');
       await new Promise((resolve) => finish(() => { showDefault(); resolve(); }));
       return;
     }
