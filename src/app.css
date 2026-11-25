@@ -569,6 +569,10 @@
          this button, which starts at 56px and is centred under it. While a note is showing, the button sits
          one step lower so the two never overlap. */
       body[data-bud-note] #shop-last-location-btn { top: calc(56px + var(--space-2xl)); }
+      /* #4193: a line in the status pill (the flight limit "You are at the top of the sky.", a refusal) is
+         up to two lines tall at 60vw and starts at the same 56px, so the centred button covered its end. While
+         the pill holds text the button sits below it. */
+      body:has(#shop-status.visible:not(:empty)) #shop-last-location-btn { top: 124px; }
       /* #3570: the account menu opens over this button, whose label then
          showed through the menu's edge. Two surfaces never overlap: the
          button steps aside (same fade) while the menu is open and returns

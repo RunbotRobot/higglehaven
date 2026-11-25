@@ -140,6 +140,21 @@ await page.waitForFunction(
 ).catch(() => {});
 const buttonBackAfterLeafClosed = Number(await page.evaluate(() => getComputedStyle(document.getElementById('shop-last-location-btn')).opacity)) > 0.99;
 
+// #4193: a line in the status pill (here the flight-limit sentence) and this button never overlap.
+const statusAndButtonClear = await page.evaluate(async () => {
+  const status = document.getElementById('shop-status');
+  status.textContent = 'You are at the top of the sky.';
+  status.classList.add('visible');
+  await new Promise((r) => setTimeout(r, 700)); // the button's top eases over --motion-fade
+  const a = status.getBoundingClientRect();
+  const b = document.getElementById('shop-last-location-btn').getBoundingClientRect();
+  const overlap = a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  status.classList.remove('visible');
+  status.textContent = '';
+  return !overlap;
+});
+console.log('status pill and Go to last location do not overlap (should be true):', statusAndButtonClear);
+
 await page.click('#shop-last-location-btn');
 const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 
@@ -192,6 +207,7 @@ console.log('grounded again once the fade/teleport/fade/land sequence finishes (
 console.log('a material is still stuck transparent after the sequence completes (should be false, i.e. NOT stuck):', transparentStuckAfterSequence);
 
 const pass =
+  statusAndButtonClear &&
   noButtonOnFreshAccount &&
   seedStatusA === 200 &&
   visibleAfterSeedA &&
