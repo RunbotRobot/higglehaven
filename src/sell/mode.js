@@ -1232,6 +1232,13 @@ function renderSellerList() {
     duplicateBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
+      // A listing needs a price, a free one an explicit $0, so a copy of a product with none would be refused
+      // by the server with a message about a field name. Say what to do instead, before asking.
+      if (template.priceCents == null) {
+        rowStatus.textContent = 'Set a price on this product first (enter 0 for a free one), then duplicate it.';
+        rowStatus.classList.add('error');
+        return;
+      }
       duplicateBtn.disabled = true;
       try {
         const copy = await createCatalogTemplate({
