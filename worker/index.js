@@ -178,6 +178,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleLandlets } from './lib/land.js';
 import { handleFarPlacements, invalidateFarPlacementsForLandlets } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
+import { itemInsideLandletOutline } from '../shared/landlet-outline.js';
 import { DEFAULT_WORDMARK_ID, isWordmarkStyleId, isWordmarkColorId } from '../shared/wordmark-set.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
@@ -4540,6 +4541,16 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
     rows.push(...results);
   }
   const templatesById = new Map(rows.map((row) => [row.template_id, templateFromRow(row)]));
+  // #4198: the lándlet's own outline, read once per lándlet (a lándlet with no usable polygon keeps the square).
+  const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
+  const polygonsByLandlet = new Map();
+  for (let i = 0; i < landletIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = landletIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const { results } = await db.prepare(
+      `SELECT landlet_id, polygon_json FROM landlets WHERE landlet_id IN (${chunk.map(() => '?').join(', ')})`,
+    ).bind(...chunk).all();
+    for (const row of results) polygonsByLandlet.set(row.landlet_id, row.polygon_json);
+  }
   for (const instance of instances) {
     const halfSpan = (LANDLET_SIDE_M / 2) * footprintScaleAtHeight(instance.z);
     const template = templatesById.get(instance.templateId);
@@ -4561,6 +4572,22 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
         + `given its current size/scale)`,
         400,
       );
+    }
+    if (template) {
+      const flooring = template.metadata?.flooring === true;
+      const inside = itemInsideLandletOutline(polygonsByLandlet.get(instance.landletId), {
+        x: instance.x,
+        y: instance.y,
+        width: flooring ? template.dimensions.width : (instance.crop?.x ?? template.dimensions.width) * instance.scale,
+        depth: flooring ? template.dimensions.depth : (instance.crop?.y ?? template.dimensions.depth) * instance.scale,
+        rotationZ: instance.rotationZ ?? 0,
+      }, footprintScaleAtHeight(instance.z));
+      if (!inside) {
+        throw new HttpError(
+          `Instance at (${instance.x}, ${instance.y}) extends outside lándlet "${instance.landletId}"'s outline`,
+          400,
+        );
+      }
     }
   }
 }

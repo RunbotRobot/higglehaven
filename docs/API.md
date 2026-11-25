@@ -11752,6 +11752,11 @@ raw size) turned by its rotation about the vertical axis, against the outline sc
 `shared/landlet-outline.js` holds the one definition. Nothing is moved or removed. Built for today's size (one pass
 over every owned lándlet's items, no paging).
 
+The same rule now guards writes (#4198): `POST /api/instances`, `PUT /api/instances/:id` and the batch save refuse, with
+`400` "extends outside lándlet … outline", an item whose footprint (same definition) is off its lándlet's outline, after
+the older square check. Only items whose position, size, level, lándlet or product changed are re-checked, so an item
+already standing off the outline does not block saving something else; a lándlet with no usable polygon keeps the square.
+
 ### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
 
 The dashboard's Video-to-3D jobs panel. The list returns the latest 50 jobs, newest first: `jobId`, `status`,
