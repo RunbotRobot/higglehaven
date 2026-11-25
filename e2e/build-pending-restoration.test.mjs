@@ -124,6 +124,15 @@ const shownAfterSuspension = await removedItemsButtonShown(page); // opens the T
 const buttonText = shownAfterSuspension ? await page.locator('#pending-restoration-btn').textContent() : '';
 console.log('"Removed items" button visible after the seller is suspended (should be true):', shownAfterSuspension, buttonText);
 
+// #4201: in the Tools leaf the button wears the same dress as its siblings (a pill, not the browser's square default).
+const buttonDress = await page.evaluate(() => {
+  const own = getComputedStyle(document.getElementById('pending-restoration-btn'));
+  const sibling = getComputedStyle(document.getElementById('toggle-ghosts'));
+  return { own: own.borderRadius, sibling: sibling.borderRadius, height: parseFloat(own.minHeight) };
+});
+console.log('Removed items button dress matches its sibling (should be true):', buttonDress);
+const buttonDressOk = buttonDress.own === buttonDress.sibling && buttonDress.height >= 44 && parseFloat(buttonDress.own) > 8;
+
 await page.click('#pending-restoration-btn');
 await page.waitForSelector('#pending-restoration-modal.visible', { timeout: 5000 });
 await page.waitForSelector('.pending-restoration-row', { timeout: 5000 });
@@ -194,6 +203,7 @@ const pass = placeRes.status === 201
   && shownAfterSuspension
   && /Removed items/.test(noteBefore ?? '')
   && /1/.test(buttonText)
+  && buttonDressOk
   && rowCount === 1
   && ghostsBeforeToggle.length === 0
   && ghostIsModel
