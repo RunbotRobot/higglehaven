@@ -789,7 +789,7 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
       method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
     }));
     expect(result.response.status).toBe(409);
-    expect(result.body.error).toMatch(/land cap/i);
+    expect(result.body.error).toMatch(/lándlet cap/i);
 
     // Nothing actually changed on a rejected attempt.
     const stillOwner = await api('/landlets/reassign-land-cap-source-landlet');

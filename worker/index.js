@@ -4216,7 +4216,7 @@ async function autoAuctionInactiveLandlets(db) {
         // means the owner loses the land to a bidder or to greenbelt either
         // way once it resolves (resolveAuction's own no-bid/winner branches),
         // never back to themselves. Purely informational.
-        `Your land at ${row.landlet_id} has been inactive for ${INACTIVITY_AUCTION_DAYS}+ days and was automatically put up for a $0 starting-bid auction — it will go to a bidder, or revert to greenbelt, once the auction resolves.`,
+        `Your lándlet at ${row.landlet_id} has been inactive for ${INACTIVITY_AUCTION_DAYS}+ days and was automatically put up for a $0 starting-bid auction — it will go to a bidder, or revert to greenbelt, once the auction resolves.`,
       );
     } catch (err) {
       console.error('autoAuctionInactiveLandlets: failed to notify', row.seller_builder_id, err);
@@ -4277,7 +4277,7 @@ export async function warnInactiveLandletOwners(db) {
       await fireNotification(
         db,
         row.builder_id,
-        `Your land has been inactive for ${INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS} days. Log in within ${INACTIVITY_WARNING_DAYS} days or it will automatically go up for a $0 starting-bid auction.`,
+        `Your lándlet has been inactive for ${INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS} days. Log in within ${INACTIVITY_WARNING_DAYS} days or it will automatically go up for a $0 starting-bid auction.`,
       );
     } catch (error) {
       console.error('warnInactiveLandletOwners: failed to notify builder, re-arming for a future retry', row.builder_id, error);
