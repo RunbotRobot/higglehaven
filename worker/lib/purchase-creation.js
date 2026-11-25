@@ -904,7 +904,7 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     // own identical notification below.
     const escrowNote = escrowCents > 0 ? ` (${formatCents(escrowCents)} held for ${COMMISSION_HOLD_DURATION_DAYS} days per standard review policy)` : '';
     await fireNotification(db, builderId,
-      `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.${escrowNote}`);
+      `A sale went through just as its listing was being changed (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in higgles.${escrowNote}`);
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -1157,7 +1157,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     // notification above.
     const escrowNote = escrowCents > 0 ? ` (${formatCents(escrowCents)} held for ${COMMISSION_HOLD_DURATION_DAYS} days per standard review policy)` : '';
     await fireNotification(db, builderId,
-      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.${escrowNote}`);
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in higgles.${escrowNote}`);
   }
   // #2019: soft self-dealing signal, never blocks or affects this purchase
   // itself -- a side effect after the real write already committed, same

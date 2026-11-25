@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // #3929 (follows #3902, #3403): seeds a local `wrangler dev` world with one lándlet that carries a
 // heavy wall -- about 1,650 placements of one 5,120-triangle catalog "brick" (the production
-// wall is 1,655 copies of a 5,320-triangle brick) -- plus a few dozen mixed items, owned by a
-// local account, so what Build, Shop and Sell cost per frame can be measured against a lándlet
-// as heavy as the owner's.
+// wall is 1,655 copies of a 5,320-triangle brick; its reduced versions are described below) -- plus
+// a few dozen mixed items, owned by a local account, so what Build, Shop and Sell cost per frame can
+// be measured against a lándlet as heavy as the owner's.
 //
 //   npm run build && npx wrangler dev --local     # one terminal
-//   node scripts/seed-heavy-landlet.mjs [--bricks 1650] [--no-tiers] [--url http://127.0.0.1:8787]
+//   node scripts/seed-heavy-landlet.mjs [--bricks 1650] [--no-tiers] [--mid-level 3] [--url http://127.0.0.1:8787]
 //
 // Prints one JSON line: { email, password, username, landletId, templateId, bricks }. Sign in with
 // that account (scripts/live-frame-cost.mjs --login local does it for you). Local only: it creates
@@ -112,11 +112,20 @@ const { seller } = await api('/sellers/me', builder.cookie);
 
 const { glb, triangles } = icosphereGlb(4, 0.25);
 const brickModelUrl = await uploadModel('seed-brick.glb', glb);
-// Stored reduced versions, as the upload optimiser leaves on a real product (320 and 80 triangles),
-// so Shop and Build load them instead of building them in the browser frame by frame. Pass
-// --no-tiers to leave them off and measure that path.
+// Stored reduced versions, as the upload optimiser leaves on a real product, so Shop and Build load
+// them instead of building them in the browser frame by frame. Pass --no-tiers to leave them off and
+// measure that path.
+// #4302 (found under #4293): the first version of this seed used a 320-triangle mid, about a tenth of
+// what the owner's wall carries, so every frame figure taken here (#4089, #4293, #4294, the numbers on
+// #4062/#4113) understated the real wall about three times. The live 'Brick - Orange' is 5,320
+// triangles full, 2,638 mid today (1,458 once its stored versions are regenerated with #4307's border
+// sliding) and 34 far (a hull). An icosphere can only be 20 * 4^level triangles, so the seeded brick
+// is 5,120 full, 1,280 mid (level 3, within 12% of the regenerated mid and half the mid on the site
+// today) and 80 far. --mid-level 4 seeds a 5,120-triangle mid (no reduction) and --mid-level 2 the old
+// 320, to compare against earlier figures.
 const withTiers = !args.includes('--no-tiers');
-const brickMidUrl = withTiers ? await uploadModel('seed-brick-mid.glb', icosphereGlb(2, 0.25).glb) : null;
+const MID_LEVEL = Number(flag('--mid-level', 3));
+const brickMidUrl = withTiers ? await uploadModel('seed-brick-mid.glb', icosphereGlb(MID_LEVEL, 0.25).glb) : null;
 const brickFarUrl = withTiers ? await uploadModel('seed-brick-far.glb', icosphereGlb(1, 0.25).glb) : null;
 const mkTemplate = async (name, category, modelUrl, dimensions, priceCents, tiers = {}) => (await api('/catalog', builder.cookie, {
   method: 'POST',

@@ -26,6 +26,9 @@ const REPLAN_MIN_INTERVAL_MS = 500;
 const REPLAN_MAX_INTERVAL_MS = 3000;
 const REPLAN_MOVE_M = 25;
 const TILE_RETRY_MS = 30000;
+// #4310: a product's far model that failed to load (a network blip) is asked for again after this long, like a tile.
+// Only a product that legitimately has no far source (the loader answered nothing) stays 'none' for the session.
+const SOURCE_RETRY_MS = 30000;
 // #4147: a tile is not read once for the whole session. While it is in range it is read again after this long, so a
 // lándlet emptied or returned to the greenbelt while a Shop is open is gone from the far view within a couple of minutes
 // without a reload (the owner's report: far models drawn where a table could be walked through). It is one small request
@@ -126,7 +129,7 @@ export function createFarView({
   }
 
   function startSource(templateId) {
-    const record = { state: 'loading', source: null, triangles: 0 };
+    const record = { state: 'loading', source: null, triangles: 0, failedAt: 0 };
     sources.set(templateId, record);
     sourcesInFlight += 1;
     Promise.resolve().then(() => loadSource(templateId)).then((source) => {
@@ -139,7 +142,9 @@ export function createFarView({
         record.state = 'none';
       }
     }).catch(() => {
-      record.state = 'none';
+      // #4310: a thrown load is a failure to try again later, not the answer 'there is no far model'.
+      record.state = 'failed';
+      record.failedAt = now();
     }).finally(() => {
       sourcesInFlight -= 1;
       dirty = true;
@@ -300,7 +305,9 @@ export function createFarView({
 
     const { landlets, templateIds } = gatherLandlets();
     for (const templateId of templateIds) {
-      if (!sources.has(templateId) && mayStart && sourcesInFlight < MAX_SOURCE_LOADS_IN_FLIGHT && t - lastSourceStartAt >= SOURCE_LOAD_GAP_MS) {
+      const sourceRecord = sources.get(templateId);
+      const wantsLoad = !sourceRecord || (sourceRecord.state === 'failed' && t - sourceRecord.failedAt > SOURCE_RETRY_MS);
+      if (wantsLoad && mayStart && sourcesInFlight < MAX_SOURCE_LOADS_IN_FLIGHT && t - lastSourceStartAt >= SOURCE_LOAD_GAP_MS) {
         lastSourceStartAt = t;
         startSource(templateId);
       }

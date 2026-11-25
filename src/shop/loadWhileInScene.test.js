@@ -51,3 +51,33 @@ describe('loadWhileInScene', () => {
     expect(got).toEqual([]);
   });
 });
+
+// #4313: the review cache hands every caller the remembered failure until its
+// backoff has passed, so the first retry has to wait longer than that.
+import { createReviewCache, REVIEW_FAILURE_BACKOFF_MS } from './reviewCache.js';
+
+describe('loadWhileInScene with the review cache', () => {
+  it('a retry after the backoff reaches the server again and delivers the reviews', async () => {
+    let clock = 0;
+    let requests = 0;
+    const cache = createReviewCache({
+      now: () => clock,
+      fetchReviews: async () => { if (++requests === 1) throw new Error('x'); return { reviews: ['r'] }; },
+    });
+    const timers = [];
+    const got = [];
+    loadWhileInScene({
+      fetch: () => cache.get('t'),
+      isInScene: () => true,
+      onResult: (r) => got.push(r),
+      delays: [REVIEW_FAILURE_BACKOFF_MS + 1000],
+      setTimer: (fn, ms) => timers.push({ fn, ms }),
+    });
+    await flush();
+    expect(timers[0].ms).toBeGreaterThan(REVIEW_FAILURE_BACKOFF_MS);
+    clock += timers[0].ms;
+    timers[0].fn(); await flush();
+    expect(requests).toBe(2);
+    expect(got).toEqual([{ reviews: ['r'] }]);
+  });
+});

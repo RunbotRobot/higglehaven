@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { readWithRetry } from './retryRead.js';
+import { describe, expect, it, vi } from 'vitest';
+import { readWithRetry, scheduleRetry } from './retryRead.js';
 
 const noWait = () => Promise.resolve();
 
@@ -40,5 +40,23 @@ describe('readWithRetry (#4298)', () => {
       isStale: () => stale,
     })).rejects.toThrow('blip');
     expect(calls).toBe(1);
+  });
+});
+
+describe('scheduleRetry (#4317)', () => {
+  it('runs again after each wait with the next attempt number, then gives up', () => {
+    const waits = [];
+    const schedule = (fn, ms) => { waits.push(ms); fn(); };
+    const attempts = [];
+    const runAgain = (attempt) => { attempts.push(attempt); scheduleRetry(runAgain, attempt, { delaysMs: [2000, 8000], schedule }); };
+    expect(scheduleRetry(runAgain, 0, { delaysMs: [2000, 8000], schedule })).toBe(true);
+    expect(waits).toEqual([2000, 8000]);
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it('schedules nothing once the waits are used up', () => {
+    const schedule = vi.fn();
+    expect(scheduleRetry(() => {}, 2, { delaysMs: [2000, 8000], schedule })).toBe(false);
+    expect(schedule).not.toHaveBeenCalled();
   });
 });
