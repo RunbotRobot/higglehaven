@@ -2287,6 +2287,7 @@ const redoBtn = document.getElementById('redo-btn');
 const levelLabelEl = document.getElementById('level-label');
 const levelDownBtn = document.getElementById('level-down-btn');
 const levelUpBtn = document.getElementById('level-up-btn');
+const levelNavEl = document.getElementById('level-nav');
 const levelBuildBtn = document.getElementById('level-build-btn');
 const levelDigBtn = document.getElementById('level-dig-btn');
 const levelRemoveBtn = document.getElementById('level-remove-btn');
@@ -2339,6 +2340,8 @@ export function renderLevelControls() {
   levelLabelEl.textContent = levelLabel(currentLevelIndex);
   levelDownBtn.disabled = currentLevelIndex <= bottom;
   levelUpBtn.disabled = currentLevelIndex >= top;
+  // #4275: with only the Ground level both arrows can only refuse, so they are not drawn at all.
+  levelNavEl.hidden = top === bottom;
   const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
   levelBuildBtn.textContent = `Build level above (${formatArea(upCostM2)})`;
