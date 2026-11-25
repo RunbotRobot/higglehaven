@@ -54,8 +54,13 @@ console.log('Escape alone let the gated shop flow proceed (should be false):', s
 // Escape shouldn't have broken the real exit path — the legitimate
 // Continue-button close still works afterward.
 await clearVerifyModalIfShown(page);
-await page.waitForSelector('#shop-status.visible', { timeout: 15000 }).catch(() => {});
-const clearedViaContinueButton = (await page.locator('#shop-status.visible').count()) === 1;
+// #4281: #shop-status is a loading note that shows and then hides again, so counting it after a wait raced the end of
+// the load (seen on CI: the note had already gone). The state that means the gated flow went on is the world being
+// ready, or the note showing; wait for either, with real headroom for a loaded shard.
+const clearedViaContinueButton = await page.waitForFunction(
+  () => document.body.classList.contains('shop-ready') || !!document.querySelector('#shop-status.visible'),
+  null, { timeout: 60000 },
+).then(() => true, () => false);
 console.log('Clearing the gate via the real Continue button still works (should be true):', clearedViaContinueButton);
 
 const pass = !shopStatusVisibleBeforeEscape &&
