@@ -2963,10 +2963,11 @@
         font-size: var(--text-md);
         line-height: 1;
       }
-      /* #3942: the Tools leaf's toggles and Paste are quiet buttons; a toggle that is on fills green. */
+      /* #3942: the Tools leaf's toggles, Paste and Removed items (#4201) are quiet buttons; a toggle that is on fills green. */
       #toggle-multiselect,
       #toggle-measure,
       #toggle-ghosts,
+      #pending-restoration-btn,
       #paste-btn {
         min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
