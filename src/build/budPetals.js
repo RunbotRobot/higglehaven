@@ -53,6 +53,8 @@ function openLevelsLeaf() {
       line.className = 'bud-level-line';
       line.append('You are on ', byId('level-label'));
       body.append(line, byId('level-menu-panel'));
+      // #4331: the cap is read as the leaf opens (scene.js listens), so the buttons are drawn by what it leaves.
+      document.dispatchEvent(new CustomEvent('hh-levels-leaf-opened'));
     },
     onClose: () => {
       const home = byId('level-controls');

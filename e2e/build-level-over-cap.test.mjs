@@ -38,7 +38,7 @@ await page.waitForTimeout(800);
 console.log('level requests sent (should be 0):', levelRequests);
 
 const pass = state.buildDisabled && state.digDisabled
-  && /A new level takes 1,000m² and you have 1m² left/.test(state.note)
+  && /A new level takes 1,000m² and you have 0m² left/.test(state.note)
   && /The cap grows as your products earn higgles/.test(state.note)
   && !/\.\d\dm²/.test(state.note)
   && levelRequests === 0;

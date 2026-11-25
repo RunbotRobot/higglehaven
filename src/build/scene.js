@@ -61,7 +61,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
-import { landCapRoomM2 } from '../../shared/level-cap.js';
+import { landCapRoomM2, landCapShownRoomM2 } from '../../shared/level-cap.js';
 import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt, pullGroupTowardCentre } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
@@ -2328,6 +2328,7 @@ let levelActionBusy = false;
 // check is still the authority (a level is refused there too); this only keeps a person from being offered a
 // button that can only refuse, and says why in the same numbers the My lándlets leaf uses.
 let levelCapRoomValueM2 = null;
+let levelCapShownRoomM2 = 0; // what the sentence says is left (without the server's rounding slack)
 let levelCapFetchedAt = 0;
 let levelCapNoteShown = false;
 async function refreshLevelCapRoom() {
@@ -2335,6 +2336,7 @@ async function refreshLevelCapRoom() {
   try {
     const me = await fetchMyBuilder();
     levelCapRoomValueM2 = me && me.landCapM2 != null ? landCapRoomM2(me.ownedAreaM2 ?? 0, me.landCapM2) : null;
+    if (levelCapRoomValueM2 !== null) levelCapShownRoomM2 = landCapShownRoomM2(me.ownedAreaM2 ?? 0, me.landCapM2);
   } catch {
     levelCapRoomValueM2 = null;
   }
@@ -2344,7 +2346,7 @@ function levelFitsRoom(costM2) {
   return levelCapRoomValueM2 === null || costM2 <= levelCapRoomValueM2;
 }
 function levelCapSentence(costM2) {
-  return `A new level takes ${formatArea(costM2, 0)} and you have ${formatArea(levelCapRoomValueM2, 0)} left. The cap grows as your products earn higgles.`;
+  return `A new level takes ${formatArea(costM2, 0)} and you have ${formatArea(levelCapShownRoomM2, 0)} left. The cap grows as your products earn higgles.`;
 }
 function levelCapCosts() {
   const { top, bottom } = levelExtent();
@@ -2468,6 +2470,7 @@ async function addLevel(direction, failureMessage) {
     setLevelButtonsDisabled(false);
   }
 }
+document.addEventListener('hh-levels-leaf-opened', () => { refreshLevelCapRoom(); });
 levelBuildBtn.addEventListener('click', () => addLevel('up', 'Couldn\'t build a new level.'));
 levelDigBtn.addEventListener('click', () => addLevel('down', 'Couldn\'t dig a new level.'));
 

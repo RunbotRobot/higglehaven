@@ -15,3 +15,8 @@ export function landCapRoomM2(ownedAreaM2, capM2) {
 export function levelFitsCap(ownedAreaM2, capConsumedM2, capM2) {
   return ownedAreaM2 + capConsumedM2 <= capM2 + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2;
 }
+
+// The room a person is told about: the figures they see (cap and held, each rounded), without the slack above.
+export function landCapShownRoomM2(ownedAreaM2, capM2) {
+  return Math.max(0, capM2 - ownedAreaM2);
+}
