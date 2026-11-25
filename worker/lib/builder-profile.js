@@ -164,7 +164,7 @@ export async function getOrCreateBuilderForUser(db, user) {
 export async function handleMyBuilder(request, db, videoGenerationAvailable = true) {
   const user = await requireCurrentUser(request, db);
   const row = await getOrCreateBuilderForUser(db, user);
-  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
+  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id, row); // #3873: the row just read, not read again
   row.land_cap_m2 = nextCap;
   row.owned_area_m2 = ownedAreaM2;
   return json({ builder: { ...builderFromRow(row), videoGenerationAvailable: !!videoGenerationAvailable } });

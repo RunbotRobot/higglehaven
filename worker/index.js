@@ -1973,8 +1973,11 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
 // exposes it so the frontend's own "you own X of Y" display (#312) never
 // has to re-derive it (and risk leaving out level area the way its
 // original ground-only-landlets sum did).
-export async function recomputeLandCap(db, builderId) {
-  const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
+// #3873/#3464: a caller that has just read this builder's own row in the same request (GET /api/builders/me, which
+// every Build and Sell start waits on) passes it as `knownBuilder` so the row is not read a second time, one
+// sequential D1 trip fewer; everyone else lets it be read here, as before.
+export async function recomputeLandCap(db, builderId, knownBuilder = null) {
+  const builder = knownBuilder ?? await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return { nextCap: LAND_CAP_STARTER_M2, ownedAreaM2: 0 };
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earningsRow, ownedRow, levelsRow] = await Promise.all([
