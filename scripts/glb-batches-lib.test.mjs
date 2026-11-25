@@ -19,4 +19,8 @@ describe('glbBatches colour (#4111)', () => {
     const b = glbBatches(icosphereGlb(1, 1).glb).batches;
     expect(colorShift(a, b)).toBeLessThan(1e-6);
   });
+
+  it('marks a batch unlit only when its material says KHR_materials_unlit', () => {
+    expect(glbBatches(icosphereGlb(1, 1).glb).batches[0].unlit).toBe(false);
+  });
 });

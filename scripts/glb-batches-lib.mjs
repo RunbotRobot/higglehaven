@@ -138,7 +138,7 @@ export function glbBatches(buffer) {
         for (let t = 0; t + 8 < out.length; t += 9) area += triangleArea(out, t);
         const indexList = idx || Uint32Array.from({ length: count }, (_, i) => i);
         const color = litColor(json, bin, prim, material, out, indexList);
-        batches.push({ positions: out, doubleSided: Boolean(material && material.doubleSided), area, ...(color ? { color } : {}) });
+        batches.push({ positions: out, doubleSided: Boolean(material && material.doubleSided), area, unlit: Boolean(material && material.extensions && material.extensions.KHR_materials_unlit), ...(color ? { color } : {}) });
         triangles += count / 3;
       }
     }
