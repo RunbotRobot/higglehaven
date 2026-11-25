@@ -29,10 +29,11 @@ import {
   apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, TIER_FULL, TIER_MID, TIER_FAR,
   MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready, setApparentPx,
 } from '../shop/lodTier.js';
-import { buildLodSets } from '../shop/lodSets.js';
+import { startLodSetsJob, stepLodSetsJob } from '../shop/lodSets.js';
 import { attachInstanceTiers, setInstanceLodState, setLodChildHitTestable, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
 
 export const BUILD_LOD_INTERVAL_MS = 250;
+export const BUILD_SETS_SLICE_MS = 2; // #4189: the part of a tick the sets' discovery may use
 export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching and flipping may use
 // #4003: items whose versions have not attached yet are drawn from their full model, so on a heavy
 // lándlet the way in drew up to 8.4 million triangles in a frame. Those beyond this many triangles
@@ -106,6 +107,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   let sets = new Map();
   let setsSignature = null; // what `sets` was worked out from
   let lastSignature = null; // what the previous pass saw
+  // #4189: the sets are worked out in slices of BUILD_SETS_SLICE_MS a tick, not in one frame; the sets in use stay
+  // the previous ones until the new ones are complete, then change at once.
+  let setsJob = null; // { job, signature } while one is running
   let wholeIds = new Set(); // the sets held whole at full detail last pass
   const accs = new Map(); // setId -> what this pass has found out about the members it saw
 
@@ -273,17 +277,28 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     }
     // #4115: the layout stood still for a tick: work the sets out again. (The first time, at once.)
     const signature = `${objects.length}:${signatureHash >>> 0}`;
-    if (signature !== setsSignature && (signature === lastSignature || setsSignature === null)) {
-      sets = buildLodSets(objects, {
-        hasTiers: () => true,
-        groupIdOf: (object) => object.userData.groupId,
-        templateKeyOf: (object) => object.userData.template?.templateId,
-        positionOf: (object) => scratchSetPosition.setFromMatrixPosition(object.matrixWorld),
-        radiusOf,
-        implicit: implicitSets,
-      });
-      setsSignature = signature;
-      wholeIds = new Set(); // set ids are worked out again
+    if (setsJob && setsJob.signature !== signature) setsJob = null; // the layout changed under it: start over
+    if (signature !== setsSignature && !setsJob && (signature === lastSignature || setsSignature === null)) {
+      setsJob = {
+        signature,
+        job: startLodSetsJob(objects, {
+          hasTiers: () => true,
+          groupIdOf: (object) => object.userData.groupId,
+          templateKeyOf: (object) => object.userData.template?.templateId,
+          positionOf: (object) => scratchSetPosition.setFromMatrixPosition(object.matrixWorld),
+          radiusOf,
+          implicit: implicitSets,
+        }),
+      };
+    }
+    if (setsJob) {
+      const done = stepLodSetsJob(setsJob.job, BUILD_SETS_SLICE_MS);
+      if (done) {
+        sets = done;
+        setsSignature = setsJob.signature;
+        setsJob = null;
+        wholeIds = new Set(); // set ids are worked out again
+      }
     }
     lastSignature = signature;
     // One decision for a whole set, from its size on screen (src/shop/lodTier.js setApparentPx), and the whole
@@ -438,7 +453,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     setFullTriangleCap(triangles) { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; },
     setProtectNear(on) { protectNear = on !== false; },
     // #4115: e2e-only switch for the grouping of loose items; the sets are worked out again on the next pass.
-    setImplicitSets(on) { implicitSets = on !== false; setsSignature = null; },
+    setImplicitSets(on) { implicitSets = on !== false; setsSignature = null; setsJob = null; },
     setCount() { return sets.size; },
   };
 }

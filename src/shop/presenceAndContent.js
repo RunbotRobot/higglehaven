@@ -67,7 +67,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
-import { buildLodSets } from './lodSets.js';
+import { startLodSetsJob, stepLodSetsJob } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -550,23 +550,49 @@ window.__testSetImplicitLodSets = (enabled) => {
   implicitSetsVersion += 1;
 };
 
+// #4189: worked out in slices of SHOP_SETS_SLICE_MS a frame, not in one. While a job runs, the previous sets
+// of the same load stay in use (changed at once when the new ones are complete); a landlet with none yet
+// (first load, or after an unload) has none until its job finishes, so its items are judged one by one for
+// those frames.
+const SHOP_SETS_SLICE_MS = 2;
+const NO_SETS = new Map();
 function lodSetsFor(entry) {
-  if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken
+  const current = entry.lodSetsToken === entry.loadToken;
+  if (entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
     && entry.lodSetsVersion === implicitSetsVersion) return entry.lodSets;
-  // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
-  const sets = buildLodSets(entry.objects, {
-    hasTiers: hasLodTiers,
-    groupIdOf: (object) => object.userData.groupId,
-    templateKeyOf: (object) => object.userData.template?.templateId,
-    positionOf: (object) => object.position,
-    radiusOf: lodRadiusM,
-    implicit: implicitSetsEnabled,
-  });
-  entry.lodSets = sets;
-  entry.lodSetsObjectCount = entry.objects.length;
-  entry.lodSetsVersion = implicitSetsVersion;
-  entry.lodSetsToken = entry.loadToken; // an unload and reload with the same count must not reuse stale members
-  return sets;
+  const job = entry.lodSetsJob;
+  if (job && (job.token !== entry.loadToken || job.count !== entry.objects.length || job.version !== implicitSetsVersion)) {
+    entry.lodSetsJob = null; // the layout changed under it: start over
+  }
+  if (!entry.lodSetsJob) {
+    entry.lodSetsJob = {
+      token: entry.loadToken,
+      count: entry.objects.length,
+      version: implicitSetsVersion,
+      // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
+      job: startLodSetsJob(entry.objects, {
+        hasTiers: hasLodTiers,
+        groupIdOf: (object) => object.userData.groupId,
+        templateKeyOf: (object) => object.userData.template?.templateId,
+        positionOf: (object) => object.position,
+        radiusOf: lodRadiusM,
+        implicit: implicitSetsEnabled,
+      }),
+    };
+  }
+  const running = entry.lodSetsJob;
+  const sets = stepLodSetsJob(running.job, SHOP_SETS_SLICE_MS);
+  if (sets) {
+    entry.lodSets = sets;
+    entry.lodSetsObjectCount = running.count;
+    entry.lodSetsVersion = running.version;
+    entry.lodSetsToken = running.token; // an unload and reload with the same count must not reuse stale members
+    entry.lodSetsJob = null;
+    return sets;
+  }
+  // Not done: the previous sets of this same load, if any, else none. (A changed load token means the old
+  // members are gone, so they are never reused.)
+  return entry.lodSets && current ? entry.lodSets : NO_SETS;
 }
 
 // #3920: what the full model of an item costs to draw, in triangles, counted once and kept. A

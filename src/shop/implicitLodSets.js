@@ -36,15 +36,29 @@ function find(parent, i) {
 
 // `items`: [{ key, x, y, z, radiusM }]. Returns an array of sets, each an array of indices into `items`
 // (at least MIN_SET_MEMBERS each), in a stable order. Linear in the number of items (a spatial hash).
-export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
+export function findImplicitSets(items, options) {
+  const steps = findImplicitSetsSteps(items, options);
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+  }
+}
+
+// #4189: the same work as a generator that yields every STEP_CHUNK items of a loop, so a caller with a frame
+// budget can stop between chunks and carry on next frame. Drained to the end it returns exactly what
+// findImplicitSets returns (that function is this one drained).
+export const STEP_CHUNK = 256;
+export function* findImplicitSetsSteps(items, { gapM = SET_GAP_M } = {}) {
   const parent = items.map((_, i) => i);
   // The grid is per product: two items of different products never link, so each product's cell is sized
   // by its own largest item, and one big item of one product no longer widens the cell (and the number
   // of neighbours checked) for every other product. The sets that come out, and their order, are the
   // same as one grid for everything: only the items checked against each other changed.
   const maxRadiusByKey = new Map();
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     if (item.radiusM > (maxRadiusByKey.get(item.key) ?? 0)) maxRadiusByKey.set(item.key, item.radiusM);
+    if (i % STEP_CHUNK === STEP_CHUNK - 1) yield;
   }
   const gridByKey = new Map();
   // An integer hash of the cell, not a string: two cells that collide only add a neighbour to check, and the
@@ -70,6 +84,7 @@ export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
     let bucket = grid.get(own);
     if (!bucket) grid.set(own, bucket = []);
     bucket.push(i);
+    if (i % STEP_CHUNK === STEP_CHUNK - 1) yield;
   }
   const link = (i, j) => {
     const item = items[i];
@@ -95,6 +110,7 @@ export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
         for (const j of others) link(i, j);
       }
     }
+    if (i % STEP_CHUNK === STEP_CHUNK - 1) yield;
   }
 
   const components = new Map();
@@ -102,6 +118,7 @@ export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
     const root = find(parent, i);
     if (!components.has(root)) components.set(root, []);
     components.get(root).push(i);
+    if (i % STEP_CHUNK === STEP_CHUNK - 1) yield;
   }
 
   const sets = [];
@@ -127,6 +144,7 @@ export function findImplicitSets(items, { gapM = SET_GAP_M } = {}) {
       cut.get(key).push(i);
     }
     for (const part of cut.values()) if (part.length >= MIN_SET_MEMBERS) sets.push(part);
+    yield;
   }
   return sets;
 }
