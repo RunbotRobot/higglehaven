@@ -1352,6 +1352,14 @@ users table, `admin-user-search`, `admin-user-detail`, `admin-landlet-search`, t
 a suspension's free-text `evidenceNote` is `null`; and `admin-user-search` matches usernames only, never emails.
 `worker/admin-viewer.test.js` lists every file that may opt a route in.
 
+`POST /api/auth/admin-set-viewer` `{ userId, enabled }` (full admin only; `401`, `403`) is the owner's switch,
+used by the dashboard's "Give look-only access" / "Remove look-only access" on a user's detail. It answers
+`{ userId, adminViewer, changed }`. Giving the role is refused with `409` and a reason for a person's account
+(only fleet accounts), an assistant, an admin and a deleted account; removing it is always allowed. Each change
+is written to the admin log in the same batch (`admin_viewer_granted`, `admin_viewer_removed`); a request that
+changes nothing writes nothing. `admin-user-detail` carries `adminViewer` and `adminViewerRefusal` so the
+dashboard draws the switch only where it can work.
+
 ### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
 
 Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns

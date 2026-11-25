@@ -88,6 +88,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminSetViewer } from './lib/admin-viewer-grant.js';
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
@@ -3227,6 +3228,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4175: the owner's switch for the look-only admin role (full admin only, logged).
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-set-viewer') {
+    return handleAdminSetViewer(request, db);
   }
   // #4077: the admin dashboard's Delete account: a preview of what goes with it, then the same cascade a person's own deletion runs.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-delete-account-preview') {

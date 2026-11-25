@@ -8,6 +8,7 @@ import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
 import { requireCurrentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
 import { emailFor, isViewer } from './admin-viewer-mask.js';
+import { viewerRefusalFor } from './admin-viewer-grant.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
@@ -847,7 +848,7 @@ export async function handleAdminUserDetail(request, db, url) {
   const userId = (url.searchParams.get('userId') || '').trim();
   if (!userId) throw new HttpError('userId query parameter is required', 400);
   const row = await db.prepare(
-    `SELECT user_id, username, email, trust_tier, created_at, email_verified_at,
+    `SELECT user_id, username, email, trust_tier, created_at, email_verified_at, is_admin, is_fleet, is_admin_viewer, deleted_at,
       card_refusal_code, card_refusal_decline_code, card_refusal_at, card_refusal_count
     FROM users WHERE user_id = ?`,
   ).bind(userId).first();
@@ -894,6 +895,9 @@ export async function handleAdminUserDetail(request, db, url) {
       builderLabel: builder ? builder.label : null,
       sellerId: seller ? seller.seller_id : null,
       sellerLabel: seller ? seller.label : null,
+      // #4175: the dashboard draws the look-only switch from these (and not for an account it can only refuse).
+      adminViewer: row.is_admin_viewer === 1,
+      adminViewerRefusal: viewerRefusalFor(row),
     },
     landlets: landletRows.map((l) => ({
       landletId: l.landlet_id,
