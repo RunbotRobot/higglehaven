@@ -2242,14 +2242,26 @@ export async function fetchCreditOrbs(landletId) {
 // ({ limit, windowSeconds, remaining, retryAfterSeconds }), so an orb over the
 // limit can be left alone before it is touched. Resolves to null when there is
 // no session or the read fails -- the server still enforces the limit either way.
-export async function fetchCreditOrbStanding() {
-  try {
-    const { standing, credits } = await requestJson('/credit-orbs/standing');
-    // #4123: the balance rides along with the standing, so the note can say how many credits a person holds.
-    return standing ? { ...standing, credits: typeof credits === 'number' ? credits : null } : null;
-  } catch {
-    return null;
-  }
+// #4228: the standing is the person's, not a landlet's, and opening Shop asked for it once per greenbelt landlet
+// in range (four identical authenticated requests at once on the live site, each about 1 to 2 s on a phone). A call
+// that arrives while one is in flight shares its answer; once it has settled the next call asks again, because the
+// standing changes with every collect, so nothing here is kept or goes stale.
+let creditOrbStandingInFlight = null;
+export function fetchCreditOrbStanding() {
+  if (creditOrbStandingInFlight) return creditOrbStandingInFlight;
+  const request = (async () => {
+    try {
+      const { standing, credits } = await requestJson('/credit-orbs/standing');
+      // #4123: the balance rides along with the standing, so the note can say how many credits a person holds.
+      return standing ? { ...standing, credits: typeof credits === 'number' ? credits : null } : null;
+    } catch {
+      return null;
+    } finally {
+      creditOrbStandingInFlight = null;
+    }
+  })();
+  creditOrbStandingInFlight = request;
+  return request;
 }
 
 // #1995: claims an orb on proximity auto-collect. The server's own atomic
