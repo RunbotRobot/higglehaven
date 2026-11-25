@@ -1,6 +1,6 @@
 // #4198: Build's limiter against the shared outline definition.
 import { describe, expect, it } from 'vitest';
-import { limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt, setBuildOutline, getBuildOutline } from './outlineLimit.js';
+import { limitItemMove, limitItemPlacement, limitGroupOffset, pullGroupTowardCentre, itemLegalAt, setBuildOutline, getBuildOutline } from './outlineLimit.js';
 
 const SQUARE = [{ x: -10, y: -10 }, { x: 10, y: -10 }, { x: 10, y: 10 }, { x: -10, y: 10 }];
 // A slanted right edge: from (10, -10) up to (4, 10).
@@ -90,5 +90,28 @@ describe('setBuildOutline', () => {
     expect(getBuildOutline()).toHaveLength(4);
     setBuildOutline('[]');
     expect(getBuildOutline()).toBeNull();
+  });
+});
+
+describe('pullGroupTowardCentre', () => {
+  const at = (x, y) => ({ item: BRICK, x, y, z: 0 });
+
+  it('leaves a bundle that already fits alone', () => {
+    expect(pullGroupTowardCentre(SQUARE, [at(-2, 0), at(2, 0)])).toEqual({ x: 0, y: 0, limited: false });
+  });
+
+  it('slides a bundle placed over the edge back by the least amount, as one body', () => {
+    const members = [at(6, 0), at(11, 0)]; // the right brick sticks out: its edge is at 12
+    const offset = pullGroupTowardCentre(SQUARE, members);
+    expect(offset.limited).toBe(true);
+    // The pull is along the line to the centre of the group (8.5), so the group moves left by a little over 2.
+    expect(offset.x).toBeLessThan(-1.9);
+    expect(offset.x).toBeGreaterThan(-2.5);
+    expect(members.every((m) => itemLegalAt(SQUARE, m.item, m.x + offset.x, m.y + offset.y, 0))).toBe(true);
+  });
+
+  it('leaves the position (the server will say why) when even the centre does not fit', () => {
+    const wide = [at(-20, 0), at(20, 0)];
+    expect(pullGroupTowardCentre(SQUARE, wide)).toEqual({ x: 0, y: 0, limited: false });
   });
 });

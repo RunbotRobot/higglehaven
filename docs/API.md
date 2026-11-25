@@ -11929,9 +11929,9 @@ eligible landlet (`status = 'greenbelt'`, via `ORDER BY RANDOM() LIMIT 1` —
 no prior precedent for this in the codebase) is picked at the same time,
 inside the same statement, so no greenbelt landlet to spawn into is simply a
 0-row no-op rather than a separate branch. The spawned position is a random
-point inside the landlet's own buildable footprint
-(`LANDLET_SIDE_M`, #789), scaled by `CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) to
-keep it off the very edge.
+point inside the landlet's own outline (`landlets.polygon_json`, #4198), shrunk by
+`CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) about its centre to keep it off the very edge; a landlet with no
+usable polygon falls back to the old square (`LANDLET_SIDE_M`, #789).
 
 ### `GET /api/credit-orbs`
 

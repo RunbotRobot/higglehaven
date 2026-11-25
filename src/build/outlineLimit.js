@@ -81,3 +81,28 @@ export function limitGroupOffset(outline, members, offset, heightScale = () => 1
   candidates.sort((a, b) => Math.hypot(offset.x - a.x, offset.y - a.y) - Math.hypot(offset.x - b.x, offset.y - b.y));
   return { ...candidates[0], limited: true };
 }
+
+// A bundle just placed (from the picker or a paste) lands wherever it was aimed. If any member is off the outline the
+// whole bundle is slid toward the lándlet's centre, by the least amount that puts every member on it (a rigid
+// move, so the bundle keeps its shape). `members` are { item, x, y, z }. Returns the offset to add to every member
+// ({ x: 0, y: 0 } when they already fit; also when no slide toward the centre helps, so the caller keeps the
+// position and the server's refusal says why).
+export function pullGroupTowardCentre(outline, members, heightScale = () => 1) {
+  if (members.length === 0) return { x: 0, y: 0, limited: false };
+  let lowX = Infinity; let highX = -Infinity; let lowY = Infinity; let highY = -Infinity;
+  for (const m of members) {
+    lowX = Math.min(lowX, m.x); highX = Math.max(highX, m.x);
+    lowY = Math.min(lowY, m.y); highY = Math.max(highY, m.y);
+  }
+  const centre = { x: (lowX + highX) / 2, y: (lowY + highY) / 2 };
+  const allLegalWith = (dx, dy) => members.every((m) => legal(outline, m.item, m.x + dx, m.y + dy, m.z, m.item.rotationZ ?? 0, heightScale));
+  if (allLegalWith(0, 0)) return { x: 0, y: 0, limited: false };
+  // Slide the bundle's centre toward the origin; t = 1 puts the centre on the origin.
+  if (!allLegalWith(-centre.x, -centre.y)) return { x: 0, y: 0, limited: false };
+  let lo = 0; let hi = 1;
+  for (let i = 0; i < SEARCH_STEPS; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (allLegalWith(-centre.x * mid, -centre.y * mid)) hi = mid; else lo = mid;
+  }
+  return { x: -centre.x * hi, y: -centre.y * hi, limited: true };
+}

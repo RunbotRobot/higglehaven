@@ -13,6 +13,7 @@ import { rateLimitInsertStatement, rateLimitRefusal, rateLimitStanding, rateLimi
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { parseOutline, scaleOutline, pointInOutline } from '../../shared/landlet-outline.js';
 
 // #1978: workerd requires every named export of the main Worker entry
 // module (worker/index.js) to be a function/class binding, not a plain
@@ -68,17 +69,39 @@ const CREDIT_ORB_SPAWN_MARGIN_FACTOR = 0.8;
 // fleet's lot here; scripts/fleet-lot-never-steers.test.mjs pins it.
 export async function spawnCreditOrbIfDue(db) {
   const cutoff = new Date(Date.now() - CREDIT_ORB_SPAWN_INTERVAL_MS).toISOString();
-  const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;
-  const x = (Math.random() * 2 - 1) * halfSpan;
-  const y = (Math.random() * 2 - 1) * halfSpan;
+  // #4198: the point is drawn on the landlet's own outline, not in the 31.6 m square that is the same for every
+  // landlet (a square corner can lie on a neighbour's ground). The pick, the due check and the insert stay one
+  // guarded statement, so two overlapping ticks still make one orb.
+  const target = await db.prepare(
+    "SELECT landlet_id, polygon_json FROM landlets WHERE status = 'greenbelt' ORDER BY RANDOM() LIMIT 1",
+  ).first();
+  if (!target) return;
+  const { x, y } = orbSpawnPoint(target.polygon_json);
   const orbId = `orb-${crypto.randomUUID()}`;
   await db.prepare(`
     INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
     SELECT ?, landlet_id, ?, ?, 0 FROM landlets
-    WHERE status = 'greenbelt'
+    WHERE landlet_id = ? AND status = 'greenbelt'
       AND NOT EXISTS (SELECT 1 FROM credit_orbs WHERE spawned_at > ?)
-    ORDER BY RANDOM() LIMIT 1
-  `).bind(orbId, x, y, cutoff).run();
+  `).bind(orbId, x, y, target.landlet_id, cutoff).run();
+}
+
+// A random point inside the landlet's outline shrunk by CREDIT_ORB_SPAWN_MARGIN_FACTOR about its centre (so an orb
+// never sits on the very edge); the old square when the polygon is unusable.
+export function orbSpawnPoint(polygonJson, random = Math.random) {
+  const outline = parseOutline(polygonJson);
+  if (outline) {
+    const shrunk = scaleOutline(outline, CREDIT_ORB_SPAWN_MARGIN_FACTOR);
+    const xs = shrunk.map((p) => p.x);
+    const ys = shrunk.map((p) => p.y);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const point = { x: minX + random() * (maxX - minX), y: minY + random() * (maxY - minY) };
+      if (pointInOutline(point, shrunk)) return point;
+    }
+  }
+  const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;
+  return { x: (random() * 2 - 1) * halfSpan, y: (random() * 2 - 1) * halfSpan };
 }
 
 function creditOrbFromRow(row) {
