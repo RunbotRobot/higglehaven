@@ -11714,6 +11714,17 @@ independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
 
+### `GET /api/admin-items-outside-landlets` (#4198, admin only)
+
+A read-only list of the placed items whose footprint stands outside their own lándlet's outline
+(`landlets.polygon_json`, in the lándlet's own coordinates), shown in the dashboard's Landlet overrides panel as
+"Items off their lándlet". Answers `{ checkedItems, outsideItems, landlets: [{ landletId, name, owner, items,
+outside, examples: [{ instanceId, product, x, y }] }] }`, only for lándlets with something outside (at most five
+examples each). The footprint is the item's width and depth (crop and scale applied; flooring uses its template's
+raw size) turned by its rotation about the vertical axis, against the outline scaled to the item's height;
+`shared/landlet-outline.js` holds the one definition. Nothing is moved or removed. Built for today's size (one pass
+over every owned lándlet's items, no paging).
+
 ### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
 
 The dashboard's Video-to-3D jobs panel. The list returns the latest 50 jobs, newest first: `jobId`, `status`,
