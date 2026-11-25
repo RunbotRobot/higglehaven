@@ -52,6 +52,7 @@
 // (#2565) -- imported from there instead now; a circular import with that
 // module (which itself imports several things back from this one), same
 // shape every other extracted leaf here already uses.
+import { loadWhileInScene } from './loadWhileInScene.js';
 import * as THREE from 'three';
 import { camera } from '../world/scene.js';
 import { meshDimensions } from '../world/models.js';
@@ -167,11 +168,14 @@ export function setShopHighlightedProduct(value) {
 export function registerShopSign(mesh, entry) {
   const sign = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, posts: [], sprites: [] };
   shopSigns.push(sign);
-  fetchSignPosts(sign.instanceId).then(({ posts }) => {
-    if (!shopSigns.includes(sign)) return;
-    sign.posts = posts;
-    rebuildSignSprites(sign);
-  }).catch(() => {});
+  loadWhileInScene({
+    fetch: () => fetchSignPosts(sign.instanceId),
+    isInScene: () => shopSigns.includes(sign),
+    onResult: ({ posts }) => {
+      sign.posts = posts;
+      rebuildSignSprites(sign);
+    },
+  });
 }
 
 export function disposeSignSprites(sign) {
@@ -254,11 +258,14 @@ function makeSignPostSprite(text) {
 export function registerShopCalendar(mesh, entry) {
   const calendar = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, events: [], sprites: [] };
   shopCalendars.push(calendar);
-  fetchCalendarEvents(calendar.instanceId).then(({ events }) => {
-    if (!shopCalendars.includes(calendar)) return;
-    calendar.events = events;
-    rebuildCalendarSprites(calendar);
-  }).catch(() => {});
+  loadWhileInScene({
+    fetch: () => fetchCalendarEvents(calendar.instanceId),
+    isInScene: () => shopCalendars.includes(calendar),
+    onResult: ({ events }) => {
+      calendar.events = events;
+      rebuildCalendarSprites(calendar);
+    },
+  });
 }
 
 export function disposeCalendarSprites(calendar) {
