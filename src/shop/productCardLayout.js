@@ -29,6 +29,10 @@ export const CARD_POINTER_INSET_PX = 16;
 // that sits on the middle of the screen (Build's selected item is at the orbit target) flips the card
 // from left to right every frame as its projected centre moves a fraction of a pixel.
 export const CARD_SIDE_HYSTERESIS_PX = 48;
+// #4118: a card too tall for any side of a thing with handles round it (Build's item card with More open, on a
+// phone) is shortened to the room above or below the thing and scrolls inside, rather than lying over the thing's
+// rings. Under this much room the card is left as it was (overlapping beats an unreadable sliver).
+export const CARD_MIN_CAPPED_HEIGHT_PX = 160;
 
 function clamp(value, lo, hi) {
   return Math.min(Math.max(value, lo), hi);
@@ -45,7 +49,9 @@ function clamp(value, lo, hi) {
 //   product sits (pointerY for a card to the side, pointerX for one above or
 //   below);
 //   edge: true when there is no on-screen product to point at (the card is
-//   then pinned and shows no pointer).
+//   then pinned and shows no pointer);
+//   maxHeight: null, or the height (px) the card is to be shortened to (it scrolls inside) so it can sit
+//   above or below the thing instead of over it.
 export function placeProductCard({
   anchor, card, viewport, margin = CARD_MARGIN_PX, gap = CARD_GAP_PX, topClear = CARD_TOP_CLEAR_PX,
   previousSide = null,
@@ -67,6 +73,7 @@ export function placeProductCard({
       pointerX: card.width / 2,
       pointerY: card.height / 2,
       edge: true,
+      maxHeight: null,
     };
   }
 
@@ -81,6 +88,8 @@ export function placeProductCard({
   let side;
   let left;
   let top;
+  let maxHeight = null;
+  let shown = card;
   if (fitsRight || fitsLeft) {
     // Both sides fit: stay on the side the card was on, rather than snapping to the right.
     side = fitsRight && fitsLeft && previousSide === 'left' ? 'left' : (fitsRight ? 'right' : 'left');
@@ -98,6 +107,17 @@ export function placeProductCard({
     if (fitsBelow || fitsAbove) {
       side = fitsBelow && (!fitsAbove || roomBelow >= roomAbove) ? 'below' : 'above';
       top = side === 'below' ? belowTop : aboveTop;
+      left = clamp(x - card.width / 2, margin, maxLeft);
+    } else if (Math.max(roomBelow, roomAbove) >= CARD_MIN_CAPPED_HEIGHT_PX) {
+      // #4118: nothing fits at the card's full height, but a shorter card would sit clear above or below:
+      // shorten it (it scrolls inside) rather than lay it over the thing's handles. It keeps its side unless
+      // the other has clearly more room.
+      const keepBelow = previousSide === 'below' && roomBelow + CARD_SIDE_HYSTERESIS_PX >= roomAbove;
+      const keepAbove = previousSide === 'above' && roomAbove + CARD_SIDE_HYSTERESIS_PX >= roomBelow;
+      side = keepBelow || (!keepAbove && roomBelow >= roomAbove) ? 'below' : 'above';
+      maxHeight = Math.floor(side === 'below' ? roomBelow : roomAbove);
+      shown = { width: card.width, height: maxHeight };
+      top = side === 'below' ? y + radius + gap : y - radius - gap - maxHeight;
       left = clamp(x - card.width / 2, margin, maxLeft);
     } else {
       // Nothing fits (a very large product on a small screen): keep the card on
@@ -119,10 +139,10 @@ export function placeProductCard({
       top = clamp(y - card.height / 2, minTop, maxTop);
     }
   }
-  const pointerY = clamp(y - top, CARD_POINTER_INSET_PX, Math.max(CARD_POINTER_INSET_PX, card.height - CARD_POINTER_INSET_PX));
-  const pointerX = clamp(x - left, CARD_POINTER_INSET_PX, Math.max(CARD_POINTER_INSET_PX, card.width - CARD_POINTER_INSET_PX));
+  const pointerY = clamp(y - top, CARD_POINTER_INSET_PX, Math.max(CARD_POINTER_INSET_PX, shown.height - CARD_POINTER_INSET_PX));
+  const pointerX = clamp(x - left, CARD_POINTER_INSET_PX, Math.max(CARD_POINTER_INSET_PX, shown.width - CARD_POINTER_INSET_PX));
   return {
-    left, top, side, pointerX, pointerY, edge: offScreen,
+    left, top, side, pointerX, pointerY, edge: offScreen, maxHeight,
   };
 }
 

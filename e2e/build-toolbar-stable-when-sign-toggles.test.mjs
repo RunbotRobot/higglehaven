@@ -18,12 +18,19 @@ await page.mouse.click(210, 400);
 await page.waitForTimeout(800);
 
 const IDS = ['toggle-community-sign', 'toggle-community-calendar', 'toggle-backup-chain', 'delete-item', 'group-item', 'edit-bundle-item'];
-const positions = () => page.evaluate((ids) => Object.fromEntries(ids.map((id) => {
-  const el = document.getElementById(id);
-  if (!el || el.offsetParent === null) return [id, null];
-  const r = el.getBoundingClientRect();
-  return [id, [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]];
-})), IDS);
+// #4118: a card too tall to sit clear of the item is shortened and scrolls, and a click on a button scrolls it into
+// view; so positions are read inside the card's own content (card origin and scroll taken out), which is what "the
+// toolbar does not re-wrap or move" means.
+const positions = () => page.evaluate((ids) => {
+  const card = document.getElementById('item-card');
+  const origin = card.getBoundingClientRect();
+  return Object.fromEntries(ids.map((id) => {
+    const el = document.getElementById(id);
+    if (!el || el.offsetParent === null) return [id, null];
+    const r = el.getBoundingClientRect();
+    return [id, [Math.round(r.left - origin.left), Math.round(r.top - origin.top + card.scrollTop), Math.round(r.width), Math.round(r.height)]];
+  }));
+}, IDS);
 
 // #3693: the three buttons sit in the item card's More now; open it so the buttons are measured on both sides.
 await page.click('#item-card-more-btn');

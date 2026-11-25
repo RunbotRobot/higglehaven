@@ -93,6 +93,42 @@ describe('placeProductCard (#3651)', () => {
   });
 });
 
+describe('a card too tall to sit clear is shortened, not laid over the thing (#4118)', () => {
+  // Build's item card with More open: 240 x 540 on a phone, round an item whose rings reach 112 px.
+  const TALL = { width: 240, height: 540 };
+  const anchor = { x: 290, y: 440, radius: 112 };
+
+  it('shortens the card to the room below (or above) the thing and keeps it clear of it', () => {
+    const place = placeProductCard({ anchor, card: TALL, viewport: PHONE });
+    expect(place.maxHeight).not.toBeNull();
+    expect(place.maxHeight).toBeLessThan(TALL.height);
+    expect(['above', 'below']).toContain(place.side);
+    const top = place.top;
+    const bottom = place.top + place.maxHeight;
+    // clear of the circle round the thing: wholly below its bottom or wholly above its top
+    const clear = top >= anchor.y + anchor.radius || bottom <= anchor.y - anchor.radius;
+    expect(clear).toBe(true);
+    expect(top).toBeGreaterThanOrEqual(CARD_TOP_CLEAR_PX);
+    expect(bottom).toBeLessThanOrEqual(PHONE.height - CARD_MARGIN_PX);
+  });
+
+  it('does not shorten a card that fits at full height', () => {
+    expect(placeProductCard({ anchor: { x: 195, y: 420, radius: 112 }, card: { width: 240, height: 150 }, viewport: PHONE }).maxHeight).toBeNull();
+    expect(placeProductCard({ anchor: { x: 60, y: 420, radius: 30 }, card: CARD, viewport: PHONE }).maxHeight).toBeNull();
+  });
+
+  it('keeps the side it had unless the other has clearly more room', () => {
+    const first = placeProductCard({ anchor, card: TALL, viewport: PHONE });
+    const nudged = placeProductCard({ anchor: { ...anchor, y: anchor.y + 20 }, card: TALL, viewport: PHONE, previousSide: first.side });
+    expect(nudged.side).toBe(first.side);
+  });
+
+  it('leaves a card overlapping, as before, when even a shortened one has no room', () => {
+    const place = placeProductCard({ anchor: { x: 130, y: 300, radius: 140 }, card: TALL, viewport: { width: 260, height: 600 } });
+    expect(place.maxHeight).toBeNull();
+  });
+});
+
 describe('the top bar stays clear (#3698)', () => {
   it('never puts any part of the card in the top bar, wherever the product is', () => {
     for (const y of [0, 20, 60, 80, 92, 120]) {
@@ -223,7 +259,9 @@ describe('sellerLine (#3680)', () => {
 describe('a card keeps its side (#4118)', () => {
   // An expanded card on a phone fits on neither side, above nor below a thing in the middle of the screen
   // (Build's selected item sits at the orbit target), which used to flip from left to right every frame.
+  // #4118: a short screen, where not even a shortened card has room above or below (the case that still overlaps).
   const BIG = { width: 235, height: 590 };
+  const SHORT = { width: 390, height: 480 };
   const jitter = [194.6, 195.0, 195.4, 195.1, 194.9, 195.3, 194.7];
 
   it('an anchor jittering around the middle of the screen never changes the card\'s side', () => {
@@ -231,7 +269,7 @@ describe('a card keeps its side (#4118)', () => {
     const seen = new Set();
     for (const x of jitter) {
       const place = placeProductCard({
-        anchor: { x, y: 420, radius: 60 }, card: BIG, viewport: PHONE, previousSide: side,
+        anchor: { x, y: 240, radius: 140 }, card: BIG, viewport: SHORT, previousSide: side,
       });
       side = place.side;
       seen.add(side);
@@ -242,7 +280,7 @@ describe('a card keeps its side (#4118)', () => {
   it('moves to the other side only once it is clearly better, and then stays there', () => {
     let side = 'right';
     const step = (x) => {
-      side = placeProductCard({ anchor: { x, y: 420, radius: 60 }, card: BIG, viewport: PHONE, previousSide: side }).side;
+      side = placeProductCard({ anchor: { x, y: 240, radius: 140 }, card: BIG, viewport: SHORT, previousSide: side }).side;
       return side;
     };
     expect(step(200)).toBe('right'); // a little right of the middle: stays
@@ -252,7 +290,7 @@ describe('a card keeps its side (#4118)', () => {
   });
 
   it('with no earlier side the old rule applies, and a side that fits is still chosen when both do', () => {
-    const fresh = placeProductCard({ anchor: { x: 195, y: 420, radius: 60 }, card: BIG, viewport: PHONE });
+    const fresh = placeProductCard({ anchor: { x: 195, y: 240, radius: 140 }, card: BIG, viewport: SHORT });
     expect(fresh.side).toBe('left');
     const both = placeProductCard({ anchor: { x: 195, y: 400, radius: 20 }, card: { width: 100, height: 100 }, viewport: PHONE, previousSide: 'left' });
     expect(both.side).toBe('left');

@@ -49,7 +49,9 @@ export function createWorldCard(cardEl) {
 
   function measure() {
     const width = cardEl.offsetWidth;
-    const height = cardEl.offsetHeight;
+    // #4118: the card's whole content height, not what is shown, or a card shortened to fit would measure as short
+    // and the next frame would put it back beside the thing at full height.
+    const height = Math.max(cardEl.offsetHeight, cardEl.scrollHeight);
     if (width > 0 && height > 0) measuredSize = { width, height };
     sizeDirty = false;
   }
@@ -112,11 +114,16 @@ export function createWorldCard(cardEl) {
       const pointerY = Math.round(place.pointerY);
       const pointerX = Math.round(place.pointerX);
       const last = lastPlacement;
+      const maxHeight = place.maxHeight ?? null;
       if (last && last.left === left && last.top === top && last.side === place.side
-        && last.edge === place.edge && last.pointerY === pointerY && last.pointerX === pointerX) return;
+        && last.edge === place.edge && last.pointerY === pointerY && last.pointerX === pointerX
+        && last.maxHeight === maxHeight) return;
       lastPlacement = {
-        left, top, side: place.side, edge: place.edge, pointerY, pointerX,
+        left, top, side: place.side, edge: place.edge, pointerY, pointerX, maxHeight,
       };
+      if (maxHeight === null) cardEl.style.removeProperty('--card-max-height');
+      else cardEl.style.setProperty('--card-max-height', `${maxHeight}px`);
+      cardEl.dataset.capped = maxHeight === null ? 'false' : 'true';
       cardEl.style.setProperty('--card-x', `${left}px`);
       cardEl.style.setProperty('--card-y', `${top}px`);
       cardEl.style.setProperty('--pointer-y', `${pointerY}px`);
