@@ -77,6 +77,7 @@ import {
   fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
 import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
+import { noteOrbLoadFailed, orbLoadDue } from './orbLoadRetry.js';
 import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
 import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
@@ -393,7 +394,7 @@ export function updateShopProximity() {
       // load/unload decision scoped to orbs alone, independent of
       // entry.loaded/entry.objects (which stay permanently empty/false for
       // every greenbelt landlet).
-      if (!entry.orbsLoaded && distance < SHOP_LOAD_RADIUS_M) {
+      if (orbLoadDue(entry, distance, SHOP_LOAD_RADIUS_M, performance.now())) {
         entry.orbsLoaded = true;
         loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
       } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
@@ -1993,6 +1994,7 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
   try {
     orbs = await fetchCreditOrbs(entry.record.landletId);
   } catch {
+    noteOrbLoadFailed(entry, myToken, performance.now()); // #4252: tried again after a wait, not left empty until the person leaves and returns
     return;
   }
   if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
