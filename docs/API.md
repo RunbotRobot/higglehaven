@@ -749,7 +749,10 @@ without internal resolution fields.
 `commerce.listings` is a seller's own listings (what they put up for sale: name,
 category, dimensions, `priceCents`, `stockQuantity`, `delistedAt`, model and image links;
 not embeddings or moderation fields), and `commerce.creditOrbsCollected` the orbs a builder
-collected. `ownedAvatars`/`ownedAnimations` stay what the person owns.
+collected, `commerce.suspendedPlacements` what a suspension took down from the builder's
+lándlets (kept so they are never left wondering what stood there), and
+`communication.contentEditHistory` the earlier versions of the account's own reviews
+and sign posts. `ownedAvatars`/`ownedAnimations` stay what the person owns.
 
 **#4142:** a top-level `communication` section, present for every account
 (builder or not), holds what keys on the account itself: `assistantConversations`
