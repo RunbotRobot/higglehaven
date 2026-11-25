@@ -304,7 +304,7 @@ describe('What a fleet account cannot do', () => {
     await env.DB.prepare("UPDATE users SET trust_tier = 'id_verified', age_attested_at = '2026-01-01T00:00:00.000Z' WHERE username = 'higglehaven8'").run();
     const bid = await api('/auctions/fleet-bid-auction/bids', withKey(fleet.token, { method: 'POST', body: JSON.stringify({ amountCents: 100 }) }));
     expect(bid.response.status).toBe(403);
-    expect(bid.body.error).toBe('A fleet account cannot bid on a land auction.');
+    expect(bid.body.error).toBe('A fleet account cannot bid on a lándlet auction.');
     expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind('fleet-bid-auction').first()).n).toBe(0);
   });
 

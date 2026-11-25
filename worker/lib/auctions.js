@@ -627,7 +627,7 @@ export async function handleAuctionBids(request, db, route) {
     // lándlet of its own"). It can still sell land; selling only credits.
     assertNotFleetAccount(
       await db.prepare('SELECT is_fleet FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first(),
-      'bid on a land auction',
+      'bid on a lándlet auction',
     );
     await checkRateLimit(db, `auction-bid:${builderId}`, AUCTION_BID_RATE_LIMIT_MAX);
     if (builderId === resolved.seller_builder_id) {
@@ -684,7 +684,7 @@ export async function handleAuctionBids(request, db, route) {
     if (committedAreaM2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
       throw new HttpError(
         `Winning this auction would take you to ${committedAreaM2.toFixed(2)}m² `
-        + `(including what your other active bids are already holding), over your ${bidderCap.nextCap}m² land cap`,
+        + `(including what your other active bids are already holding), over your ${bidderCap.nextCap}m² lándlet cap`,
         409,
       );
     }
@@ -755,7 +755,7 @@ export async function handleAuctionBids(request, db, route) {
       if (currentHighest && currentHighest.amount_cents >= amountCents) {
         throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
       }
-      throw new HttpError('This would put you over your land cap. Retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+      throw new HttpError('This would put you over your lándlet cap. Retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
     // Re-derived after the insert (excluding the bid just inserted) rather

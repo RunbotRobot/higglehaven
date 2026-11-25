@@ -113,13 +113,13 @@ describe('Landlet levels', () => {
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
     expect(up.response.status).toBe(409);
-    expect(up.body.error).toMatch(/land cap/i);
+    expect(up.body.error).toMatch(/lándlet cap/i);
 
     const down = await api('/landlets/levels-cap-gate-landlet/levels', owner.session({
       method: 'POST', body: JSON.stringify({ direction: 'down' }),
     }));
     expect(down.response.status).toBe(409);
-    expect(down.body.error).toMatch(/land cap/i);
+    expect(down.body.error).toMatch(/lándlet cap/i);
 
     const list = await api('/landlets/levels-cap-gate-landlet/levels');
     expect(list.body.levels).toEqual([]);

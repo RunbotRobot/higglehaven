@@ -642,7 +642,7 @@ describe('Land cap', () => {
       method: 'POST', body: JSON.stringify({ amountCents: 100 }),
     }));
     expect(bid.response.status).toBe(409);
-    expect(bid.body.error).toMatch(/land cap/i);
+    expect(bid.body.error).toMatch(/lándlet cap/i);
   });
 
   it('allows a bid that stays within the bidder\'s land cap', async () => {
@@ -823,7 +823,7 @@ describe('Land cap', () => {
       method: 'POST', body: JSON.stringify({ amountCents: 500 }),
     }));
     expect(secondBid.response.status).toBe(409);
-    expect(secondBid.body.error).toMatch(/land cap/i);
+    expect(secondBid.body.error).toMatch(/lándlet cap/i);
 
     // Being outbid releases the hold — the same bid now succeeds once
     // someone else takes over the lead on the first auction.

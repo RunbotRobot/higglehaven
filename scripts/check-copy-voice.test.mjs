@@ -25,13 +25,22 @@ describe('findVoiceBreaks', () => {
 describe('findWorkerVoiceBreaks', () => {
   const src = (source) => [{ file: 'worker/x.js', source }];
   it('flags plain landlet in a refusal a person reads', () => {
-    expect(findWorkerVoiceBreaks(src("throw new HttpError(404, 'Landlet not found');"))[0]).toMatchObject({ line: 1, word: 'landlet' });
+    // The real argument order is HttpError(message, status): the check once read (status, message) and saw nothing (#4278).
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('Landlet not found', 404);"))[0]).toMatchObject({ line: 1, word: 'landlet' });
     expect(findWorkerVoiceBreaks(src('return json({ error: `No such landlet` }, 404);'))).toHaveLength(1);
   });
-  it('passes the accented word, interpolations and names that are not sentences', () => {
-    expect(findWorkerVoiceBreaks(src("throw new HttpError(404, 'Lándlet not found');"))).toEqual([]);
-    expect(findWorkerVoiceBreaks(src("throw new HttpError(400, `Bad ${landlet} id`);"))).toEqual([]);
+  it('flags "land" and "plot" too, including in a later piece of a joined sentence', () => {
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('This would put you over your land cap', 409);"))[0]).toMatchObject({ word: 'land' });
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('Name taken for this plot', 409);"))[0]).toMatchObject({ word: 'plot' });
+    const joined = "throw new HttpError(\n  `Winning this takes you to ${n}m² `\n  + `over your ${cap}m² land cap`,\n  409,\n);";
+    expect(findWorkerVoiceBreaks(src(joined))).toHaveLength(1);
+  });
+  it('passes the accented word, interpolations, names, the admin tool\'s land candidates and extra arguments', () => {
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('Lándlet not found', 404);"))).toEqual([]);
+    expect(findWorkerVoiceBreaks(src("throw new HttpError(`Bad ${landlet} id`, 400);"))).toEqual([]);
     expect(findWorkerVoiceBreaks(src("const landlet_id = 'landlet'; console.error('landlet failed');"))).toEqual([]);
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('Materialized land candidates cannot be deleted', 409);"))).toEqual([]);
+    expect(findWorkerVoiceBreaks(src("throw new HttpError('Not found', 404, { code: LANDLET_GONE(land) });"))).toEqual([]);
   });
 });
 
