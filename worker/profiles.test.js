@@ -1777,6 +1777,21 @@ describe('Friendships', () => {
   // test below (this whole file, 300+ tests, one process) applies here too
   // — matching its timeout rather than re-discovering the same flake.
 
+  // #4268: the limit follows the account, not the builder profile (a profile can be reset to a new builder_id).
+  it('keys the friend-request limit on the account, so a profile reset cannot refill it', async () => {
+    const requester = await signupBuilder('friendship-rate-limit-account-requester');
+    const userId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(requester.builderId).first()).user_id;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 20 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(`friend-request:${userId}`, now)));
+    const recipient = await signupBuilder('friendship-rate-limit-account-recipient');
+    const limited = await api('/friendships', requester.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: recipient.builderId }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #899: unlike POST above (#369), PATCH (accept) and DELETE (decline/
   // cancel/unfriend) never got a checkRateLimit call at all — a single
   // friendship could be re-accepted (a no-op per #353, but still a live

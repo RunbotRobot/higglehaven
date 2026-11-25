@@ -677,7 +677,7 @@ async function reportedUserIdOf(db, builderId) {
 
 async function handleNearbyChatReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
-  await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
+  await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.user_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
   if (reportedBuilderId === sessionBuilder.builder_id) {
@@ -1011,7 +1011,7 @@ const VOICE_REPORT_CREATE_RATE_LIMIT_MAX = 20;
 
 async function handleVoiceReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-  await checkRateLimit(db, `voice-report-create:${sessionBuilder.builder_id}`, VOICE_REPORT_CREATE_RATE_LIMIT_MAX);
+  await checkRateLimit(db, `voice-report-create:${sessionBuilder.user_id}`, VOICE_REPORT_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
   if (reportedBuilderId === sessionBuilder.builder_id) {
@@ -1387,7 +1387,7 @@ export async function handleFriendships(request, db, route, url) {
     // recipient — cycling through fresh, previously-unrequested recipients
     // sidesteps it entirely, and each one fires a real notification (see
     // below), so this needs its own throttle (#369).
-    await checkRateLimit(db, `friend-request:${requesterBuilderId}`, FRIEND_REQUEST_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friend-request:${sessionBuilder.user_id}`, FRIEND_REQUEST_RATE_LIMIT_MAX);
     const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
     if (requesterBuilderId === recipientBuilderId) {
       throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
@@ -1468,7 +1468,7 @@ export async function handleFriendships(request, db, route, url) {
     if (await userBlocks(db, existing.recipient_user_id, existing.requester_user_id)) {
       return json({ error: 'Friendship not found' }, 404);
     }
-    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.user_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
     // #353: gated on the row's *current* status (mirroring resolveAuction's
@@ -1514,7 +1514,7 @@ export async function handleFriendships(request, db, route, url) {
       && sessionBuilder.user_id !== existing.recipient_user_id) {
       throw new HttpError('Not your friendship', 403);
     }
-    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.user_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     // #857: same "no passive way to find out" gap #319 already fixed for
     // request/accept — a decline left the original requester with nothing
     // but re-polling GET /api/friendships to notice the row just vanished.
