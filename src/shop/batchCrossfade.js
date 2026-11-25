@@ -57,6 +57,13 @@ export const BATCH_CROSSFADE_MAX_TRIANGLES = 1_200_000;
 // A placement joins a running cohort while it is still this early in its fade, so the late ones do
 // not appear part way through the dissolve; after that they start a cohort of their own (or swap).
 const JOIN_UNTIL_LEVEL = 0.2;
+// #4113: a placement the caps cannot take yet WAITS (keeps its old version, books untouched) for the running
+// fades to give room, when the caller says it can retry (`canWait`). The owner's 829-brick wall: past the
+// triangle ceiling about 90% of the bricks swapped in one frame, a hard-edged wedge across the wall. A wait
+// is bounded: after this long the placement swaps at once, as before, so nothing is held back for ever.
+export const BATCH_CROSSFADE_MAX_WAIT_MS = 4000;
+// What move() answers for a placement that is waiting (nothing changed; call again on a later tick).
+export const BATCH_WAITING = 'waiting';
 const REDUCED_MOTION_RECHECK_MS = 1000;
 
 const scratch = new THREE.Matrix4();
@@ -128,6 +135,7 @@ export function createBatchCrossfades({
   let trianglesInFlight = 0;
   let transientMeshes = 0;
   let started = 0;
+  let hardSwaps = 0; // placements that changed in one frame because a cap (or the wait limit) said so
   let startsLeft = maxStartsPerFrame;
 
   // matchMedia allocates a MediaQueryList per read, and a tick can move hundreds of placements:
@@ -138,6 +146,20 @@ export function createBatchCrossfades({
       reduced = reducedMotion();
     }
     return reduced;
+  }
+
+  // A cap says no fade for this placement now. With `canWait`, and when room will come back (a fade is
+  // running and ends, or the frame's one start is spent) and it has not waited long, it WAITS; otherwise it
+  // swaps at once, exactly as before #4113.
+  function overCap(batch, handle, toName, nowMs, canWait, willFit) {
+    if (canWait && willFit) {
+      const since = handle.userData.batchWaitSince ?? nowMs;
+      handle.userData.batchWaitSince = since;
+      if (nowMs - since < BATCH_CROSSFADE_MAX_WAIT_MS) return BATCH_WAITING;
+    }
+    handle.userData.batchWaitSince = undefined;
+    hardSwaps++;
+    return move(batch, handle, toName);
   }
 
   // The placement's real matrices in the slots it holds in its set now (a fade writes them hidden).
@@ -256,11 +278,19 @@ export function createBatchCrossfades({
     get trianglesInFlight() {
       return trianglesInFlight;
     },
+    // #4113 (e2e): placements that swapped in one frame because a cap said so.
+    get hardSwapCount() {
+      return hardSwaps;
+    },
     // Moves one placement to `wanted` (after the batch's own fallback). Returns the tier it is in.
-    move(batch, handle, wanted, { instant = false } = {}) {
+    // With `canWait` it may answer BATCH_WAITING: the placement was left as it was, to be moved again later.
+    move(batch, handle, wanted, { instant = false, canWait = false } = {}) {
       const toName = resolveBatchTier(batch, wanted);
       const fromName = handle.userData.batchTier;
-      if (toName === fromName) return toName;
+      if (toName === fromName) {
+        handle.userData.batchWaitSince = undefined;
+        return toName;
+      }
       // A placement that is still fading and changes again leaves its cohort; the others keep fading
       // (rare: the tiers have hysteresis).
       const open = handle.userData.batchFade;
@@ -269,7 +299,10 @@ export function createBatchCrossfades({
       const nowMs = clock();
       const fromTier = batch.tiers[fromName];
       const toTier = batch.tiers[toName];
-      if (instant || !batch.root || isArriving(batch) || prefersReduced(nowMs)) return move(batch, handle, toName);
+      if (instant || !batch.root || isArriving(batch) || prefersReduced(nowMs)) {
+        handle.userData.batchWaitSince = undefined;
+        return move(batch, handle, toName);
+      }
 
       // Which cohort does it join? One of this batch, for this pair of sets, still at the start.
       let cohort = null;
@@ -281,12 +314,17 @@ export function createBatchCrossfades({
         }
       }
       const perPlacement = cohort ? cohort.perPlacementTriangles : placementTriangles(fromTier, toTier);
-      if (trianglesInFlight + perPlacement > maxTriangles) return move(batch, handle, toName);
+      // Room comes back when a running fade ends (or, for the start limit, next frame), if this placement
+      // could ever fit; a placement bigger than the ceiling on its own never waits.
+      const needed = fromTier.meshes.length + toTier.meshes.length;
+      const couldFit = perPlacement <= maxTriangles && needed <= maxTransientMeshes && (cohorts.size > 0 || startsLeft <= 0);
+      if (trianglesInFlight + perPlacement > maxTriangles) return overCap(batch, handle, toName, nowMs, canWait, couldFit);
       if (!cohort) {
-        if (cohorts.size >= maxCohorts) return move(batch, handle, toName);
+        if (cohorts.size >= maxCohorts) return overCap(batch, handle, toName, nowMs, canWait, couldFit);
         cohort = startCohort(batch, fromTier, toTier, nowMs);
-        if (!cohort) return move(batch, handle, toName);
+        if (!cohort) return overCap(batch, handle, toName, nowMs, canWait, couldFit);
       }
+      handle.userData.batchWaitSince = undefined;
 
       // The outgoing version keeps this placement: its matrices as drawn now, before the books move.
       const n = cohort.members.length;
