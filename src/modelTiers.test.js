@@ -287,6 +287,207 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(report.openGrowth).toBeLessThanOrEqual(1.15);
   });
 
+  // #4302: a long open strip (a scanned brick's shell, in miniature): almost every vertex lies on an open
+  // edge. With the borders locked a pass cannot go below the border's own triangles; free, the pass tears.
+  // Sliding lets a border vertex collapse onto the next one of its own border while no original border point
+  // ends up further than a tolerance from the border that replaces it: the straight stretches go, the corners
+  // stay.
+  function openStrip() {
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(new THREE.PlaneGeometry(10, 0.4, 200, 2), new THREE.MeshStandardMaterial({ color: 0xcc6a2a, side: THREE.DoubleSide })));
+    return group;
+  }
+
+  // The same strip bent into an arc of 120 degrees: a gently curved border, every vertex of it a small step.
+  function curvedStrip() {
+    const geometry = new THREE.PlaneGeometry(10, 0.4, 200, 2);
+    const position = geometry.attributes.position;
+    const radius = 10 / (Math.PI * 2 / 3);
+    for (let i = 0; i < position.count; i++) {
+      const angle = position.getX(i) / radius;
+      position.setXYZ(i, radius * Math.sin(angle), position.getY(i), radius * (Math.cos(angle) - 1));
+    }
+    return geometry;
+  }
+
+  // The farthest any vertex of `original`'s border is from the border of `simplified` (positions only).
+  function borderDrift(original, simplified) {
+    const edges = (geometry) => {
+      const index = geometry.index.array;
+      const position = geometry.attributes.position;
+      const uses = new Map();
+      const key = (i) => `${position.getX(i).toFixed(5)},${position.getY(i).toFixed(5)},${position.getZ(i).toFixed(5)}`;
+      for (let t = 0; t < index.length; t += 3) {
+        for (const [x, y] of [[index[t], index[t + 1]], [index[t + 1], index[t + 2]], [index[t + 2], index[t]]]) {
+          const k = [key(x), key(y)].sort().join('|');
+          uses.set(k, (uses.get(k) || 0) + 1);
+        }
+      }
+      return [...uses.entries()].filter(([, n]) => n === 1).map(([k]) => k.split('|').map((p) => new THREE.Vector3(...p.split(',').map(Number))));
+    };
+    const segments = edges(simplified);
+    const points = edges(original).flat();
+    let worst = 0;
+    const closest = new THREE.Vector3();
+    for (const p of points) {
+      let best = Infinity;
+      for (const [a, b] of segments) best = Math.min(best, new THREE.Line3(a, b).closestPointToPoint(p, true, closest).distanceTo(p));
+      worst = Math.max(worst, best);
+    }
+    return worst;
+  }
+
+  it('slides the borders of an open strip: far fewer triangles than with the borders locked, surface and outline kept (#4302)', () => {
+    const full = openStrip();
+    const locked = buildModelTiersSync(full, { slideBorders: false });
+    const slid = buildModelTiersSync(full);
+    expect(slid.slide.attempts).toBeGreaterThan(0);
+    expect(slid.slide.used).toBe(true);
+    expect(slid.stats.mid).toBeLessThan(locked.stats.mid * 0.6);
+    const report = silhouetteFidelity(fidelityBatches(full), fidelityBatches(slid.mid.object));
+    expect(isFaithful(report, 'mid')).toBe(true);
+    expect(report.areaKept).toBeGreaterThanOrEqual(0.95);
+    expect(report.openGrowth).toBeLessThanOrEqual(1.15);
+  });
+
+  it('keeps the corners of a border while sliding its straight stretches (#4302)', () => {
+    const geometry = new THREE.PlaneGeometry(10, 0.4, 200, 2);
+    const slid = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false, slideBorders: 0.1 }));
+    expect(countTriangles(slid)).toBeLessThan(countTriangles(geometry) / 4);
+    const corners = [[-5, -0.2], [5, -0.2], [-5, 0.2], [5, 0.2]];
+    const position = slid.attributes.position;
+    for (const [x, y] of corners) {
+      let found = false;
+      for (let i = 0; i < position.count; i++) if (Math.abs(position.getX(i) - x) < 1e-6 && Math.abs(position.getY(i) - y) < 1e-6) found = true;
+      expect(found).toBe(true);
+    }
+    expect(runToEnd(boundaryEdgeCountSteps(slid))).toBeLessThanOrEqual(runToEnd(boundaryEdgeCountSteps(geometry)));
+  });
+
+  it('a curved border does not drift further than the tolerance in total, however many vertices slide away (#4302)', () => {
+    const geometry = curvedStrip();
+    const tolerance = 0.02;
+    const slid = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false, slideBorders: tolerance }));
+    // It did slide...
+    expect(countTriangles(slid)).toBeLessThan(countTriangles(geometry));
+    // ...but every original border point is still within the tolerance of the border that replaced it
+    // (one step at a time each was only a small shortcut; the sum must not be allowed to add up).
+    expect(borderDrift(geometry, slid)).toBeLessThanOrEqual(tolerance * 1.05);
+    // And a tolerance of nothing slides nothing along the curve.
+    const still = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false, slideBorders: 1e-9 }));
+    expect(borderDrift(geometry, still)).toBeLessThanOrEqual(1e-6);
+  });
+
+  it('a closed border (a hole) does not collapse toward nothing (#4302)', () => {
+    // A square plate with a round hole: the hole's rim is a closed border of many small steps.
+    const shape = new THREE.Shape();
+    shape.moveTo(-5, -5); shape.lineTo(5, -5); shape.lineTo(5, 5); shape.lineTo(-5, 5); shape.lineTo(-5, -5);
+    const hole = new THREE.Path();
+    hole.absarc(0, 0, 2, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+    const geometry = new THREE.ShapeGeometry(shape, 64);
+    const tolerance = 0.05;
+    const slid = runToEnd(simplifyToTarget(geometry, 10, { lockBorders: false, slideBorders: tolerance }));
+    expect(borderDrift(geometry, slid)).toBeLessThanOrEqual(tolerance * 1.05);
+    // The rim still encloses nearly the hole it did: count the rim's vertices and measure its radius.
+    const radii = [];
+    const position = slid.attributes.position;
+    for (let i = 0; i < position.count; i++) {
+      const r = Math.hypot(position.getX(i), position.getY(i));
+      if (r < 3) radii.push(r);
+    }
+    expect(radii.length).toBeGreaterThanOrEqual(3);
+    expect(Math.min(...radii)).toBeGreaterThan(2 - tolerance * 1.05);
+  });
+
+  it('with sliding off the result is exactly the locked result (#4302)', () => {
+    const geometry = new THREE.PlaneGeometry(10, 0.4, 200, 2);
+    const locked = runToEnd(simplifyToTarget(geometry, 80, { lockBorders: true }));
+    const { stats, slide } = buildModelTiersSync(openStrip(), { slideBorders: false });
+    expect(slide.attempts).toBe(0);
+    // the strip's mid target is a tenth of its 800 triangles
+    expect(stats.mid).toBe(countTriangles(locked));
+    const never = runToEnd(simplifyToTarget(geometry, 80, { lockBorders: false, slideBorders: 0 }));
+    const plain = runToEnd(simplifyToTarget(geometry, 80, { lockBorders: false }));
+    expect(countTriangles(never)).toBe(countTriangles(plain));
+  });
+
+  it('never uses a sliding mid that is not strictly lighter than the locked one (#4302)', () => {
+    const locked = buildModelTiersSync(openStrip(), { slideBorders: false });
+    // A ladder with nothing in it rebuilds nothing: what comes back is the original geometry, heavier than the
+    // locked result, and it would pass the fidelity check trivially.
+    const result = buildModelTiersSync(openStrip(), { slideBorderLadder: [] });
+    expect(result.slide.attempts).toBeGreaterThan(0);
+    expect(result.slide.used).toBe(false);
+    expect(result.stats.mid).toBe(locked.stats.mid);
+  });
+
+  it('a tiny closed rim of four vertices, smaller than the tolerance, keeps three at least (#4302)', () => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-5, -5); shape.lineTo(5, -5); shape.lineTo(5, 5); shape.lineTo(-5, 5); shape.lineTo(-5, -5);
+    const hole = new THREE.Path();
+    hole.moveTo(-0.01, -0.01); hole.lineTo(-0.01, 0.01); hole.lineTo(0.01, 0.01); hole.lineTo(0.01, -0.01); hole.lineTo(-0.01, -0.01);
+    shape.holes.push(hole);
+    const geometry = new THREE.ShapeGeometry(shape);
+    const slid = runToEnd(simplifyToTarget(geometry, 4, { lockBorders: false, slideBorders: 0.5 }));
+    const position = slid.attributes.position;
+    const rim = new Set();
+    for (let i = 0; i < position.count; i++) {
+      if (Math.hypot(position.getX(i), position.getY(i)) < 0.5) rim.add(`${position.getX(i).toFixed(4)},${position.getY(i).toFixed(4)}`);
+    }
+    expect(rim.size).toBeGreaterThanOrEqual(3);
+    // No open edge of nothing: every triangle of the result still has three distinct corners.
+    const index = slid.index.array;
+    for (let t = 0; t < index.length; t += 3) expect(new Set([index[t], index[t + 1], index[t + 2]]).size).toBe(3);
+  });
+
+  it('does not attempt sliding on a closed model (#4302)', () => {
+    const a = buildModelTiersSync(chair());
+    const b = buildModelTiersSync(chair(), { slideBorders: false });
+    expect(a.slide.attempts).toBe(0);
+    expect(a.stats.mid).toBe(b.stats.mid);
+    expect(a.stats.far).toBe(b.stats.far);
+  });
+
+  it('does not attempt sliding when the locked result is within 1.5x of its target (#4302)', () => {
+    // The brick box reaches its target with the borders locked (it has none): the same must hold for an
+    // open shell whose locked pass already gets close.
+    const model = noisyOpenScan();
+    const a = buildModelTiersSync(model);
+    const b = buildModelTiersSync(model, { slideBorders: false });
+    if (a.slide.attempts === 0) expect(a.stats.mid).toBe(b.stats.mid);
+    expect(a.stats.mid).toBeLessThanOrEqual(b.stats.mid);
+  });
+
+  it('falls back to the locked version when the sliding one fails the fidelity check (#4302)', () => {
+    // A disc whose rim is 400 open edges: locked it cannot lose the rim. The check is made to refuse anything
+    // lighter than the locked version, as it would a sliding candidate that lost too much.
+    const disc = () => {
+      const group = new THREE.Group();
+      group.add(new THREE.Mesh(new THREE.CircleGeometry(5, 400), new THREE.MeshStandardMaterial({ color: 0xcc6a2a, side: THREE.DoubleSide })));
+      return group;
+    };
+    const locked = buildModelTiersSync(disc(), { slideBorders: false });
+    const refuseLighter = (fullBatches, object, tier) => tier !== 'mid' || trianglesOf(object) >= locked.stats.mid;
+    const fallback = buildModelTiersSync(disc(), { tierCheck: refuseLighter });
+    expect(fallback.slide.attempts).toBeGreaterThan(0);
+    expect(fallback.slide.used).toBe(false);
+    expect(fallback.stats.mid).toBe(locked.stats.mid);
+    // Without the refusal the sliding version stands: it was the check that stopped it.
+    const accepted = buildModelTiersSync(disc());
+    expect(accepted.slide.used).toBe(true);
+    expect(accepted.stats.mid).toBeLessThan(locked.stats.mid);
+  });
+
+  it('scales the tolerance by the mesh and the model, not by the mesh alone (#4302)', () => {
+    // The same strip scaled 100x on its node: same relative result.
+    const small = buildModelTiersSync(openStrip());
+    const big = openStrip();
+    big.scale.set(100, 100, 100);
+    const scaled = buildModelTiersSync(big);
+    expect(scaled.stats.mid).toBe(small.stats.mid);
+  });
+
   it('draws the far version from both sides, so nothing the simplifier left facing away disappears', () => {
     const { far } = buildModelTiersSync(chair());
     const meshes = [];
