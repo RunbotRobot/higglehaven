@@ -67,7 +67,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
-import { startLodSetsJob, stepLodSetsJob } from './lodSets.js';
+import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -556,21 +556,23 @@ window.__testSetImplicitLodSets = (enabled) => {
   implicitSetsVersion += 1;
 };
 
-// #4189: worked out in slices of SHOP_SETS_SLICE_MS a frame, not in one. While a job runs, the previous sets
-// of the same load stay in use (changed at once when the new ones are complete); a landlet with none yet
-// (first load, or after an unload) has none until its job finishes, so its items are judged one by one for
-// those frames.
+// #4189: worked out in slices of SHOP_SETS_SLICE_MS a frame, not in one. A running job always finishes on the
+// items it started with and then replaces the sets at once (a job is only dropped when its load is gone, so
+// continuous placements cannot starve it); if the count changed meanwhile, the next job starts on the next
+// call. While a landlet has no finished sets for this load, updateInstanceLodTiers holds every item's version
+// (see lodSetsSeen there): a change of version is never seen, so nothing is judged alone and then re-judged.
 const SHOP_SETS_SLICE_MS = 2;
 const NO_SETS = new Map();
 function lodSetsFor(entry) {
   const current = entry.lodSetsToken === entry.loadToken;
-  if (entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
-    && entry.lodSetsVersion === implicitSetsVersion) return entry.lodSets;
-  const job = entry.lodSetsJob;
-  if (job && (job.token !== entry.loadToken || job.count !== entry.objects.length || job.version !== implicitSetsVersion)) {
-    entry.lodSetsJob = null; // the layout changed under it: start over
+  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion)) {
+    entry.lodSetsJob = null; // its load is gone (the members are disposed) or the e2e switch changed
   }
+  const upToDate = entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
+    && entry.lodSetsVersion === implicitSetsVersion;
+  if (upToDate && !entry.lodSetsJob) return entry.lodSets;
   if (!entry.lodSetsJob) {
+    entry.lodSetsFailed = false;
     entry.lodSetsJob = {
       token: entry.loadToken,
       count: entry.objects.length,
@@ -593,6 +595,7 @@ function lodSetsFor(entry) {
     entry.lodSetsObjectCount = running.count;
     entry.lodSetsVersion = running.version;
     entry.lodSetsToken = running.token; // an unload and reload with the same count must not reuse stale members
+    entry.lodSetsFailed = running.job.failed;
     entry.lodSetsJob = null;
     return sets;
   }
@@ -679,6 +682,10 @@ function updateInstanceLodTiers() {
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
+      // #4189: an item no finished set job has looked at yet (first load, a reload, anything added since) keeps the
+      // version it has and is not judged: judged alone it would take a different version from the set it is
+      // about to join, and a person would see the change when the job finishes. A failed job releases the hold.
+      const held = isHeldForSets(object, entry.lodSetsFailed);
       const set = object.userData.lodSetId ? sets.get(object.userData.lodSetId) : undefined;
       const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
@@ -697,16 +704,21 @@ function updateInstanceLodTiers() {
       lodItemsScratch.push({
         px,
         protected: nearAvatar,
-        wanted: nearAvatar ? TIER_FULL : (set ? nextSetTier(currentTier, px) : nextTier(currentTier, px)),
+        wanted: held ? (currentTier ?? TIER_FULL) : nearAvatar ? TIER_FULL : (set ? nextSetTier(currentTier, px) : nextTier(currentTier, px)),
         tris: fullTrianglesOf(object), // #3920: the triangle budget counts protected items too
         dist: ownDistanceM,
         current: object.userData.lodApplied,
+        held,
       });
       lodObjectsScratch.push({ entry, object });
     }
   }
   const reasons = tierReadoutOn ? [] : null;
   const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap, reasons);
+  // #4189: a held item (no finished set job has looked at it) keeps its version, whatever the budget says.
+  for (let i = 0; i < lodItemsScratch.length; i++) {
+    if (lodItemsScratch[i].held) tiers[i] = lodObjectsScratch[i].object.userData.lodTier ?? TIER_FULL;
+  }
   if (reasons) lastTierReadout = { items: lodObjectsScratch.map(({ object }, i) => ({ object, px: lodItemsScratch[i].px, near: lodItemsScratch[i].protected, wanted: lodItemsScratch[i].wanted, tier: tiers[i], reason: reasons[i] })) };
   // First note every item's wanted version (and ask for the reduced versions of
   // any that will need them); the ones due to change are collected to be applied

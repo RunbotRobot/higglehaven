@@ -32,7 +32,7 @@ export function buildLodSets(objects, options) {
 // changed and starts another. Drained to the end it gives exactly what buildLodSets gives.
 export function startLodSetsJob(objects, options) {
   const snapshot = objects.slice();
-  return { steps: buildLodSetsSteps(snapshot, options), done: false, sets: null, small: snapshot.length <= SMALL_JOB_ITEMS };
+  return { steps: buildLodSetsSteps(snapshot, options), done: false, failed: false, sets: null, small: snapshot.length <= SMALL_JOB_ITEMS };
 }
 
 // Runs the job until `budgetMs` has passed, but always at least MIN_CHUNKS chunks (a chunk is about 256
@@ -42,19 +42,30 @@ export const MIN_CHUNKS = 4;
 // A job this small costs about a millisecond whole, so it is finished in one step: no wait, and no dependence
 // on the clock, for the ordinary lándlet.
 export const SMALL_JOB_ITEMS = 500;
+// A reading that throws (positionOf, radiusOf, ...) ends the job with no sets and `job.failed` set, with one
+// console.error: the callers carry on with every item judged alone, as before sets existed, and do not retry
+// until the layout changes. It never throws and never leaves a job that steps forever.
 export function stepLodSetsJob(job, budgetMs, now = () => performance.now()) {
   if (job.done) return job.sets;
   const start = now();
   let chunks = 0;
-  do {
-    const next = job.steps.next();
-    chunks += 1;
-    if (next.done) {
-      job.done = true;
-      job.sets = next.value;
-      return job.sets;
-    }
-  } while (job.small || chunks < MIN_CHUNKS || now() - start < budgetMs);
+  try {
+    do {
+      const next = job.steps.next();
+      chunks += 1;
+      if (next.done) {
+        job.done = true;
+        job.sets = next.value;
+        return job.sets;
+      }
+    } while (job.small || chunks < MIN_CHUNKS || now() - start < budgetMs);
+  } catch (error) {
+    job.done = true;
+    job.failed = true;
+    job.sets = new Map();
+    console.error('#4189: set discovery failed; items are judged one by one until the layout changes', error);
+    return job.sets;
+  }
   return null;
 }
 
@@ -75,20 +86,25 @@ function* buildLodSetsSteps(objects, { hasTiers, groupIdOf, templateKeyOf, posit
   }
   const sets = new Map();
   const planned = []; // [setId, members], written to the items only when the job is complete
-  const addSet = (setId, members) => {
-    const sphere = setBoundingSphere(members.map((object) => {
-      const position = positionOf(object);
-      return { x: position.x, y: position.y, z: position.z, radiusM: radiusOf(object) };
-    }));
-    planned.push([setId, members]);
-    // #4089: the biggest member, for a set too costly to be judged whole (setApparentPx).
+  // Read in chunks (a set of thousands is not one step); #4089: also the biggest member, for a set too costly
+  // to be judged whole (setApparentPx).
+  const addSet = function* (setId, members) {
+    const spheres = [];
     let maxMemberRadiusM = 0;
-    for (const object of members) maxMemberRadiusM = Math.max(maxMemberRadiusM, radiusOf(object));
+    for (let n = 0; n < members.length; n++) {
+      if (n % STEP_CHUNK === STEP_CHUNK - 1) yield;
+      const position = positionOf(members[n]);
+      const radiusM = radiusOf(members[n]);
+      spheres.push({ x: position.x, y: position.y, z: position.z, radiusM });
+      if (radiusM > maxMemberRadiusM) maxMemberRadiusM = radiusM;
+    }
+    const sphere = setBoundingSphere(spheres);
+    planned.push([setId, members]);
     sets.set(setId, { members, sphere, maxMemberRadiusM, px: 0, near: false });
   };
   for (const [groupId, members] of byGroup) {
     if (members.length < 2) continue; // a lone member is decided as a single item
-    addSet(groupId, members);
+    yield* addSet(groupId, members);
     yield;
   }
   // #4063: loose placements that stand together are a set for drawing too, so a wall the builder never
@@ -106,11 +122,29 @@ function* buildLodSetsSteps(objects, { hasTiers, groupIdOf, templateKeyOf, posit
   }
   const found = implicit ? yield* findImplicitSetsSteps(looseItems) : [];
   for (let n = 0; n < found.length; n++) {
-    addSet(`auto:${n}`, found[n].map((i) => looseObjects[i]));
+    yield* addSet(`auto:${n}`, found[n].map((i) => looseObjects[i]));
     yield;
   }
-  // Complete: only now do the items learn their set (an item in no set has none).
-  for (const object of withTiers) object.userData.lodSetId = undefined;
-  for (const [setId, members] of planned) for (const object of members) object.userData.lodSetId = setId;
+  // Complete: only now do the items learn their set (an item in no set has none), in chunks like the rest.
+  // lodSetsSeen: this item was looked at by a finished job, so its first version is judged with its set and
+  // not alone (Shop holds an item's version until then: a change of version is never seen).
+  for (let n = 0; n < withTiers.length; n++) {
+    if (n % STEP_CHUNK === STEP_CHUNK - 1) yield;
+    withTiers[n].userData.lodSetId = undefined;
+    withTiers[n].userData.lodSetsSeen = true;
+  }
+  let written = 0;
+  for (const [setId, members] of planned) {
+    for (const object of members) {
+      object.userData.lodSetId = setId;
+      if (++written % STEP_CHUNK === 0) yield;
+    }
+  }
   return sets;
+}
+
+// #4189: an item no finished job has looked at keeps the version it has (judged alone it would take a different
+// version from the set it is about to join, and the change would be seen). A failed job releases the hold.
+export function isHeldForSets(object, failed = false) {
+  return object.userData.lodSetsSeen !== true && !failed;
 }

@@ -122,10 +122,15 @@ export function* findImplicitSetsSteps(items, { gapM = SET_GAP_M } = {}) {
   }
 
   const sets = [];
+  let componentWork = 0;
   for (const members of components.values()) {
+    componentWork += 1 + (members.length >> 2); // a big component counts for more; chunks are by work done
+    if (componentWork >= STEP_CHUNK) { componentWork = 0; yield; }
     if (members.length < MIN_SET_MEMBERS) continue;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const i of members) {
+    for (let n = 0; n < members.length; n++) {
+      if (n % STEP_CHUNK === STEP_CHUNK - 1) yield;
+      const i = members[n];
       const m = items[i];
       minX = Math.min(minX, m.x - m.radiusM); maxX = Math.max(maxX, m.x + m.radiusM);
       minY = Math.min(minY, m.y - m.radiusM); maxY = Math.max(maxY, m.y + m.radiusM);
@@ -137,7 +142,9 @@ export function* findImplicitSetsSteps(items, { gapM = SET_GAP_M } = {}) {
       continue;
     }
     const cut = new Map();
-    for (const i of members) {
+    for (let n = 0; n < members.length; n++) {
+      if (n % STEP_CHUNK === STEP_CHUNK - 1) yield;
+      const i = members[n];
       const m = items[i];
       const key = `${Math.floor(m.x / SPLIT_CELL_M)},${Math.floor(m.y / SPLIT_CELL_M)}`;
       if (!cut.has(key)) cut.set(key, []);
