@@ -661,8 +661,12 @@ function pollVoiceSignalsIfNeeded(now) {
   fetchVoiceSignals({ cursor: voiceSignalCursor }).then(async (result) => {
     if (myToken !== voicePollToken) return;
     if (result.nextCursor) voiceSignalCursor = result.nextCursor;
+    // #4324: no "a newer poll superseded this one" early return inside the
+    // batch. The cursor above has already moved past every message in it, so
+    // returning here threw the rest of the batch away for good (an offer that
+    // sat behind a slow message was never answered). Each batch still runs on
+    // its own, so one stuck message never holds up a later poll's messages.
     for (const message of result.messages) {
-      if (myToken !== voicePollToken) return; // a newer poll superseded this one mid-batch
       await handleIncomingSignal(message.fromBuilderId, message.kind, message.payload, message.channelOwnerBuilderId);
     }
   }).catch(() => {});
