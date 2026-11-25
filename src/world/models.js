@@ -409,19 +409,27 @@ async function loadTierScenesUncached(template) {
   }
   if (stored.mid && stored.far) return stored;
   let built = null;
+  let failed = false;
   try {
     const full = await loadModelScene(template.modelUrl);
     const run = tierBuildTail.then(() => buildModelTiers(full, { nextFrame: nextAnimationFrame }));
     tierBuildTail = run.catch(() => {});
     built = await run;
   } catch (err) {
+    failed = true;
     console.warn(`Failed to build the reduced models of "${template.templateId}", keeping its full model:`, err);
   }
   // A model the builder declines to simplify (skinned, or already tiny) comes
   // back as itself: that tier is the full model, so there is nothing to add.
   const pick = (name) => stored[name] || (built && !built[name].sharesFullModel ? built[name].object : null);
-  return { mid: pick('mid'), far: pick('far') };
+  const tiers = { mid: pick('mid'), far: pick('far') };
+  // #4309: a failed load is not an answer. loadTierScenes forgets this result after a pause.
+  if (failed) Object.defineProperty(tiers, 'failed', { value: true });
+  return tiers;
 }
+
+// #4309: how long a result that came from a failed load is kept before the next caller tries again.
+export const TIER_SCENES_RETRY_AFTER_MS = 15000;
 
 // Resolves to { mid, far }: the cached scene of each reduced version, or null
 // where an item should simply stay on its full model. Never rejects.
@@ -429,7 +437,16 @@ export function loadTierScenes(template) {
   if (!template.modelUrl) return Promise.resolve({ mid: null, far: null });
   const key = `${template.modelUrl}|${template.modelMidUrl ?? ''}|${template.modelFarUrl ?? ''}`;
   if (!tierScenesCache.has(key)) {
-    tierScenesCache.set(key, loadTierScenesUncached(template).catch(() => ({ mid: null, far: null })));
+    const result = loadTierScenesUncached(template).catch(() => {
+      const none = { mid: null, far: null };
+      Object.defineProperty(none, 'failed', { value: true });
+      return none;
+    });
+    tierScenesCache.set(key, result);
+    // #4309: one dropped request used to leave this product on its full model for the whole visit.
+    result.then((tiers) => {
+      if (tiers.failed) setTimeout(() => { if (tierScenesCache.get(key) === result) tierScenesCache.delete(key); }, TIER_SCENES_RETRY_AFTER_MS);
+    });
   }
   return tierScenesCache.get(key);
 }
