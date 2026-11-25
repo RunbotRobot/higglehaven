@@ -104,6 +104,40 @@ describe('Account deletion (#1146)', () => {
     });
   });
 
+  // #4266: bug reports outlive the account only as a description, with no
+  // account link, device details or screenshot.
+  it('detaches the person from their bug reports and deletes the screenshots', async () => {
+    const account = await signup(`bug-${crypto.randomUUID()}@example.com`, TEST_PASSWORD, { username: `bug-${crypto.randomUUID().slice(0, 8)}` });
+    const sessionA = extractSessionCookie(account.response);
+    const userId = account.body.user.userId;
+    const other = await signup(`bug-${crypto.randomUUID()}@example.com`, TEST_PASSWORD, { username: `bug-${crypto.randomUUID().slice(0, 8)}` });
+    const otherId = other.body.user.userId;
+    const mine = `r-${crypto.randomUUID()}`;
+    const theirs = `r-${crypto.randomUUID()}`;
+    for (const [id, owner] of [[mine, userId], [theirs, otherId]]) {
+      await env.DB.prepare(`
+        INSERT INTO bug_reports (report_id, user_id, screenshot_url, description, user_agent, platform, render_state_buffer_json)
+        VALUES (?, ?, ?, 'it flickers', 'UA', 'Linux', '[]')
+      `).bind(id, owner, `/api/feedback/bug-reports/${id}/screenshot`).run();
+      await env.FEEDBACK.put(`bug-reports/${id}.png`, new Uint8Array([1, 2, 3]));
+    }
+
+    const deletion = await api('/auth/delete-account', withSession(sessionA, {
+      method: 'POST',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
+    }));
+    expect(deletion.response.status).toBe(200);
+
+    const gone = await env.DB.prepare('SELECT * FROM bug_reports WHERE report_id = ?').bind(mine).first();
+    expect(gone.description).toBe('it flickers');
+    expect([gone.user_id, gone.user_agent, gone.platform, gone.render_state_buffer_json, gone.screenshot_url]).toEqual([null, null, null, null, null]);
+    expect(await env.FEEDBACK.get(`bug-reports/${mine}.png`)).toBeNull();
+
+    const kept = await env.DB.prepare('SELECT * FROM bug_reports WHERE report_id = ?').bind(theirs).first();
+    expect([kept.user_id, kept.user_agent, kept.screenshot_url !== null]).toEqual([otherId, 'UA', true]);
+    expect(await env.FEEDBACK.get(`bug-reports/${theirs}.png`)).not.toBeNull();
+  });
+
   // #1148 (owner decision via Control Room, 2026-10-16): real account
   // deletion also deletes the user's own builder/seller row(s), reusing
   // the exact same real-money guards DELETE /api/builders/:id and

@@ -586,7 +586,7 @@ export default {
     // #2033 (sub-issue of #1201): without this, an unreversed admin
     // suspension's own grace_period_ends_at passing silently does nothing
     // -- nothing else ever acts on it.
-    ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
+    ctx.waitUntil(escalateExpiredSuspensions(env.DB, env).catch((error) => {
       console.error('escalateExpiredSuspensions failed', error);
     }));
     // #1109: without this, an escrowed commission (a sale capped by the
@@ -3184,7 +3184,7 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
-    return handleDeleteAccount(request, db, url);
+    return handleDeleteAccount(request, db, url, env);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'change-password') {
     return handleChangePassword(request, db);
@@ -3247,7 +3247,7 @@ async function handleAuth(request, env, db, route, url, ctx) {
     return handleAdminDeleteAccountPreview(request, db, url);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
-    return handleAdminDeleteAccount(request, db);
+    return handleAdminDeleteAccount(request, db, env);
   }
   // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {
@@ -3358,7 +3358,10 @@ const STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX = 20;
 // Exported for worker/lib/auth-routes.js (#2542) -- also called from this
 // file's own escalateExpiredSuspensions cron job above, so it stays here
 // rather than moving with handleDeleteAccount itself.
-export async function cascadeDeleteAccount(db, userId) {
+// #4266: `env` (optional) lets the cascade also remove the person's bug-report
+// screenshots from the FEEDBACK bucket; without it the report rows are still
+// detached and the screenshot link cleared.
+export async function cascadeDeleteAccount(db, userId, env = null) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -3383,6 +3386,13 @@ export async function cascadeDeleteAccount(db, userId) {
   const sellerRow = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
   const builderId = builderRow?.builder_id ?? null;
   const sellerId = sellerRow?.seller_id ?? null;
+
+  // #4266: bug reports keep their description (the team triaged from it) but
+  // not the person: no account link, no device details, no screenshot. Read
+  // the screenshot ids first, delete the objects only once the deletion went through.
+  const reportScreenshots = (await db.prepare(
+    'SELECT report_id FROM bug_reports WHERE user_id = ? AND screenshot_url IS NOT NULL',
+  ).bind(userId).all()).results.map((row) => row.report_id);
 
   const statements = [];
   let landletsReleasedIndex = -1;
@@ -3444,6 +3454,12 @@ export async function cascadeDeleteAccount(db, userId) {
     `).bind(...columns.map(() => userId), ...guardBinds));
   }
 
+  statements.push(db.prepare(`
+    UPDATE bug_reports SET user_id = NULL, user_agent = NULL, platform = NULL,
+      render_state_buffer_json = NULL, screenshot_url = NULL
+    WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+  `).bind(userId, ...guardBinds));
+
   const usersUpdateIndex = statements.length;
   statements.push(
     db.prepare(`
@@ -3495,6 +3511,12 @@ export async function cascadeDeleteAccount(db, userId) {
     // the builder/seller endpoints' own "concurrent delete" case.
     throw new HttpError('Account deletion did not complete. Retry', 409);
   }
+  if (env?.FEEDBACK) {
+    for (const reportId of reportScreenshots) {
+      await env.FEEDBACK.delete(`bug-reports/${reportId}.png`)
+        .catch((error) => console.error('cascadeDeleteAccount: failed to delete a bug-report screenshot', reportId, error));
+    }
+  }
   // #3065: the seller (if any) is really gone now -- take their products off
   // builders' land and tell the builders. Best-effort: the account is
   // already deleted and cannot be retried, and closed_sellers (written in
@@ -3527,7 +3549,7 @@ export async function cascadeDeleteAccount(db, userId) {
 // partway through one account's cascade can't leave it stuck
 // unprocessed forever, and a second concurrent run of this same cron
 // can't double-escalate the same suspension.
-export async function escalateExpiredSuspensions(db) {
+export async function escalateExpiredSuspensions(db, env = null) {
   const due = await db.prepare(`
     UPDATE account_suspensions
     SET escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -3561,7 +3583,7 @@ export async function escalateExpiredSuspensions(db) {
       // #3057: before the cascade deletes the sellers row.
       closedRecord = await recordSellerClosure(db, row.user_id);
       closure = await prepareSellerPermanentClosure(db, row.user_id);
-      await cascadeDeleteAccount(db, row.user_id);
+      await cascadeDeleteAccount(db, row.user_id, env);
     } catch (error) {
       // The deletion itself did not complete, so the closure is not real:
       // undo its marks and re-arm.
