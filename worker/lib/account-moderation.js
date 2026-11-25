@@ -6,7 +6,7 @@
 import { json, HttpError, clientIp } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
-import { requireCurrentUser, requireAdmin } from './auth.js';
+import { requireCurrentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
@@ -790,7 +790,7 @@ export async function handleSuspensionStatus(request, db, url) {
 const ADMIN_USER_SEARCH_RESULT_LIMIT = 25;
 
 export async function handleAdminUserSearch(request, db, url) {
-  await requireAdmin(request, db);
+  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
   const q = (url.searchParams.get('q') || '').trim();
   if (!q) throw new HttpError('q query parameter is required', 400);
   // Substring search via instr(), not LIKE -- confirmed directly against a
@@ -839,7 +839,7 @@ export async function handleAdminUserSearch(request, db, url) {
 }
 
 export async function handleAdminUserDetail(request, db, url) {
-  await requireAdmin(request, db);
+  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
   const userId = (url.searchParams.get('userId') || '').trim();
   if (!userId) throw new HttpError('userId query parameter is required', 400);
   const row = await db.prepare(

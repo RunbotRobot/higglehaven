@@ -114,6 +114,20 @@ export async function requireAdmin(request, db) {
   return user;
 }
 
+// #4175: the look-only admin role (users.is_admin_viewer, migrations/0237). A viewer is NOT an admin: every
+// check that reads is_admin refuses one, so a new admin route is closed to a viewer unless its author opts
+// it in here, on purpose, by calling this instead of requireAdmin. Even then a viewer only gets GET and
+// HEAD, whatever the handler does with the method (the guard lives here, not in each handler). Returns the
+// user, with adminViewer: true when it is a viewer so a handler can mask what a look does not need.
+export async function requireAdminOrViewer(request, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.is_admin) return user;
+  if (user.is_admin_viewer && (request.method === 'GET' || request.method === 'HEAD')) {
+    return { ...user, adminViewer: true };
+  }
+  throw new HttpError('Admin access required', 403);
+}
+
 // #2538: thrown wherever an existing row's own owner column doesn't match
 // the session's resolved builder/seller id -- the shared shape for every
 // "is this actually yours" check across the file. Pure/zero-dependency.

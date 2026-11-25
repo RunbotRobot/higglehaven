@@ -17,7 +17,7 @@
 // the log row cannot ride in it); the counts are read before, so the record says what went.
 import { HttpError, json } from './http.js';
 import { readJson } from './validation.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireAdminOrViewer } from './auth.js';
 import { isAssistantUsername } from './fleet-agents.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { cascadeDeleteAccount } from '../index.js';
@@ -64,7 +64,7 @@ function refusalFor(admin, user, counts, includeFleet) {
 }
 
 export async function handleAdminDeleteAccountPreview(request, db, url) {
-  const admin = await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4175: the preview only reads; the delete below stays admin-only
   const userId = url.searchParams.get('userId') || '';
   if (!userId) throw new HttpError('userId is required', 400);
   const { user, counts } = await targetAndCounts(db, userId);
