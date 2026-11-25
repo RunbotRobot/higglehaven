@@ -61,6 +61,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
+import { landCapRoomM2 } from '../../shared/level-cap.js';
 import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt, pullGroupTowardCentre } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
@@ -2322,6 +2323,54 @@ let lastAppliedLevelFloorZ = 0;
 // single-flag-across-multiple-triggers idiom as undoRedoBusy below.
 let levelActionBusy = false;
 
+// #4331: how many m² are left under the builder's lándlet cap for a new level to take, or null when it is not
+// known (the read failed): then the buttons stay as they were and the server stays the only judge. The server's
+// check is still the authority (a level is refused there too); this only keeps a person from being offered a
+// button that can only refuse, and says why in the same numbers the My lándlets leaf uses.
+let levelCapRoomValueM2 = null;
+let levelCapFetchedAt = 0;
+let levelCapNoteShown = false;
+async function refreshLevelCapRoom() {
+  levelCapFetchedAt = performance.now();
+  try {
+    const me = await fetchMyBuilder();
+    levelCapRoomValueM2 = me && me.landCapM2 != null ? landCapRoomM2(me.ownedAreaM2 ?? 0, me.landCapM2) : null;
+  } catch {
+    levelCapRoomValueM2 = null;
+  }
+  renderLevelCapAvailability();
+}
+function levelFitsRoom(costM2) {
+  return levelCapRoomValueM2 === null || costM2 <= levelCapRoomValueM2;
+}
+function levelCapSentence(costM2) {
+  return `A new level takes ${formatArea(costM2, 0)} and you have ${formatArea(levelCapRoomValueM2, 0)} left. The cap grows as your products earn higgles.`;
+}
+function levelCapCosts() {
+  const { top, bottom } = levelExtent();
+  return { up: levelCapConsumedM2(currentLandletAreaM2, top + 1), down: levelCapConsumedM2(currentLandletAreaM2, bottom - 1) };
+}
+// Draws Build above / Dig below as unavailable, with the reason beside them, while the new level would not fit.
+function renderLevelCapAvailability() {
+  const { up, down } = levelCapCosts();
+  const upFits = levelFitsRoom(up);
+  const downFits = levelFitsRoom(down);
+  if (!levelActionBusy) {
+    levelBuildBtn.disabled = !upFits;
+    levelDigBtn.disabled = !downFits;
+  }
+  if (!upFits || !downFits) {
+    // Only ever replaces nothing or its own earlier note, never a result the person has not read yet.
+    if (!levelStatusEl.textContent || levelCapNoteShown) {
+      setLevelStatus(levelCapSentence(Math.min(up, down)));
+      levelCapNoteShown = true;
+    }
+  } else if (levelCapNoteShown) {
+    setLevelStatus('');
+    levelCapNoteShown = false;
+  }
+}
+
 // Re-renders the nav/build/dig/remove controls from currentLevelIndex +
 // currentLandletLevels, and moves the ground mesh to visually sit at
 // whichever level's own floor is now being viewed — a plain vertical
@@ -2346,6 +2395,9 @@ export function renderLevelControls() {
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
   levelBuildBtn.textContent = `Build level above (${formatArea(upCostM2)})`;
   levelDigBtn.textContent = `Dig level below (${formatArea(downCostM2)})`;
+  // #4331: ask how much room the cap leaves (at most every ten seconds), and draw the buttons by it.
+  renderLevelCapAvailability();
+  if (performance.now() - levelCapFetchedAt > 10000) refreshLevelCapRoom();
   // Only the outermost existing level (in whichever direction it's on) can
   // actually be removed (worker/index.js's own 409 otherwise) — ground
   // (index 0) is never a real row and can never be removed at all.
@@ -2371,8 +2423,9 @@ levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex -
 levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
 
 function setLevelButtonsDisabled(disabled) {
-  levelBuildBtn.disabled = disabled;
-  levelDigBtn.disabled = disabled;
+  const { up, down } = levelCapCosts(); // #4331: a button that cannot fit under the cap stays unavailable after an action
+  levelBuildBtn.disabled = disabled || !levelFitsRoom(up);
+  levelDigBtn.disabled = disabled || !levelFitsRoom(down);
   levelRemoveBtn.disabled = disabled;
   // #1077: Up/Down were never part of this gate, so navigating to a
   // different level while a Build/Dig/Remove was still in flight let that
@@ -2389,7 +2442,17 @@ async function addLevel(direction, failureMessage) {
   levelActionBusy = true;
   setLevelButtonsDisabled(true);
   try {
+    // #4331: ask the cap again at the tap (it may have moved since the leaf opened) and say so without sending a
+    // request that can only be refused.
+    await refreshLevelCapRoom();
+    const cost = levelCapCosts()[direction === 'up' ? 'up' : 'down'];
+    if (!levelFitsRoom(cost)) {
+      setLevelStatus(levelCapSentence(cost), { isError: true });
+      levelCapNoteShown = false;
+      return;
+    }
     const level = await addLandletLevel(currentLandletId, direction);
+    levelCapFetchedAt = 0; // the new level takes room: read the cap again
     currentLandletLevels.push(level);
     currentLevelIndex = level.levelIndex;
     setLevelStatus('');
@@ -2423,6 +2486,7 @@ levelRemoveBtn.addEventListener('click', async () => {
   setLevelButtonsDisabled(true);
   try {
     const { sweptInstanceIds, savedSignPostCount, savedCalendarEventCount } = await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    levelCapFetchedAt = 0; // #4331: a removed level gives its room back: read the cap again
     // #901: the server already deleted these instances (archiving them into
     // a saved layout first) — without pruning them here too, their meshes
     // stay selectable/draggable in the scene and can later get swept into

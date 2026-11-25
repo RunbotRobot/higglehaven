@@ -36,6 +36,7 @@
 // plain const (confirmed the hard way for D1_MAX_BOUND_PARAMETERS in #2535).
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
+import { levelFitsCap, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from '../../shared/level-cap.js';
 import { checkRateLimit } from './rate-limit.js';
 import { invalidateFarPlacementsAt } from './far-placements.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -92,10 +93,7 @@ const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
 // absolute floor no level can ever reach or pass.
 const MIN_LEVEL_FOOTPRINT_M2 = 10;
 
-// Also used by recomputeLandCap/handleAuctionBids/resolveAuction, which stay
-// in worker/index.js -- duplicated here for the same reason as the other
-// platform constants above (see this file's own header comment).
-const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
+// #4331: one definition, shared with the Build client (shared/level-cap.js).
 
 // #796: both version-creating write paths below (this POST, and the
 // auto-version side effect of PUT /landlets/:id/draft) had no rate limit at
@@ -416,7 +414,7 @@ export async function handleLandletLevels(request, db, route) {
     // message in the common case; the atomic clause folded into the
     // INSERT below is the real race guard (see its own comment).
     const landCap = await recomputeLandCap(db, landlet.owner_builder_id);
-    if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+    if (!levelFitsCap(landCap.ownedAreaM2, capConsumedM2, landCap.nextCap)) {
       throw new HttpError(
         `This would take you to ${(landCap.ownedAreaM2 + capConsumedM2).toFixed(2)}m², `
         + `over your ${landCap.nextCap}m² lándlet cap`,
