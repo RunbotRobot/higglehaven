@@ -7182,7 +7182,25 @@ async function setGhostsOn(on, { remember = true } = {}) {
   ghostsBtn?.classList.toggle('active', on);
   if (remember) { try { localStorage.setItem(GHOSTS_PREF_KEY, on ? '1' : '0'); } catch { /* the switch still works for this visit */ } }
   if (on && currentLandletId) {
-    try { setSoldOutMarkers(await fetchSoldOutMarkers(currentLandletId)); } catch { /* the removed ghosts still show; the sold-out ones wait for the next try */ }
+    // #4315: a failed read is not "nothing sold out". Ask again (2 s, 6 s, 18 s) while the switch stays on, and if it still
+    // fails say so in the status line; switching it off and on again tries once more. The removed ghosts show meanwhile.
+    const landletAtStart = currentLandletId;
+    const retryWaitsMs = window.__testGhostRetryWaitsMs || [2000, 6000, 18000];
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        setSoldOutMarkers(await fetchSoldOutMarkers(landletAtStart));
+        break;
+      } catch {
+        if (!showSoldOutMarkers || currentLandletId !== landletAtStart) return;
+        if (attempt >= retryWaitsMs.length) {
+          setProductInfo('Couldn\'t load the markers for sold-out items. Switch the ghosts off and on to try again.');
+          break;
+        }
+        applySoldOutMarkerVisibility(); // the removed ghosts show while we wait
+        await new Promise((resolve) => setTimeout(resolve, retryWaitsMs[attempt]));
+        if (!showSoldOutMarkers || currentLandletId !== landletAtStart) return;
+      }
+    }
     if (!showSoldOutMarkers) return; // switched off while the list loaded
   }
   applySoldOutMarkerVisibility();
