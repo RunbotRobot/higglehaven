@@ -90,6 +90,41 @@ const budShowsNotes = () => document.body.dataset.mode !== 'layoutPreview';
 // 403, which a page would log as an error), the same bar every other social call in Shop uses.
 const canReadMenuCounts = () => Boolean(currentAuthUser?.ageAttested) && currentAuthUser.trustTier !== 'none';
 
+// #4317: a count the head shows (notices, friend requests) is asked for once at start-up; if that one request failed
+// the dot and the note stayed missing for the whole visit. A failed ask is tried again after a growing wait, and a
+// tab coming back into view asks again when the last good answer is old. A refusal ends the tries (see
+// canReadMenuCounts: an account that cannot read the counts is never asked).
+const MENU_COUNT_RETRY_MS = [8000, 30000, 90000];
+const MENU_COUNT_STALE_MS = 60000;
+const menuCountState = new Map(); // key -> { tries, timer, okAt }
+function menuCountEntry(key) {
+  if (!menuCountState.has(key)) menuCountState.set(key, { tries: 0, timer: null, okAt: 0 });
+  return menuCountState.get(key);
+}
+function noteMenuCountOk(key) {
+  const entry = menuCountEntry(key);
+  clearTimeout(entry.timer);
+  entry.tries = 0;
+  entry.timer = null;
+  entry.okAt = Date.now();
+}
+function noteMenuCountFailed(key, again) {
+  const entry = menuCountEntry(key);
+  if (entry.timer !== null || entry.tries >= MENU_COUNT_RETRY_MS.length) return;
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    entry.tries += 1;
+    again();
+  }, MENU_COUNT_RETRY_MS[entry.tries]);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !canReadMenuCounts()) return;
+  const now = Date.now();
+  // Only a count that was asked for before (it has an entry) and is old; the first ask is each mode's own.
+  if (menuCountState.has('notices') && now - menuCountState.get('notices').okAt > MENU_COUNT_STALE_MS) refreshNotificationsBadge();
+  if (menuCountState.has('friends') && now - menuCountState.get('friends').okAt > MENU_COUNT_STALE_MS) refreshFriendsBadge();
+});
+
 export async function refreshNotificationsBadge() {
   if (!canReadMenuCounts()) return; // #3774: Shop reads it too, with no builder identity of its own
   try {
@@ -104,8 +139,10 @@ export async function refreshNotificationsBadge() {
     // #3774: the head says so too, and the note is a door to the Notices leaf.
     if (count > 0 && budShowsNotes()) setBudWord('notices', count === 1 ? 'Notice' : `${count} notices`, { open: () => notificationsBtn.click(), label: count === 1 ? 'You have a notice. Open Notices.' : `You have ${count} notices. Open Notices.` });
     else clearBudWord('notices');
+    noteMenuCountOk('notices');
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
+    noteMenuCountFailed('notices', refreshNotificationsBadge);
   }
 }
 
@@ -634,8 +671,10 @@ export async function refreshFriendsBadge() {
     // #3774: the head says so too, and the note is a door to Friends, where the request waits.
     if (incoming.length > 0 && budShowsNotes()) setBudWord('friend-requests', incoming.length === 1 ? 'Friend request' : `${incoming.length} friend requests`, { open: () => friendsBtn.click(), label: incoming.length === 1 ? 'Someone sent you a friend request. Open Friends.' : `${incoming.length} friend requests. Open Friends.` });
     else clearBudWord('friend-requests');
+    noteMenuCountOk('friends');
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
+    noteMenuCountFailed('friends', refreshFriendsBadge);
   }
 }
 
