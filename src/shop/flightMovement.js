@@ -68,7 +68,7 @@ import {
 import { keepPairInside } from './rigidCameraPair.js';
 import { isFlightToggleKeyEvent, isNavigationKeyEvent, isNearbyProductKeyEvent, keyboardAxes, keyboardRise, mergeStickInput } from './keyboardInput.js';
 // #4102: the three flight-height options the owner can fly and compare (off unless chosen).
-import { createHeightControl, heightHint, HEIGHT_HINT, KEY_HEIGHT_HINT, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
+import { createHeightControl, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
@@ -1232,7 +1232,6 @@ function updateShopFlight(dt) {
       const speed = SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM);
       shopFlightAltitudeM += (heightControl.rate() || keyboardRise(shopKeysDown)) * FLIGHT_CLIMB_FRACTION * speed * dt;
     }
-    showHeightHintOnce();
     // The limits are felt during the gesture: at the top of the sky and at the
     // lowest hover (or the top of an item under the avatar) the avatar levels
     // off and rests, never bounces, and says so once. It never lands by itself.
@@ -1258,23 +1257,6 @@ function updateShopFlight(dt) {
   }
 }
 
-// #4105: the first time someone flies, the page says the gesture in its own words (a status line that
-// fades, like the limit notices, never a control on the world).
-let heightHintShown = false;
-function showHeightHintOnce() {
-  if (heightHintShown || !document.body.classList.contains('shop-ready')) return;
-  heightHintShown = true;
-  shopStatusEl.textContent = heightHint();
-  shopStatusEl.classList.add('visible');
-  clearTimeout(flightLimitNoticeTimer);
-  flightLimitNoticeTimer = setTimeout(() => {
-    if (shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
-      shopStatusEl.classList.remove('visible');
-      shopStatusEl.textContent = '';
-    }
-  }, 7000);
-}
-
 // #3769: which limit the avatar is resting against (so it is said once per
 // contact, not every frame), and the one plain sentence for each.
 let flightLimitNoticed = null;
@@ -1286,7 +1268,7 @@ function showFlightLimitNotice(limit) {
   shopStatusEl.classList.add('visible');
   clearTimeout(flightLimitNoticeTimer);
   flightLimitNoticeTimer = setTimeout(() => {
-    if (shopStatusEl.textContent.startsWith('You are ') || shopStatusEl.textContent === HEIGHT_HINT || shopStatusEl.textContent === KEY_HEIGHT_HINT) {
+    if (shopStatusEl.textContent.startsWith('You are ')) {
       shopStatusEl.classList.remove('visible');
       shopStatusEl.textContent = '';
     }
