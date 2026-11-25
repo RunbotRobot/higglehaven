@@ -174,7 +174,6 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled hidden>Redo</button>
-      <button id="pending-restoration-btn" type="button" hidden>Removed items</button>
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
@@ -221,6 +220,8 @@
       </div>
       <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled hidden>Paste</button>
+      <!-- #4201: Removed items lives in the Tools leaf, not on the world; it is drawn only while something is pending. -->
+      <button id="pending-restoration-btn" type="button" hidden>Removed items</button>
     </div>
     <div id="add-item-panel">
       <div id="catalog-picker" role="dialog" aria-modal="true" aria-label="Add item" tabindex="-1">

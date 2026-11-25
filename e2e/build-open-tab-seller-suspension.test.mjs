@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish, budClick } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish, budClick, removedItemsButtonShown } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -125,7 +125,7 @@ await page.waitForTimeout(1500);
 const phantomsAfter = (await page.evaluate(() => window.__testProductScreenPositions()))
   .filter((p) => p.instanceId.startsWith('open-tab-suspension-instance-')).length;
 const alerts = await page.evaluate(() => window.__alerts);
-const buttonShown = await page.locator('#pending-restoration-btn').isVisible();
+const buttonShown = await removedItemsButtonShown(page);
 console.log('phantom product removed from the open tab (should be 0):', phantomsAfter);
 console.log('Removed items button visible without a reload (should be true):', buttonShown);
 console.log('alerts:', JSON.stringify(alerts));

@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal, removedItemsButtonShown } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,7 +102,7 @@ async function reloadBuildMode() {
 }
 
 await reloadBuildMode();
-const hiddenBeforeSuspension = await page.locator('#pending-restoration-btn').isHidden();
+const hiddenBeforeSuspension = !(await removedItemsButtonShown(page));
 console.log('"Removed items" button hidden while nothing is pending (should be true):', hiddenBeforeSuspension);
 
 const suspend = await apiFetch('/auth/suspend-account', adminCookie, {
@@ -114,7 +114,13 @@ if (suspend.response.status !== 200) {
 console.log('instances removed by the suspension (should be 1):', suspend.body.instancesRemoved);
 
 await reloadBuildMode();
-const shownAfterSuspension = await page.locator('#pending-restoration-btn').isVisible();
+// #4201: the head wears a note for newly removed items (one tap opens the list), and says nothing once the list has been opened.
+const noteBefore = await page.evaluate(() => {
+  const note = document.getElementById('bud-note');
+  return note && !note.hidden ? note.textContent : null;
+});
+console.log('head note for the newly removed item (should name Removed items):', noteBefore);
+const shownAfterSuspension = await removedItemsButtonShown(page); // opens the Tools leaf, where the button now lives
 const buttonText = shownAfterSuspension ? await page.locator('#pending-restoration-btn').textContent() : '';
 console.log('"Removed items" button visible after the seller is suspended (should be true):', shownAfterSuspension, buttonText);
 
@@ -131,7 +137,7 @@ await page.locator('.pending-restoration-row-clear').first().click();
 await acceptConfirmModal(page);
 await page.waitForFunction(() => document.querySelectorAll('.pending-restoration-row').length === 0, null, { timeout: 5000 });
 const emptyShown = await page.locator('#pending-restoration-empty').isVisible();
-const buttonHiddenAfterClear = await page.locator('#pending-restoration-btn').isHidden();
+const buttonHiddenAfterClear = await page.evaluate(() => document.getElementById('pending-restoration-btn').hidden);
 console.log('empty state shown after clearing (should be true):', emptyShown);
 console.log('"Removed items" button hidden again once nothing is pending (should be true):', buttonHiddenAfterClear);
 
@@ -151,6 +157,7 @@ const pass = placeRes.status === 201
   && hiddenBeforeSuspension
   && suspend.body.instancesRemoved === 1
   && shownAfterSuspension
+  && /Removed items/.test(noteBefore ?? '')
   && /1/.test(buttonText)
   && rowCount === 1
   && rowText.includes(PRODUCT_NAME)

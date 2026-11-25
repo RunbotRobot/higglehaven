@@ -10,6 +10,8 @@
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { fetchPendingRestorations, clearPendingRestoration } from '../api.js';
+import { setBudWord, clearBudWord } from '../ui/bud.js';
+import { shouldNoteRemoved } from './removedNote.js';
 
 const buttonEl = document.getElementById('pending-restoration-btn');
 const modalEl = document.getElementById('pending-restoration-modal');
@@ -44,6 +46,14 @@ function renderSlots(slots) {
   listEl.innerHTML = '';
   buttonEl.hidden = slots.length === 0;
   buttonEl.textContent = slots.length > 0 ? `Removed items (${slots.length})` : 'Removed items';
+  // #4201: the head wears a note when something is newly removed (more than the builder has already looked at), and one tap
+  // opens the list. It is not an introduction: it reports a change to the builder's own lándlet ("full information").
+  latestCount = slots.length;
+  if (shouldNoteRemoved(slots.length, readSeenCount())) {
+    setBudWord('removed-items', 'Removed items', { open: openModal, label: 'Items were removed from your lándlet. Open the list.' });
+  } else {
+    clearBudWord('removed-items');
+  }
   emptyEl.hidden = slots.length > 0;
   for (const slot of slots) {
     const { name, where, status } = describeSlot(slot);
@@ -123,7 +133,18 @@ export async function refresh() {
   return slots;
 }
 
+const SEEN_KEY = 'hh-removed-items-seen';
+let latestCount = 0;
+function readSeenCount() {
+  try { return Number(localStorage.getItem(SEEN_KEY) || 0) || 0; } catch { return 0; }
+}
+function writeSeenCount(count) {
+  try { localStorage.setItem(SEEN_KEY, String(count)); } catch { /* the note may come back; nothing is lost */ }
+}
+
 function openModal() {
+  writeSeenCount(latestCount);
+  clearBudWord('removed-items');
   modalEl.classList.add('visible');
   openModalA11y(modalEl, closeModal);
   refresh();
