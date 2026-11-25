@@ -5,7 +5,7 @@ import { createFrameBudgetQueue } from '../world/frameBudgetQueue.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup({ loaded = new Set(), payloads, reducedMotion = true, createDissolve, fetchOverride } = {}) {
+function setup({ loaded = new Set(), payloads, reducedMotion = true, createDissolve, fetchOverride, loadSourceOverride } = {}) {
   let clock = 0;
   const queue = createFrameBudgetQueue({ now: () => clock, schedule: () => {} });
   const root = new THREE.Group();
@@ -14,11 +14,15 @@ function setup({ loaded = new Set(), payloads, reducedMotion = true, createDisso
   const view = createFarView({
     queue, root,
     fetchTile: async (x, y) => { fetched.push(`${x},${y}`); fetchOverride?.(`${x},${y}`); return payloads[`${x},${y}`] ?? { templates: [], landlets: [] }; },
-    loadSource: async (id) => ({
-      container: new THREE.Group(),
-      parts: [{ geometry: new THREE.BoxGeometry(1, 1, 1), material: new THREE.MeshBasicMaterial(), matrix: new THREE.Matrix4() }],
-      dispose: () => disposed.push(id),
-    }),
+    loadSource: async (id) => {
+      // the override may throw, or answer 'none' (the loader's own "no far model" answer, null)
+      if (loadSourceOverride?.(id) === 'none') return null;
+      return {
+        container: new THREE.Group(),
+        parts: [{ geometry: new THREE.BoxGeometry(1, 1, 1), material: new THREE.MeshBasicMaterial(), matrix: new THREE.Matrix4() }],
+        dispose: () => disposed.push(id),
+      };
+    },
     dimensionsFor: () => ({ width: 2, depth: 2, height: 2 }),
     elevationFor: () => 0,
     loadedLandletIds: () => loaded,
@@ -80,6 +84,38 @@ describe('createFarView (#3478)', () => {
     for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); }
     await queue.drain();
     expect(root.children.flatMap((child) => child.children)[0].count).toBe(3);
+  });
+
+  // #4310: a thrown load of a product's far model was kept as the answer 'no far model', so the product was never
+  // drawn in the distance for the rest of the session. It is asked for again after a while, like a tile.
+  it('asks again for a product model that failed to load, and draws it once it comes (#4310)', async () => {
+    let calls = 0;
+    const { view, root, advance, settle, queue } = setup({
+      payloads: { '0,0': payload },
+      loadSourceOverride: () => { calls += 1; if (calls === 1) throw new Error('blip'); return undefined; },
+    });
+    await settle();
+    expect(calls).toBe(1);
+    expect(root.children).toHaveLength(0); // nothing drawn: no model, and never a stand-in
+    advance(31000);
+    for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); }
+    await queue.drain();
+    expect(calls).toBe(2);
+    expect(root.children.flatMap((child) => child.children)[0].count).toBe(3);
+  });
+
+  it('does not ask again for a product that legitimately has no far model (#4310)', async () => {
+    let calls = 0;
+    const { view, root, advance, settle, queue } = setup({
+      payloads: { '0,0': payload },
+      loadSourceOverride: () => { calls += 1; return 'none'; },
+    });
+    await settle();
+    advance(120000);
+    for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); }
+    await queue.drain();
+    expect(calls).toBe(1);
+    expect(root.children).toHaveLength(0);
   });
 
   it('does not draw before the product model is ready, and never draws a stand-in', async () => {
