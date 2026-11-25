@@ -34,6 +34,7 @@
 // updateSelectionUI moved to src/build/scene.js (#2559, landed after this
 // leaf's own work started) -- imported from there directly.
 import * as THREE from 'three';
+import { parseStockInput, STOCK_FIELD_HINT } from '../../shared/stock-limits.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { registerBudPetals, openLeaf } from '../ui/bud.js';
@@ -497,14 +498,8 @@ export async function saveSellerPrice(template, text) {
 // number of 0 or more is what is left to sell. Same busy guard and error wording style as the price.
 export async function saveSellerStock(template, text) {
   if (metadataSaveBusyByTemplateId.get(template.templateId) === true) return { busy: true };
-  const trimmed = String(text ?? '').trim();
-  let stockQuantity = null;
-  if (trimmed) {
-    stockQuantity = Number(trimmed);
-    if (!Number.isSafeInteger(stockQuantity) || stockQuantity < 0) {
-      return { error: 'Stock must be a whole number of 0 or more, or left blank for no limit.' };
-    }
-  }
+  const stockQuantity = parseStockInput(text); // #4343: the server's own cap, from one definition
+  if (stockQuantity === undefined) return { error: STOCK_FIELD_HINT };
   if (stockQuantity === (template.stockQuantity ?? null)) return { noChange: true };
   metadataSaveBusyByTemplateId.set(template.templateId, true);
   syncMetadataSaveButtonsDisabled(template.templateId);
@@ -2397,16 +2392,13 @@ async function submitAttachListing(event) {
     return;
   }
   const priceCents = Math.round(dollars * 100);
-  const trimmedStock = sellThisTooStockInput.value.trim();
-  let stockQuantity;
-  if (trimmedStock) {
-    stockQuantity = Number(trimmedStock);
-    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
-      fail('Stock must be a whole number of 0 or more, or left blank.');
-      sellThisTooStockInput.focus();
-      return;
-    }
+  const parsedStock = parseStockInput(sellThisTooStockInput.value); // #4343: the server's own cap, from one definition
+  if (parsedStock === undefined) {
+    fail(STOCK_FIELD_HINT);
+    sellThisTooStockInput.focus();
+    return;
   }
+  const stockQuantity = parsedStock === null ? undefined : parsedStock;
   attachListingInFlight = true;
   sellThisTooAddBtn.disabled = true;
   try {

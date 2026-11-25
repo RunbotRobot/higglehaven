@@ -106,6 +106,12 @@ await page.fill('#seller-product-card-stock-input', '-2');
 await page.click('#seller-product-card-stock-save-btn');
 await page.waitForFunction(() => document.getElementById('seller-product-card-status').textContent.length > 0, null, { timeout: 5000 });
 check((await page.textContent('#seller-product-card-status')).includes('whole number'), 'a bad stock is refused on the card, in words');
+// #4343: a count above the server's cap is stopped here, in words that name the cap, not sent for a bare server error.
+await page.fill('#seller-product-card-stock-input', '1000001');
+await page.click('#seller-product-card-stock-save-btn');
+await page.waitForTimeout(300);
+const overCapStatus = await page.textContent('#seller-product-card-status');
+check(overCapStatus.includes('1,000,000') && !overCapStatus.includes('stockQuantity'), `a stock above the cap is refused on the card and the cap is named: "${overCapStatus}"`);
 await page.fill('#seller-product-card-stock-input', '');
 await page.click('#seller-product-card-stock-save-btn');
 await page.waitForFunction(() => document.getElementById('seller-product-card-stock').textContent === 'No limit on stock', null, { timeout: 10000 });

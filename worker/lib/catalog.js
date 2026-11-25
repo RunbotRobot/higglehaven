@@ -47,6 +47,7 @@ import {
 import { getStorageUsage, reserveStorageBudget, formatBytes } from './storage.js';
 import { handleProductReviews, handleProductFlags } from './reputation.js';
 import { farPlacementCentersForTemplates, invalidateFarPlacementCenters } from './far-placements.js';
+import { MAX_STOCK_QUANTITY } from '../../shared/stock-limits.js';
 
 // #1978: see this file's own header comment above for why these are
 // duplicated rather than imported -- each is the exact value worker/
@@ -314,8 +315,8 @@ function optionalModelSizeBytes(value) {
 
 // #1948: bounded generously -- this is a count of physical units, not money
 // or bytes, so MAX_MONEY_CENTS would be the wrong bound wearing the right
-// shape the same way optionalModelSizeBytes already explains above.
-const MAX_STOCK_QUANTITY = 1_000_000;
+// shape the same way optionalModelSizeBytes already explains above. #4343: the
+// limit lives in shared/stock-limits.js so Sell stops the same number the server refuses.
 
 function optionalStockQuantity(value) {
   if (value === undefined || value === null) return null;
