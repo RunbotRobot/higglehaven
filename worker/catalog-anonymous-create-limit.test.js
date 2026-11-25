@@ -24,3 +24,39 @@ describe('seller-less catalog creation (#4287)', () => {
     expect(refused.body.error).toMatch(/at most 50/);
   });
 });
+
+// #4287 step 2: off a local or test Worker, seller-less creation needs an admin session.
+import { handleCatalog } from './lib/catalog.js';
+import { signupAdmin } from './test-helpers.js';
+
+describe('seller-less catalog creation off a local Worker (#4287 step 2)', () => {
+  const productionEnv = { APP_BASE_URL: 'https://higglehaven.com' };
+  const asRequest = (headers = {}) => new Request('https://higglehaven.test/api/catalog', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'cf-connecting-ip': `prod-${crypto.randomUUID()}`, ...headers },
+    body: JSON.stringify(template('prod-seed')),
+  });
+
+  it('refuses a caller with no session', async () => {
+    await expect(handleCatalog(asRequest(), env.DB, ['catalog'], new URL('https://higglehaven.test/api/catalog'), env.MODELS, productionEnv))
+      .rejects.toMatchObject({ status: 401 });
+  });
+
+  it('refuses a signed-in non-admin and fails closed when APP_BASE_URL is unset', async () => {
+    const { signupBuilder } = await import('./test-helpers.js');
+    const builder = await signupBuilder('prod-seed-nonadmin');
+    const withSession = (envToUse) => handleCatalog(
+      asRequest({ cookie: `hh_session=${builder.sessionToken}` }), env.DB, ['catalog'], new URL('https://higglehaven.test/api/catalog'), env.MODELS, envToUse,
+    );
+    await expect(withSession(productionEnv)).rejects.toMatchObject({ status: 403 });
+    await expect(withSession({})).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('lets an admin create one', async () => {
+    const admin = await signupAdmin('prod-seed-admin');
+    const response = await handleCatalog(
+      asRequest({ cookie: `hh_session=${admin.sessionToken}` }), env.DB, ['catalog'], new URL('https://higglehaven.test/api/catalog'), env.MODELS, productionEnv,
+    );
+    expect(response.status).toBe(201);
+  });
+});
