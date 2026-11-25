@@ -125,6 +125,37 @@ describe('createArrivalRun', () => {
     expect(log.dissolves[0].restored).toBe(true);
   });
 
+  it('#4250: an item that arrives after its cluster timed out and finished is left drawn, never held at level 0', () => {
+    const { run, log, advance } = setup(wall(2));
+    run.itemReady('w0', {});
+    advance((ARRIVAL_MAX_WAIT_S + 1) * 1000);
+    run.update();
+    advance(ARRIVAL_RESOLVE_S * 1000 + 100);
+    run.update(); // the cluster has finished
+    expect(run.settled()).toBe(true);
+    const dissolvesBefore = log.dissolves.length;
+    run.itemReady('w1', { late: true }); // the slow model finally arrives
+    run.update();
+    expect(log.dissolves.length).toBe(dissolvesBefore); // no dissolve made on a finished cluster
+    run.dispose();
+    expect(log.dissolves.every((d) => d.restored)).toBe(true); // nothing is left holding a level
+  });
+
+  it('#4250: a late batch (one object standing for many ids) and its settled members are ignored the same way', () => {
+    const { run, log, advance } = setup(wall(3));
+    advance((ARRIVAL_MAX_WAIT_S + 1) * 1000);
+    run.update();
+    advance(ARRIVAL_RESOLVE_S * 1000 + 100);
+    run.update();
+    const before = log.dissolves.length;
+    run.itemReady('w0', { root: true });
+    run.itemSettled('w1');
+    run.itemSettled('w2');
+    run.update();
+    expect(log.dissolves.length).toBe(before);
+    expect(run.settled()).toBe(true);
+  });
+
   it('dispose releases every fog and restores every material, mid-arrival', () => {
     const before = aliveArrivalFogCount();
     const { run, log } = setup([...wall(5), { instanceId: 'b', templateId: 't', x: 40, y: 40, z: 0 }]);
