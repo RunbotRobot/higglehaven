@@ -3757,6 +3757,13 @@ async function exportCommunicationData(db, userId) {
     LEFT JOIN users u ON u.user_id = b.blocked_user_id
     WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
   `).bind(userId).all();
+  // The feedback reports this account submitted. The attached device facts are
+  // the person's own; the render-state ring buffer is a large diagnostic dump
+  // and stays out, like the screenshot bytes (only the link is listed).
+  const bugReports = await db.prepare(`
+    SELECT report_id, description, screenshot_url, user_agent, platform, submitted_at, created_at
+    FROM bug_reports WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
   const byConversation = new Map();
   for (const row of messages.results) {
     if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
@@ -3780,6 +3787,15 @@ async function exportCommunicationData(db, userId) {
       closedAt: row.closed_at,
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    bugReports: bugReports.results.map((row) => ({
+      reportId: row.report_id,
+      description: row.description,
+      screenshotUrl: row.screenshot_url,
+      userAgent: row.user_agent,
+      platform: row.platform,
+      submittedAt: row.submitted_at,
+      createdAt: row.created_at,
+    })),
   };
 }
 
@@ -3834,7 +3850,7 @@ async function handleExportData(request, db) {
         decidedAt: row.decided_at,
       })),
     },
-    commerce: await exportCommerceData(db, builderRow, user.user_id),
+    commerce: await exportCommerceData(db, builderRow, user.user_id, sellerRow?.seller_id ?? null),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
     communication: await exportCommunicationData(db, user.user_id),
   });
@@ -3864,7 +3880,7 @@ async function handleExportData(request, db) {
 // purchase-grants-ownership flow), not independent user-facing data: every
 // field either of them carries (purchase_id, template_id) is already present
 // on the corresponding owned_avatars/owned_animations row itself.
-async function exportCommerceData(db, builderRow, userId) {
+async function exportCommerceData(db, builderRow, userId, sellerId) {
   const tax1099Forms = await db.prepare(`
     SELECT form_id, tax_year, form_type, status, gross_income_cents, generated_at, approved_at, filed_at, filing_reference
     FROM tax_1099_forms WHERE user_id = ? ORDER BY tax_year DESC, form_type ASC
@@ -3881,6 +3897,31 @@ async function exportCommerceData(db, builderRow, userId) {
     filingReference: row.filing_reference,
   }));
 
+  // #4142: a seller's own listings (what they put up for sale). The joins on
+  // catalog_templates further down describe what a person OWNS; this is what
+  // they SELL. No embedding, moderation flag or test-model marker.
+  const listingRows = sellerId ? (await db.prepare(`
+    SELECT template_id, product_id, name, category, subcategory, color, width_m, depth_m, height_m,
+           price_cents, stock_quantity, model_url, image_url, delisted_at, created_at, updated_at
+    FROM catalog_templates WHERE seller_id = ? ORDER BY created_at DESC
+  `).bind(sellerId).all()).results : [];
+  const listings = listingRows.map((row) => ({
+    templateId: row.template_id,
+    productId: row.product_id,
+    name: row.name,
+    category: row.category,
+    subcategory: row.subcategory,
+    color: row.color,
+    dimensions: { width: row.width_m, depth: row.depth_m, height: row.height_m },
+    priceCents: row.price_cents,
+    stockQuantity: row.stock_quantity,
+    modelUrl: row.model_url,
+    imageUrl: row.image_url,
+    delistedAt: row.delisted_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
   if (!builderRow) {
     return {
       purchasesAsBuyer: [],
@@ -3890,6 +3931,11 @@ async function exportCommerceData(db, builderRow, userId) {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
+      creditOrbsCollected: [],
+      listings,
       tax1099Forms: tax1099FormsExport,
     };
   }
@@ -3941,6 +3987,10 @@ async function exportCommerceData(db, builderRow, userId) {
   const auctionsRun = await db.prepare(`
     SELECT auction_id, landlet_id, starting_bid_cents, status, ends_at, winning_bid_id, created_at
     FROM auctions WHERE seller_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  const creditOrbsCollected = await db.prepare(`
+    SELECT orb_id, landlet_id, collected_at FROM credit_orbs
+    WHERE collected_by_builder_id = ? ORDER BY collected_at DESC
   `).bind(builderId).all();
   const auctionBidsPlaced = await db.prepare(`
     SELECT bid_id, auction_id, amount_cents, created_at
@@ -3997,6 +4047,12 @@ async function exportCommerceData(db, builderRow, userId) {
       amountCents: row.amount_cents,
       createdAt: row.created_at,
     })),
+    creditOrbsCollected: creditOrbsCollected.results.map((row) => ({
+      orbId: row.orb_id,
+      landletId: row.landlet_id,
+      collectedAt: row.collected_at,
+    })),
+    listings,
     tax1099Forms: tax1099FormsExport,
   };
 }

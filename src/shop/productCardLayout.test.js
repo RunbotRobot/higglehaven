@@ -219,3 +219,44 @@ describe('sellerLine (#3680)', () => {
     expect(sellerLine(42)).toBe('');
   });
 });
+
+describe('a card keeps its side (#4118)', () => {
+  // An expanded card on a phone fits on neither side, above nor below a thing in the middle of the screen
+  // (Build's selected item sits at the orbit target), which used to flip from left to right every frame.
+  const BIG = { width: 235, height: 590 };
+  const jitter = [194.6, 195.0, 195.4, 195.1, 194.9, 195.3, 194.7];
+
+  it('an anchor jittering around the middle of the screen never changes the card\'s side', () => {
+    let side = null;
+    const seen = new Set();
+    for (const x of jitter) {
+      const place = placeProductCard({
+        anchor: { x, y: 420, radius: 60 }, card: BIG, viewport: PHONE, previousSide: side,
+      });
+      side = place.side;
+      seen.add(side);
+    }
+    expect(seen.size).toBe(1);
+  });
+
+  it('moves to the other side only once it is clearly better, and then stays there', () => {
+    let side = 'right';
+    const step = (x) => {
+      side = placeProductCard({ anchor: { x, y: 420, radius: 60 }, card: BIG, viewport: PHONE, previousSide: side }).side;
+      return side;
+    };
+    expect(step(200)).toBe('right'); // a little right of the middle: stays
+    expect(step(215)).toBe('right'); // the left has 40 px more room: inside the margin
+    expect(step(330)).toBe('left');  // clearly more room on the left now
+    expect(step(200)).toBe('left');  // back near the middle: does not flip back
+  });
+
+  it('with no earlier side the old rule applies, and a side that fits is still chosen when both do', () => {
+    const fresh = placeProductCard({ anchor: { x: 195, y: 420, radius: 60 }, card: BIG, viewport: PHONE });
+    expect(fresh.side).toBe('left');
+    const both = placeProductCard({ anchor: { x: 195, y: 400, radius: 20 }, card: { width: 100, height: 100 }, viewport: PHONE, previousSide: 'left' });
+    expect(both.side).toBe('left');
+    const bothFresh = placeProductCard({ anchor: { x: 195, y: 400, radius: 20 }, card: { width: 100, height: 100 }, viewport: PHONE });
+    expect(bothFresh.side).toBe('right');
+  });
+});

@@ -746,13 +746,19 @@ earnings held back: `amountCents`, `releaseAt`, `releasedAt`, `revokedAt`),
 `commerce.auctionBidsPlaced` (bids the builder placed) are exported for builders,
 without internal resolution fields.
 
+`commerce.listings` is a seller's own listings (what they put up for sale: name,
+category, dimensions, `priceCents`, `stockQuantity`, `delistedAt`, model and image links;
+not embeddings or moderation fields), and `commerce.creditOrbsCollected` the orbs a builder
+collected. `ownedAvatars`/`ownedAnimations` stay what the person owns.
+
 **#4142:** a top-level `communication` section, present for every account
 (builder or not), holds what keys on the account itself: `assistantConversations`
 (each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and
 its `messages` as `{sender, text, sentAt}`), `assistantQuestions` (a question left
 while no assistant was free, with its `answer`), and `blocksMade` (who this
-account blocked and when). Who blocked the account is deliberately not exported
-("A block is silent").
+account blocked and when) and `bugReports` (feedback the account submitted: description,
+screenshot link, device facts; not the render-state dump). Who blocked the account
+is deliberately not exported ("A block is silent").
 
 **#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
 survey left open): `profile.moderationDecisions` lists every
@@ -5849,7 +5855,9 @@ invisible to them, like the other two). Deleting the reporter's account removes 
 Reached only from an accepted friend's own row in the Friends modal (no
 top-level nav entry of its own) — a "Message" button next to Remove
 opens `#dm-modal` (`openDmModal`), which lists the thread and lets the
-caller compose a reply. `#dm-badge`, next to `#friends-badge` on the
+caller compose a reply, and carries "Report this person" and "Block this person" side by side in its header
+(#4169, #3140); Report asks for an optional reason in the shared report dialog and says the outcome in the thread's
+own status line. `#dm-badge`, next to `#friends-badge` on the
 account-menu toggle, shows the unread count from `GET
 /api/direct-messages/unread-count` (#1661).
 

@@ -133,6 +133,18 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [AVATAR_X, AVATAR_Y]);
 await page.waitForTimeout(500); // lets the just-forced landlet instance load actually finish
+// #4176: the idle episode looks for its lean target once, the instant the idle timer crosses
+// SHOP_IDLE_DELAY_S, and keeps that answer (null if the wall was not loaded yet) until real input re-arms
+// it. The fixed 500 ms above is a guess at the load; when the wall streams in later than the 3 s idle
+// delay the episode starts empty and no lean ever comes (seen on CI and on a loaded machine). So wait for
+// the wall to be really findable, then give a real input to start a fresh idle episode with it loaded, and
+// put the avatar back exactly where it was.
+await page.waitForFunction(([x, y]) => window.__testFindShopIdleInteractionTarget(x, y)?.kind === 'lean', [AVATAR_X, AVATAR_Y], { timeout: 60000 });
+await deflectMoveJoystick(page);
+await page.evaluate(([x, y]) => {
+  window.__testTeleportShopAvatar(x, y, 0);
+  window.__testForceShopProximityCheck();
+}, [AVATAR_X, AVATAR_Y]);
 
 // Captured once here as the real baseline for the expected position/yaw-
 // offset math below, same reasoning shop-idle-sit-pose.test.mjs's own

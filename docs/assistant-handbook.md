@@ -728,8 +728,9 @@ go. It stops at the edge of how far you can go and never turns upside down.
 **If something goes wrong:**
 - Nothing moves: a box or a window is open and has the keys. Close it, or press
   Escape, and try again.
-- You can move the view and delete or undo by key so far: picking, placing and
-  moving items still need a mouse or a touch screen for now.
+- You can move the view, move and turn the selected item, and delete or undo by
+  key so far: picking and placing items still need a mouse or a touch screen for now.
+  With an item selected, Shift with the arrow keys moves the item instead of the view.
 
 ```controls build
 #add-item-btn | Add item
@@ -743,7 +744,9 @@ go. It stops at the edge of how far you can go and never turns upside down.
    instead, the view turns and the item stays put.
 3. Let go where you want it. It saves by itself.
 4. To lift it, lower it or move it in small exact steps, tap "More" on the card:
-   see "Nudge" below.
+   see "Nudge" below. On a keyboard, hold Shift: Shift with the arrow keys slides the
+   selected item a small step, Shift with Page Up and Page Down lifts and lowers it,
+   and Shift with Q and E turns it.
 
 **You will see:** the item follows your finger and stays where you leave it.
 

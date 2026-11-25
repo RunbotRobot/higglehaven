@@ -25,6 +25,10 @@ export const CARD_MAX_ANCHOR_RADIUS_PX = 140;
 // How far from the card's top or bottom its pointer may sit, so the pointer
 // never lands on a rounded corner.
 export const CARD_POINTER_INSET_PX = 16;
+// #4118: a card keeps the side it has until the other side is better by this much. Without it a thing
+// that sits on the middle of the screen (Build's selected item is at the orbit target) flips the card
+// from left to right every frame as its projected centre moves a fraction of a pixel.
+export const CARD_SIDE_HYSTERESIS_PX = 48;
 
 function clamp(value, lo, hi) {
   return Math.min(Math.max(value, lo), hi);
@@ -44,6 +48,7 @@ function clamp(value, lo, hi) {
 //   then pinned and shows no pointer).
 export function placeProductCard({
   anchor, card, viewport, margin = CARD_MARGIN_PX, gap = CARD_GAP_PX, topClear = CARD_TOP_CLEAR_PX,
+  previousSide = null,
 }) {
   const minTop = Math.max(margin, topClear);
   const maxLeft = Math.max(margin, viewport.width - margin - card.width);
@@ -77,7 +82,8 @@ export function placeProductCard({
   let left;
   let top;
   if (fitsRight || fitsLeft) {
-    side = fitsRight ? 'right' : 'left';
+    // Both sides fit: stay on the side the card was on, rather than snapping to the right.
+    side = fitsRight && fitsLeft && previousSide === 'left' ? 'left' : (fitsRight ? 'right' : 'left');
     left = fitsRight ? rightLeft : leftLeft;
     top = clamp(y - card.height / 2, minTop, maxTop);
   } else {
@@ -96,7 +102,19 @@ export function placeProductCard({
     } else {
       // Nothing fits (a very large product on a small screen): keep the card on
       // screen on the side with more room, even if it overlaps.
-      side = x < viewport.width / 2 ? 'right' : 'left';
+      // Room on each side is how far the card could sit from the thing before the screen's edge. The card
+      // keeps the side it had unless the other has clearly more room (CARD_SIDE_HYSTERESIS_PX).
+      const roomRight = viewport.width - margin - (x + radius + gap);
+      const roomLeft = x - radius - gap - margin;
+      if (previousSide === 'right' || previousSide === 'left') {
+        const previousRoom = previousSide === 'right' ? roomRight : roomLeft;
+        const otherRoom = previousSide === 'right' ? roomLeft : roomRight;
+        side = otherRoom > previousRoom + CARD_SIDE_HYSTERESIS_PX
+          ? (previousSide === 'right' ? 'left' : 'right')
+          : previousSide;
+      } else {
+        side = x < viewport.width / 2 ? 'right' : 'left';
+      }
       left = clamp(side === 'right' ? rightLeft : leftLeft, margin, maxLeft);
       top = clamp(y - card.height / 2, minTop, maxTop);
     }

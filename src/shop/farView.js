@@ -65,7 +65,7 @@ function prefersReducedMotion() {
 
 export function createFarView({
   queue, root, fetchTile, loadSource, dimensionsFor, elevationFor, loadedLandletIds, getCamera, getView,
-  now = () => performance.now(), rangeM = FAR_VIEW_RANGE_M,
+  now = () => performance.now(), rangeM = FAR_VIEW_RANGE_M, tileRefreshMs = TILE_REFRESH_MS,
   createDissolve = createArrivalDissolve, reducedMotion = prefersReducedMotion(),
 }) {
   const group = {}; // queue group, so dispose() cancels what has not run
@@ -117,7 +117,7 @@ export function createFarView({
       record.landlets = decodeFarPlacementsPayload(payload);
       record.readAt = now();
     }).catch(() => {
-      record.readAt = now() - TILE_REFRESH_MS + TILE_RETRY_MS;
+      record.readAt = now() - tileRefreshMs + TILE_RETRY_MS;
     }).finally(() => {
       record.refreshing = false;
       tilesInFlight -= 1;
@@ -285,7 +285,7 @@ export function createFarView({
       } else if (record.state === 'failed' && t - record.failedAt > TILE_RETRY_MS && mayFetch) {
         lastTileStartAt = t;
         startTile(tile);
-      } else if (record.state === 'ready' && !record.refreshing && t - record.readAt > TILE_REFRESH_MS && mayFetch) {
+      } else if (record.state === 'ready' && !record.refreshing && t - record.readAt > tileRefreshMs && mayFetch) {
         lastTileStartAt = t;
         refreshTile(tile, record);
       }

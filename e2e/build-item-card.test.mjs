@@ -72,6 +72,27 @@ check(afterOrbit.shown, 'the card is still showing after the view moves');
 check(afterOrbit.box.left >= 0 && afterOrbit.box.right <= 390 && afterOrbit.box.top >= 0 && afterOrbit.box.bottom <= 844, 'it stays wholly on screen');
 console.log('card before/after orbit:', JSON.stringify(before.box), JSON.stringify(afterOrbit.box));
 
+// #4118: with More open the card is as large as the screen allows and fits beside nothing; it used to jump
+// between the left and right edge every frame while the view was orbited. It keeps its side: one change at
+// most across a whole orbit, sampled every animation frame.
+await page.evaluate(() => {
+  window.__cardSides = [];
+  const sample = () => {
+    window.__cardSides.push(document.getElementById('item-card').dataset.side);
+    if (window.__cardSides.length < 400) requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+});
+await page.mouse.move(120, 500);
+await page.mouse.down();
+for (let i = 0; i < 40; i++) await page.mouse.move(120 + (i % 2 === 0 ? 40 : -40) + i * 2, 500, { steps: 2 });
+await page.mouse.up();
+await page.waitForTimeout(700);
+const sides = await page.evaluate(() => window.__cardSides);
+const changes = sides.filter((side, i) => i > 0 && side !== sides[i - 1]).length;
+console.log('card side changes while orbiting with More open:', changes, 'of', sides.length, 'frames');
+check(changes <= 1, `the card keeps its side while the view is orbited (${changes} changes over ${sides.length} frames)`);
+
 // The close button clears the selection and the card with it.
 await page.click('#item-card-close-btn');
 await page.waitForTimeout(300);
