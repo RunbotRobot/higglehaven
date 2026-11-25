@@ -327,6 +327,65 @@ describe('Build judges a wall as one set (#4115)', () => {
     expect(tiersOf(objects).size).toBe(1);
   });
 
+  // #4208 (review): the hold is per item, as Shop's is: an item no finished set job has looked at keeps what it is drawn at.
+  it('holds a wall that arrives after an empty first layout until a job has covered it', () => {
+    const objects = [];
+    const { lod, look, tick, place } = setup(objects);
+    look(0, -12, 0);
+    tick(2); // an empty layout: its job finishes at once, and says nothing about a wall that is not there yet
+    place(wall('brick', 20, 20));
+    tick(1);
+    expect(tiersOf(objects)).toEqual(new Set(['full']));
+    tick(3);
+    expect(lod.setCount()).toBe(1);
+    expect(tiersOf(objects).size).toBe(1);
+  });
+
+  it('holds items that stream in later until a job has covered them, then they join the wall', () => {
+    const objects = wall('brick', 10, 20);
+    const { lod, look, tick, place } = setup(objects);
+    look(0, -12, 0);
+    tick(4);
+    const more = wall('brick', 10, 20, { x0: 10 });
+    place(more);
+    tick(1);
+    expect(tiersOf(more)).toEqual(new Set(['full']));
+    tick(4);
+    expect(lod.setCount()).toBe(1);
+    expect(tiersOf(objects).size).toBe(1);
+  });
+
+  it('lets a held item in at the version it is drawn at, not at a version no set has judged', () => {
+    const objects = wall('brick', 20, 20);
+    const late = objects[objects.length - 1];
+    late.userData.lodTiersState = 'loading'; // its versions are still on their way
+    const { lod, look, tick } = setup(objects);
+    look(0, -12, 0);
+    lod.holdNew(late);
+    late.userData.lodTiersState = 'ready'; // they have attached
+    tick(1);
+    expect(tierOf(late)).toBe('full');
+  });
+
+  it('serves a selected item in the first pass, and a reset starts a first load again', () => {
+    const objects = wall('brick', 20, 20);
+    const selected = new Set([objects[0]]);
+    const { lod, look, tick } = setup(objects, { selected });
+    look(0, -12, 0);
+    tick(1);
+    expect(tierOf(objects[0])).toBe('full');
+    tick(4);
+    expect(lod.setCount()).toBe(1);
+    lod.reset();
+    expect(lod.setCount()).toBe(0);
+    look(0, -40, 10);
+    tick(1);
+    const before = objects.map(tierOf);
+    expect(objects.map(tierOf)).toEqual(before);
+    tick(4);
+    expect(lod.setCount()).toBe(1);
+  });
+
   it('works the sets out again after the layout changes and stands still', () => {
     const objects = wall('brick', 6, 6);
     const { lod, look, tick, place } = setup(objects);
