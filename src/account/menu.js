@@ -32,6 +32,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 // rendering only) does.
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
+import { promptReportReason } from '../ui/reportReasonModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import {
@@ -55,6 +56,7 @@ import {
   fetchBuilders,
   fetchDirectMessages,
   sendDirectMessage,
+  sendDirectMessageReport,
   clearDirectMessageIdempotencyKey,
   markDirectMessagesRead,
   fetchUnreadDirectMessageCount,
@@ -599,6 +601,27 @@ dmBlockBtn.addEventListener('click', async () => {
     }
   } finally {
     dmBlockBtn.disabled = false;
+  }
+});
+
+// #4169: Report from the DM header, like the nearby chat and voice reports: the reason is optional, the outcome is
+// said in the thread's own status line and stays until the next action, and the other person is told nothing.
+const dmReportBtn = document.getElementById('dm-report-btn');
+dmReportBtn.addEventListener('click', async () => {
+  if (!dmOtherBuilderId) return;
+  const answer = await promptReportReason({ title: 'Report this person for inappropriate conduct?' });
+  if (answer === null) return;
+  dmReportBtn.disabled = true;
+  dmStatusEl.classList.remove('error');
+  dmStatusEl.textContent = '';
+  try {
+    await sendDirectMessageReport({ reportedBuilderId: dmOtherBuilderId, reason: answer.reason || undefined });
+    dmStatusEl.textContent = 'Report sent. Thank you.';
+  } catch (err) {
+    dmStatusEl.classList.add('error');
+    dmStatusEl.textContent = `Couldn't submit the report. ${err?.message || 'Try again.'}`;
+  } finally {
+    dmReportBtn.disabled = false;
   }
 });
 

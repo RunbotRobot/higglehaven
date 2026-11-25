@@ -55,7 +55,6 @@ const NOT_EXPORTED = {
 // Own data that should be in the export and is not yet. Each line is a task,
 // not an excuse: remove it when the section lands (tracked on #4142).
 const KNOWN_GAPS = {
-  bug_reports: 'feedback reports the person submitted',
   suspended_seller_instance_snapshots: 'a builder\'s own placed content, saved while suspended',
   nearby_chat_messages: 'what the person said in nearby chat (short-lived)',
   user_content_edit_history: 'earlier versions of the person\'s own reviews and sign posts',

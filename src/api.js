@@ -2131,6 +2131,17 @@ export async function sendNearbyChatReport({ reportedBuilderId, reason }) {
   return reportId;
 }
 
+// #4169: a conduct report about someone the caller has a message thread with; the server keeps who and why,
+// never any message text, and the other person is told nothing.
+export async function sendDirectMessageReport({ reportedBuilderId, reason }) {
+  const { reportId } = await requestJson('/direct-messages/reports', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reportedBuilderId, reason }),
+  });
+  return reportId;
+}
+
 // #3140 (sub-issue of #3124): durable, silent blocks keyed on the account.
 // Blocking takes whichever id the surface already has (a builder id on
 // presence, chat and friends); the server resolves it to the account itself.
