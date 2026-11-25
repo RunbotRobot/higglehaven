@@ -12,7 +12,7 @@
 // creation" leaf, #2614, since this leaf's own functions only call it, not
 // the other way around): purchaseFromRow, handlePurchaseFinalize, and
 // every other helper exclusive to that leaf.
-import { purchaseProductName, ORPHANED_PRODUCT_NAME, ORPHANED_SELLER_NAME } from './purchase-record.js';
+import { purchaseProductName, ORPHANED_PRODUCT_NAME, ORPHANED_SELLER_NAME, refundAmountCents } from './purchase-record.js';
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
@@ -56,7 +56,6 @@ const STRIPE_RATE_LIMIT_MAX = 20;
 // commission rate ever does. #2614 moved PURCHASE_COMMISSION_RATE/
 // PURCHASE_BUILDER_SPLIT themselves into worker/lib/purchase-creation.js;
 // this constant's own derivation still references their values there.
-const REFUND_PAYOUT_RATE = 0.99;
 // #2020 (sub-issue of #1212, owner-settled shape 2026-10-13): "disputes/
 // refund requests at or below $15-25... exact value at implementer's
 // discretion within that range" — picked the midpoint.
@@ -733,11 +732,11 @@ async function finalizeRefundReversal(env, purchase) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
       throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
-    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
+    const refundCents = refundAmountCents(purchase.total_cents);
     try {
       await stripeRequest(env, 'POST', 'refunds', {
         payment_intent: purchase.payment_intent_id,
-        amount: refundAmountCents,
+        amount: refundCents,
         reverse_transfer: true,
         refund_application_fee: true,
       }, refundIdempotencyKey(purchase.purchase_id));

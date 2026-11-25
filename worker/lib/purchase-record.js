@@ -20,3 +20,11 @@ export async function purchaseProductName(db, purchase) {
   const live = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?').bind(purchase.template_id).first();
   return live?.name || null;
 }
+
+// #4340: what a real-money refund actually sends back to the buyer. The owner's 2026-09-10 ruling on #651
+// (see purchase-lifecycle.js) keeps 1% back so a refund can never reverse a cashed-out commission in full, so
+// the figure shown to the seller has to be this one, from one definition, not the order's total.
+export const REFUND_PAYOUT_RATE = 0.99;
+export function refundAmountCents(totalCents) {
+  return Math.round(totalCents * REFUND_PAYOUT_RATE);
+}

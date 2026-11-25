@@ -8690,6 +8690,10 @@ with the created `purchase`; on the real-money path, returns `200` with
 `paymentIntentId` is only ever non-null for a purchase that went through
 the real-money path below.
 
+`refundCents` (#4340) is what refunding the order sends back to the buyer: 99% of
+`totalCents` for a card order (`paymentIntentId` set), `null` otherwise. The
+Sell > Orders refund confirmation shows it.
+
 `buyerBuilderId` (#1112) is the buyer's own `builder_id`, captured at
 purchase time now that every real purchase already requires a verified
 session (N44) — distinct from `builderId` above, which is the *host*
