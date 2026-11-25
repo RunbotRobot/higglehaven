@@ -149,6 +149,14 @@
       <input id="landletLookupInput" placeholder="Name, id or owner" aria-label="Find a landlet by name, id or owner" />
       <button id="landletLookupBtn">Look up</button>
     </div>
+    <div id="outsideItemsBlock">
+      <h3>Items off their lándlet</h3>
+      <p class="hint">Items whose footprint stands outside their own lándlet's outline, by lándlet. Nothing is moved or removed. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/4198" target="_blank" rel="noopener">#4198</a>.</p>
+      <p class="err" id="outsideItemsErr" hidden></p>
+      <button class="secondary" id="outsideItemsBtn">Check</button>
+      <p class="hint" id="outsideItemsCount" role="status" aria-live="polite"></p>
+      <div id="outsideItemsWrap"></div>
+    </div>
     <p class="hint" id="landletSearchNote" hidden></p>
     <div id="landletSearchResults" class="landlet-search-results" hidden></div>
     <div id="landletDetailWrap" hidden>

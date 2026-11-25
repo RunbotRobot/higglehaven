@@ -89,6 +89,7 @@ import {
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
+import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
@@ -863,6 +864,11 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'GET' && route[0] === 'video-generation-jobs' && route.length === 2) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
+  }
+
+  // #4198: a read-only list of the items standing off their own lándlet's outline (admin only).
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-items-outside-landlets') {
+    return handleAdminItemsOutsideLandlets(request, env.DB);
   }
 
   // #4122: the admin dashboard's Video-to-3D jobs panel (why a finished model was not kept; a free re-check).
