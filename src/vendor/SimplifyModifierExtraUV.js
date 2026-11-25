@@ -164,6 +164,13 @@ class SimplifyModifier {
 		// piece is simplified.
 		if ( options.lockBorders ) yield* markBorderVertices( vertices, faces ); // SLICED
 
+		// #4302: or, instead of locking them, let a border vertex slide along its border: it may collapse onto the
+		// next vertex of the same border while the border stays within a tolerance of where it was, and nothing
+		// else may move it. A model whose border is most of its vertices (the brick: 2,507 open edges) cannot
+		// get below the interior's own triangle count with the borders locked (2,638 of 5,320), and tears when
+		// they are free (#4114). options.slideBorders is the tolerance as a fraction of the model's diagonal.
+		if ( options.slideBorders > 0 && ! options.lockBorders ) yield* markSlidingBorderVertices( vertices, faces, options.slideBorders ); // SLICED
+
 		for ( let i = 0, il = vertices.length; i < il; i ++ ) {
 
 			computeEdgeCostAtVertex( vertices[ i ] );
@@ -486,6 +493,169 @@ function* markBorderVertices( vertices, faces ) {
 
 }
 
+// #4302: marks every vertex on an open edge (positions welded as in markBorderVertices) as a border vertex that
+// may slide along its border, with the deviation it may cause: `fraction` of the model's diagonal.
+function* markSlidingBorderVertices( vertices, faces, fraction ) {
+
+	if ( vertices.length === 0 || faces.length === 0 ) return;
+
+	const min = new Vector3( Infinity, Infinity, Infinity );
+	const max = new Vector3( - Infinity, - Infinity, - Infinity );
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		min.min( vertices[ i ].position );
+		max.max( vertices[ i ].position );
+
+	}
+
+	const diagonal = min.distanceTo( max );
+	const cell = Math.max( diagonal * 1e-5, 1e-9 );
+	const ids = new Map();
+	const idOf = ( v ) => {
+
+		const p = v.position;
+		const key = Math.round( p.x / cell ) + ',' + Math.round( p.y / cell ) + ',' + Math.round( p.z / cell );
+		let id = ids.get( key );
+		if ( id === undefined ) {
+
+			id = ids.size;
+			ids.set( key, id );
+
+		}
+
+		return id;
+
+	};
+
+	const uses = new Map();
+
+	for ( let i = 0; i < faces.length; i ++ ) {
+
+		const a = idOf( faces[ i ].v1 );
+		const b = idOf( faces[ i ].v2 );
+		const c = idOf( faces[ i ].v3 );
+
+		if ( a !== b && b !== c && a !== c ) {
+
+			for ( const [ x, y ] of [ [ a, b ], [ b, c ], [ c, a ] ] ) {
+
+				const key = x < y ? x + '-' + y : y + '-' + x;
+				const entry = uses.get( key );
+				if ( entry ) entry.n ++; else uses.set( key, { n: 1, a: x, b: y } );
+
+			}
+
+		}
+
+		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+	}
+
+	const border = new Set();
+
+	for ( const { n, a, b } of uses.values() ) {
+
+		if ( n === 1 ) {
+
+			border.add( a );
+			border.add( b );
+
+		}
+
+	}
+
+	const tolerance = diagonal * fraction;
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		if ( border.has( idOf( vertices[ i ] ) ) ) {
+
+			vertices[ i ].border = true;
+			vertices[ i ].slideTolerance = tolerance;
+
+		}
+
+		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+	}
+
+}
+
+// #4302: the neighbours of v along an open edge (an edge of exactly one of v's triangles).
+function borderNeighbors( v ) {
+
+	const out = [];
+
+	for ( let i = 0; i < v.neighbors.length; i ++ ) {
+
+		const n = v.neighbors[ i ];
+		let shared = 0;
+
+		for ( let j = 0; j < v.faces.length; j ++ ) if ( v.faces[ j ].hasVertex( n ) ) shared ++;
+
+		if ( shared === 1 ) out.push( n );
+
+	}
+
+	return out;
+
+}
+
+const _slideSegment = new Vector3(), _slideToPoint = new Vector3(), _slideClosest = new Vector3();
+
+// Distance from p to the segment a-b.
+function distanceToSegment( p, a, b ) {
+
+	_slideSegment.subVectors( b, a );
+	_slideToPoint.subVectors( p, a );
+	const lengthSq = _slideSegment.lengthSq();
+	const t = lengthSq > 0 ? Math.min( 1, Math.max( 0, _slideToPoint.dot( _slideSegment ) / lengthSq ) ) : 0;
+	_slideClosest.copy( a ).addScaledVector( _slideSegment, t );
+	return p.distanceTo( _slideClosest );
+
+}
+
+// #4302: the cheapest way for a sliding border vertex to move: onto a neighbour on its own border, while the
+// border (a chain through this vertex) stays within the tolerance. Nothing else may move it.
+function computeSlidingBorderCost( v ) {
+
+	const along = borderNeighbors( v );
+	let bestCost = Infinity;
+	let bestNeighbor = null;
+
+	// Only a simple chain (exactly two border neighbours) can slide; a corner where borders meet stays.
+	if ( along.length === 2 ) {
+
+		for ( let i = 0; i < 2; i ++ ) {
+
+			const target = along[ i ];
+			const other = along[ 1 - i ];
+
+			if ( ! target.border ) continue;
+
+			const deviation = distanceToSegment( v.position, other.position, target.position );
+
+			if ( deviation > v.slideTolerance ) continue;
+
+			const cost = deviation + 1e-3 * v.position.distanceTo( target.position );
+
+			if ( cost < bestCost ) {
+
+				bestCost = cost;
+				bestNeighbor = target;
+
+			}
+
+		}
+
+	}
+
+	v.collapseNeighbor = bestNeighbor || v.neighbors[ 0 ];
+	v.collapseCost = bestCost;
+
+}
+
 function computeEdgeCostAtVertex( v ) {
 
 	if ( v.neighbors.length === 0 ) {
@@ -502,6 +672,14 @@ function computeEdgeCostAtVertex( v ) {
 		v.collapseNeighbor = v.neighbors[ 0 ];
 		v.collapseCost = Infinity;
 
+		return;
+
+	}
+
+	// #4302
+	if ( v.border ) {
+
+		computeSlidingBorderCost( v );
 		return;
 
 	}
@@ -767,6 +945,8 @@ class Vertex {
 		this.collapseCost = 0;
 		this.collapseNeighbor = null;
 		this.locked = false; // #3528: shares its position with another vertex
+		this.border = false; // #4302: on an open edge and allowed to slide along it (options.slideBorders)
+		this.slideTolerance = 0;
 
 	}
 

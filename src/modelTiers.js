@@ -72,6 +72,13 @@ export const MID_MIN_TRIANGLES_PER_MESH = 12;
 // A model that fails every rung keeps its own geometry for mid. The target ceiling grows with each rung.
 export const MID_FRACTION_LADDER = [MID_TRIANGLE_FRACTION, 0.25, 0.5];
 export const MID_TEXTURE_MAX_SIZE = 256;
+// #4302: when locking a mesh's open borders leaves its mid version far above its target (the brick: a
+// shell of 2,507 open edges, which stuck at half its triangles), its borders may slide along themselves
+// instead, within this much of the model's diagonal, smallest first. Whether the result may stand is the
+// fidelity check's call (src/tierFidelity.js), as for every mid version.
+export const MID_SLIDE_BORDER_LADDER = [0.005, 0.01, 0.02];
+// A locked result within this multiple of its target is good enough: no sliding is tried.
+const MID_SLIDE_STUCK_FACTOR = 1.5;
 // Directions the far fallback (the support hull) takes its extreme points in: the six axes, twelve
 // edges and eight corners of a box, so the hull has at most 26 points and about fifty triangles.
 const HULL_DIRECTIONS = (() => {
@@ -358,6 +365,25 @@ function* downsizeMaterial(material, maxSize, getPixels, cache, makeImage) {
 
 // ---- Mid ----
 
+// #4302: simplifies `geometry` again with its open borders free to slide along themselves, smallest tolerance
+// first, stopping at the first that gets within MID_SLIDE_STUCK_FACTOR of the target; of all that were tried,
+// the smallest result wins. `locked` is the result the locked pass already made; it is returned (not
+// disposed) when sliding does no better, and disposed when something beats it.
+function* slideBordersToTarget(geometry, targetTriangles, locked, ladder) {
+  let best = locked;
+  for (const tolerance of ladder) {
+    const candidate = yield* simplifyToTarget(geometry, targetTriangles, { lockBorders: false, slideBorders: tolerance });
+    if (countTriangles(candidate) < countTriangles(best)) {
+      if (best !== geometry) best.dispose();
+      best = candidate;
+    } else if (candidate !== geometry) {
+      candidate.dispose();
+    }
+    if (countTriangles(best) <= targetTriangles * MID_SLIDE_STUCK_FACTOR) break;
+  }
+  return best;
+}
+
 function* buildMid(model, meshes, options, getPixels, rung = 0) {
   const makeImage = options.makeImage ?? canvasImageFromPixels;
   const total = meshes.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
@@ -377,7 +403,12 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
     if (total > target) {
       const meshTarget = Math.max(MID_MIN_TRIANGLES_PER_MESH, Math.round((triangles * target) / total));
       if (triangles > meshTarget) {
-        const simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders: options.lockBorders ?? true });
+        let simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders: options.lockBorders ?? true });
+        // #4302: stuck far above the target with the borders locked: let them slide.
+        if (options.slideBorders !== false && (options.lockBorders ?? true) && countTriangles(simplified) > meshTarget * MID_SLIDE_STUCK_FACTOR
+          && (yield* boundaryEdgeCountSteps(geometry)) > 0) {
+          simplified = yield* slideBordersToTarget(geometry, meshTarget, simplified, options.slideBorderLadder ?? MID_SLIDE_BORDER_LADDER);
+        }
         if (simplified !== geometry) {
           cloneMesh.geometry = simplified;
           changed = true;

@@ -287,6 +287,59 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(report.openGrowth).toBeLessThanOrEqual(1.15);
   });
 
+  // #4302: a long open strip (a scanned brick's shell, in miniature): almost every vertex lies on an open
+  // edge. With the borders locked a pass cannot go below the border's own triangles; free, the pass tears.
+  // Sliding lets a border vertex collapse onto the next one of its own border while the border stays within
+  // a tolerance, so the straight stretches go and the corners stay.
+  function openStrip() {
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(new THREE.PlaneGeometry(10, 0.4, 200, 2), new THREE.MeshStandardMaterial({ color: 0xcc6a2a, side: THREE.DoubleSide })));
+    return group;
+  }
+
+  it('slides the borders of an open strip: far fewer triangles than with the borders locked, surface and outline kept (#4302)', () => {
+    const full = openStrip();
+    const locked = buildModelTiersSync(full, { slideBorders: false });
+    const slid = buildModelTiersSync(full);
+    expect(slid.stats.mid).toBeLessThan(locked.stats.mid * 0.6);
+    const report = silhouetteFidelity(fidelityBatches(full), fidelityBatches(slid.mid.object));
+    expect(isFaithful(report, 'mid')).toBe(true);
+    expect(report.areaKept).toBeGreaterThanOrEqual(0.95);
+    expect(report.openGrowth).toBeLessThanOrEqual(1.15);
+  });
+
+  it('keeps the corners of a border while sliding its straight stretches (#4302)', () => {
+    const geometry = new THREE.PlaneGeometry(10, 0.4, 200, 2);
+    const slid = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false, slideBorders: 0.01 }));
+    expect(countTriangles(slid)).toBeLessThan(countTriangles(geometry) / 4);
+    const corners = [[-5, -0.2], [5, -0.2], [-5, 0.2], [5, 0.2]];
+    const position = slid.attributes.position;
+    for (const [x, y] of corners) {
+      let found = false;
+      for (let i = 0; i < position.count; i++) if (Math.abs(position.getX(i) - x) < 1e-6 && Math.abs(position.getY(i) - y) < 1e-6) found = true;
+      expect(found).toBe(true);
+    }
+    // No border opened up: the open edges did not grow.
+    expect(runToEnd(boundaryEdgeCountSteps(slid))).toBeLessThanOrEqual(runToEnd(boundaryEdgeCountSteps(geometry)));
+  });
+
+  it('does not slide a border when asked not to (#4302)', () => {
+    const geometry = new THREE.PlaneGeometry(10, 0.4, 200, 2);
+    const locked = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: true }));
+    const unlockedNoSlide = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false }));
+    const slid = runToEnd(simplifyToTarget(geometry, 20, { lockBorders: false, slideBorders: 0.01 }));
+    expect(countTriangles(slid)).toBeLessThan(countTriangles(locked));
+    // Without sliding and without locking, nothing is protected: the old behaviour is unchanged.
+    expect(countTriangles(unlockedNoSlide)).toBeGreaterThan(0);
+  });
+
+  it('does not try to slide a closed model: its mid version is the same as without sliding (#4302)', () => {
+    const a = buildModelTiersSync(chair());
+    const b = buildModelTiersSync(chair(), { slideBorders: false });
+    expect(a.stats.mid).toBe(b.stats.mid);
+    expect(a.stats.far).toBe(b.stats.far);
+  });
+
   it('draws the far version from both sides, so nothing the simplifier left facing away disappears', () => {
     const { far } = buildModelTiersSync(chair());
     const meshes = [];
