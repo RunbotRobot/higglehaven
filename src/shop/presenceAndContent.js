@@ -1705,6 +1705,7 @@ export function updateOtherShopAvatars(now) {
 // meshes/signs/calendars/reviews rather than duplicating whatever the
 // current load already added.
 async function loadShopLandletInstances(entry, myToken) {
+  console.warn('DBG4295 load start', myToken, entry.loadToken);
   let instances;
   try {
     // #1282: entry.record is a one-time snapshot taken when Shop mode was
@@ -1734,6 +1735,7 @@ async function loadShopLandletInstances(entry, myToken) {
   // #4295: a load that was put away while its requests were in flight (an unload, then a newer load) must not go
   // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
   // stale, so nothing would be drawn at all.
+  console.warn('DBG4295 fetched', myToken, entry.loadToken, instances.length, findTemplate(instances[0]?.templateId) ? 'tmpl' : 'NO-TMPL');
   if (myToken !== entry.loadToken) return;
   // #3396: moving, looking and drawing never wait on loading. Each item is its
   // own small unit of work, run inside the per-frame time budget (see
