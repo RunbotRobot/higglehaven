@@ -9937,21 +9937,21 @@ refetch and retry"`, distinct from the marker-level `404` above.
 
 ### Frontend wiring
 
-Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
-right below the existing Low Stock panel, #1949/#1950's own sibling) — a
-checkbox toggle (`#sold-out-marker-toggle`, defaults off) plus a list of
-this landlet's own un-dismissed markers, each with a `Dismiss` button.
-Unlike the Low Stock panel (which highlights an **already-placed, still-
-live** mesh — `addLowStockHighlight`), a sold-out marker has no live
-instance left to decorate, so checking the toggle instead spawns a
-standalone grayed-out ghost box (`THREE.MeshBasicMaterial`, 35% opacity,
-non-interactive) at each marker's own recorded position — cleared and
-re-applied via `applySoldOutMarkerVisibility` whenever the toggle flips or
-a fresh list loads. Same Build-mode-only lifecycle as the Low Stock
-panel's own `activeLowStockTemplateIds`: both the toggle state and the
-ghost boxes reset the moment Build mode is left (`enterShopMode`/
-`enterSellMode`), so re-entering Build later starts clean rather than
-silently reapplying a stale toggle with nothing behind it yet.
+Settings > Build has a "Sold-out markers" panel (`renderSoldOutMarkersSection`,
+right below the existing Low Stock panel, #1949/#1950's own sibling): a list of
+this landlet's own un-dismissed markers, each with a `Dismiss` button. Unlike the
+Low Stock panel (which highlights an **already-placed, still-live** mesh), a
+sold-out marker has no live instance left to decorate.
+
+The switch that draws them is **"Faded items"** in Build's Tools leaf (#4201;
+`#toggle-ghosts`, it used to be a Settings checkbox). One switch covers everything not
+live: each sold-out marker and each removed item (`pending-restoration`) is drawn where
+it stood as the item's own model, translucent and pulled toward grey (an outline of its
+size while the model loads or when it cannot). The switch fetches the marker list itself,
+applies via `applySoldOutMarkerVisibility`, and is remembered on the device
+(`localStorage` `hh_build_show_ghosts`); Build's scene-ready step re-applies it. Both the
+state and the ghosts reset when Build is left (`enterShopMode`/`enterSellMode`), and the
+next Build entry restores the remembered setting.
 `window.__testSoldOutMarkerMeshIds()` exposes which markers are currently
 rendered, the same `window.__test*` convention
 `window.__testLowStockHighlightedInstanceIds` already established for

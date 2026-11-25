@@ -2966,6 +2966,7 @@
       /* #3942: the Tools leaf's toggles and Paste are quiet buttons; a toggle that is on fills green. */
       #toggle-multiselect,
       #toggle-measure,
+      #toggle-ghosts,
       #paste-btn {
         min-height: 44px;
         padding: var(--space-xs) var(--space-lg);
@@ -2977,7 +2978,8 @@
         align-self: flex-start;
       }
       #toggle-multiselect.active,
-      #toggle-measure.active {
+      #toggle-measure.active,
+      #toggle-ghosts.active {
         background: var(--brand-green);
         color: var(--ink);
       }
@@ -5358,14 +5360,6 @@
          settings tab — same list/row look as .low-stock-list/.low-stock-row
          just above, own classes since each row carries a Dismiss action
          the low-stock rows don't. */
-      .sold-out-marker-toggle-row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-xs);
-        font-size: var(--text-xs);
-        color: rgb(var(--ink-rgb) / 0.75);
-        margin-bottom: var(--space-sm);
-      }
       .sold-out-marker-list {
         display: flex;
         flex-direction: column;

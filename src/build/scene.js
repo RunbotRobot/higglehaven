@@ -2690,6 +2690,7 @@ export function markBuildSceneReady() {
   buildLod.reset(); // #4208: a first load: no set job has looked at anything yet, so nothing is judged alone
   buildLod.update(performance.now(), true);
   buildFirstLoad = false;
+  restoreGhostsSwitch(); // #4201
 }
 
 // Never reconcile over work this tab hasn't finished saving: an action in
@@ -7108,6 +7109,30 @@ async function renderLowStockSection() {
   applyFilter();
 }
 
+// #4201: the one switch for everything not live (sold out, removed, suspended), in the Tools leaf (it used to be
+// a checkbox in Settings > Build). On draws each as a faint ghost where it stood, for the builder only; the
+// setting is remembered on this device. The sold-out list is fetched here when the switch goes on, since the
+// Settings section that used to fetch it may never be opened.
+const ghostsBtn = document.getElementById('toggle-ghosts');
+const GHOSTS_PREF_KEY = 'hh_build_show_ghosts';
+function readGhostsPref() {
+  try { return localStorage.getItem(GHOSTS_PREF_KEY) === '1'; } catch { return false; }
+}
+async function setGhostsOn(on, { remember = true } = {}) {
+  setShowSoldOutMarkers(on);
+  ghostsBtn?.setAttribute('aria-pressed', String(on));
+  ghostsBtn?.classList.toggle('active', on);
+  if (remember) { try { localStorage.setItem(GHOSTS_PREF_KEY, on ? '1' : '0'); } catch { /* the switch still works for this visit */ } }
+  if (on && currentLandletId) {
+    try { setSoldOutMarkers(await fetchSoldOutMarkers(currentLandletId)); } catch { /* the removed ghosts still show; the sold-out ones wait for the next try */ }
+    if (!showSoldOutMarkers) return; // switched off while the list loaded
+  }
+  applySoldOutMarkerVisibility();
+}
+ghostsBtn?.addEventListener('click', () => { setGhostsOn(ghostsBtn.getAttribute('aria-pressed') !== 'true'); });
+// Entering Build: the switch shows, and applies, what this device remembered.
+function restoreGhostsSwitch() { setGhostsOn(readGhostsPref(), { remember: false }); }
+
 // #2068 (leaf sub-issue of #1973/#1947, owner requirement): "On the build
 // screen looking at their land, they should be able to toggle on/off
 // grayed-out items that have disappeared which they haven't dismissed
@@ -7127,16 +7152,6 @@ async function renderSoldOutMarkersSection() {
   label.textContent = 'Sold-out markers';
   field.appendChild(label);
 
-  const toggleRow = document.createElement('label');
-  toggleRow.className = 'sold-out-marker-toggle-row';
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.id = 'sold-out-marker-toggle';
-  toggle.checked = showSoldOutMarkers;
-  toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out or removed items used to be'));
-  field.appendChild(toggleRow);
-
   const list = document.createElement('div');
   list.className = 'sold-out-marker-list';
   field.appendChild(list);
@@ -7144,11 +7159,6 @@ async function renderSoldOutMarkersSection() {
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
   appendToMoreFold(field);
-
-  toggle.addEventListener('change', () => {
-    setShowSoldOutMarkers(toggle.checked);
-    applySoldOutMarkerVisibility();
-  });
 
   let markers;
   try {

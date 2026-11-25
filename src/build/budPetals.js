@@ -70,7 +70,7 @@ function openLevelsLeaf() {
 // is unchanged. Paste (hidden until something is copied, #3574) is simply not listed until
 // then, because scene.js leaves its `hidden` attribute alone and so does this.
 // #4201: Removed items joins them (it used to stand on the world beside Undo); it stays hidden until something is pending.
-const TOOL_IDS = ['toggle-multiselect', 'multiselect-brush-control', 'toggle-measure', 'paste-btn', 'pending-restoration-btn'];
+const TOOL_IDS = ['toggle-multiselect', 'multiselect-brush-control', 'toggle-measure', 'toggle-ghosts', 'paste-btn', 'pending-restoration-btn'];
 
 function openToolsLeaf() {
   openLeaf({
@@ -90,7 +90,7 @@ function openToolsLeaf() {
       // wears the tool's name (below) until it is switched off. Paste starts a placement, which
       // needs the world too. The brush slider keeps the leaf open: it is being adjusted.
       list.addEventListener('click', (event) => {
-        if (event.target.closest('#toggle-multiselect, #toggle-measure, #paste-btn, #pending-restoration-btn')) setTimeout(closeLeaf, 0);
+        if (event.target.closest('#toggle-multiselect, #toggle-measure, #toggle-ghosts, #paste-btn, #pending-restoration-btn')) setTimeout(closeLeaf, 0);
       });
     },
     onClose: () => {
