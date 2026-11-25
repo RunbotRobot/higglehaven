@@ -602,3 +602,38 @@ describe('fetchCreditOrbStanding (#4228)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('a request that never reaches the server (#4342)', () => {
+  it('a failed read says so in plain words and is still a TypeError (the connectivity icon reads that)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const error = await fetchCurrentUser().then(() => null, (err) => err);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe("Couldn't reach higglehaven. Check your connection and try again.");
+    expect(error.message).not.toMatch(/fetch|network/i);
+    expect(error.code).toBe('network');
+    expect(error.isWrite).toBe(false);
+    expect(error.cause.message).toBe('Failed to fetch');
+  });
+
+  it('a failed write says it may not have gone through', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+    const error = await upsertInstancesRemote('landlet-1', []).then(() => null, (err) => err);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toMatch(/may not have gone through/);
+    expect(error.message).not.toMatch(/load failed/i);
+    expect(error.isWrite).toBe(true);
+  });
+
+  it('a failed upload says the same', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('NetworkError when attempting to fetch resource.')));
+    const error = await uploadModelFile(new Blob(['x'])).then(() => null, (err) => err);
+    expect(error.message).toMatch(/may not have gone through/);
+  });
+
+  it('a request the page cancelled is not reported as a lost connection', async () => {
+    const abort = new DOMException('aborted', 'AbortError');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort));
+    const error = await fetchCurrentUser().then(() => null, (err) => err);
+    expect(error).toBe(abort);
+  });
+});
