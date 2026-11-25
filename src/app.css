@@ -1052,6 +1052,30 @@
         animation: bud-row-fold var(--motion-fold) var(--ease-fold) both;
         animation-delay: calc((var(--row-n, 4) - 1 - var(--row-i, 0)) * var(--step-open-row));
       }
+      /* #4199: the row is a slim run of round icon chips with no words drawn (the four are known everywhere;
+         the word stays in the button for a screen reader and shows on hover or long-press as its title, set
+         by src/ui/bud.js). Each chip keeps its own grow and fold, so every part stays attached to the head.
+         Targets are 44px; the icons are drawn smaller (budIcons.js). */
+      body[data-bud="on"] #bud-row { align-items: center; gap: var(--space-2xs); width: auto; max-width: calc(100vw - 166px); }
+      body[data-bud="on"] #bud-row button,
+      body[data-bud="on"] #bud-row #account-auth-btn {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        min-width: 44px;
+        max-width: none;
+        height: 44px;
+        min-height: 44px;
+        padding: 0;
+        font-size: 0;
+        overflow: visible;
+      }
+      body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
+      body[data-bud="on"] #bud-row .bud-icon { margin: 0; }
+      body[data-bud="on"] #bud-row > [id] { border-radius: var(--radius-round); }
+      body[data-bud="on"] #bud-row button #notifications-badge { top: 0; right: 0; font-size: var(--text-xs); }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
       body[data-bud="on"] #bud-modes .mode-nav-btn {

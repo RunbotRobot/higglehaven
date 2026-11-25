@@ -915,6 +915,14 @@ export async function budClick(page, selector) {
   await page.click(selector);
 }
 
+// #4201: "Removed items" lives in the Tools leaf now, so to see it (or tap it) the Tools petal is opened first.
+// Returns whether the button is drawn; leaves the leaf open so the caller can tap it.
+export async function removedItemsButtonShown(page) {
+  await budClick(page, '#bud-petal-build-tools');
+  await page.waitForTimeout(500);
+  return page.locator('#pending-restoration-btn').isVisible();
+}
+
 // Whether `selector` is drawn right now, with the bud opened first when it is closed.
 export async function budShows(page, selector) {
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));

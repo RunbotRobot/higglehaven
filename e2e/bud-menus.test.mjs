@@ -71,6 +71,13 @@ const layout = await page.evaluate(() => {
 });
 check(layout.rowOnScreen && layout.rowClearOfPetals && layout.buttonsApart, `the row is on screen, clear of the petals, and its icons do not overlap (${JSON.stringify(layout)})`);
 check(layout.tall >= 44, 'each row icon is at least 44px tall');
+// #4199: the row draws no words, but each button keeps its word for a screen reader and as its title.
+const rowWords = await page.evaluate(() => [...document.querySelectorAll('#bud-row button')].filter((b) => !b.hidden).map((b) => ({
+  drawn: getComputedStyle(b).fontSize,
+  title: b.title,
+  name: [...b.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim(),
+})));
+check(rowWords.length >= 4 && rowWords.every((w) => w.drawn === '0px' && w.name && w.title === w.name), `the row draws no words and keeps each as its title (${JSON.stringify(rowWords)})`);
 const stemBelowRing = await page.evaluate(() => {
   const ringBottom = Math.max(...[...document.querySelectorAll('#bud-modes button')].map((b) => b.getBoundingClientRect().bottom));
   return [...document.querySelectorAll('#account-menu-panel > button')].filter((b) => b.offsetParent !== null).every((b) => b.getBoundingClientRect().top >= ringBottom - 1);

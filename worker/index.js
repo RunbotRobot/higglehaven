@@ -89,6 +89,7 @@ import {
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
+import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
@@ -863,6 +864,11 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'GET' && route[0] === 'video-generation-jobs' && route.length === 2) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
+  }
+
+  // #4198: a read-only list of the items standing off their own lándlet's outline (admin only).
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-items-outside-landlets') {
+    return handleAdminItemsOutsideLandlets(request, env.DB);
   }
 
   // #4122: the admin dashboard's Video-to-3D jobs panel (why a finished model was not kept; a free re-check).
@@ -3764,6 +3770,12 @@ async function exportCommunicationData(db, userId) {
     SELECT report_id, description, screenshot_url, user_agent, platform, submitted_at, created_at
     FROM bug_reports WHERE user_id = ? ORDER BY created_at ASC
   `).bind(userId).all();
+  // Earlier versions of the person's own reviews and sign posts, kept for
+  // disputes (#1975, #2041): the text they wrote before editing or deleting.
+  const editHistory = await db.prepare(`
+    SELECT source_table, source_id, action, snapshot_json, created_at
+    FROM user_content_edit_history WHERE actor_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
   const byConversation = new Map();
   for (const row of messages.results) {
     if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
@@ -3787,6 +3799,11 @@ async function exportCommunicationData(db, userId) {
       closedAt: row.closed_at,
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    contentEditHistory: editHistory.results.map((row) => {
+      let snapshot = null;
+      try { snapshot = JSON.parse(row.snapshot_json); } catch { snapshot = row.snapshot_json; }
+      return { source: row.source_table, sourceId: row.source_id, action: row.action, snapshot, at: row.created_at };
+    }),
     bugReports: bugReports.results.map((row) => ({
       reportId: row.report_id,
       description: row.description,
@@ -3934,6 +3951,7 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
       commissionHolds: [],
       auctionsRun: [],
       auctionBidsPlaced: [],
+      suspendedPlacements: [],
       creditOrbsCollected: [],
       listings,
       tax1099Forms: tax1099FormsExport,
@@ -3987,6 +4005,13 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
   const auctionsRun = await db.prepare(`
     SELECT auction_id, landlet_id, starting_bid_cents, status, ends_at, winning_bid_id, created_at
     FROM auctions WHERE seller_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  // What the builder had placed when a suspension took it down, so they are
+  // never left wondering what used to stand there (the builder has full
+  // information about their own landlet).
+  const suspendedPlacements = await db.prepare(`
+    SELECT landlet_id, template_id, instance_json, removed_at, restored_at, cleared_at
+    FROM suspended_seller_instance_snapshots WHERE builder_id = ? ORDER BY removed_at DESC
   `).bind(builderId).all();
   const creditOrbsCollected = await db.prepare(`
     SELECT orb_id, landlet_id, collected_at FROM credit_orbs
@@ -4047,6 +4072,18 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
       amountCents: row.amount_cents,
       createdAt: row.created_at,
     })),
+    suspendedPlacements: suspendedPlacements.results.map((row) => {
+      let instance = null;
+      try { instance = JSON.parse(row.instance_json); } catch { instance = row.instance_json; }
+      return {
+        landletId: row.landlet_id,
+        templateId: row.template_id,
+        instance,
+        removedAt: row.removed_at,
+        restoredAt: row.restored_at,
+        clearedAt: row.cleared_at,
+      };
+    }),
     creditOrbsCollected: creditOrbsCollected.results.map((row) => ({
       orbId: row.orb_id,
       landletId: row.landlet_id,

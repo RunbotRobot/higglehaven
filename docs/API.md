@@ -749,7 +749,10 @@ without internal resolution fields.
 `commerce.listings` is a seller's own listings (what they put up for sale: name,
 category, dimensions, `priceCents`, `stockQuantity`, `delistedAt`, model and image links;
 not embeddings or moderation fields), and `commerce.creditOrbsCollected` the orbs a builder
-collected. `ownedAvatars`/`ownedAnimations` stay what the person owns.
+collected, `commerce.suspendedPlacements` what a suspension took down from the builder's
+lándlets (kept so they are never left wondering what stood there), and
+`communication.contentEditHistory` the earlier versions of the account's own reviews
+and sign posts. `ownedAvatars`/`ownedAnimations` stay what the person owns.
 
 **#4142:** a top-level `communication` section, present for every account
 (builder or not), holds what keys on the account itself: `assistantConversations`
@@ -11718,6 +11721,17 @@ field names above come from https://developers.tripo3d.ai/ (checked against its 
 independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
+
+### `GET /api/admin-items-outside-landlets` (#4198, admin only)
+
+A read-only list of the placed items whose footprint stands outside their own lándlet's outline
+(`landlets.polygon_json`, in the lándlet's own coordinates), shown in the dashboard's Landlet overrides panel as
+"Items off their lándlet". Answers `{ checkedItems, outsideItems, landlets: [{ landletId, name, owner, items,
+outside, examples: [{ instanceId, product, x, y }] }] }`, only for lándlets with something outside (at most five
+examples each). The footprint is the item's width and depth (crop and scale applied; flooring uses its template's
+raw size) turned by its rotation about the vertical axis, against the outline scaled to the item's height;
+`shared/landlet-outline.js` holds the one definition. Nothing is moved or removed. Built for today's size (one pass
+over every owned lándlet's items, no paging).
 
 ### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
 

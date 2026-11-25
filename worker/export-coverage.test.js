@@ -45,6 +45,7 @@ const NOT_EXPORTED = {
   closed_sellers: 'record of a closed seller account kept by the platform',
   builder_label_backfill_3142: 'a one-off migration table',
   // Moves with a person for a few seconds or minutes only.
+  nearby_chat_messages: 'deleted after 30 minutes (NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS), so there is nothing lasting to hand back',
   avatar_presence: 'live position, replaced every few seconds',
   voice_signaling_messages: 'WebRTC handshakes, deleted within seconds',
   friend_voice_channel_members: 'membership of a live voice channel',
@@ -56,9 +57,7 @@ const NOT_EXPORTED = {
 // Own data that should be in the export and is not yet. Each line is a task,
 // not an excuse: remove it when the section lands (tracked on #4142).
 const KNOWN_GAPS = {
-  suspended_seller_instance_snapshots: 'a builder\'s own placed content, saved while suspended',
-  nearby_chat_messages: 'what the person said in nearby chat (short-lived)',
-  user_content_edit_history: 'earlier versions of the person\'s own reviews and sign posts',
+  // Empty on purpose: every gap #4142 found has been closed or given a reason above.
 };
 
 // The text of one top-level async function in worker/index.js.

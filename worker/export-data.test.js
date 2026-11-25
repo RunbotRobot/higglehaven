@@ -150,6 +150,7 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       commissionHolds: [],
       auctionsRun: [],
       auctionBidsPlaced: [],
+      suspendedPlacements: [],
       creditOrbsCollected: [],
       listings: [],
       tax1099Forms: [],
@@ -171,6 +172,7 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       commissionHolds: [],
       auctionsRun: [],
       auctionBidsPlaced: [],
+      suspendedPlacements: [],
       creditOrbsCollected: [],
       listings: [],
       tax1099Forms: [],
@@ -681,7 +683,9 @@ describe('GET /auth/export-data -- communication section (#4142)', () => {
   it('is present, and empty, for an account that has never used any of it', async () => {
     const quiet = await signupBuilder('export-comm-quiet');
     const result = await api('/auth/export-data', quiet.session());
-    expect(result.body.communication).toEqual({ assistantConversations: [], assistantQuestions: [], blocksMade: [], bugReports: [] });
+    expect(result.body.communication).toEqual({
+      assistantConversations: [], assistantQuestions: [], blocksMade: [], bugReports: [], contentEditHistory: [],
+    });
   });
 });
 
@@ -768,5 +772,33 @@ describe('GET /auth/export-data -- listings and collected orbs (#4142)', () => {
     expect(result.body.commerce.listings[0]).toMatchObject({ priceCents: 750, stockQuantity: 3 });
     expect(JSON.stringify(result.body)).not.toContain('Their export listing');
     expect(result.body.commerce.creditOrbsCollected.map((o) => o.orbId)).toEqual(['export-orb-mine']);
+  });
+});
+
+// #4142: earlier versions of the person's own content, and what a suspension took down.
+describe('GET /auth/export-data -- edit history and suspended placements (#4142)', () => {
+  it('lists the account\'s own edit history and its builder\'s suspension snapshots, not anyone else\'s', async () => {
+    const me = await signupBuilder('export-edit-me');
+    const other = await signupBuilder('export-edit-other');
+    const userOf = async (b) => (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(b.builderId).first()).user_id;
+    await env.DB.prepare(`
+      INSERT INTO user_content_edit_history (history_id, source_table, source_id, action, snapshot_json, actor_user_id) VALUES
+        ('hist-mine', 'sign_posts', 'post-1', 'edit', '{"text":"my earlier words"}', ?),
+        ('hist-theirs', 'sign_posts', 'post-2', 'edit', '{"text":"their earlier words"}', ?)
+    `).bind(await userOf(me), await userOf(other)).run();
+    await env.DB.prepare(`
+      INSERT INTO suspended_seller_instance_snapshots (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json) VALUES
+        ('snap-mine', 'seller-a', ?, 'landlet-a', 'template-a', '{"x":1}'),
+        ('snap-theirs', 'seller-b', ?, 'landlet-b', 'template-b', '{"x":2}')
+    `).bind(me.builderId, other.builderId).run();
+    const result = await api('/auth/export-data', me.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.communication.contentEditHistory).toEqual([
+      expect.objectContaining({ source: 'sign_posts', sourceId: 'post-1', action: 'edit', snapshot: { text: 'my earlier words' } }),
+    ]);
+    expect(result.body.commerce.suspendedPlacements).toEqual([
+      expect.objectContaining({ landletId: 'landlet-a', templateId: 'template-a', instance: { x: 1 } }),
+    ]);
+    expect(JSON.stringify(result.body)).not.toContain('their earlier words');
   });
 });

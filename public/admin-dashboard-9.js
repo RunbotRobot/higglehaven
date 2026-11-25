@@ -89,3 +89,39 @@
   window.__adminDashboardPanels = window.__adminDashboardPanels || {};
   window.__adminDashboardPanels['video-jobs'] = load;
 })();
+
+// #4198: the Landlet overrides panel's "Items off their lándlet" check: a read-only list from
+// GET /api/admin-items-outside-landlets (one row per lándlet with something outside, a few examples each).
+(function () {
+  const btn = document.getElementById('outsideItemsBtn');
+  if (!btn) return;
+  const err = document.getElementById('outsideItemsErr');
+  const count = document.getElementById('outsideItemsCount');
+  const wrap = document.getElementById('outsideItemsWrap');
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+  btn.addEventListener('click', async () => {
+    err.hidden = true;
+    btn.disabled = true;
+    count.textContent = 'Checking…';
+    try {
+      const response = await fetch('/api/admin-items-outside-landlets');
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+      count.textContent = body.outsideItems + ' of ' + body.checkedItems + ' items stand outside their lándlet';
+      wrap.innerHTML = body.landlets.length === 0 ? '' : '<table><thead><tr><th>Lándlet</th><th>Owner</th><th>Outside</th><th>Of</th><th>Examples (product at x, y)</th></tr></thead><tbody>'
+        + body.landlets.map((row) => '<tr><td>' + esc(row.landletId) + '</td><td>' + esc(row.owner || '') + '</td><td>' + row.outside + '</td><td>' + row.items + '</td><td>'
+          + row.examples.map((e) => esc((e.product || 'item') + ' at ' + e.x + ', ' + e.y)).join('; ') + '</td></tr>').join('')
+        + '</tbody></table>';
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+      count.textContent = '';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
