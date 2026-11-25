@@ -1014,11 +1014,27 @@ export async function deleteCatalogTemplate(templateId) {
 // upload itself is the slow, droppable step a lost response could repeat);
 // this call has no comparably slow prerequisite step worth protecting the
 // same way.
+// #4346: the same idea as the template key above, scoped by the product being listed: a lost response followed by a
+// resubmit of the same form must not create a second listing. The server returns the listing it already made when
+// price and stock are unchanged, and treats a changed price or stock as a new attempt.
+function catalogListingIdempotencyKey(productId) {
+  const storageKey = `higglehaven-catalog-listing-idempotency-${productId}`;
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < CATALOG_TEMPLATE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
 export async function createCatalogListing({ productId, priceCents, stockQuantity }) {
   const { template: created } = await requestJson('/catalog/listings', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ productId, priceCents, stockQuantity }),
+    body: JSON.stringify({ productId, priceCents, stockQuantity, idempotencyKey: catalogListingIdempotencyKey(productId) }),
   });
   return created;
 }
