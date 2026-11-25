@@ -32,8 +32,36 @@ function apiError(response, body, fallback) {
   return error;
 }
 
+// #4342: a fetch() that never reached the server (dropped connection, offline, DNS) rejects with the browser's own
+// TypeError ("Failed to fetch" in Chrome, "Load failed" in Safari, "NetworkError when attempting to fetch resource."
+// in Firefox), and every caller that shows `err.message` showed that to the person. This says what happened in plain
+// words, and for a write says that it may not have gone through, since a seller cannot otherwise tell whether a
+// save landed. It stays a TypeError, so isNetworkError (src/build/scene.js) and the connectivity icon, which read
+// "never reached a server" from exactly that, are unchanged.
+export class ConnectionError extends TypeError {
+  constructor(isWrite, cause) {
+    super(isWrite
+      ? "Couldn't reach higglehaven, so that may not have gone through. Check your connection, look again, and try once more."
+      : "Couldn't reach higglehaven. Check your connection and try again.");
+    this.name = 'ConnectionError';
+    this.code = 'network';
+    this.isWrite = isWrite;
+    this.cause = cause;
+  }
+}
+
+async function apiFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw err; // a request the page itself cancelled is not a lost connection
+    const method = String(options?.method ?? 'GET').toUpperCase();
+    throw new ConnectionError(method !== 'GET' && method !== 'HEAD', err);
+  }
+}
+
 async function requestJson(path, options) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const response = await apiFetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `${path} failed with HTTP ${response.status}` --
@@ -864,7 +892,7 @@ export async function uploadModelFile(file, { tier } = {}) {
   const form = new FormData();
   form.append('file', file);
   const query = tier ? `?tier=${encodeURIComponent(tier)}` : '';
-  const response = await fetch(`${API_BASE}/models${query}`, { method: 'POST', body: form });
+  const response = await apiFetch(`${API_BASE}/models${query}`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
@@ -888,7 +916,7 @@ export async function uploadModelFile(file, { tier } = {}) {
 // until #2719 merges, this 404s, and the caller surfaces that as an
 // ordinary error same as any other failed request here.
 export async function submitFeedbackBugReport(form) {
-  const response = await fetch(`${API_BASE}/feedback/bug-report`, { method: 'POST', body: form });
+  const response = await apiFetch(`${API_BASE}/feedback/bug-report`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw apiError(response, body, "Couldn't submit that feedback — higglehaven ran into a problem on its end. Try again in a moment.");
@@ -902,7 +930,7 @@ export async function submitFeedbackBugReport(form) {
 // per worker/index.js's handleVideoGenerationJobCreate. A raw multipart
 // body like uploadModelFile above, not JSON.
 export async function createVideoGenerationJob(framesForm) {
-  const response = await fetch(`${API_BASE}/video-generation-jobs`, { method: 'POST', body: framesForm });
+  const response = await apiFetch(`${API_BASE}/video-generation-jobs`, { method: 'POST', body: framesForm });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Video generation request failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
