@@ -419,7 +419,7 @@ export async function handleLandletLevels(request, db, route) {
     if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
       throw new HttpError(
         `This would take you to ${(landCap.ownedAreaM2 + capConsumedM2).toFixed(2)}m², `
-        + `over your ${landCap.nextCap}m² land cap`,
+        + `over your ${landCap.nextCap}m² lándlet cap`,
         409,
       );
     }
@@ -1105,7 +1105,7 @@ export async function handleLandlets(request, db, route, url) {
           );
         }
       }
-      throw new HttpError("Target builder's land cap can't cover this lándlet", 409);
+      throw new HttpError("That builder's lándlet cap has no room for this lándlet", 409);
     }
     // #1711: re-read live, now that the transfer above is confirmed,
     // rather than reusing the pre-check's auctionConflict -- that read is
@@ -1512,7 +1512,7 @@ export async function handleLandlets(request, db, route, url) {
       if (landlet.name !== existing.name) {
         const nameTaken = await db.prepare('SELECT 1 FROM landlets WHERE name = ? COLLATE NOCASE AND landlet_id != ?')
           .bind(landlet.name, route[1]).first();
-        if (nameTaken) throw new HttpError('That land name is already taken — names must be unique across all of Higglehaven', 409);
+        if (nameTaken) throw new HttpError('That lándlet name is already taken. Names are unique across Higglehaven.', 409);
       }
       throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }

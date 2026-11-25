@@ -76,16 +76,54 @@ export function findCaseBreaks(rows) {
 }
 
 // The Worker's refusals are read by people too (the client shows them as they are). Only the sentence a
-// person can see is checked: the text of an HttpError(...) or an `error:` field, never a log line or a name.
-const WORKER_SENTENCE = /(?:HttpError\(\s*\d+\s*,\s*|\berror:\s*)(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+// person can see is checked: every string piece of an HttpError(message, status, extra) call (the real argument
+// order; #4278 found this check had been reading `HttpError(status, message)`, which never matches, so it saw
+// no refusal at all) and the text of an `error:` field, never a log line or a name.
+const ERROR_FIELD = /\berror:\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+
+// The text pieces inside the balanced parentheses that open at `start` (the character after "HttpError(").
+function callStrings(source, start) {
+  const pieces = [];
+  let depth = 1;
+  for (let i = start; i < source.length && depth > 0; i += 1) {
+    const ch = source[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      let text = '';
+      while (j < source.length && source[j] !== ch) {
+        if (source[j] === '\\') { text += source[j + 1] ?? ''; j += 2; continue; }
+        text += source[j];
+        j += 1;
+      }
+      pieces.push(text);
+      i = j;
+    }
+  }
+  return pieces;
+}
+
+// Words a person must not read in a refusal. "land candidate" is the admin tool's own term (the owner reads it).
+const WORKER_BANNED = [
+  { word: 'landlet', pattern: /\blandlets?\b/i, why: 'say "lándlet", with the accent' },
+  { word: 'land', pattern: /\bland(?! candidate)\b/i, why: 'say "lándlet", never "land"' },
+  { word: 'plot', pattern: /\bplots?\b/i, why: 'say "lándlet", never "plot"' },
+];
 
 export function findWorkerVoiceBreaks(files) {
   const breaks = [];
   for (const { file, source } of files) {
-    for (const m of source.matchAll(WORKER_SENTENCE)) {
-      const text = m[2].replace(/\$\{[^}]*\}/g, ' ');
-      const line = source.slice(0, m.index).split('\n').length;
-      if (/\blandlets?\b/i.test(text)) breaks.push({ file, line, text: m[2], word: 'landlet', why: 'say "lándlet", with the accent' });
+    const sentences = [];
+    for (const m of source.matchAll(ERROR_FIELD)) sentences.push({ text: m[2], index: m.index });
+    for (const m of source.matchAll(/HttpError\(/g)) {
+      const text = callStrings(source, m.index + m[0].length).join(' ');
+      if (text) sentences.push({ text, index: m.index });
+    }
+    for (const { text, index } of sentences) {
+      const plain = text.replace(/\$\{[^}]*\}/g, ' ');
+      const line = source.slice(0, index).split('\n').length;
+      for (const b of WORKER_BANNED) if (b.pattern.test(plain)) breaks.push({ file, line, text, word: b.word, why: b.why });
     }
   }
   return breaks;
