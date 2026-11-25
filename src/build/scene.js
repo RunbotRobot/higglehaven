@@ -2643,6 +2643,7 @@ export function markBuildSceneReady() {
   buildSceneReady = true;
   // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
   // pass, before the next frame, judges all of them against the entering budget.
+  buildLod.reset(); // #4208: a first load: no set job has looked at anything yet, so nothing is judged alone
   buildLod.update(performance.now(), true);
   buildFirstLoad = false;
 }
