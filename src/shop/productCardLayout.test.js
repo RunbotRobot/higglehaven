@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CARD_GAP_PX, CARD_MARGIN_PX, CARD_MAX_ANCHOR_RADIUS_PX, CARD_MIN_ANCHOR_RADIUS_PX, CARD_TOP_CLEAR_PX,
+  CARD_DOCK_MAX_SHARE, CARD_GAP_PX, CARD_MARGIN_PX, CARD_MAX_ANCHOR_RADIUS_PX, CARD_MIN_ANCHOR_RADIUS_PX, CARD_TOP_CLEAR_PX,
   clampAnchorRadius, placeProductCard, productCardState, sellerLine,
 } from './productCardLayout.js';
 
@@ -126,6 +126,54 @@ describe('a card too tall to sit clear is shortened, not laid over the thing (#4
   it('leaves a card overlapping, as before, when even a shortened one has no room', () => {
     const place = placeProductCard({ anchor: { x: 130, y: 300, radius: 140 }, card: TALL, viewport: { width: 260, height: 600 } });
     expect(place.maxHeight).toBeNull();
+  });
+});
+
+describe('a thing that fills the view docks the card to an edge, clear of its middle (#4242)', () => {
+  const phone = { width: 390, height: 844 };
+  const card = { width: 240, height: 420 };
+  const fills = (y, extra = {}) => ({ x: 195, y, radius: 140, behind: false, fills: true, ...extra });
+
+  it('puts it on the bottom edge when the thing is in the top half, the top edge when in the bottom half', () => {
+    const low = placeProductCard({ anchor: fills(300), card, viewport: phone });
+    expect(low.side).toBe('below');
+    expect(low.top + (low.maxHeight ?? card.height)).toBeLessThanOrEqual(phone.height - 12 + 0.5);
+    const high = placeProductCard({ anchor: fills(600), card, viewport: phone });
+    expect(high.side).toBe('above');
+    expect(high.top).toBeGreaterThanOrEqual(52);
+  });
+
+  it('shortens it to a strip (it scrolls inside), with no pointer, centred across the screen', () => {
+    const placed = placeProductCard({ anchor: fills(300), card, viewport: phone });
+    expect(placed.maxHeight).toBeLessThanOrEqual(Math.ceil((844 - 52 - 12) * CARD_DOCK_MAX_SHARE));
+    expect(placed.edge).toBe(true);
+    expect(placed.left).toBe(75);
+  });
+
+  it('leaves a short card whole', () => {
+    const placed = placeProductCard({ anchor: fills(300), card: { width: 240, height: 120 }, viewport: phone });
+    expect(placed.maxHeight).toBeNull();
+  });
+
+  it('keeps the edge it has while the thing is near the middle, and moves only when clearly better', () => {
+    const middle = 844 / 2;
+    expect(placeProductCard({ anchor: fills(middle - 10), card, viewport: phone, previousSide: 'above' }).side).toBe('above');
+    expect(placeProductCard({ anchor: fills(middle - 10), card, viewport: phone, previousSide: 'below' }).side).toBe('below');
+    expect(placeProductCard({ anchor: fills(middle - 200), card, viewport: phone, previousSide: 'above' }).side).toBe('below');
+  });
+
+  it('never lies on the middle of a thing that fills the view, wherever it is (the owner, zoomed in on a wall)', () => {
+    for (const y of [120, 300, 422, 560, 760]) {
+      const placed = placeProductCard({ anchor: fills(y), card, viewport: phone });
+      const bottom = placed.top + (placed.maxHeight ?? card.height);
+      expect(placed.top <= 52 + 0.5 || bottom >= phone.height - 12 - 0.5, `y=${y}`).toBe(true); // against an edge
+    }
+  });
+
+  it('leaves a thing that does not fill the view to the ordinary rules', () => {
+    const ordinary = placeProductCard({ anchor: { x: 90, y: 400, radius: 40, behind: false }, card: { width: 200, height: 120 }, viewport: phone });
+    expect(ordinary.side).toBe('right');
+    expect(ordinary.edge).toBe(false);
   });
 });
 
