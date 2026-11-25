@@ -710,8 +710,9 @@ async function withOneModelLoadRetry(load, templateId) {
   }
 }
 
-export async function createMeshForInstance(instance) {
-  const template = findTemplate(instance.templateId);
+// `knownTemplate` is for a ghost of a removed product (#4201), which the builder's catalog no longer lists.
+export async function createMeshForInstance(instance, knownTemplate = null) {
+  const template = knownTemplate ?? findTemplate(instance.templateId);
   if (!template) {
     // Catalog and instance list came from different sources (e.g. one
     // fetched from the API, the other loaded from a stale local cache) and

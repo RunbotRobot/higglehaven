@@ -144,6 +144,9 @@ await openBuildMoreFold(page);
 await page.click('#sold-out-marker-toggle');
 await page.waitForFunction(() => window.__testRemovedGhostIds().length === 1, undefined, { timeout: 5000 });
 console.log('no ghost before the switch, one after (should be 0 then 1):', ghostsBeforeToggle.length, 1);
+// The ghost is the item itself (its own model, translucent), not a block: #4201.
+const ghostIsModel = await page.waitForFunction(() => window.__testGhostKinds().removed.join() === 'model', undefined, { timeout: 15000 }).then(() => true, () => false);
+console.log('the ghost is the removed product\'s own model (should be true):', ghostIsModel);
 // Tapping the ghost opens the list at its row.
 await page.keyboard.press('Escape');
 await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
@@ -193,6 +196,7 @@ const pass = placeRes.status === 201
   && /1/.test(buttonText)
   && rowCount === 1
   && ghostsBeforeToggle.length === 0
+  && ghostIsModel
   && tapOpenedList
   && rowText.includes(PRODUCT_NAME)
   && emptyShown
