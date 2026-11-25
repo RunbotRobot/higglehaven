@@ -479,6 +479,35 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(accepted.stats.mid).toBeLessThan(locked.stats.mid);
   });
 
+  it('when the largest tolerance fails the check, a smaller one that passes is used, not the locked version (#4302)', () => {
+    const disc = () => {
+      const group = new THREE.Group();
+      group.add(new THREE.Mesh(new THREE.CircleGeometry(5, 400), new THREE.MeshStandardMaterial({ color: 0xcc6a2a, side: THREE.DoubleSide })));
+      return group;
+    };
+    // On this disc the whole ladder ends at 54 triangles (its two larger rungs make the same version), the
+    // smallest tolerance alone at 122, the locked version at 400.
+    const ladder = [0.0002, 0.001, 0.004];
+    const locked = buildModelTiersSync(disc(), { slideBorders: false });
+    const whole = buildModelTiersSync(disc(), { slideBorderLadder: ladder });
+    const smallest = buildModelTiersSync(disc(), { slideBorderLadder: ladder.slice(0, 1) });
+    expect(whole.slide.used).toBe(true);
+    expect(whole.stats.mid).toBeLessThan(smallest.stats.mid); // meaningful only if the rungs differ
+    expect(smallest.stats.mid).toBeLessThan(locked.stats.mid);
+    // A check that refuses the lightest version, as it would one that slid too far.
+    const refuseLightest = (fullBatches, object, tier) => tier !== 'mid' || trianglesOf(object) > whole.stats.mid;
+    const result = buildModelTiersSync(disc(), { slideBorderLadder: ladder, tierCheck: refuseLightest });
+    expect(result.slide.used).toBe(true);
+    expect(result.stats.mid).toBe(smallest.stats.mid);
+    expect(result.slide.attempts).toBeGreaterThan(1);
+    // And when every slid version is refused, the locked one is judged as ever, after at most one step per rung.
+    const refuseAllLighter = (fullBatches, object, tier) => tier !== 'mid' || trianglesOf(object) >= locked.stats.mid;
+    const none = buildModelTiersSync(disc(), { slideBorderLadder: ladder, tierCheck: refuseAllLighter });
+    expect(none.slide.used).toBe(false);
+    expect(none.stats.mid).toBe(locked.stats.mid);
+    expect(none.slide.attempts).toBeLessThanOrEqual(ladder.length);
+  });
+
   it('scales the tolerance by the mesh and the model, not by the mesh alone (#4302)', () => {
     // The same strip scaled 100x on its node: same relative result.
     const small = buildModelTiersSync(openStrip());
