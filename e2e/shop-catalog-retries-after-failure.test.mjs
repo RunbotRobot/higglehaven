@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -85,6 +85,16 @@ await page.route('**/api/catalog?*', (route) => {
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 15000 });
+// A short push on the move stick ends the opening flight, so the avatar stays where it is put (as credit-orb-load-retries).
+const stick = await shopStickBox(page);
+const cx = stick.x + stick.width / 2;
+const cy = stick.y + stick.height / 2;
+await page.mouse.move(cx, cy);
+await page.mouse.down();
+await page.mouse.move(cx + 25, cy, { steps: 5 });
+await page.waitForTimeout(100);
+await page.mouse.up();
+await page.waitForTimeout(100);
 // The avatar drifts on its opening flight and the landlet can leave range again a few seconds after it loaded, so
 // the number of placements drawn is watched from inside the page and the most seen is what counts.
 await page.evaluate(() => {
