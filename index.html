@@ -63,7 +63,7 @@
         <div id="shop-nearby-chat-muted-list" hidden></div>
       </div>
       <form id="shop-nearby-chat-form">
-        <input id="shop-nearby-chat-input" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
+        <input id="shop-nearby-chat-input" aria-label="Message to people nearby" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
         <button type="submit">Send</button>
       </form>
     </div>
@@ -93,7 +93,7 @@
       <button id="assistant-chat-withdraw" type="button" hidden></button>
       <button id="assistant-chat-retry" type="button" hidden>Try again</button>
       <form id="assistant-chat-form">
-        <textarea id="assistant-chat-input" rows="1" placeholder="Ask a question…" autocomplete="off"></textarea>
+        <textarea id="assistant-chat-input" aria-label="Message to the assistant" rows="1" placeholder="Ask a question…" autocomplete="off"></textarea>
         <button id="assistant-chat-send" type="submit">Send</button>
       </form>
       <p id="assistant-chat-limit" hidden></p>
@@ -253,7 +253,7 @@
           </div>
         </div>
         <div id="catalog-prompt-mode" hidden>
-          <textarea id="prompt-mode-input" placeholder="Describe what you're looking for…"></textarea>
+          <textarea id="prompt-mode-input" aria-label="Describe what you are looking for" placeholder="Describe what you're looking for…"></textarea>
           <button id="prompt-mode-generate-btn" type="button">Generate</button>
           <div id="prompt-mode-status" hidden role="status" aria-live="polite"></div>
           <div id="prompt-mode-grid"></div>
@@ -674,8 +674,8 @@
         <div id="seller-feedback-list" class="seller-review-list"></div>
         <div id="seller-filter-controls">
           <input type="text" id="seller-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search your products">
-          <select id="seller-category-filter" class="seller-filter-control"><option value="">All categories</option></select>
-          <select id="seller-sort-select" class="seller-filter-control">
+          <select id="seller-category-filter" aria-label="Filter your products by category" class="seller-filter-control"><option value="">All categories</option></select>
+          <select id="seller-sort-select" aria-label="Sort your products" class="seller-filter-control">
             <option value="name-asc">Name (A&ndash;Z)</option>
             <option value="price-asc">Price (low to high)</option>
             <option value="price-desc">Price (high to low)</option>
@@ -763,7 +763,7 @@
         <div id="dm-list"></div>
         <div id="dm-empty">No messages yet — say hi!</div>
         <form id="dm-compose-form">
-          <input id="dm-compose-input" type="text" maxlength="280" placeholder="Message…" autocomplete="off" />
+          <input id="dm-compose-input" aria-label="Direct message" type="text" maxlength="280" placeholder="Message…" autocomplete="off" />
           <button id="dm-send-btn" type="submit">Send</button>
         </form>
       </div>
