@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem } from './tierFidelity.js';
 
 // A unit cube as twelve triangles with outward-facing (counter-clockwise from outside) windings.
 function cube(scale = 1, doubleSided = false, flip = false) {
@@ -101,5 +101,21 @@ describe('surface checks (#4114)', () => {
     const report = silhouetteFidelity(cube(), torn);
     expect(report.openGrowth).toBeGreaterThan(1.15);
     expect(isFaithful(report, 'mid')).toBe(false);
+  });
+});
+
+describe('material kind (#4111)', () => {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const batch = (unlit) => ({ positions: tri, doubleSided: true, unlit });
+  it('is fine when both are unlit or both lit', () => {
+    expect(materialKindProblem([batch(true)], [batch(true)])).toBeNull();
+    expect(materialKindProblem([batch(false)], [batch(false)])).toBeNull();
+  });
+  it('names a lit version of an unlit model, and the reverse', () => {
+    expect(materialKindProblem([batch(true)], [batch(false)])).toMatch(/unlit, this version is lit/);
+    expect(materialKindProblem([batch(false)], [batch(true)])).toMatch(/lit, this version is unlit/);
+  });
+  it('gives no verdict with nothing to compare', () => {
+    expect(materialKindProblem([], [batch(true)])).toBeNull();
   });
 });

@@ -214,3 +214,17 @@ export function isFaithful(report, tier = 'mid') {
   if (maxOpenGrowth !== undefined && report.openGrowth !== undefined && report.openGrowth > maxOpenGrowth) return false;
   return true;
 }
+
+// #4111: the kind of material a version is drawn with. A model of unlit materials (KHR_materials_unlit) is drawn
+// without light, and so must its simpler versions be: a lit far version of an unlit brick was darkened by the
+// scene's light and read as a different colour even where its baked colours matched. A batch carries
+// `unlit: true` when its material is unlit; a model is unlit when every batch is. Returns null when the kinds
+// agree (or either side has no batches), else a sentence for a report.
+export function materialKindProblem(full, tier) {
+  if (!full.length || !tier.length) return null;
+  const unlit = (batches) => batches.every((batch) => batch.unlit === true);
+  const fullUnlit = unlit(full);
+  const tierUnlit = unlit(tier);
+  if (fullUnlit === tierUnlit) return null;
+  return fullUnlit ? 'the model is drawn unlit, this version is lit' : 'the model is lit, this version is unlit';
+}

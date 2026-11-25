@@ -10,7 +10,7 @@
 //   node scripts/scan-model-tiers.mjs --url http://127.0.0.1:8787
 //   node scripts/scan-model-tiers.mjs --json                  # machine-readable
 import { glbBatches } from './glb-batches-lib.mjs';
-import { silhouetteFidelity, isFaithful } from '../src/tierFidelity.js';
+import { silhouetteFidelity, isFaithful, materialKindProblem } from '../src/tierFidelity.js';
 
 const args = process.argv.slice(2);
 const valueOf = (flag, fallback) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback);
@@ -64,7 +64,8 @@ for (const template of templates) {
       if (!url) { row.tiers[tier] = { status: 'none' }; continue; }
       const parsed = await loadModel(url);
       const report = silhouetteFidelity(full.batches, parsed.batches);
-      row.tiers[tier] = { triangles: parsed.triangles, coverage: +report.coverage.toFixed(2), extra: +report.extra.toFixed(2), areaKept: +report.areaKept.toFixed(2), openGrowth: +report.openGrowth.toFixed(2), colorShift: report.colorShift == null ? null : +report.colorShift.toFixed(2), faithful: isFaithful(report, tier) }; // #4111: colour beside the outline; #4114: surface kept and open-edge growth beside the outline
+      const kindProblem = materialKindProblem(full.batches, parsed.batches); // an unlit model's version drawn lit (or the reverse)
+      row.tiers[tier] = { triangles: parsed.triangles, coverage: +report.coverage.toFixed(2), extra: +report.extra.toFixed(2), areaKept: +report.areaKept.toFixed(2), openGrowth: +report.openGrowth.toFixed(2), colorShift: report.colorShift == null ? null : +report.colorShift.toFixed(2), kindProblem, faithful: isFaithful(report, tier) && !kindProblem }; // #4111: colour and material kind beside the outline; #4114: surface kept and open-edge growth beside the outline
     }
     row.fullTriangles = full.triangles;
     row.status = Object.values(row.tiers).every((t) => t.status === 'none' || t.faithful) ? 'ok' : 'FAILS';
@@ -77,7 +78,7 @@ for (const template of templates) {
 if (asJson) {
   console.log(JSON.stringify(rows, null, 2));
 } else {
-  const fmt = (t) => (t ? (t.status === 'none' ? 'none' : `${t.triangles} tris, covers ${t.coverage}, extra ${t.extra}, surface kept ${t.areaKept}, open edges x${t.openGrowth}, colour ${t.colorShift == null ? 'not read' : 'shift ' + t.colorShift}${t.faithful ? '' : '  <-- fails'}`) : '');
+  const fmt = (t) => (t ? (t.status === 'none' ? 'none' : `${t.triangles} tris, covers ${t.coverage}, extra ${t.extra}, surface kept ${t.areaKept}, open edges x${t.openGrowth}, colour ${t.colorShift == null ? 'not read' : 'shift ' + t.colorShift}${t.kindProblem ? `, ${t.kindProblem}` : ''}${t.faithful ? '' : '  <-- fails'}`) : '');
   for (const row of rows) {
     console.log(`${row.status.padEnd(18)} ${row.name} (${row.templateId.slice(0, 8)})${row.fullTriangles ? `  full ${row.fullTriangles} tris` : ''}`);
     if (row.tiers.mid || row.tiers.far) console.log(`    mid: ${fmt(row.tiers.mid)}\n    far: ${fmt(row.tiers.far)}`);

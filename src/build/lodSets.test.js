@@ -165,13 +165,11 @@ describe('Build judges a wall as one set (#4115)', () => {
     const objects = [...left, ...right];
     const { look, tick } = setup(objects);
     look(10, -90, 40); // far away: both on far
-    // 512 bricks are over SMALL_JOB_ITEMS, so the sets are found in slices of the real clock; with a loaded machine
-    // three ticks are not always enough. A clock that does not move gives every slice the whole job, so the start
-    // does not depend on how fast the machine is (the assertion below is unchanged).
-    const frozen = vi.spyOn(performance, 'now').mockReturnValue(0);
-    tick(3);
+    // (flake, #4228 pass): 512 bricks is a job of several slices of real time (BUILD_SETS_SLICE_MS), and every brick keeps the
+    // version it has until it is done (#4208), so how many passes this takes depends on the machine. Pass until they
+    // have settled instead of counting on three.
+    for (let n = 0; n < 60 && !(tiersOf(objects).size === 1 && tiersOf(objects).has('far')); n++) tick(1);
     expect(tiersOf(objects)).toEqual(new Set(['far']));
-    frozen.mockRestore();
     // Every call to the clock advances 50 ms, so a pass is out of slice after its first set.
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => (now += 50));

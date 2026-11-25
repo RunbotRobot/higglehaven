@@ -507,6 +507,47 @@ describe('redoing cracked tiers (#3527)', () => {
     expect(world.rows[0].model_far_url).not.toBe(world.models.net.far);
   });
 
+  it('redoes a sound-looking tier the current generator would make differently (#4111: an unlit model stored lit)', async () => {
+    const world = await makeTierWorld([{ name: 'brick', fullHoles: 0, midHoles: 0, farHoles: 0 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const base = world.io(cleanTiers);
+    const left = await runRedoCracked({ candidates, io: { ...base, staleReasons: async () => [] } });
+    expect(left).toMatchObject({ sound: 1, redone: 0 });
+    const lines = [];
+    const redone = await runRedoCracked({
+      candidates, io: { ...base, staleReasons: async (full, tier, name) => (name === 'far' ? ['the model is drawn unlit, this version is lit'] : []) }, log: (line) => lines.push(line),
+    });
+    expect(redone).toMatchObject({ sound: 0, redone: 1, failed: [] });
+    expect(lines.join('\n')).toMatch(/far: the model is drawn unlit, this version is lit/);
+  });
+
+  it('--redo-all remakes a version that is sound in every way', async () => {
+    const world = await makeTierWorld([{ name: 'plain', fullHoles: 0, midHoles: 0, farHoles: 0 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const summary = await runRedoCracked({ candidates, io: world.io(cleanTiers), redoAll: true });
+    expect(summary).toMatchObject({ sound: 0, redone: 1, failed: [] });
+    expect(world.rows[0].model_far_url).not.toBe(world.models.plain.far);
+  });
+
+  it('a dry run with staleReasons reads the models, says why each would be remade, and stores and records nothing', async () => {
+    const world = await makeTierWorld([
+      { name: 'brick', fullHoles: 0, midHoles: 0, farHoles: 0 },
+      { name: 'plain', fullHoles: 0, midHoles: 0, farHoles: 0 },
+    ]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const before = JSON.stringify(world.rows);
+    const objectsBefore = world.objects.size;
+    const lines = [];
+    const summary = await runRedoCracked({
+      candidates, dryRun: true, log: (line) => lines.push(line),
+      io: { ...world.io(cleanTiers), staleReasons: async (full, tier, name) => (name === 'far' ? ['colour is off by 0.40'] : []) },
+    });
+    expect(JSON.stringify(world.rows)).toBe(before);
+    expect(world.objects.size).toBe(objectsBefore);
+    expect(summary).toMatchObject({ dryRun: true, wouldProcess: 2, redone: 0 });
+    expect(lines.filter((line) => /^would  redo .*far: colour is off by 0.40/.test(line))).toHaveLength(2);
+  });
+
   it('only swaps rows that still point at the old tiers, so a model replaced meanwhile is never overwritten', async () => {
     const world = await makeTierWorld([{ name: 'toilet', midHoles: 500 }]);
     const { candidates } = groupCrackCandidates(world.candidateRows());
@@ -563,5 +604,7 @@ describe('--redo-cracked (#3527)', () => {
     expect(parseArgs(['--local']).redoCracked).toBe(false);
     expect(parseArgs(['--remote', '--redo-cracked', '--dry-run'])).toMatchObject({ redoCracked: true, dryRun: true, mode: 'remote' });
     expect(() => parseArgs(['--redo-cracked'])).toThrow(/--local .* or --remote/);
+    expect(parseArgs(['--remote', '--redo-all'])).toMatchObject({ redoCracked: true, redoAll: true });
+    expect(parseArgs(['--remote', '--redo-cracked'])).toMatchObject({ redoAll: false });
   });
 });

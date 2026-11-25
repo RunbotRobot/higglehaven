@@ -11631,7 +11631,11 @@ Tripo's own file-upload endpoint to obtain a `file_token`, then a single
 `POST /v3/generation/multiview-to-model` call kicks off the real job pinned
 to Tripo's `v3.0-20250812` model version (pinned rather than "latest" so a
 provider-side default change can't silently alter output quality/cost out
-from under this integration). Response (`201`):
+from under this integration). The call also sends `face_limit: 50000` (the top
+of Tripo's own web/mobile range) and `texture_quality: "standard"`, so the
+result stays well under the 20 MB model cap (#4122: an uncapped result was
+30 MB); `compress` is not sent, because a meshopt GLB cannot be read by our
+loader yet. Response (`201`):
 
 ```json
 { "jobId": "job-<uuid>", "status": "processing" }

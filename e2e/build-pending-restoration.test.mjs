@@ -144,6 +144,19 @@ await openBuildMoreFold(page);
 await page.click('#sold-out-marker-toggle');
 await page.waitForFunction(() => window.__testRemovedGhostIds().length === 1, undefined, { timeout: 5000 });
 console.log('no ghost before the switch, one after (should be 0 then 1):', ghostsBeforeToggle.length, 1);
+// Tapping the ghost opens the list at its row.
+await page.keyboard.press('Escape');
+await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+const ghostPos = await page.evaluate(() => window.__testRemovedGhostScreenPos(window.__testRemovedGhostIds()[0]));
+await page.mouse.click(ghostPos.x, ghostPos.y);
+const tapOpenedList = await page.waitForSelector('#pending-restoration-modal.visible', { timeout: 5000 }).then(() => true, () => false);
+console.log('a tap on the ghost opens the Removed items list (should be true):', tapOpenedList);
+await page.click('#pending-restoration-close-btn');
+await openAccountMenu(page);
+await page.click('#settings-btn');
+await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page);
 await page.click('#sold-out-marker-toggle');
 await page.waitForFunction(() => window.__testRemovedGhostIds().length === 0, undefined, { timeout: 5000 });
 await page.keyboard.press('Escape');
@@ -180,6 +193,7 @@ const pass = placeRes.status === 201
   && /1/.test(buttonText)
   && rowCount === 1
   && ghostsBeforeToggle.length === 0
+  && tapOpenedList
   && rowText.includes(PRODUCT_NAME)
   && emptyShown
   && buttonHiddenAfterClear
