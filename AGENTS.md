@@ -1551,6 +1551,27 @@ most likely to come up again.
   needs and leave a note at the place that will break, naming the size at
   which it must change; do not build paging for six rows.
 
+- **A session that needs to see the owner's tools gets a look-only key,
+  given by the owner's own tap; it never gets the owner's key.**
+  (2026-11-25, #4175.) The owner offered to make a higglehaven account an
+  admin so that higglehaven1 could check the admin dashboard before saying
+  a tool was ready. Shown that any coding session can sign in as any fleet
+  account (the sign-in key belongs to the environment), so one admin fleet
+  account would make every session an admin, and offered a look-only role
+  instead, the owner: "I like option A, too. Please make it so I can give
+  you read-only access to the admin dashboard." So there is a second,
+  lesser role: it opens every admin page, the server refuses every change
+  it tries (default deny, with a test that walks every admin route), and
+  personal details such as email addresses are masked. The owner switches
+  it on and off for an account from the dashboard themselves, and its use
+  is written to the admin log. The principle: looking and acting are
+  different rights, and a need to look is met with a right to look; access
+  is given to the narrowest thing that meets the need, by the person whose
+  access it is, and whatever is given to one fleet account is counted as
+  given to all of them. Full admin for a fleet account stays off the
+  table, and "Clean-up of live data is done by the owner's own tap" is
+  unchanged.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and

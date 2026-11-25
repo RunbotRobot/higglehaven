@@ -1235,7 +1235,7 @@ function updateShopFlight(dt) {
     // The limits are felt during the gesture: at the top of the sky and at the
     // lowest hover (or the top of an item under the avatar) the avatar levels
     // off and rests, never bounces, and says so once. It never lands by itself.
-    const maxAltitudeM = shopMaxFlightAltitudeM();
+    const maxAltitudeM = shopPairMaxFlightAltitudeM();
     const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
     const hoverFloorM = SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5;
     const minAltitudeM = obstructionTopZ === null
@@ -1296,6 +1296,27 @@ function shopMaxFlightAltitudeM() {
   const avatarDistanceFromOriginM = Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y);
   return SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M
     - curvatureDropM(activeWorldRadiusM()) + curvatureDropM(avatarDistanceFromOriginM);
+}
+
+// #4193 (owner rule from #3374): the ceiling is the *pair's*, not the avatar's alone. Flight is level
+// since #4105, so a person can rise while looking down, which puts the camera above the avatar. The camera
+// then reaches the dome first; bounding it alone (clampShopCameraHeight) left the avatar rising past it and
+// the follow distance collapsed until the avatar was behind the camera, out of the picture. The avatar now
+// stops when it or the camera, at its full follow distance in the direction the view points, would cross
+// the dome: looking down from high up it levels off lower than it does looking level (the accepted
+// asymmetry), and tipping the view down at the ceiling lowers it just far enough. clampShopCameraHeight stays
+// as the fallback where there is no pair to keep (Sell's showroom, an unbounded camera). The view's
+// direction is read now, not from last frame's camera, so a turn this frame is already counted.
+const shopCeilingViewDirection = new THREE.Vector3();
+function shopPairMaxFlightAltitudeM() {
+  const avatarCeilingM = shopMaxFlightAltitudeM();
+  const world = movementWorld();
+  if (world.worldRadiusM() === null || world.boundsCamera === false || world.clampToBoundary) return avatarCeilingM;
+  camera.getWorldDirection(shopCeilingViewDirection);
+  // camera z = avatar z + anchor height - view z * follow distance, and it must stay under the same dome height
+  // the avatar's own ceiling is measured to.
+  const cameraCeilingM = avatarCeilingM - shopCameraAnchorHeightM() + shopCeilingViewDirection.z * SHOP_CAMERA_FOLLOW_DISTANCE_M;
+  return Math.min(avatarCeilingM, cameraCeilingM);
 }
 
 // #3374/#3385: how far from the world's centre the avatar's pivot may be at
