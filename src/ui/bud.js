@@ -335,7 +335,17 @@ function decoratePetal(btn) {
 // leaf is in which menu is decided elsewhere (registerBudPetals and friends), so it walks the
 // *visible* children, never :nth-child, and runs again whenever one is added, shown, hidden or has
 // its text replaced (Add item's "Cancel placing" does that).
+// #4199: the top row draws no words; the word is the button's own text (kept for a screen reader) and also its
+// title, so a mouse hover or a long-press still says it.
+function rowWord(el) {
+  return [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim();
+}
+
 function decorateLeaf(el) {
+  if (el.parentElement?.id === 'bud-row') {
+    const word = rowWord(el);
+    if (word && el.title !== word) el.title = word;
+  }
   // The sign-in leaf says "Log in / Sign up" before an account and the person's name after it: an
   // arrow into a door, then a person.
   const key = el.id === 'account-auth-btn' && !/log in|sign up/i.test(el.textContent) ? 'person' : iconKeyFor(el);

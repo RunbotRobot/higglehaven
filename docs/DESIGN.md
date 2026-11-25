@@ -509,7 +509,12 @@ by touching the world. The module is `src/ui/bud.js`:
   reader on a phone, #3824), Build's (Add item, My Lándlets, Levels, Undo and Redo, Tools, and the
   lándlet cap line) and Sell's (My products, Add a product, Payouts, Storefront, Orders). The row is the
   same in every place and is part of the flower: it grows with the petals and folds with them (the
-  leaves fold into the stem, the stem draws up, then the petals and the row close). A tap on a place you
+  leaves fold into the stem, the stem draws up, then the petals and the row close). **The row draws no
+  words (#4199, owner 2026-11-24):** its four icons (person, bell, gear, question mark) are known
+  everywhere, so each is a round 44px chip (pill-green wash, `--shadow-petal`) with the icon alone. This is
+  the one place the "icon with its word" rule is relaxed: petals and leaves keep their words. The word is
+  still in each button for a screen reader and is its `title`, so a mouse hover or a long-press says it.
+  A tap on a place you
   are not in takes you there (the page reloads and the ring stays out); a tap on the place you are in
   only marks where you are, since its menu is already open; the head, Escape or the world folds all of
   it. At 390 px the row sits to the right of the head, above the lándlet's name card and the compass,
