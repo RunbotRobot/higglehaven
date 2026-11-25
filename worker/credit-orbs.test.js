@@ -529,3 +529,22 @@ describe('Builder self-delete after collecting a credit orb (#2309)', () => {
     expect(row.collected_by_builder_id).toBe(builder.builderId);
   });
 });
+
+// #4198: an orb is drawn on the landlet's own outline, not anywhere in the 31.6 m square.
+import { orbSpawnPoint } from './lib/credit-orbs.js';
+describe('orbSpawnPoint (#4198)', () => {
+  const TRIANGLE = JSON.stringify([{ x: -10, y: -10 }, { x: 10, y: -10 }, { x: -10, y: 10 }]);
+  it('always lands inside the outline, shrunk toward the centre', () => {
+    for (let i = 0; i < 200; i += 1) {
+      const { x, y } = orbSpawnPoint(TRIANGLE);
+      expect(x).toBeGreaterThanOrEqual(-8);
+      expect(y).toBeGreaterThanOrEqual(-8);
+      expect(x + y).toBeLessThanOrEqual(-0 + 1e-9); // under the slanted edge x + y = 0
+    }
+  });
+  it('falls back to the square for an unusable polygon', () => {
+    const { x, y } = orbSpawnPoint('[]', () => 1);
+    expect(x).toBeCloseTo((Math.sqrt(1000) / 2) * 0.8, 6);
+    expect(y).toBeCloseTo((Math.sqrt(1000) / 2) * 0.8, 6);
+  });
+});

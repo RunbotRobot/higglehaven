@@ -61,7 +61,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
-import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt } from './outlineLimit.js';
+import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt, pullGroupTowardCentre } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -4797,12 +4797,14 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
     let minOffsetZ = -Infinity, maxOffsetZ = Infinity;
     for (const mesh of placed) {
       const { width, depth, height } = meshDimensions(mesh);
-      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minOffsetX = Math.max(minOffsetX, -halfSpanX - mesh.position.x);
-      maxOffsetX = Math.min(maxOffsetX, halfSpanX - mesh.position.x);
-      minOffsetY = Math.max(minOffsetY, -halfSpanY - mesh.position.y);
-      maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
+      if (!getBuildOutline()) {
+        const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+        const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+        minOffsetX = Math.max(minOffsetX, -halfSpanX - mesh.position.x);
+        maxOffsetX = Math.min(maxOffsetX, halfSpanX - mesh.position.x);
+        minOffsetY = Math.max(minOffsetY, -halfSpanY - mesh.position.y);
+        maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
+      }
       minOffsetZ = Math.max(minOffsetZ, floorZ + height / 2 - mesh.position.z);
       maxOffsetZ = Math.min(maxOffsetZ, ceilingZ - height / 2 - mesh.position.z);
       // #3372: and by the lándlet's levels, as the server reads them.
@@ -4810,9 +4812,20 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
       minOffsetZ = Math.max(minOffsetZ, minZ - mesh.position.z);
       maxOffsetZ = Math.min(maxOffsetZ, maxZ - mesh.position.z);
     }
-    const offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
-    const offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);
+    let offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
+    let offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);
     const offsetZ = THREE.MathUtils.clamp(0, minOffsetZ, maxOffsetZ);
+    // #4198: the lándlet's own outline, not the square, decides where a placed bundle may stand; the Worker
+    // refuses the batch otherwise. The whole bundle slides toward the centre just far enough.
+    const placeOutline = getBuildOutline();
+    if (placeOutline) {
+      const pulled = pullGroupTowardCentre(placeOutline, placed.map((mesh) => {
+        const { width, depth } = meshDimensions(mesh);
+        return { item: { width, depth, rotationZ: mesh.rotation.z }, x: mesh.position.x, y: mesh.position.y, z: mesh.position.z + offsetZ };
+      }), footprintScaleAtHeight);
+      offsetX = pulled.x;
+      offsetY = pulled.y;
+    }
     for (const mesh of placed) {
       mesh.position.x += offsetX;
       mesh.position.y += offsetY;
