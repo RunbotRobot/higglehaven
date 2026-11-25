@@ -931,15 +931,29 @@ export function* modelTierSteps(model, options = {}) {
     // #4302: the borders are what keep some mesh above its target: a second version slides them. It is an
     // extra candidate and only wins if it passes the check; otherwise the locked one is judged as ever.
     if (candidate.stuck && candidate.stuck.size > 0) {
-      slide.attempts++;
-      const sliding = yield* buildMid(model, meshes, options, getPixels, rung, candidate.stuck);
-      // A sliding mid is rebuilt from the original geometry: it must be strictly lighter than the locked one,
-      // or it is not worth having (a heavier version passes the fidelity check trivially).
-      if (!sliding.sharesFullModel && triangleCountOf(sliding.object) < triangleCountOf(candidate.object) && check(fullBatches, sliding.object, 'mid', getPixels)) {
-        mid = sliding;
-        slide.used = true;
-        continue;
+      // #4302: the whole ladder first (it ends at the largest tolerance that was needed); when that one fails the
+      // check, the same ladder without its largest rung, and so on down to the smallest tolerance alone, so a
+      // gentler slide that would have passed is not lost to one that went too far. Each step that is tried
+      // costs at most as many simplifier passes as it has rungs (3 + 2 + 1 for the shipped ladder), and the
+      // first to pass wins.
+      const ladder = options.slideBorderLadder ?? MID_SLIDE_BORDER_LADDER;
+      let lastCount = -1;
+      for (let rungs = Math.max(1, ladder.length); rungs >= 1 && !mid; rungs--) {
+        slide.attempts++;
+        const sliding = yield* buildMid(model, meshes, { ...options, slideBorderLadder: ladder.slice(0, rungs) }, getPixels, rung, candidate.stuck);
+        if (sliding.sharesFullModel) continue;
+        const count = triangleCountOf(sliding.object);
+        // The same triangle count as the step above is the same version: it already failed, do not judge it twice.
+        if (count === lastCount) continue;
+        lastCount = count;
+        // A sliding mid is rebuilt from the original geometry: it must be strictly lighter than the locked one,
+        // or it is not worth having (a heavier version passes the fidelity check trivially).
+        if (count < triangleCountOf(candidate.object) && check(fullBatches, sliding.object, 'mid', getPixels)) {
+          mid = sliding;
+          slide.used = true;
+        }
       }
+      if (mid) continue;
     }
     if (candidate.sharesFullModel || check(fullBatches, candidate.object, 'mid', getPixels)) mid = candidate;
   }
