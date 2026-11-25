@@ -84,6 +84,13 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
     paidOutLabel.className = 'product-sale-row-refunded';
     paidOutLabel.textContent = 'Paid out — contact support for a refund';
     saleRow.appendChild(paidOutLabel);
+  } else if (purchase.noReturns) {
+    // #4341: the seller turned returns off for this product and the server refuses a refund on it, so say that
+    // here (and where to change it) instead of offering a button that can only refuse.
+    const noReturnsLabel = document.createElement('div');
+    noReturnsLabel.className = 'product-sale-row-refunded';
+    noReturnsLabel.textContent = 'Returns are turned off for this product';
+    saleRow.appendChild(noReturnsLabel);
   } else {
     const refundBtn = document.createElement('button');
     refundBtn.className = 'product-sale-row-refund-btn';

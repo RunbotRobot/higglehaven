@@ -56,6 +56,11 @@ const STRIPE_RATE_LIMIT_MAX = 20;
 // commission rate ever does. #2614 moved PURCHASE_COMMISSION_RATE/
 // PURCHASE_BUILDER_SPLIT themselves into worker/lib/purchase-creation.js;
 // this constant's own derivation still references their values there.
+// #4341: whether the product an order was for is set to not accept returns, so the seller's own views can say so
+// instead of offering a Refund the server will refuse (handlePurchaseRefund below reads the same flag).
+function templateNoReturns(metadataJson) {
+  try { return JSON.parse(metadataJson || '{}').noReturns === true; } catch { return false; }
+}
 // #2020 (sub-issue of #1212, owner-settled shape 2026-10-13): "disputes/
 // refund requests at or below $15-25... exact value at implementer's
 // discretion within that range" — picked the midpoint.
@@ -183,7 +188,7 @@ export async function handlePurchases(request, env, route, url) {
     if (url.searchParams.get('mine') === 'seller') {
       const sessionSeller = await requireSessionSeller(request, db);
       const { results } = await db.prepare(`
-        SELECT p.*, t.name AS live_name
+        SELECT p.*, t.name AS live_name, t.metadata_json AS template_metadata_json
         FROM purchases p
         LEFT JOIN catalog_templates t ON t.template_id = p.template_id
         WHERE p.seller_id = ?
@@ -193,7 +198,7 @@ export async function handlePurchases(request, env, route, url) {
       return json({
         // #3776: the order's own recorded name first, then the live product, so a delisted product
         // is still named on the seller's side too.
-        purchases: results.map((row) => ({ ...purchaseFromRow(row), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        purchases: results.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
         totalCount: total.count,
       });
     }
@@ -239,7 +244,7 @@ export async function handlePurchases(request, env, route, url) {
     }
     if (templateId) {
       const id = stringValue(templateId, 'templateId');
-      const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(id).first();
+      const template = await db.prepare('SELECT seller_id, metadata_json FROM catalog_templates WHERE template_id = ?').bind(id).first();
       if (!template) throw new HttpError('Catalog template not found', 404);
       // #940: catalog_templates.seller_id has no FK constraint, so it can be
       // a genuinely dangling value once the owning seller self-deletes their
@@ -259,7 +264,7 @@ export async function handlePurchases(request, env, route, url) {
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
-      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
+      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
     }
     throw new HttpError('builderId, templateId, mine=seller, or danglingSeller is required', 400);
   }
