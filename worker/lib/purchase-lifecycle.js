@@ -822,7 +822,9 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   const template = await db.prepare('SELECT name, category, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
-    throw new HttpError('This product\'s seller does not accept returns', 400);
+    // #4341: this reads to the seller (an admin may also reach it), so it names the setting and where it is changed
+    // instead of calling it somebody else's rule.
+    throw new HttpError('This product is set to not accept returns, so this order can\'t be refunded. Turn returns back on under Edit returns policy in My products, then refund it.', 400);
   }
   const templateName = (await purchaseProductName(db, purchase)) || 'A product';
 
