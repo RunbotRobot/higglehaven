@@ -553,6 +553,7 @@ export async function enterShopMode() {
     retryCatalogLater({
       fetchCatalog,
       onCatalog: (catalog) => {
+        console.warn('DBG4295 catalog arrived', Array.isArray(catalog) ? catalog.length : typeof catalog, [...shopLandlets.values()].map((e) => e.loaded));
         setActiveCatalog(catalog);
         for (const entry of shopLandlets.values()) if (entry.loaded) unloadShopLandletInstances(entry);
       },

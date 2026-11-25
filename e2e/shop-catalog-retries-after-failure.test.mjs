@@ -75,6 +75,7 @@ for (let i = 0; i < ITEMS; i += 1) {
 // The first catalog request fails; every later one goes through.
 let catalogRequests = 0;
 let failed = 0;
+page.on('console', (m) => { if (/DBG4295/.test(m.text())) console.log(m.text()); });
 await page.route('**/api/catalog?*', (route) => {
   if (route.request().method() !== 'GET') return route.continue();
   catalogRequests += 1;
