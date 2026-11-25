@@ -27,6 +27,7 @@ describe('placing inside a lándlet outline (#4198)', () => {
     const over = await place(owner, 'instance-outline-lot', 'outline-over', 5, 5);
     expect(over.response.status).toBe(400);
     expect(over.body.error).toMatch(/outline/);
+    expect(over.body.code).toBe('outside_landlet_outline');
   });
 
   it('keeps the square rule for a lándlet whose polygon is unusable', async () => {
