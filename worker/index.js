@@ -22,7 +22,7 @@ import {
 } from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import {
-  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
+  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, requireAdminUnlessLocalWorker, assertOwner,
   assertVerified, requireSessionBuilder, requireVerifiedSession, builderIdsForUsers,
 } from './lib/auth.js';
 // #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
@@ -1449,6 +1449,8 @@ async function handleBuilders(request, env, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    // #4287: no client calls this (signup provisions the profile); a deployed Worker needs an admin session.
+    await requireAdminUnlessLocalWorker(request, db, env);
     const input = await readJson(request);
     await checkRateLimit(db, `builder-create:${clientIp(request)}`, BUILDER_CREATE_RATE_LIMIT_MAX);
     const label = labelValue(input.label, 'label');
