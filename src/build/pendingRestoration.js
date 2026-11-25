@@ -22,6 +22,12 @@ const emptyEl = document.getElementById('pending-restoration-empty');
 // Same stale-fetch guard idiom as backupChainLoadToken in metadataModals.js.
 let loadToken = 0;
 
+// #4201: Build draws each removed item as a ghost where it stood, under the
+// same switch as the sold-out markers. scene.js registers here (this module
+// cannot import it back) and is told the slots every time they are rendered.
+let slotsListener = null;
+export function setPendingSlotsListener(fn) { slotsListener = fn; }
+
 function formatMeters(value) {
   return typeof value === 'number' ? value.toFixed(1) : '?';
 }
@@ -49,6 +55,7 @@ function renderSlots(slots) {
   // #4201: the head wears a note when something is newly removed (more than the builder has already looked at), and one tap
   // opens the list. It is not an introduction: it reports a change to the builder's own lándlet ("full information").
   latestCount = slots.length;
+  if (slotsListener) slotsListener(slots);
   if (shouldNoteRemoved(slots.length, readSeenCount())) {
     setBudWord('removed-items', 'Removed items', { open: openModal, label: 'Items were removed from your lándlet. Open the list.' });
   } else {

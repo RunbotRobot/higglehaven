@@ -77,7 +77,7 @@ import {
   fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles, updateBundle,
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
-import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
+import { refresh as refreshPendingRestorations, setPendingSlotsListener } from './pendingRestoration.js';
 import { planSelectionBoxes, writeBoxEdges, BOX_EDGE_VERTICES, BOX_EDGE_FLOATS, batchCapacity } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
@@ -3751,13 +3751,60 @@ export function removeSoldOutMarkerMesh(markerId) {
 }
 
 export function clearSoldOutMarkerMeshes() {
+  clearRemovedGhostMeshes();
   for (const markerId of [...soldOutMarkerMeshes.keys()]) removeSoldOutMarkerMesh(markerId);
 }
+
+// #4201: items taken off the lándlet (a suspended or removed seller's
+// products) are drawn as the same grayed ghosts, where they stood, under the
+// same switch. A ghost is only ever a mesh in landletElevationGroup: never in
+// productMeshes, so it cannot be selected, moved, bundled or saved.
+const removedGhostMeshes = new Map(); // snapshotId -> THREE.Mesh
+let removedGhostSlots = [];
+
+function clearRemovedGhostMeshes() {
+  for (const mesh of removedGhostMeshes.values()) {
+    landletElevationGroup.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  removedGhostMeshes.clear();
+}
+
+function addRemovedGhostMesh(slot) {
+  if (removedGhostMeshes.has(slot.snapshotId) || slot.landletId !== currentLandletId) return;
+  const dims = findTemplate(slot.templateId)?.dimensions;
+  const scale = typeof slot.scale === 'number' && slot.scale > 0 ? slot.scale : 1;
+  const geometry = new THREE.BoxGeometry(
+    (dims?.width || 1) * scale, (dims?.depth || 1) * scale, (dims?.height || 1) * scale,
+  );
+  const material = new THREE.MeshBasicMaterial({
+    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(slot.position.x ?? 0, slot.position.y ?? 0, slot.position.z ?? 0.5);
+  if (slot.rotation) mesh.rotation.set(slot.rotation.x, slot.rotation.y, slot.rotation.z);
+  mesh.userData.removedSnapshotId = slot.snapshotId;
+  landletElevationGroup.add(mesh);
+  removedGhostMeshes.set(slot.snapshotId, mesh);
+}
+
+function applyRemovedGhostVisibility() {
+  clearRemovedGhostMeshes();
+  if (!showSoldOutMarkers) return;
+  for (const slot of removedGhostSlots) addRemovedGhostMesh(slot);
+}
+setPendingSlotsListener((slots) => {
+  removedGhostSlots = slots;
+  applyRemovedGhostVisibility();
+});
+window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
 
 // Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called
 // whenever either changes (the toggle flips, or a fresh list just loaded).
 export function applySoldOutMarkerVisibility() {
   clearSoldOutMarkerMeshes();
+  applyRemovedGhostVisibility();
   if (!showSoldOutMarkers) return;
   for (const marker of soldOutMarkers) addSoldOutMarkerMesh(marker);
 }
@@ -6850,7 +6897,7 @@ async function renderSoldOutMarkersSection() {
   toggle.id = 'sold-out-marker-toggle';
   toggle.checked = showSoldOutMarkers;
   toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out items used to be'));
+  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out or removed items used to be'));
   field.appendChild(toggleRow);
 
   const list = document.createElement('div');
