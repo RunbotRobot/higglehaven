@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { batchTierCounts } from './shop/batchTiers.js';
+import { batchTierCounts, batchHiddenCount } from './shop/batchTiers.js';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
 import { markStartup } from './ui/startupMarks.js';
 import { failLoadingStage, markLoadingStage } from './ui/loadingStages.js';
@@ -1357,8 +1357,9 @@ window.__testShopDrawStats = (options) => {
   let instancedMeshes = 0;
   let batchedPlacements = 0;
   // #3403: how many batched placements are drawn from each version of their model right now; the
-  // three numbers sum to batchedPlacements.
+  // three numbers plus batchEnclosed (left out of all of them, #4365) sum to batchedPlacements.
   const batchTiers = { full: 0, mid: 0, far: 0 };
+  let batchEnclosed = 0; // #4365: placements left out of every set because their neighbours enclose them
   for (const entry of shopLandlets.values()) {
     batches += entry.batches.length;
     for (const batch of entry.batches) {
@@ -1366,12 +1367,13 @@ window.__testShopDrawStats = (options) => {
       batchedPlacements += batch.handles.length;
       const counts = batchTierCounts(batch);
       for (const name of Object.keys(batchTiers)) batchTiers[name] += counts[name];
+      batchEnclosed += batchHiddenCount(batch);
     }
   }
   const { render, memory } = renderer.info;
   return {
     drawCalls: render.calls, triangles: render.triangles,
-    batches, instancedMeshes, batchedPlacements, batchTiers,
+    batches, instancedMeshes, batchedPlacements, batchTiers, batchEnclosed,
     geometries: memory.geometries, textures: memory.textures,
   };
 };

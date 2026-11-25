@@ -28,18 +28,52 @@ export function icosphereGlb(level, radius) {
   const positions = new Float32Array(vertices.flatMap((v) => v.map((c) => c * radius)));
   const normals = new Float32Array(vertices.flat());
   const indices = new Uint16Array(faces.flat());
+  const min = [-radius, -radius, -radius]; const max = [radius, radius, radius];
+  return { glb: packGlb(positions, normals, indices, min, max), triangles: faces.length };
+}
+
+// #4365: a plain box, `size` metres on a side with its centre at the origin, each face cut into n x n squares of
+// two triangles (12 n^2 triangles in all: n = 21 is 5,292, close to the owner's 5,320-triangle brick). One
+// closed, outward-wound surface with welded corners, so it is a solid box to the enclosure rule
+// (src/shop/enclosedPlacements.js) at every n, which an icosphere is not.
+export function boxGlb(n, size) {
+  const h = size / 2;
+  const positions = []; const normals = []; const indices = [];
+  const faces = [ // [normal axis, sign, u axis, v axis], wound so (u x v) points along the normal
+    [0, 1, 1, 2], [0, -1, 2, 1], [1, 1, 2, 0], [1, -1, 0, 2], [2, 1, 0, 1], [2, -1, 1, 0],
+  ];
+  for (const [axis, sign, uAxis, vAxis] of faces) {
+    const base = positions.length / 3;
+    for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+      const p = [0, 0, 0];
+      p[axis] = sign * h; p[uAxis] = -h + (size * i) / n; p[vAxis] = -h + (size * j) / n;
+      positions.push(...p);
+      const nrm = [0, 0, 0]; nrm[axis] = sign;
+      normals.push(...nrm);
+    }
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const a = base + j * (n + 1) + i; const b = a + 1; const c = a + n + 1; const d = c + 1;
+      indices.push(a, b, d, a, d, c);
+    }
+  }
+  return {
+    glb: packGlb(new Float32Array(positions), new Float32Array(normals), new Uint16Array(indices), [-h, -h, -h], [h, h, h]),
+    triangles: indices.length / 3,
+  };
+}
+
+function packGlb(positions, normals, indices, min, max) {
   const pad4 = (n) => (n + 3) & ~3;
   const posBytes = positions.byteLength; const nrmBytes = normals.byteLength; const idxBytes = indices.byteLength;
   const binLength = pad4(posBytes + nrmBytes + idxBytes);
-  const min = [-radius, -radius, -radius]; const max = [radius, radius, radius];
   const json = {
     asset: { version: '2.0', generator: 'seed-heavy-landlet' },
     scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
     materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.85, 0.45, 0.15, 1], metallicFactor: 0, roughnessFactor: 0.9 } }],
     meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0 }] }],
     accessors: [
-      { bufferView: 0, componentType: 5126, count: vertices.length, type: 'VEC3', min, max },
-      { bufferView: 1, componentType: 5126, count: vertices.length, type: 'VEC3' },
+      { bufferView: 0, componentType: 5126, count: positions.length / 3, type: 'VEC3', min, max },
+      { bufferView: 1, componentType: 5126, count: positions.length / 3, type: 'VEC3' },
       { bufferView: 2, componentType: 5123, count: indices.length, type: 'SCALAR' },
     ],
     bufferViews: [
@@ -61,6 +95,5 @@ export function icosphereGlb(level, radius) {
   Buffer.from(positions.buffer).copy(out, binStart + 8);
   Buffer.from(normals.buffer).copy(out, binStart + 8 + posBytes);
   Buffer.from(indices.buffer).copy(out, binStart + 8 + posBytes + nrmBytes);
-  return { glb: out, triangles: faces.length };
+  return out;
 }
-
