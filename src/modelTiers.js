@@ -40,6 +40,7 @@ import {
   DoubleSide,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   RGBAFormat,
   SRGBColorSpace,
@@ -568,8 +569,12 @@ function buildHullFar(parts) {
   return geometry;
 }
 
-function farObject(geometry) {
-  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
+// #4111: a model of unlit materials (KHR_materials_unlit loads as MeshBasicMaterial) is drawn without
+// light, so its far version is too: a lit far version shaded a model that has no shading anywhere else.
+function farObject(geometry, unlit = false) {
+  const material = unlit
+    ? new MeshBasicMaterial({ vertexColors: true, side: DoubleSide })
+    : new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
   const mesh = new Mesh(geometry, material);
   mesh.name = 'far';
   const group = new Group();
@@ -808,11 +813,15 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
   // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
   // by the model's own outline. null means not even that held: the caller uses a more detailed version.
-  const simplified = farObject(merged);
+  const unlit = visible.every((mesh) => {
+    const material = materialForMesh(mesh);
+    return !!(material && material.isMeshBasicMaterial);
+  });
+  const simplified = farObject(merged, unlit);
   if (tierIsFaithful(fullBatches, simplified.object, 'far', getPixels)) return simplified;
   const hull = buildHullFar(parts);
   if (hull) {
-    const outline = farObject(hull);
+    const outline = farObject(hull, unlit);
     if (tierIsFaithful(fullBatches, outline.object, 'far', getPixels)) return outline;
   }
   return null;

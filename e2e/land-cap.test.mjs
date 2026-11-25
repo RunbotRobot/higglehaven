@@ -16,10 +16,22 @@ await claimLandlet(page);
 
 await openAccountMenu(page);
 // Owner feedback: "Builders should see their lánd cap in the menu
-// somewhere" — refreshAccountMenuLandCap (src/main.js) populates this on
-// every menu open, independent of Settings/Build mode.
-const menuLandCapText = await waitForText(page, '#account-menu-landcap', '/');
-console.log('Account menu land cap text (should read "Lándlet cap: 1,000m² / 1,000m²"):', menuLandCapText);
+// somewhere" — shown in the My lándlets leaf (#4202), read when it opens.
+// #4202: the cap is a meter inside the My lándlets leaf (it was a loose line under the menu): two figures, a bar that
+// is full for a builder at the cap, and what raises it.
+await page.click('#my-lands-btn');
+await page.waitForSelector('#my-lands-modal.visible', { timeout: 5000 });
+const menuLandCapText = await waitForText(page, '#my-lands-cap-words', 'You hold');
+const meterNow = await page.getAttribute('#my-lands-cap-meter', 'aria-valuenow');
+const meterMax = await page.getAttribute('#my-lands-cap-meter', 'aria-valuemax');
+const fillWidth = await page.evaluate(() => document.getElementById('my-lands-cap-fill').style.width);
+const capNote = await page.textContent('#my-lands-cap-note');
+console.log('My lándlets cap meter (should read "You hold 1,000m² of the 1,000m² you may hold."):', menuLandCapText, `| ${meterNow}/${meterMax} fill ${fillWidth} | note: ${capNote}`);
+const looseLineGone = (await page.locator('#account-menu-landcap').count()) === 0;
+console.log('the loose line under the menu is gone (should be true):', looseLineGone);
+await page.click('#my-lands-close-btn');
+await page.waitForSelector('#my-lands-modal:not(.visible)', { state: 'attached', timeout: 5000 });
+await openAccountMenu(page);
 
 // #613: same "refresh on open" wiring, right next to the land cap line —
 // a fresh builder has earned nothing yet, so this stays hidden rather than
@@ -46,7 +58,7 @@ const landCapFieldLabel = await page.locator('#land-cap-field').locator('span').
 console.log('Land Cap field label (should be "Lándlet cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1,000m²" twice — owned and cap):', landCapFieldText);
 
-const pass = menuLandCapText === 'Lándlet cap: 1,000m² / 1,000m²' &&
+const pass = menuLandCapText === 'You hold 1,000m² of the 1,000m² you may hold.' && meterNow === meterMax && fillWidth === '100%' && /earn higgles/.test(capNote) && looseLineGone &&
   taxNoticeHidden &&
   landCapFieldLabel.trim() === 'Lándlet cap' &&
   landCapFieldText.includes('You own 1,000m²') &&

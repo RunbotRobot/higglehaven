@@ -61,6 +61,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
+import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -86,7 +87,7 @@ import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
 import { stepBuildCamera } from './keyboardCamera.js';
 import { buildEditKeyAction } from './keyboardEdit.js';
-import { buildItemKeyAction, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
+import { buildItemKeyAction, itemKeyAnnouncement, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -200,7 +201,15 @@ function itemCentreZRange() {
 // once per hit, not once per frame.
 let levelLimitHit = null;
 let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
+// #4198: set when a move was stopped at the lándlet's outline; said once per hit like the level limits.
+let outlineLimitHit = false;
 function announceLevelLimit() {
+  const outlineHit = outlineLimitHit;
+  outlineLimitHit = false;
+  if (outlineHit && !levelLimitHit) {
+    levelLimitAnnounced = true;
+    showSelectionActionStatus("That's the edge of this lándlet.");
+  }
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
@@ -466,6 +475,23 @@ function clampToLandlet(mesh, x, y, z) {
   const clampedZ = THREE.MathUtils.clamp(z, lowestZ, highestZ);
   if (z > highestZ && highestZ === maxZ) levelLimitHit = 'top';
   else if (z < lowestZ && lowestZ === minZ) levelLimitHit = 'bottom';
+  // #4198: a lándlet's real outline, not a square, is where an item may stand (shared/landlet-outline.js, the
+  // same rule the Worker applies). Without a usable outline (a placeholder lándlet) the square below stays.
+  const outline = getBuildOutline();
+  if (outline) {
+    const item = { width, depth, rotationZ: mesh.rotation.z };
+    const previous = mesh.userData.safePosition;
+    let moved = previous
+      ? limitItemMove(outline, item, previous, { x, y }, clampedZ, footprintScaleAtHeight)
+      : limitItemPlacement(outline, item, { x, y }, clampedZ, footprintScaleAtHeight);
+    if (!itemLegalAt(outline, item, moved.x, moved.y, clampedZ, footprintScaleAtHeight)) {
+      // Where it was no longer fits (a trim made it bigger, or it was stored off the lándlet): the nearest legal
+      // place on the line from the centre.
+      moved = limitItemPlacement(outline, item, { x: moved.x, y: moved.y }, clampedZ, footprintScaleAtHeight);
+    }
+    if (moved.limited) outlineLimitHit = true;
+    return { x: moved.x, y: moved.y, z: clampedZ };
+  }
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -777,12 +803,14 @@ translateControls.addEventListener('objectChange', () => {
     for (const mesh of meshes) {
       const start = groupMoveStartPositions.get(mesh);
       const { width, depth, height } = meshDimensions(mesh);
-      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
-      maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
-      minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
-      maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      if (!getBuildOutline()) {
+        const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+        const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+        minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
+        maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
+        minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
+        maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      }
       // issue #169: bounded by whichever level is currently being viewed/
       // edited, same as clampToLandlet's own single-item case.
       minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
@@ -804,6 +832,20 @@ translateControls.addEventListener('objectChange', () => {
       THREE.MathUtils.clamp(totalOffset.y, minOffsetY, maxOffsetY),
       THREE.MathUtils.clamp(totalOffset.z, minOffsetZ, maxOffsetZ),
     );
+    // #4198: the bundle moves as one rigid body inside the lándlet's outline: every member must stay on it, so the
+    // whole bundle stops, or slides along the edge, when its first member would cross.
+    const groupOutline = getBuildOutline();
+    if (groupOutline && meshes.length > 0) {
+      const members = meshes.map((mesh) => {
+        const start = groupMoveStartPositions.get(mesh);
+        const { width, depth } = meshDimensions(mesh);
+        return { item: { width, depth, rotationZ: mesh.rotation.z }, start: { x: start.x, y: start.y }, z: start.z + offset.z };
+      });
+      const limited = limitGroupOffset(groupOutline, members, { x: totalOffset.x, y: totalOffset.y }, footprintScaleAtHeight);
+      offset.x = limited.x;
+      offset.y = limited.y;
+      if (limited.limited) outlineLimitHit = true;
+    }
     if (snapToSurfaces) {
       // Same idea as resolveByAxis for a single item, but resolved for the
       // whole group at once per axis (resolveGroupAxisDelta) so the group's
@@ -914,10 +956,29 @@ function bundleBounds() {
   };
 }
 let bundleRotateLimitShown = false;
+let bundleRotateOutlineHit = false; // #4198: the last refused turn was the outline's, not the bundle's size
 function applyBundleRotation(delta) {
   const raw = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  bundleRotateOutlineHit = false;
   const { transforms, fits } = reseatInBounds(raw, bundleBounds());
   if (!fits) return false;
+  // #4198: every member must also stand on the lándlet's real outline at its new place and angle, the same
+  // rule the single-item move uses. A turn that would swing a member over the edge stops at the last angle
+  // that was legal, with one line saying why.
+  const outline = getBuildOutline();
+  if (outline) {
+    const meshes = groupMoveMeshes ?? [];
+    const probe = new THREE.Euler();
+    for (let i = 0; i < meshes.length; i += 1) {
+      const { width, depth } = meshDimensions(meshes[i]);
+      probe.setFromQuaternion(transforms[i].quaternion, meshes[i].rotation.order);
+      const at = transforms[i].position;
+      if (!itemLegalAt(outline, { width, depth, rotationZ: probe.z }, at.x, at.y, at.z, footprintScaleAtHeight)) {
+        bundleRotateOutlineHit = true;
+        return false;
+      }
+    }
+  }
   (groupMoveMeshes ?? []).forEach((mesh, i) => {
     mesh.position.copy(transforms[i].position);
     mesh.quaternion.copy(transforms[i].quaternion);
@@ -937,7 +998,9 @@ rotateControls.addEventListener('objectChange', () => {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
     if (!bundleRotateLimitShown) {
       bundleRotateLimitShown = true;
-      showSelectionActionStatus('This bundle is too big to turn any further here.');
+      showSelectionActionStatus(bundleRotateOutlineHit
+        ? "That's the edge of this lándlet."
+        : 'This bundle is too big to turn any further here.');
     }
   }
 });
@@ -1006,6 +1069,29 @@ rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 // #3376: `dragAxis: true` also tells the gizmo which ring is being turned, the
 // way a real drag does, so Snap / settle apply; without it the raw angle is used.
 window.__testRotateRingsShown = () => ({ x: rotateControls.showX, y: rotateControls.showY, z: rotateControls.showZ }); // e2e (#4118): which rings the selected item wears
+// e2e (#4118): where on the screen (client pixels) each of the three rings can be grabbed, so a test can put a real
+// finger on the red, green or blue ring of the selected item. A point on the middle of the ring's pick area, kept
+// only if it is on screen; null for a ring that is not offered.
+window.__testRotateRingPoints = () => {
+  const out = {};
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const pickers = rotateControls._gizmo.picker.rotate.children.filter((p) => ['X', 'Y', 'Z'].includes(p.name) && p.visible);
+  for (const picker of pickers) {
+    const position = picker.geometry.attributes.position;
+    const points = [];
+    // a spread of points along the ring's pick area that are on screen; the test presses on them until the gizmo
+    // itself says this ring is the one under the finger (the rings cross, and a point where two meet picks one)
+    for (let i = 0; i < position.count; i += Math.max(1, Math.floor(position.count / 40))) {
+      v.fromBufferAttribute(position, i).applyMatrix4(picker.matrixWorld).project(camera);
+      if (Math.abs(v.x) > 0.9 || Math.abs(v.y) > 0.9 || v.z > 1) continue;
+      points.push({ x: Math.round(rect.left + ((v.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - v.y) / 2) * rect.height) });
+    }
+    out[picker.name.toLowerCase()] = points;
+  }
+  return out;
+};
+window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
@@ -1324,6 +1410,8 @@ trimControls.addEventListener('dragging-changed', (event) => {
 // now live in src/world/models.js (#2553); shapeForLandlet is still here,
 // pending claim/flow.js's own extraction of it.
 export function applyLandletShape(landletRecord) {
+  // #4198: the polygon that draws the ground is also where an item may stand.
+  setBuildOutline(landletRecord.polygon);
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
   normalizeGroundShapeUVs(landlet.geometry);
@@ -2599,6 +2687,7 @@ export function markBuildSceneReady() {
   buildSceneReady = true;
   // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
   // pass, before the next frame, judges all of them against the entering budget.
+  buildLod.reset(); // #4208: a first load: no set job has looked at anything yet, so nothing is judged alone
   buildLod.update(performance.now(), true);
   buildFirstLoad = false;
 }
@@ -5335,6 +5424,7 @@ window.addEventListener('keydown', (event) => {
 // #4162 (leaf 4 of #4158): Shift with the arrows, Page Up and Page Down, Q and E moves and turns the one
 // selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
 let lastItemKeyAt = 0;
+let itemKeyAnnounceFlip = false;
 function turnSelectedItem(degrees) {
   if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
   const [mesh] = selectedMeshes;
@@ -5350,8 +5440,17 @@ window.addEventListener('keydown', (event) => {
   const now = performance.now();
   if (now - lastItemKeyAt < ITEM_KEY_MIN_GAP_MS) return;
   lastItemKeyAt = now;
+  const [item] = selectedMeshes;
+  const was = { position: item.position.clone(), quaternion: item.quaternion.clone() };
   if (action.type === 'nudge') nudgeSelectedItem(action.direction);
   else turnSelectedItem(action.degrees);
+  // A press that did something says so for a screen reader; one that did nothing already said why.
+  const did = action.type === 'nudge' ? item.position.distanceTo(was.position) > 1e-4 : item.quaternion.angleTo(was.quaternion) > 1e-4;
+  if (did && buildSelectStatusEl) {
+    // The same sentence twice in a row is not read again, so every other press carries an invisible mark.
+    itemKeyAnnounceFlip = !itemKeyAnnounceFlip;
+    buildSelectStatusEl.textContent = itemKeyAnnouncement(action, getUnits()) + (itemKeyAnnounceFlip ? '\u200b' : '');
+  }
 });
 window.addEventListener('blur', () => { buildKeysDown.clear(); });
 function applyBuildKeyboardCamera(now) {

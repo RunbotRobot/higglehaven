@@ -44,6 +44,9 @@ export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching
 // long after entering is judged on its own, and a single new item is always drawn.
 export const BUILD_HOLD_BACK_TRIANGLES = MAX_FULL_DETAIL_TRIANGLES;
 export const BUILD_HOLD_MAX_MS = 20000;
+// #4208: an item keeps the version it is drawn at until a finished set job has covered it, for at most this long
+// after it was first seen (a layout that keeps changing under the jobs must not pin items above the triangle cap).
+export const BUILD_SETS_HOLD_MAX_MS = 3000;
 
 const scratchPosition = new THREE.Vector3();
 const scratchSetPosition = new THREE.Vector3();
@@ -110,7 +113,11 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   let lastSignature = null; // what the previous pass saw
   // #4189: the sets are worked out in slices of BUILD_SETS_SLICE_MS a tick, not in one frame; the sets in use stay
   // the previous ones until the new ones are complete, then change at once.
-  let setsJob = null; // { job, signature } while one is running
+  let setsJob = null; // { job, signature, objects } while one is running
+  // #4208: the items a finished set job has looked at. An item not in it (first load, streaming in, just pasted) has
+  // not been seen by any job, so it would be judged alone and then flip when the sets arrive: it keeps what is drawn.
+  let covered = new WeakSet();
+  let justCovered = null;
   let wholeIds = new Set(); // the sets held whole at full detail last pass
   const accs = new Map(); // setId -> what this pass has found out about the members it saw
 
@@ -215,6 +222,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     lastTickMs = now;
     const startMs = performance.now();
     drainAttachQueue(startMs);
+    if (justCovered) { for (const covering of justCovered) covered.add(covering); justCovered = null; }
     items.length = 0;
     objects.length = 0;
     accs.clear();
@@ -282,6 +290,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     if (signature !== setsSignature && !setsJob && (signature === lastSignature || setsSignature === null)) {
       setsJob = {
         signature,
+        objects: objects.slice(),
         job: startLodSetsJob(objects, {
           hasTiers: () => true,
           groupIdOf: (object) => object.userData.groupId,
@@ -297,6 +306,7 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
       if (done) {
         sets = done;
         setsSignature = setsJob.signature;
+        justCovered = setsJob.objects; // counts from the next pass: this one judged them with the sets before
         setsJob = null;
         wholeIds = new Set(); // set ids are worked out again
       }
@@ -380,6 +390,17 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
         if (!items[index].selected && !items[index].protected && tiers[index] !== TIER_FULL) tiers[index] = tier;
       }
     }
+    // #4208: an item no finished set job has looked at yet keeps the version it is drawn at (a selected item is
+    // always served by the budget, above, and is never held). It is let go after BUILD_SETS_HOLD_MAX_MS, so a
+    // layout that keeps changing under the jobs cannot pin items at full detail past the cap for long, and on
+    // the way in the #4003 hold-back still keeps what does not fit the budget undrawn.
+    const judged = tiers.slice(); // what each item would be without the hold: its memory for the next pass's hysteresis
+    for (let i = 0; i < objects.length; i++) {
+      const data = objects[i].userData;
+      if (items[i].selected || covered.has(objects[i])) continue;
+      if (now - (data.lodSeenMs ?? now) > BUILD_SETS_HOLD_MAX_MS) continue;
+      tiers[i] = data.lodApplied ?? TIER_FULL;
+    }
     applyHoldBack(objects, items, tiers, now);
     flips.length = 0;
     // A set whose members are not all ready to change (a versions still loading) waits, so it never shows two
@@ -393,8 +414,8 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     for (let i = 0; i < objects.length; i++) {
       const object = objects[i];
       const tier = tiers[i];
-      object.userData.lodTier = tier;
-      if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
+      object.userData.lodTier = judged[i];
+      if (judged[i] !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
       if (object.userData.lodTiersState !== 'ready' || tier === (object.userData.lodApplied ?? TIER_FULL)) continue;
       if (object.userData.lodSetId !== undefined && !items[i].selected && blocked.has(object.userData.lodSetId)) continue;
       flips.push(i);
@@ -454,7 +475,9 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     setFullTriangleCap(triangles) { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; },
     setProtectNear(on) { protectNear = on !== false; },
     // #4115: e2e-only switch for the grouping of loose items; the sets are worked out again on the next pass.
-    setImplicitSets(on) { implicitSets = on !== false; setsSignature = null; setsJob = null; },
+    setImplicitSets(on) { implicitSets = on !== false; setsSignature = null; setsJob = null; covered = new WeakSet(); justCovered = null; },
     setCount() { return sets.size; },
+    // #4208: a new lándlet or a return to Build starts as a first load: nothing has been looked at by a set job.
+    reset() { sets = new Map(); setsSignature = null; lastSignature = null; setsJob = null; wholeIds = new Set(); covered = new WeakSet(); justCovered = null; },
   };
 }

@@ -31,3 +31,15 @@ export function buildItemKeyAction(event, { singleSelected = false } = {}) {
 export function isItemKey(event, singleSelected) {
   return buildItemKeyAction(event, { singleSelected }) !== null;
 }
+
+// #4162 follow-up (area 13, a screen reader): a press that worked says what it did in a polite live region, in
+// the words and unit the card's Nudge pad uses (a refusal already says why, in the card's own status). Only for
+// a key: a tap on the card has the card in front of the person. -> a sentence.
+const WHERE = { left: 'to the left', right: 'to the right', forward: 'forward', back: 'back' };
+export function itemKeyAnnouncement(action, units) {
+  if (action.type === 'turn') return `Turned ${Math.abs(action.degrees)} degrees ${action.degrees > 0 ? 'left' : 'right'}.`;
+  const amount = units === 'ft' ? '3 inches' : '10 centimetres';
+  if (action.direction === 'up') return `Lifted ${amount}.`;
+  if (action.direction === 'down') return `Lowered ${amount}.`;
+  return `Moved ${amount} ${WHERE[action.direction]}.`;
+}

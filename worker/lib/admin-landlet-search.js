@@ -3,7 +3,7 @@
 // (so the database does the narrowing), then the Worker ranks what came back and applies the numeric
 // words itself, because "north ridge 2" has to find "north-ridge-002".
 import { json } from './http.js';
-import { requireAdmin } from './auth.js';
+import { requireAdminOrViewer } from './auth.js';
 
 export const LANDLET_SEARCH_LIMIT = 25; // rows shown; the total found is reported beside them
 const SCAN_LIMIT_WITH_WORDS = 500; // rows the database hands back when at least one word narrows it
@@ -51,7 +51,7 @@ export function rankLandlet(words, landlet) {
 }
 
 export async function handleAdminLandletSearch(request, db, url) {
-  await requireAdmin(request, db);
+  await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it
   const raw = String(url.searchParams.get('q') ?? '').slice(0, MAX_QUERY_LENGTH);
   const words = searchWords(raw);
   if (!words.length) return json({ query: raw, landlets: [], total: 0, shown: 0 });

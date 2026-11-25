@@ -842,6 +842,7 @@
       "failed_login_attempts": "INTEGER|1|0|0",
       "first_hints_done": "INTEGER|0||0",
       "is_admin": "INTEGER|1|0|0",
+      "is_admin_viewer": "INTEGER|1|0|0",
       "is_fleet": "INTEGER|1|0|0",
       "loading_tips_off": "INTEGER|0||0",
       "locked_until": "TEXT|0||0",

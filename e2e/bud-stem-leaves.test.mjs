@@ -50,9 +50,10 @@ async function inspect(label) {
       stemLeft: box ? box.left : -1,
       stemBottom: box ? box.bottom : -1,
       stemRight: box ? box.right : -1,
-      headMiddle: head.top + head.height / 2,
-      headCentreX: head.left + head.width / 2,
-      lastMiddle: lastLeaf.top + lastLeaf.height / 2,
+      // #4200: the head points down and to the right, so the stem enters it at its base, at the upper left
+      headBaseY: head.top + head.height * 0.19,
+      headBaseX: head.left + head.width * 0.19,
+      lastTip: lastLeaf.top + 6,
       firstTop: rows[0].box.top,
     };
   });
@@ -69,8 +70,13 @@ async function inspect(label) {
     check(row.tap.every(([w, h]) => w >= 44 && h >= 44), `${label}: ${row.id} tap size ${JSON.stringify(row.tap)}`);
     check(row.box.left >= 0 && row.box.right <= report.vw && row.box.bottom <= report.vh, `${label}: ${row.id} is on the screen`);
   });
-  check(Math.abs(report.stemTop - report.headMiddle) <= 2 && Math.abs(report.stemLeft - report.headCentreX) <= 2, `${label}: the stem starts on the head's own centre line (top ${report.stemTop}, left ${report.stemLeft}; head middle ${report.headMiddle}, centre ${report.headCentreX})`);
-  check(Math.abs(report.stemBottom - report.lastMiddle) <= 2, `${label}: the stem reaches the middle of the last leaf (${report.stemBottom} vs ${report.lastMiddle})`);
+  check(Math.abs(report.stemTop - report.headBaseY) <= 2 && Math.abs(report.stemLeft - report.headBaseX) <= 2, `${label}: the stem enters the head at its base, the upper left (top ${report.stemTop}, left ${report.stemLeft}; base ${report.headBaseY}, ${report.headBaseX})`);
+  check(Math.abs(report.stemBottom - report.lastTip) <= 2, `${label}: the stem ends at the last leaf's tip (${report.stemBottom} vs ${report.lastTip})`);
+  // #4200: every leaf joins the stem at its tip: a right leaf's left edge, a left leaf's right edge, is on the stem's line.
+  for (const row of report.rows) {
+    const edge = row.side === 'right' ? row.box.left : row.box.right;
+    check(Math.abs(edge - report.stemRight) <= 3, `${label}: ${row.id} (${row.side}) meets the stem at its tip (edge ${edge}, stem ${report.stemRight})`);
+  }
   check(report.stemRight > report.stemLeft + 20 && report.stemTop < report.firstTop, `${label}: it curves across to the leaves' line above the first leaf`);
   check(report.overlaps.length === 0, `${label}: no two leaves overlap (${JSON.stringify(report.overlaps)})`);
   if (process.env.STILLS_DIR) await page.screenshot({ path: `${process.env.STILLS_DIR}/stem-${label}.png` });

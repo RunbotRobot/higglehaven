@@ -1,6 +1,6 @@
 // #4162: which item step a shifted key makes.
 import { describe, expect, it } from 'vitest';
-import { buildItemKeyAction, isItemKey, ITEM_TURN_DEGREES } from './keyboardItem.js';
+import { buildItemKeyAction, isItemKey, itemKeyAnnouncement, ITEM_TURN_DEGREES } from './keyboardItem.js';
 
 const press = (code, extra) => ({ code, shiftKey: true, ctrlKey: false, metaKey: false, altKey: false, target: null, ...extra });
 const one = { singleSelected: true };
@@ -42,5 +42,16 @@ describe('buildItemKeyAction', () => {
     expect(isItemKey(press('ArrowLeft'), true)).toBe(true);
     expect(isItemKey(press('ArrowLeft'), false)).toBe(false);
     expect(isItemKey(press('KeyW'), true)).toBe(false);
+  });
+});
+
+describe('itemKeyAnnouncement', () => {
+  it('says what a press did, in the card\'s unit', () => {
+    expect(itemKeyAnnouncement({ type: 'nudge', direction: 'left' }, 'm')).toBe('Moved 10 centimetres to the left.');
+    expect(itemKeyAnnouncement({ type: 'nudge', direction: 'forward' }, 'ft')).toBe('Moved 3 inches forward.');
+    expect(itemKeyAnnouncement({ type: 'nudge', direction: 'up' }, 'ft')).toBe('Lifted 3 inches.');
+    expect(itemKeyAnnouncement({ type: 'nudge', direction: 'down' }, 'm')).toBe('Lowered 10 centimetres.');
+    expect(itemKeyAnnouncement({ type: 'turn', degrees: ITEM_TURN_DEGREES }, 'm')).toBe('Turned 5 degrees left.');
+    expect(itemKeyAnnouncement({ type: 'turn', degrees: -ITEM_TURN_DEGREES }, 'm')).toBe('Turned 5 degrees right.');
   });
 });

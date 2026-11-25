@@ -1341,6 +1341,25 @@ activity, avatar presence and latest sign-in. `suspended` is an active, not lift
 `admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
 what it did, and a row's name opens the same detail).
 
+### Look-only admin (#4175)
+
+A second role, `users.is_admin_viewer` (never `is_admin`), for an account that needs to look at the owner's tools
+and change nothing. Default deny: every check that reads `is_admin` refuses a viewer; only a handler that calls
+`requireAdminOrViewer` (`worker/lib/auth.js`) lets one in, and only for `GET` and `HEAD`. Opted in today: the
+users table, `admin-user-search`, `admin-user-detail`, `admin-landlet-search`, the delete-account preview and
+`admin-video-jobs` (its re-check is a `POST`, so a viewer is refused). Same routes, masked for a viewer
+(`worker/lib/admin-viewer-mask.js`): emails read `j***@g***.com`; card and tax form details come back `null`;
+a suspension's free-text `evidenceNote` is `null`; and `admin-user-search` matches usernames only, never emails.
+`worker/admin-viewer.test.js` lists every file that may opt a route in.
+
+`POST /api/auth/admin-set-viewer` `{ userId, enabled }` (full admin only; `401`, `403`) is the owner's switch,
+used by the dashboard's "Give look-only access" / "Remove look-only access" on a user's detail. It answers
+`{ userId, adminViewer, changed }`. Giving the role is refused with `409` and a reason for a person's account
+(only fleet accounts), an assistant, an admin and a deleted account; removing it is always allowed. Each change
+is written to the admin log in the same batch (`admin_viewer_granted`, `admin_viewer_removed`); a request that
+changes nothing writes nothing. `admin-user-detail` carries `adminViewer` and `adminViewerRefusal` so the
+dashboard draws the switch only where it can work.
+
 ### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
 
 Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns
@@ -11734,6 +11753,11 @@ examples each). The footprint is the item's width and depth (crop and scale appl
 raw size) turned by its rotation about the vertical axis, against the outline scaled to the item's height;
 `shared/landlet-outline.js` holds the one definition. Nothing is moved or removed. Built for today's size (one pass
 over every owned lándlet's items, no paging).
+
+The same rule now guards writes (#4198): `POST /api/instances`, `PUT /api/instances/:id` and the batch save refuse, with
+`400` "extends outside lándlet … outline", an item whose footprint (same definition) is off its lándlet's outline, after
+the older square check. Only items whose position, size, level, lándlet or product changed are re-checked, so an item
+already standing off the outline does not block saving something else; a lándlet with no usable polygon keeps the square.
 
 ### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
 
