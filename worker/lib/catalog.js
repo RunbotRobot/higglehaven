@@ -38,7 +38,7 @@ import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { isValidStockQuantity, stockLimitMessage } from '../stockLimit.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
-import { assertOwner, requireSessionBuilder } from './auth.js';
+import { assertOwner, requireSessionBuilder, requireAdmin } from './auth.js';
 import { bytesToHex } from './crypto.js';
 import { fireNotifications } from './notifications.js';
 import {
@@ -1038,6 +1038,21 @@ const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 const CATALOG_ANONYMOUS_CREATE_RATE_LIMIT_MAX = 120;
 const CATALOG_ANONYMOUS_BATCH_MAX = 50;
 
+// #4287 step 2: seller-less (system/placeholder) products are made by an admin, not by anyone who can reach the API.
+// The test fixtures (vitest, and every e2e run against a local wrangler dev) seed them with no session, so on a
+// local or test Worker the old open path stays; anywhere else, and whenever APP_BASE_URL is unset, it is closed and
+// an admin session is required (it fails closed: production sets an https APP_BASE_URL and has no TEST_MIGRATIONS
+// binding, which only the vitest config adds).
+function isLocalOrTestWorker(env) {
+  if (env?.TEST_MIGRATIONS) return true;
+  const base = typeof env?.APP_BASE_URL === 'string' ? env.APP_BASE_URL : '';
+  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(base);
+}
+async function assertMaySeedSellerlessProducts(request, db, env) {
+  if (isLocalOrTestWorker(env)) return;
+  await requireAdmin(request, db);
+}
+
 // Same unauthenticated-path gap as CATALOG_PATCH_RATE_LIMIT_MAX above, but
 // for DELETE (#520) — unlike PATCH, DELETE has no bootstrapping-trap reason
 // to stay ungated (nothing legitimate deletes the same unowned templates
@@ -1154,6 +1169,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
     }
     const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
     if (request.method === 'POST' && sellerIds.length < templates.length) {
+      await assertMaySeedSellerlessProducts(request, db, env);
       if (templates.length - sellerIds.length > CATALOG_ANONYMOUS_BATCH_MAX) {
         throw new HttpError(`A batch may create at most ${CATALOG_ANONYMOUS_BATCH_MAX} products without a seller`, 400);
       }
@@ -1671,6 +1687,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       template.templateId = `template-${crypto.randomUUID()}`;
     }
     if (!template.sellerId) {
+      await assertMaySeedSellerlessProducts(request, db, env);
       await checkRateLimit(db, `catalog-create-anonymous:${clientIp(request)}`, CATALOG_ANONYMOUS_CREATE_RATE_LIMIT_MAX);
     }
     if (template.sellerId) {

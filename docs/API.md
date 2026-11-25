@@ -2941,6 +2941,13 @@ delisted rather than deleted because shoppers own it (#3279, see the single-item
 
 ### `POST /api/catalog`
 
+**Seller-less products (#4287).** A create with no `sellerId` (a system or placeholder product) needs an **admin session** on a
+deployed Worker (`401` with no session, `403` otherwise). It stays open without one only on a local or test Worker (vitest, or
+`wrangler dev` with a local `APP_BASE_URL` such as `http://127.0.0.1:8787`), where the fixtures seed them; an unset
+`APP_BASE_URL` counts as deployed. Whatever the caller, seller-less creation is limited per address (120 per 15 minutes) and a
+batch carries at most 50 of them.
+
+
 Creates a catalog template. `templateId` is optional; if omitted, the Worker
 generates one. If `sellerId` is set, requires a session logged in as that
 seller (`403` otherwise) — a template with no `sellerId` stays open to
