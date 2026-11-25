@@ -29,6 +29,19 @@ await placeTreeAt(160, 380);
 check((await page.locator('#mode-move').count()) === 0 && (await page.locator('#mode-rotate').count()) === 0, 'there are no Move and Rotate buttons any more');
 const readoutShown = await page.evaluate(() => !document.getElementById('rotation-readout').hidden);
 check(readoutShown, 'the ring is on the selected item without pressing anything (its angle line is up)');
+// #4118: the red and green tilt rings are back beside the blue turn ring.
+const rings = await page.evaluate(() => window.__testRotateRingsShown());
+check(rings.x && rings.y && rings.z, `all three rings (red, green, blue) are on the selected item (${JSON.stringify(rings)})`);
+// #4118: the card opens clear of the item and its rings (about 100 px round it), not on them.
+const clearance = await page.evaluate(() => {
+  const anchor = window.__testItemCardAnchor();
+  const card = document.getElementById('item-card').getBoundingClientRect();
+  if (!anchor || card.width === 0) return null;
+  const nx = Math.max(card.left, Math.min(anchor.x, card.right));
+  const ny = Math.max(card.top, Math.min(anchor.y, card.bottom));
+  return Math.round(Math.hypot(anchor.x - nx, anchor.y - ny));
+});
+check(clearance !== null && clearance >= 100, `the item card keeps clear of the rings round the item (${clearance} px from the item to the card)`);
 
 const s0 = await state();
 const spot = await screenOf(0);

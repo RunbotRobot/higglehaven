@@ -76,7 +76,7 @@ await page.waitForTimeout(800);
 const noticeText = await readSaying(page, 'orb-limit');
 const orbStayed = (await page.evaluate(() => window.__testActiveCreditOrbIds())).includes(orbId);
 const popEffects = await page.evaluate(() => window.__testActiveCreditOrbPopEffectCount());
-const toastVisible = (await budWordText(page)) === 'Credit +1';
+const toastVisible = /^\d+ credits?$/.test(await budWordText(page));
 console.log('notice:', JSON.stringify(noticeText), '| orb stayed:', orbStayed, '| pop effects:', popEffects, '| toast:', toastVisible, '| collect requests:', collectRequests);
 await page.unroute('**/api/credit-orbs/*/collect');
 

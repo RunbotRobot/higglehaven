@@ -1315,6 +1315,20 @@ export async function fetchLandletVersion(landletId, versionId) {
 
 // Points the landlet's activeVersionId at an existing snapshot — the
 // builder's own live draft is untouched, only what Shop mode shows changes.
+// #4094: the signed-in builder's own archived lándlet versions (a lándlet released for inactivity keeps its
+// builder's versions), and adding one to a lándlet they own as a new saved version. Neither changes the live
+// draft or the active version.
+export async function fetchArchivedVersions() {
+  return requestJson('/builders/me/archived-versions'); // { archivedVersions }
+}
+
+export async function restoreArchivedVersion(versionId, landletId) {
+  return requestJson(`/builders/me/archived-versions/${encodeURIComponent(versionId)}/restore`, {
+    method: 'POST',
+    body: JSON.stringify({ landletId }),
+  }); // { version }
+}
+
 export async function activateLandletVersion(landletId, versionId) {
   return requestJson(`/landlets/${encodeURIComponent(landletId)}/versions/${encodeURIComponent(versionId)}/activate`, {
     method: 'POST',
@@ -2117,6 +2131,17 @@ export async function sendNearbyChatReport({ reportedBuilderId, reason }) {
   return reportId;
 }
 
+// #4169: a conduct report about someone the caller has a message thread with; the server keeps who and why,
+// never any message text, and the other person is told nothing.
+export async function sendDirectMessageReport({ reportedBuilderId, reason }) {
+  const { reportId } = await requestJson('/direct-messages/reports', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reportedBuilderId, reason }),
+  });
+  return reportId;
+}
+
 // #3140 (sub-issue of #3124): durable, silent blocks keyed on the account.
 // Blocking takes whichever id the surface already has (a builder id on
 // presence, chat and friends); the server resolves it to the account itself.
@@ -2217,13 +2242,26 @@ export async function fetchCreditOrbs(landletId) {
 // ({ limit, windowSeconds, remaining, retryAfterSeconds }), so an orb over the
 // limit can be left alone before it is touched. Resolves to null when there is
 // no session or the read fails -- the server still enforces the limit either way.
-export async function fetchCreditOrbStanding() {
-  try {
-    const { standing } = await requestJson('/credit-orbs/standing');
-    return standing ?? null;
-  } catch {
-    return null;
-  }
+// #4228: the standing is the person's, not a landlet's, and opening Shop asked for it once per greenbelt landlet
+// in range (four identical authenticated requests at once on the live site, each about 1 to 2 s on a phone). A call
+// that arrives while one is in flight shares its answer; once it has settled the next call asks again, because the
+// standing changes with every collect, so nothing here is kept or goes stale.
+let creditOrbStandingInFlight = null;
+export function fetchCreditOrbStanding() {
+  if (creditOrbStandingInFlight) return creditOrbStandingInFlight;
+  const request = (async () => {
+    try {
+      const { standing, credits } = await requestJson('/credit-orbs/standing');
+      // #4123: the balance rides along with the standing, so the note can say how many credits a person holds.
+      return standing ? { ...standing, credits: typeof credits === 'number' ? credits : null } : null;
+    } catch {
+      return null;
+    } finally {
+      creditOrbStandingInFlight = null;
+    }
+  })();
+  creditOrbStandingInFlight = request;
+  return request;
 }
 
 // #1995: claims an orb on proximity auto-collect. The server's own atomic

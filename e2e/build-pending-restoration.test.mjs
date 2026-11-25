@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal, removedItemsButtonShown, openAccountMenu, openBuildMoreFold } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,7 +102,7 @@ async function reloadBuildMode() {
 }
 
 await reloadBuildMode();
-const hiddenBeforeSuspension = await page.locator('#pending-restoration-btn').isHidden();
+const hiddenBeforeSuspension = !(await removedItemsButtonShown(page));
 console.log('"Removed items" button hidden while nothing is pending (should be true):', hiddenBeforeSuspension);
 
 const suspend = await apiFetch('/auth/suspend-account', adminCookie, {
@@ -114,7 +114,13 @@ if (suspend.response.status !== 200) {
 console.log('instances removed by the suspension (should be 1):', suspend.body.instancesRemoved);
 
 await reloadBuildMode();
-const shownAfterSuspension = await page.locator('#pending-restoration-btn').isVisible();
+// #4201: the head wears a note for newly removed items (one tap opens the list), and says nothing once the list has been opened.
+const noteBefore = await page.evaluate(() => {
+  const note = document.getElementById('bud-note');
+  return note && !note.hidden ? note.textContent : null;
+});
+console.log('head note for the newly removed item (should name Removed items):', noteBefore);
+const shownAfterSuspension = await removedItemsButtonShown(page); // opens the Tools leaf, where the button now lives
 const buttonText = shownAfterSuspension ? await page.locator('#pending-restoration-btn').textContent() : '';
 console.log('"Removed items" button visible after the seller is suspended (should be true):', shownAfterSuspension, buttonText);
 
@@ -126,12 +132,47 @@ const rowCount = await page.locator('.pending-restoration-row').count();
 console.log('exactly one row listed (should be 1):', rowCount);
 console.log('row names the removed product (should include the product name):', rowText);
 
+// #4201: the removed item can be shown as a ghost where it stood, under the one switch, and is never a placed item.
+await page.click('#pending-restoration-close-btn');
+await page.waitForSelector('#pending-restoration-modal.visible', { state: 'hidden', timeout: 5000 });
+const ghostsBeforeToggle = await page.evaluate(() => window.__testRemovedGhostIds());
+await page.click('#toggle-ghosts'); // #4201: the switch is "Faded items" in the Tools leaf
+await page.waitForFunction(() => window.__testRemovedGhostIds().length === 1, undefined, { timeout: 5000 });
+console.log('no ghost before the switch, one after (should be 0 then 1):', ghostsBeforeToggle.length, 1);
+// The ghost is the item itself (its own model, translucent), not a block: #4201.
+const ghostIsModel = await page.waitForFunction(() => window.__testGhostKinds().removed.join() === 'model', undefined, { timeout: 15000 }).then(() => true, () => false);
+console.log('the ghost is the removed product\'s own model (should be true):', ghostIsModel);
+// Tapping the ghost opens the list at its row.
+await page.keyboard.press('Escape');
+await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+const ghostPos = await page.evaluate(() => window.__testRemovedGhostScreenPos(window.__testRemovedGhostIds()[0]));
+await page.mouse.click(ghostPos.x, ghostPos.y);
+const tapOpenedList = await page.waitForSelector('#pending-restoration-modal.visible', { timeout: 5000 }).then(() => true, () => false);
+console.log('a tap on the ghost opens the Removed items list (should be true):', tapOpenedList);
+await page.click('#pending-restoration-close-btn');
+// A slot whose product is gone entirely (no template): an outline carrying its name, never a block (#4201 item 4).
+const goneOutline = await page.evaluate((landletId) => {
+  window.__testSetRemovedGhostSlots([{
+    snapshotId: 'gone-slot', landletId, templateId: 'template-that-is-gone', templateName: 'A product that is gone',
+    position: { x: 2, y: 2, z: 0.5 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, crop: null, label: null, template: null,
+  }]);
+  return { kinds: window.__testGhostKinds().removed, named: window.__testGhostNames() };
+}, landlet.landletId);
+console.log('a slot with no template is an outline with its name (should be outline, true):', goneOutline.kinds.join(), goneOutline.named.join());
+const goneIsNamedOutline = goneOutline.kinds.join() === 'outline' && goneOutline.named.join() === 'true';
+await page.click('#toggle-ghosts'); // #4201: the switch is "Faded items" in the Tools leaf
+await page.waitForFunction(() => window.__testRemovedGhostIds().length === 0, undefined, { timeout: 5000 });
+await page.keyboard.press('Escape');
+await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+await page.click('#pending-restoration-btn').catch(async () => { await removedItemsButtonShown(page); await page.click('#pending-restoration-btn'); });
+await page.waitForSelector('.pending-restoration-row', { timeout: 5000 });
+
 // Clear it for good (#3278: confirmed in the in-app modal).
 await page.locator('.pending-restoration-row-clear').first().click();
 await acceptConfirmModal(page);
 await page.waitForFunction(() => document.querySelectorAll('.pending-restoration-row').length === 0, null, { timeout: 5000 });
 const emptyShown = await page.locator('#pending-restoration-empty').isVisible();
-const buttonHiddenAfterClear = await page.locator('#pending-restoration-btn').isHidden();
+const buttonHiddenAfterClear = await page.evaluate(() => document.getElementById('pending-restoration-btn').hidden);
 console.log('empty state shown after clearing (should be true):', emptyShown);
 console.log('"Removed items" button hidden again once nothing is pending (should be true):', buttonHiddenAfterClear);
 
@@ -151,8 +192,13 @@ const pass = placeRes.status === 201
   && hiddenBeforeSuspension
   && suspend.body.instancesRemoved === 1
   && shownAfterSuspension
+  && /Removed items/.test(noteBefore ?? '')
   && /1/.test(buttonText)
   && rowCount === 1
+  && ghostsBeforeToggle.length === 0
+  && ghostIsModel
+  && goneIsNamedOutline
+  && tapOpenedList
   && rowText.includes(PRODUCT_NAME)
   && emptyShown
   && buttonHiddenAfterClear

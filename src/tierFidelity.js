@@ -22,8 +22,15 @@ export const FIDELITY_GRID = 64;
 // distance and must read as the model, holes and all; far is a few dozen triangles seen small, so it is
 // held to "this is the model, not a net": the owner's brick far version covered 0 to 36% and its mid
 // version 73%, where a sound far version of a smooth shape covers about 65 to 95%.
+//
+// #4114: the outline alone passed a brick whose mid version had lost 12% of its surface (0.91 coverage:
+// "nine percent of the outline missing is a pass") and showed jagged, torn faces from two metres. A mid
+// version is also held to keep its surface (minAreaKept: the area of its triangles over the full model's)
+// and not to open holes the full model does not have (maxOpenGrowth: the length of its open edges over the
+// full model's, where an open edge belongs to one triangle only, positions welded). A far version is a few
+// dozen triangles meant to read as an outline, so neither applies to it.
 export const TIER_LIMITS = {
-  mid: { minCoverage: 0.88, maxExtra: 0.4 },
+  mid: { minCoverage: 0.95, maxExtra: 0.4, minAreaKept: 0.95, maxOpenGrowth: 1.15 },
   far: { minCoverage: 0.6, maxExtra: 0.5 },
 };
 
@@ -41,6 +48,49 @@ export function boundsOfBatches(batches) {
     }
   }
   return { min, max };
+}
+
+// #4114: the surface area of a model's triangles and the total length of its open edges (an edge used by one
+// triangle only, vertices welded within a hundred-thousandth of the model's own size). A closed model has no
+// open edges; a patchwork of pieces has many, and shrinking a piece's border shrinks both numbers.
+export function surfaceStats(batches) {
+  const bounds = boundsOfBatches(batches);
+  const diagonal = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
+  const cell = Math.max((Number.isFinite(diagonal) ? diagonal : 0) * 1e-5, 1e-9);
+  const ids = new Map();
+  const idOf = (x, y, z) => {
+    const key = `${Math.round(x / cell)},${Math.round(y / cell)},${Math.round(z / cell)}`;
+    let id = ids.get(key);
+    if (id === undefined) { id = ids.size; ids.set(key, id); }
+    return id;
+  };
+  const edges = new Map();
+  let area = 0;
+  for (const { positions } of batches) {
+    for (let t = 0; t + 8 < positions.length; t += 9) {
+      const a = idOf(positions[t], positions[t + 1], positions[t + 2]);
+      const b = idOf(positions[t + 3], positions[t + 4], positions[t + 5]);
+      const c = idOf(positions[t + 6], positions[t + 7], positions[t + 8]);
+      if (a === b || b === c || a === c) continue; // a triangle with no area
+      const ux = positions[t + 3] - positions[t];
+      const uy = positions[t + 4] - positions[t + 1];
+      const uz = positions[t + 5] - positions[t + 2];
+      const vx = positions[t + 6] - positions[t];
+      const vy = positions[t + 7] - positions[t + 1];
+      const vz = positions[t + 8] - positions[t + 2];
+      area += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+      const corners = [[a, b, t, t + 3], [b, c, t + 3, t + 6], [c, a, t + 6, t]];
+      for (const [x, y, p, q] of corners) {
+        const key = x < y ? `${x}-${y}` : `${y}-${x}`;
+        const entry = edges.get(key);
+        if (entry) entry.n++;
+        else edges.set(key, { n: 1, length: Math.hypot(positions[p] - positions[q], positions[p + 1] - positions[q + 1], positions[p + 2] - positions[q + 2]) });
+      }
+    }
+  }
+  let openEdgeLength = 0;
+  for (const { n, length } of edges.values()) if (n === 1) openEdgeLength += length;
+  return { area, openEdgeLength };
 }
 
 // One view: the viewer is on the `sign` side of `axis`, looking along it.
@@ -83,8 +133,10 @@ function rasterize(batches, axis, sign, bounds, grid) {
   return cells;
 }
 
-// { coverage, extra, views } for `tier` against `full`: coverage and extra are the worst of the six views;
-// views lists each. A full model that covers nothing (no triangles) is reported as faithful.
+// { coverage, extra, views, areaKept, openGrowth } for `tier` against `full`: coverage and extra are the worst
+// of the six views; views lists each; areaKept is the tier's surface over the full model's (#4114) and
+// openGrowth the length of its open edges over the full model's, plus the one grid cell of slack a model with
+// none needs. A full model that covers nothing (no triangles) is reported as faithful.
 export function silhouetteFidelity(full, tier, grid = FIDELITY_GRID) {
   const bounds = boundsOfBatches([...full, ...tier]); // a version that grew past the model shows as extra, not as clipped
   const views = [];
@@ -109,10 +161,70 @@ export function silhouetteFidelity(full, tier, grid = FIDELITY_GRID) {
       extra = Math.max(extra, view.extra);
     }
   }
-  return { coverage, extra, views };
+  const fullSurface = surfaceStats(full);
+  const tierSurface = surfaceStats(tier);
+  const areaKept = fullSurface.area > 0 ? tierSurface.area / fullSurface.area : 1;
+  const span = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1], bounds.max[2] - bounds.min[2]);
+  // A closed full model has no open edges at all: any open edge on the version is then a hole it tore, measured
+  // against a few percent of the model's own size so a hair of welding noise is not a verdict.
+  const openGrowth = (tierSurface.openEdgeLength + 0.02 * span) / (fullSurface.openEdgeLength + 0.02 * span);
+  return { coverage, extra, views, areaKept, openGrowth, colorShift: colorShift(full, tier) };
+}
+
+// #4111: colour. A batch may carry `color` ([r, g, b], linear, what the batch looks like lit) and `area`
+// (its triangles' total area). A toilet of dark grey passed the outline check above while its far
+// version was white, so the version a person sees from further away must also be the same colour.
+// The shift is the largest difference in any channel, in sRGB (0 to 1), between the area-weighted mean
+// colours of the model and of the version; null when either side carries no colour (an old caller).
+export const COLOR_SHIFT_LIMIT = { mid: 0.08, far: 0.1 };
+
+function toSrgb(c) {
+  const v = Math.min(1, Math.max(0, c));
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
+export function meanBatchColor(batches) {
+  let area = 0;
+  const sum = [0, 0, 0];
+  for (const batch of batches) {
+    if (!batch.color || !(batch.area > 0)) continue;
+    area += batch.area;
+    for (let k = 0; k < 3; k++) sum[k] += batch.color[k] * batch.area;
+  }
+  return area > 0 ? sum.map((v) => v / area) : null;
+}
+
+export function colorShift(full, tier) {
+  const a = meanBatchColor(full);
+  const b = meanBatchColor(tier);
+  if (!a || !b) return null;
+  let shift = 0;
+  for (let k = 0; k < 3; k++) shift = Math.max(shift, Math.abs(toSrgb(a[k]) - toSrgb(b[k])));
+  return shift;
 }
 
 export function isFaithful(report, tier = 'mid') {
-  const { minCoverage, maxExtra } = typeof tier === 'string' ? TIER_LIMITS[tier] : tier;
-  return report.coverage >= minCoverage && report.extra <= maxExtra;
+  const limits = typeof tier === 'string' ? TIER_LIMITS[tier] : tier;
+  const { minCoverage, maxExtra, minAreaKept, maxOpenGrowth } = limits;
+  const maxShift = limits.maxColorShift ?? (tier === 'far' ? COLOR_SHIFT_LIMIT.far : COLOR_SHIFT_LIMIT.mid);
+  if (report.colorShift != null && report.colorShift > maxShift) return false;
+  if (report.coverage < minCoverage || report.extra > maxExtra) return false;
+  // #4114: the surface checks, where the tier asks for them and the report carries them.
+  if (minAreaKept !== undefined && report.areaKept !== undefined && report.areaKept < minAreaKept) return false;
+  if (maxOpenGrowth !== undefined && report.openGrowth !== undefined && report.openGrowth > maxOpenGrowth) return false;
+  return true;
+}
+
+// #4111: the kind of material a version is drawn with. A model of unlit materials (KHR_materials_unlit) is drawn
+// without light, and so must its simpler versions be: a lit far version of an unlit brick was darkened by the
+// scene's light and read as a different colour even where its baked colours matched. A batch carries
+// `unlit: true` when its material is unlit; a model is unlit when every batch is. Returns null when the kinds
+// agree (or either side has no batches), else a sentence for a report.
+export function materialKindProblem(full, tier) {
+  if (!full.length || !tier.length) return null;
+  const unlit = (batches) => batches.every((batch) => batch.unlit === true);
+  const fullUnlit = unlit(full);
+  const tierUnlit = unlit(tier);
+  if (fullUnlit === tierUnlit) return null;
+  return fullUnlit ? 'the model is drawn unlit, this version is lit' : 'the model is lit, this version is unlit';
 }

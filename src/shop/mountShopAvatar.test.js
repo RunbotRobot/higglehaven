@@ -62,6 +62,7 @@ describe('mountShopAvatar (#3294)', () => {
   it('falls back to the default avatar, without throwing, when the equipped-avatar fetch fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const t = setup({ avatar: new Error('boom') });
+    t.deps.equippedRetryDelaysMs = [];
     await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
     expect(t.getCurrent()).toBe(t.defaultAvatar);
     expect(t.deps.createCustomShopAvatar).not.toHaveBeenCalled();
@@ -108,6 +109,19 @@ describe('mountShopAvatar (#3294)', () => {
     const t = setup({ avatar: { modelUrl: '/bad.glb' }, customAvatar: new Error('load failed') });
     await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
     expect(t.getCurrent()).toBe(t.defaultAvatar);
+    warn.mockRestore();
+  });
+
+  it('says so once, through onModelFailed, when the worn model fails to load, and not when it loads (#4067)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failed = setup({ avatar: { modelUrl: '/bad.glb' }, customAvatar: new Error('load failed') });
+    failed.deps.onModelFailed = vi.fn();
+    await mountSettled({ scene: failed.scene, isLoggedIn: true }, failed.deps);
+    expect(failed.deps.onModelFailed).toHaveBeenCalledTimes(1);
+    const fine = setup({ avatar: { modelUrl: '/u.glb' }, customAvatar: { group: 'custom-group', modelUrl: '/u.glb' } });
+    fine.deps.onModelFailed = vi.fn();
+    await mountSettled({ scene: fine.scene, isLoggedIn: true }, fine.deps);
+    expect(fine.deps.onModelFailed).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -210,5 +224,123 @@ describe('mountShopAvatar (#3294)', () => {
     finish();
     await first.settled;
     expect(t.getCurrent()).toBe(t.defaultAvatar);
+  });
+});
+
+// #4067: the person's own body is never the default one in the place of the model they wear: fog and no body
+// until the answer is in, then the right body.
+describe('mountShopAvatar: fog, not a stand-in (#4067)', () => {
+  function fakeHold(t) {
+    const hold = {
+      resolve: vi.fn((commit) => { hold.committed = commit; commit(); }),
+      cancel: vi.fn(),
+    };
+    t.deps.beginAvatarFogHold = vi.fn(() => hold);
+    return hold;
+  }
+  const withGroup = (t) => { t.defaultAvatar.group = { visible: true, name: 'default-group' }; t.scene.add = vi.fn(); t.scene.remove = vi.fn(); };
+
+  it('hides the default body at once for someone who may wear their own, and shows the worn one in its place', async () => {
+    const custom = { group: { visible: true }, modelUrl: '/uploads/a.glb' };
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb', skeletonSignature: 's' }, customAvatar: custom });
+    withGroup(t);
+    const hold = fakeHold(t);
+    const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.defaultAvatar.group.visible).toBe(false); // never drawn
+    await mounted.settled;
+    expect(hold.resolve).toHaveBeenCalledTimes(1);
+    expect(t.getCurrent()).toBe(custom);
+  });
+
+  it('someone who wears the default sees it from the fog once the answer is in', async () => {
+    const t = setup(); // nothing equipped
+    withGroup(t);
+    const hold = fakeHold(t);
+    const mounted = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.defaultAvatar.group.visible).toBe(false);
+    await mounted.settled;
+    expect(hold.resolve).toHaveBeenCalledTimes(1);
+    expect(t.defaultAvatar.group.visible).toBe(true);
+  });
+
+  it('a person known to wear the default (remembered in this browser) is shown it at once, with no fog', async () => {
+    const t = setup();
+    withGroup(t);
+    fakeHold(t);
+    t.deps.readWornHint = () => 'default';
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.beginAvatarFogHold).not.toHaveBeenCalled();
+    expect(t.defaultAvatar.group.visible).toBe(true);
+  });
+
+  it('signed out: the default body is shown at once, with no fog and no remembering', async () => {
+    const t = setup();
+    withGroup(t);
+    fakeHold(t);
+    t.deps.writeWornHint = vi.fn();
+    await mountSettled({ scene: t.scene, isLoggedIn: false }, t.deps);
+    expect(t.deps.beginAvatarFogHold).not.toHaveBeenCalled();
+    expect(t.deps.writeWornHint).not.toHaveBeenCalled();
+    expect(t.defaultAvatar.group.visible).toBe(true);
+  });
+
+  it('remembers what the person wears, so the next arrival knows', async () => {
+    const custom = { group: { visible: true }, modelUrl: '/uploads/a.glb' };
+    const worn = setup({ avatar: { modelUrl: '/uploads/a.glb' }, customAvatar: custom });
+    withGroup(worn);
+    fakeHold(worn);
+    worn.deps.writeWornHint = vi.fn();
+    await mountSettled({ scene: worn.scene, isLoggedIn: true }, worn.deps);
+    expect(worn.deps.writeWornHint).toHaveBeenCalledWith('custom');
+    const plain = setup();
+    withGroup(plain);
+    fakeHold(plain);
+    plain.deps.writeWornHint = vi.fn();
+    await mountSettled({ scene: plain.scene, isLoggedIn: true }, plain.deps);
+    expect(plain.deps.writeWornHint).toHaveBeenCalledWith('default');
+  });
+
+  it('a worn model that fails to load falls back to the default body (a failure is not a stand-in)', async () => {
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb' }, customAvatar: new Error('boom') });
+    withGroup(t);
+    fakeHold(t);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.defaultAvatar.group.visible).toBe(true);
+    expect(t.getCurrent()).toBe(t.defaultAvatar);
+    warn.mockRestore();
+  });
+
+  it('asks again when the read of what is worn fails once, and then shows the worn body (#4251)', async () => {
+    const custom = { group: { visible: true }, modelUrl: '/uploads/a.glb' };
+    const t = setup({ avatar: { modelUrl: '/uploads/a.glb' }, customAvatar: custom });
+    withGroup(t);
+    fakeHold(t);
+    t.deps.equippedRetryDelaysMs = [0, 0];
+    t.deps.writeWornHint = vi.fn();
+    const ok = t.deps.fetchMyEquippedAvatar.getMockImplementation();
+    t.deps.fetchMyEquippedAvatar.mockRejectedValueOnce(new Error('blip'));
+    t.deps.fetchMyEquippedAvatar.mockImplementation(ok);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).toHaveBeenCalledTimes(2);
+    expect(t.getCurrent()).toBe(custom);
+    expect(t.deps.writeWornHint).toHaveBeenCalledWith('custom');
+    expect(t.deps.writeWornHint).not.toHaveBeenCalledWith('default');
+    warn.mockRestore();
+  });
+
+  it('a read that keeps failing does not remember "wears the default" (#4251)', async () => {
+    const t = setup({ avatar: new Error('down') });
+    withGroup(t);
+    fakeHold(t);
+    t.deps.equippedRetryDelaysMs = [0, 0];
+    t.deps.writeWornHint = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mountSettled({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).toHaveBeenCalledTimes(3);
+    expect(t.deps.writeWornHint).not.toHaveBeenCalled();
+    expect(t.defaultAvatar.group.visible).toBe(true); // a failure is not an invisible person
+    warn.mockRestore();
   });
 });

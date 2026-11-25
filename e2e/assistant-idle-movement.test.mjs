@@ -9,8 +9,7 @@
 // is reported. Then B's account stops reporting (its browser closes, presence
 // goes stale after 10 s) and A sees it leave through fog: a departing state with
 // the avatar still there, then gone. Setup is e2e/assistant-look.test.mjs's.
-import { execSync } from 'node:child_process';
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, localD1 } from './helpers.mjs';
 
 const LABEL_A = 'Assistant Idle Builder A';
 const LABEL_B = 'Assistant Idle Builder B';
@@ -149,10 +148,7 @@ await pageB.waitForTimeout(500); // B's own first poll already overlapped the wa
 
 const bUsername = (await fetchJson(pageB, '/api/auth/me')).body.user.username;
 const ASSISTANT_NAME = 'Juniper';
-execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE users SET is_fleet = 1, username = '${ASSISTANT_NAME}' WHERE username = '${bUsername.replace(/'/g, "''")}'"`,
-  { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
-);
+localD1(`UPDATE users SET is_fleet = 1, username = '${ASSISTANT_NAME}' WHERE username = '${bUsername.replace(/'/g, "''")}'`);
 const IDLE_WANDER_RADIUS_M = 1.1; // src/shop/assistantIdle.js
 await pageA.waitForFunction(
   () => (window.__testShopOtherAvatarPoses?.() || []).some((p) => p.assistantName),

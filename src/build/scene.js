@@ -55,10 +55,13 @@
 // renderBuildSettingsSection() rather than reaching into this module's own
 // state directly.
 import * as THREE from 'three';
+import { selectionStops, stepIndex, announceStop, isStepKeyEvent, isDeselectKeyEvent } from './keyboardSelect.js';
+import { isBudOpen } from '../ui/bud.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
+import { setBuildOutline, getBuildOutline, limitItemMove, limitItemPlacement, limitGroupOffset, itemLegalAt, pullGroupTowardCentre } from './outlineLimit.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -71,15 +74,20 @@ import {
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
   fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
   fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
+  fetchArchivedVersions, restoreArchivedVersion,
   fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles, updateBundle,
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
-import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
+import { refresh as refreshPendingRestorations, setPendingSlotsListener } from './pendingRestoration.js';
 import { planSelectionBoxes, writeBoxEdges, BOX_EDGE_VERTICES, BOX_EDGE_FLOATS, batchCapacity } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
 } from './itemCard.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
+import { isNavigationKeyEvent, keyboardAxes, keyboardRise } from '../shop/keyboardInput.js';
+import { stepBuildCamera } from './keyboardCamera.js';
+import { buildEditKeyAction } from './keyboardEdit.js';
+import { buildItemKeyAction, itemKeyAnnouncement, isItemKey, ITEM_KEY_MIN_GAP_MS } from './keyboardItem.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea, getUnits } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
@@ -193,7 +201,15 @@ function itemCentreZRange() {
 // once per hit, not once per frame.
 let levelLimitHit = null;
 let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
+// #4198: set when a move was stopped at the lándlet's outline; said once per hit like the level limits.
+let outlineLimitHit = false;
 function announceLevelLimit() {
+  const outlineHit = outlineLimitHit;
+  outlineLimitHit = false;
+  if (outlineHit && !levelLimitHit) {
+    levelLimitAnnounced = true;
+    showSelectionActionStatus("That's the edge of this lándlet.");
+  }
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
@@ -459,6 +475,23 @@ function clampToLandlet(mesh, x, y, z) {
   const clampedZ = THREE.MathUtils.clamp(z, lowestZ, highestZ);
   if (z > highestZ && highestZ === maxZ) levelLimitHit = 'top';
   else if (z < lowestZ && lowestZ === minZ) levelLimitHit = 'bottom';
+  // #4198: a lándlet's real outline, not a square, is where an item may stand (shared/landlet-outline.js, the
+  // same rule the Worker applies). Without a usable outline (a placeholder lándlet) the square below stays.
+  const outline = getBuildOutline();
+  if (outline) {
+    const item = { width, depth, rotationZ: mesh.rotation.z };
+    const previous = mesh.userData.safePosition;
+    let moved = previous
+      ? limitItemMove(outline, item, previous, { x, y }, clampedZ, footprintScaleAtHeight)
+      : limitItemPlacement(outline, item, { x, y }, clampedZ, footprintScaleAtHeight);
+    if (!itemLegalAt(outline, item, moved.x, moved.y, clampedZ, footprintScaleAtHeight)) {
+      // Where it was no longer fits (a trim made it bigger, or it was stored off the lándlet): the nearest legal
+      // place on the line from the centre.
+      moved = limitItemPlacement(outline, item, { x: moved.x, y: moved.y }, clampedZ, footprintScaleAtHeight);
+    }
+    if (moved.limited) outlineLimitHit = true;
+    return { x: moved.x, y: moved.y, z: clampedZ };
+  }
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -533,11 +566,19 @@ function wireDraggingBehavior(transformControls) {
 // spin the product in place.
 export const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
-// #3689 (slice b): the ring on the item turns it about its upright axis only, which is what nearly every
-// rotation is. The other two axes are typed in the card's Angles block (the gizmo still turns about
-// any of the three when a test drives it, and the readout still names all three).
-rotateControls.showX = false;
-rotateControls.showY = false;
+// #4118: all three rings are on the selected item again (red and green tilt, blue turns). #3689 (slice b) had
+// hidden the red and green ones and left their angles to the card's typed fields; the owner read that as
+// something lost: "We seem to have lost the red and green rotation handles." A handle on the thing itself
+// is the way, and the typed fields stay for exact values.
+// The free-turn ball (XYZE) is not offered: its pick area is a sphere around the item, which would take a
+// press that means "drag the item" (#3689) and is not one of the three rings the owner asked for.
+rotateControls.showXYZE = false;
+// ...and neither is the outer view ring (E, a screen-roll ring a good deal wider than the three): it comes
+// back whenever all three axes are shown, and a tap on empty ground that lands near its circle would grab it
+// instead of deselecting. Taking its handle and its picker out of the gizmo leaves exactly the three rings.
+for (const group of [rotateControls._gizmo.gizmo.rotate, rotateControls._gizmo.picker.rotate]) {
+  for (const handle of [...group.children]) if (handle.name === 'E') group.remove(handle);
+}
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
@@ -762,12 +803,14 @@ translateControls.addEventListener('objectChange', () => {
     for (const mesh of meshes) {
       const start = groupMoveStartPositions.get(mesh);
       const { width, depth, height } = meshDimensions(mesh);
-      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
-      maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
-      minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
-      maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      if (!getBuildOutline()) {
+        const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+        const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+        minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
+        maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
+        minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
+        maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      }
       // issue #169: bounded by whichever level is currently being viewed/
       // edited, same as clampToLandlet's own single-item case.
       minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
@@ -789,6 +832,20 @@ translateControls.addEventListener('objectChange', () => {
       THREE.MathUtils.clamp(totalOffset.y, minOffsetY, maxOffsetY),
       THREE.MathUtils.clamp(totalOffset.z, minOffsetZ, maxOffsetZ),
     );
+    // #4198: the bundle moves as one rigid body inside the lándlet's outline: every member must stay on it, so the
+    // whole bundle stops, or slides along the edge, when its first member would cross.
+    const groupOutline = getBuildOutline();
+    if (groupOutline && meshes.length > 0) {
+      const members = meshes.map((mesh) => {
+        const start = groupMoveStartPositions.get(mesh);
+        const { width, depth } = meshDimensions(mesh);
+        return { item: { width, depth, rotationZ: mesh.rotation.z }, start: { x: start.x, y: start.y }, z: start.z + offset.z };
+      });
+      const limited = limitGroupOffset(groupOutline, members, { x: totalOffset.x, y: totalOffset.y }, footprintScaleAtHeight);
+      offset.x = limited.x;
+      offset.y = limited.y;
+      if (limited.limited) outlineLimitHit = true;
+    }
     if (snapToSurfaces) {
       // Same idea as resolveByAxis for a single item, but resolved for the
       // whole group at once per axis (resolveGroupAxisDelta) so the group's
@@ -899,10 +956,29 @@ function bundleBounds() {
   };
 }
 let bundleRotateLimitShown = false;
+let bundleRotateOutlineHit = false; // #4198: the last refused turn was the outline's, not the bundle's size
 function applyBundleRotation(delta) {
   const raw = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  bundleRotateOutlineHit = false;
   const { transforms, fits } = reseatInBounds(raw, bundleBounds());
   if (!fits) return false;
+  // #4198: every member must also stand on the lándlet's real outline at its new place and angle, the same
+  // rule the single-item move uses. A turn that would swing a member over the edge stops at the last angle
+  // that was legal, with one line saying why.
+  const outline = getBuildOutline();
+  if (outline) {
+    const meshes = groupMoveMeshes ?? [];
+    const probe = new THREE.Euler();
+    for (let i = 0; i < meshes.length; i += 1) {
+      const { width, depth } = meshDimensions(meshes[i]);
+      probe.setFromQuaternion(transforms[i].quaternion, meshes[i].rotation.order);
+      const at = transforms[i].position;
+      if (!itemLegalAt(outline, { width, depth, rotationZ: probe.z }, at.x, at.y, at.z, footprintScaleAtHeight)) {
+        bundleRotateOutlineHit = true;
+        return false;
+      }
+    }
+  }
   (groupMoveMeshes ?? []).forEach((mesh, i) => {
     mesh.position.copy(transforms[i].position);
     mesh.quaternion.copy(transforms[i].quaternion);
@@ -922,7 +998,9 @@ rotateControls.addEventListener('objectChange', () => {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
     if (!bundleRotateLimitShown) {
       bundleRotateLimitShown = true;
-      showSelectionActionStatus('This bundle is too big to turn any further here.');
+      showSelectionActionStatus(bundleRotateOutlineHit
+        ? "That's the edge of this lándlet."
+        : 'This bundle is too big to turn any further here.');
     }
   }
 });
@@ -990,6 +1068,30 @@ rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 // without mouse-dragging the 3D gizmo.
 // #3376: `dragAxis: true` also tells the gizmo which ring is being turned, the
 // way a real drag does, so Snap / settle apply; without it the raw angle is used.
+window.__testRotateRingsShown = () => ({ x: rotateControls.showX, y: rotateControls.showY, z: rotateControls.showZ }); // e2e (#4118): which rings the selected item wears
+// e2e (#4118): where on the screen (client pixels) each of the three rings can be grabbed, so a test can put a real
+// finger on the red, green or blue ring of the selected item. A point on the middle of the ring's pick area, kept
+// only if it is on screen; null for a ring that is not offered.
+window.__testRotateRingPoints = () => {
+  const out = {};
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const pickers = rotateControls._gizmo.picker.rotate.children.filter((p) => ['X', 'Y', 'Z'].includes(p.name) && p.visible);
+  for (const picker of pickers) {
+    const position = picker.geometry.attributes.position;
+    const points = [];
+    // a spread of points along the ring's pick area that are on screen; the test presses on them until the gizmo
+    // itself says this ring is the one under the finger (the rings cross, and a point where two meet picks one)
+    for (let i = 0; i < position.count; i += Math.max(1, Math.floor(position.count / 40))) {
+      v.fromBufferAttribute(position, i).applyMatrix4(picker.matrixWorld).project(camera);
+      if (Math.abs(v.x) > 0.9 || Math.abs(v.y) > 0.9 || v.z > 1) continue;
+      points.push({ x: Math.round(rect.left + ((v.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - v.y) / 2) * rect.height) });
+    }
+    out[picker.name.toLowerCase()] = points;
+  }
+  return out;
+};
+window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
@@ -1308,6 +1410,8 @@ trimControls.addEventListener('dragging-changed', (event) => {
 // now live in src/world/models.js (#2553); shapeForLandlet is still here,
 // pending claim/flow.js's own extraction of it.
 export function applyLandletShape(landletRecord) {
+  // #4198: the polygon that draws the ground is also where an item may stand.
+  setBuildOutline(landletRecord.polygon);
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
   normalizeGroundShapeUVs(landlet.geometry);
@@ -1983,7 +2087,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     // this means stale level data or another tab. Put the items back where
     // they are saved and say so, rather than leaving them somewhere that
     // "may not survive a reload".
-    if (err.code === 'out_of_level_range') {
+    if (err.code === 'out_of_level_range' || err.code === 'outside_landlet_outline') {
       const putBack = await revertSceneToServer();
       tellBuilder("Couldn't move those items", putBack
         ? `${err.message} They have been put back where they were.`
@@ -2583,8 +2687,10 @@ export function markBuildSceneReady() {
   buildSceneReady = true;
   // #4003: the first batch is in. Items added while it loaded waited undrawn for a pass (holdNew); this
   // pass, before the next frame, judges all of them against the entering budget.
+  buildLod.reset(); // #4208: a first load: no set job has looked at anything yet, so nothing is judged alone
   buildLod.update(performance.now(), true);
   buildFirstLoad = false;
+  restoreGhostsSwitch(); // #4201
 }
 
 // Never reconcile over work this tab hasn't finished saving: an action in
@@ -2927,6 +3033,18 @@ function endBodyDrag() {
   translateControls.detach();
 }
 
+// #4118: the red and green rings pass over the item (a ring seen edge-on is a line through its middle), so a
+// press that lands on the selected item would grab one and the drag from the item would never start. A press
+// on the item's own body is the item's: for that one press the red and green rings cannot be picked
+// (TransformControls reads the pickers' visibility on the press; the next frame sets them again). The blue
+// ring, the easy one, and a press on any ring where it stands clear of the item are unchanged.
+window.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary || event.button > 0 || !rotateControls.object) return;
+  if (!selectedItemHitAt(event)) return;
+  for (const picker of rotateControls._gizmo.picker.rotate.children) {
+    if (picker.name === 'X' || picker.name === 'Y') picker.visible = false;
+  }
+}, { capture: true });
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (bodyDrag) { endBodyDrag(); return; } // a second finger: it is looking, not moving
   if (!event.isPrimary || event.button > 0) return;
@@ -3697,39 +3815,237 @@ export function setSoldOutMarkers(value) {
 
 function addSoldOutMarkerMesh(marker) {
   if (soldOutMarkerMeshes.has(marker.markerId)) return;
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshBasicMaterial({
-    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  // marker.x/y/z is the sold-out item's own last-recorded, pre-elevation
-  // position (same convention every live instance's own x/y/z already
-  // uses) -- #2871: lives in landletElevationGroup so this ghost marker
-  // rises/sinks with the real ground the same way a still-live instance
-  // at that same spot would.
-  mesh.position.set(marker.x, marker.y, marker.z || 0.5);
-  mesh.userData.markerId = marker.markerId;
+  // #4201: the marker is the sold-out item itself as a ghost (its model, translucent), with an outline of the
+  // template's size while the model loads. marker.x/y/z is the item's own last-recorded, pre-elevation position
+  // (same convention every live instance's x/y/z uses) -- #2871: it lives in landletElevationGroup so it
+  // rises/sinks with the real ground the same way a still-live instance at that spot would.
+  const template = findTemplate(marker.templateId);
+  const dims = template?.dimensions;
+  const mesh = ghostOutline(dims?.width || 1, dims?.depth || 1, dims?.height || 1);
+  mesh.position.set(marker.x, marker.y, marker.z || (dims?.height || 1) / 2);
+  tagGhost(mesh, 'markerId', marker.markerId);
+  mesh.userData.ghostKind = 'outline';
+  mesh.userData.ghostHeight = dims?.height || 1;
   landletElevationGroup.add(mesh);
   soldOutMarkerMeshes.set(marker.markerId, mesh);
+  if (!template) addGhostName(mesh, marker.templateName, mesh.userData.ghostHeight);
+  upgradeGhost(soldOutMarkerMeshes, marker.markerId, 'markerId', template, {
+    x: marker.x, y: marker.y, z: marker.z || (dims?.height || 1) / 2, rotation: null, scale: 1, crop: null, label: null,
+  }, ghostGeneration, marker.templateName);
 }
 
 export function removeSoldOutMarkerMesh(markerId) {
   const mesh = soldOutMarkerMeshes.get(markerId);
   if (!mesh) return;
-  landletElevationGroup.remove(mesh);
-  mesh.geometry.dispose();
-  mesh.material.dispose();
+  disposeGhost(mesh);
   soldOutMarkerMeshes.delete(markerId);
 }
 
 export function clearSoldOutMarkerMeshes() {
+  clearRemovedGhostMeshes();
   for (const markerId of [...soldOutMarkerMeshes.keys()]) removeSoldOutMarkerMesh(markerId);
 }
+
+// #4201: items taken off the lándlet (a suspended or removed seller's
+// products) are drawn as the same grayed ghosts, where they stood, under the
+// same switch. A ghost is only ever a mesh in landletElevationGroup: never in
+// productMeshes, so it cannot be selected, moved, bundled or saved.
+// A ghost is the item itself (#4201, "Everything built is always shown as itself"): the product's own model, a
+// little translucent and desaturated so it cannot be taken for a live item. The outline stands in while the model
+// loads and for good when it cannot (the product's file or template is gone).
+const GHOST_OPACITY = 0.4;
+const GHOST_DESATURATE = 0.4;
+let ghostGeneration = 0; // bumped on every rebuild, so a model that arrives late for an old build is dropped
+
+function ghostOutline(width, depth, height) {
+  const group = new THREE.Group();
+  const box = new THREE.BoxGeometry(width, depth, height);
+  const lines = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({
+    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.7, depthWrite: false,
+  }));
+  // An invisible solid so a tap lands on the ghost (a line is a hair to hit).
+  const hit = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ visible: false }));
+  for (const part of [lines, hit]) { part.userData.ghostOwnsGeometry = true; part.userData.ghostMaterial = true; }
+  group.add(lines, hit);
+  return group;
+}
+
+// The outline's name (#4201 item 4): when the model cannot be drawn the builder still sees what used to stand
+// here. A small camera-facing label at the top of the outline, drawn on a canvas.
+function addGhostName(outline, name, height) {
+  if (!name || outline.userData.ghostNamed || typeof document === 'undefined') return;
+  const canvas2d = document.createElement('canvas');
+  canvas2d.width = 512;
+  canvas2d.height = 96;
+  const ctx = canvas2d.getContext('2d');
+  if (!ctx) return;
+  ctx.fillStyle = 'rgba(250, 240, 199, 0.88)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(4, 4, 504, 88, 24); else ctx.rect(4, 4, 504, 88);
+  ctx.fill();
+  ctx.fillStyle = '#2b2b2b';
+  ctx.font = '600 40px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const text = name.length > 26 ? `${name.slice(0, 25)}…` : name;
+  ctx.fillText(text, 256, 50, 488);
+  const texture = new THREE.CanvasTexture(canvas2d);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  sprite.scale.set(1.6, 0.3, 1);
+  sprite.position.set(0, 0, height / 2 + 0.3);
+  sprite.userData.ghostMaterial = true;
+  sprite.userData.ghostOwnsTexture = true;
+  // A tap on the name is a tap on the ghost.
+  for (const key of ['removedSnapshotId', 'markerId']) if (outline.userData[key] !== undefined) sprite.userData[key] = outline.userData[key];
+  outline.add(sprite);
+  outline.userData.ghostNamed = true;
+}
+
+// Makes a built model read as "not live": every material is its own copy (the model cache shares them),
+// pulled toward grey and see-through, never writing depth so it cannot hide what is behind it.
+function ghostify(object) {
+  const grey = new THREE.Color(0x888888);
+  object.traverse((child) => {
+    if (!child.material) return;
+    const swap = (material) => {
+      const copy = material.clone();
+      if (copy.color) copy.color.lerp(grey, GHOST_DESATURATE);
+      copy.transparent = true;
+      copy.opacity = GHOST_OPACITY;
+      copy.depthWrite = false;
+      return copy;
+    };
+    child.material = Array.isArray(child.material) ? child.material.map(swap) : swap(child.material);
+    child.userData.ghostMaterial = true;
+  });
+  return object;
+}
+
+function tagGhost(object, key, value) {
+  object.userData[key] = value;
+  object.traverse((child) => { child.userData[key] = value; });
+}
+
+// Frees only what a ghost made itself: its outline's geometry and every material copy. A model's geometry and
+// textures belong to the cache that loaded it and are shared with live items.
+function disposeGhost(object) {
+  landletElevationGroup.remove(object);
+  object.traverse((child) => {
+    if (child.userData.ghostOwnsGeometry) child.geometry?.dispose?.();
+    if (child.userData.ghostOwnsTexture) child.material?.map?.dispose?.();
+    if (child.userData.ghostMaterial) for (const material of [].concat(child.material || [])) material.dispose?.();
+  });
+}
+
+// Builds the item's own model for `placement` ({ x, y, z, rotation, scale, crop, label }) from `template`, or
+// null when there is none or it will not load.
+async function buildGhostModel(template, placement) {
+  if (!template) return null;
+  try {
+    const object = await createMeshForInstance({
+      templateId: template.templateId,
+      x: placement.x, y: placement.y, z: placement.z,
+      rotationX: placement.rotation?.x ?? 0, rotationY: placement.rotation?.y ?? 0, rotationZ: placement.rotation?.z ?? 0,
+      scale: placement.scale, crop: placement.crop, label: placement.label,
+    }, template);
+    return object ? ghostify(object) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Swaps a ghost's outline for the item's model once it has loaded, unless the ghosts were rebuilt meanwhile.
+function upgradeGhost(map, key, tagKey, template, placement, generation, name = null) {
+  buildGhostModel(template, placement).then((model) => {
+    const outline = map.get(key);
+    if (generation !== ghostGeneration || !outline) {
+      if (model) disposeGhost(model);
+      return;
+    }
+    if (!model) {
+      // No model to show for it: the outline carries its name, so the builder still sees what it was.
+      addGhostName(outline, name, outline.userData.ghostHeight ?? 1);
+      return;
+    }
+    model.position.copy(outline.position);
+    model.rotation.copy(outline.rotation);
+    tagGhost(model, tagKey, key);
+    model.userData.ghostKind = 'model';
+    landletElevationGroup.add(model);
+    disposeGhost(outline);
+    map.set(key, model);
+  });
+}
+
+const removedGhostMeshes = new Map(); // snapshotId -> THREE.Object3D
+let removedGhostSlots = [];
+
+function clearRemovedGhostMeshes() {
+  ghostGeneration += 1;
+  for (const mesh of removedGhostMeshes.values()) disposeGhost(mesh);
+  removedGhostMeshes.clear();
+}
+
+function addRemovedGhostMesh(slot) {
+  if (removedGhostMeshes.has(slot.snapshotId) || slot.landletId !== currentLandletId) return;
+  const dims = slot.template?.dimensions ?? findTemplate(slot.templateId)?.dimensions;
+  const scale = typeof slot.scale === 'number' && slot.scale > 0 ? slot.scale : 1;
+  const mesh = ghostOutline((dims?.width || 1) * scale, (dims?.depth || 1) * scale, (dims?.height || 1) * scale);
+  mesh.position.set(slot.position.x ?? 0, slot.position.y ?? 0, slot.position.z ?? 0.5);
+  if (slot.rotation) mesh.rotation.set(slot.rotation.x, slot.rotation.y, slot.rotation.z);
+  tagGhost(mesh, 'removedSnapshotId', slot.snapshotId);
+  mesh.userData.ghostKind = 'outline';
+  mesh.userData.ghostHeight = (dims?.height || 1) * scale;
+  landletElevationGroup.add(mesh);
+  removedGhostMeshes.set(slot.snapshotId, mesh);
+  const template = slot.template ?? findTemplate(slot.templateId);
+  if (!template) addGhostName(mesh, slot.templateName, mesh.userData.ghostHeight); // nothing to wait for: its name now
+  upgradeGhost(removedGhostMeshes, slot.snapshotId, 'removedSnapshotId', template, {
+    x: slot.position.x, y: slot.position.y, z: slot.position.z, rotation: slot.rotation, scale: slot.scale, crop: slot.crop, label: slot.label,
+  }, ghostGeneration, slot.templateName);
+}
+
+function applyRemovedGhostVisibility() {
+  clearRemovedGhostMeshes();
+  if (!showSoldOutMarkers) return;
+  for (const slot of removedGhostSlots) addRemovedGhostMesh(slot);
+}
+setPendingSlotsListener((slots) => {
+  removedGhostSlots = slots;
+  applyRemovedGhostVisibility();
+});
+// The ghost under the pointer (the raycaster is already aimed), unless a placed item is nearer.
+export function removedGhostUnderRay() {
+  if (removedGhostMeshes.size === 0) return null;
+  const ghostHit = raycaster.intersectObjects([...removedGhostMeshes.values()], true)[0];
+  if (!ghostHit) return null;
+  const productHit = raycaster.intersectObjects(productMeshes, true)[0];
+  if (productHit && productHit.distance < ghostHit.distance) return null;
+  return ghostHit.object.userData.removedSnapshotId ?? null;
+}
+// Where a ghost sits on screen, for the e2e that taps it.
+window.__testRemovedGhostScreenPos = (snapshotId) => {
+  const mesh = removedGhostMeshes.get(snapshotId);
+  if (!mesh) return null;
+  const point = mesh.getWorldPosition(new THREE.Vector3()).project(camera);
+  const rect = canvas.getBoundingClientRect();
+  return { x: rect.left + ((point.x + 1) / 2) * rect.width, y: rect.top + ((1 - point.y) / 2) * rect.height };
+};
+window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
+// 'model' once a ghost is the product's own model, 'outline' while it loads or when it cannot (e2e).
+// e2e: feeds the ghosts a slot as if the server had listed it (for a slot whose template is gone).
+window.__testSetRemovedGhostSlots = (slots) => { removedGhostSlots = slots; applyRemovedGhostVisibility(); };
+window.__testGhostNames = () => [...removedGhostMeshes.values()].map((m) => Boolean(m.userData.ghostNamed));
+window.__testGhostKinds = () => ({
+  removed: [...removedGhostMeshes.values()].map((m) => m.userData.ghostKind),
+  soldOut: [...soldOutMarkerMeshes.values()].map((m) => m.userData.ghostKind),
+});
 
 // Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called
 // whenever either changes (the toggle flips, or a fresh list just loaded).
 export function applySoldOutMarkerVisibility() {
   clearSoldOutMarkerMeshes();
+  applyRemovedGhostVisibility();
   if (!showSoldOutMarkers) return;
   for (const marker of soldOutMarkers) addSoldOutMarkerMesh(marker);
 }
@@ -3742,6 +4058,14 @@ window.__testSoldOutMarkerMeshIds = () => [...soldOutMarkerMeshes.keys()];
 // Reconciles every visible bit of "what's selected" UI (highlight already
 // applied by the caller — this only handles text/panels/gizmo) with the
 // current selectedMeshes set. Called after any change to that set.
+const OUTSIDE_NOTICE = 'Part of this is off your lándlet. Move it back to keep editing it.';
+let outsideNoticeShown = false;
+function meshIsOffOutline(mesh) {
+  const outline = getBuildOutline();
+  if (!outline) return false;
+  const { width, depth } = meshDimensions(mesh);
+  return !itemLegalAt(outline, { width, depth, rotationZ: mesh.rotation.z }, mesh.position.x, mesh.position.y, mesh.position.z, footprintScaleAtHeight);
+}
 export function updateSelectionUI() {
   // #3328: edit mode ends as soon as nothing from the bundle is selected.
   if (editingGroupId && ![...selectedMeshes].some((mesh) => mesh.userData.groupId === editingGroupId)) {
@@ -3765,6 +4089,16 @@ export function updateSelectionUI() {
     return;
   }
   const count = selectedMeshes.size;
+  // #4198: something saved off the lándlet's outline (before the outline was enforced) keeps loading and can be
+  // selected; say so, and that moving it back is what lets it be edited. Cleared once nothing selected is off.
+  const offOutline = [...selectedMeshes].some(meshIsOffOutline);
+  if (offOutline) {
+    outsideNoticeShown = true;
+    showSelectionActionStatus(OUTSIDE_NOTICE);
+  } else if (outsideNoticeShown) {
+    outsideNoticeShown = false;
+    if (selectionActionStatusTextEl.textContent === OUTSIDE_NOTICE) showSelectionActionStatus('');
+  }
   if (count === 0) {
     showSelectionActionStatus('');
     setProductInfo('');
@@ -4225,7 +4559,42 @@ editBundleBtn.addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && editingGroupId && !event.defaultPrevented) exitBundleEdit();
+  if (event.key === 'Escape' && editingGroupId && !event.defaultPrevented) {
+    exitBundleEdit();
+    event.preventDefault(); // this Escape is spent: it must not also let go of the selection (#4160)
+  }
+});
+
+// #4160 (part of #4158): N steps to the next placed item and selects it, Shift+N the one before, Escape lets go. The
+// view turns to it (the same pivot a rotate uses) and a polite live region says what it is, so someone who cannot tap
+// an item in the world can still reach every one of them. Every later keyboard step (delete, nudge, rotate) works on
+// this selection through the same state a tap uses.
+const buildSelectStatusEl = document.getElementById('build-select-status');
+document.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  if (isDeselectKeyEvent(event)) {
+    if (selectedMeshes.size === 0 || sceneMutationBusy || isBudOpen()) return; // an open menu takes this Escape first
+    clearSelection();
+    updateSelectionUI();
+    if (buildSelectStatusEl) buildSelectStatusEl.textContent = 'Nothing selected';
+    return;
+  }
+  if (!isStepKeyEvent(event) || sceneMutationBusy) return;
+  const stops = selectionStops(productMeshes);
+  const selectedKeys = new Set([...selectedMeshes].map((m) => m.userData.groupId ?? m.userData.instanceId ?? m.uuid));
+  const index = stepIndex(stops, selectedKeys, event.shiftKey);
+  if (index === -1) {
+    if (buildSelectStatusEl) buildSelectStatusEl.textContent = 'Nothing is placed on this lándlet yet';
+    return;
+  }
+  event.preventDefault();
+  const { mesh } = stops[index];
+  selectOnly(mesh);
+  const pivot = getSelectionPivot();
+  if (pivot) beginTargetTween(pivot);
+  const members = mesh.userData.groupId ? productMeshes.filter((m) => m.userData.groupId === mesh.userData.groupId).length : 1;
+  const name = members > 1 ? `${members} items` : (mesh.userData.template?.name ?? 'Item');
+  if (buildSelectStatusEl) buildSelectStatusEl.textContent = announceStop(name, index, stops.length, { bundle: members > 1 });
 });
 
 ungroupBtn.addEventListener('click', async () => {
@@ -4472,12 +4841,14 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
     let minOffsetZ = -Infinity, maxOffsetZ = Infinity;
     for (const mesh of placed) {
       const { width, depth, height } = meshDimensions(mesh);
-      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minOffsetX = Math.max(minOffsetX, -halfSpanX - mesh.position.x);
-      maxOffsetX = Math.min(maxOffsetX, halfSpanX - mesh.position.x);
-      minOffsetY = Math.max(minOffsetY, -halfSpanY - mesh.position.y);
-      maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
+      if (!getBuildOutline()) {
+        const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+        const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+        minOffsetX = Math.max(minOffsetX, -halfSpanX - mesh.position.x);
+        maxOffsetX = Math.min(maxOffsetX, halfSpanX - mesh.position.x);
+        minOffsetY = Math.max(minOffsetY, -halfSpanY - mesh.position.y);
+        maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
+      }
       minOffsetZ = Math.max(minOffsetZ, floorZ + height / 2 - mesh.position.z);
       maxOffsetZ = Math.min(maxOffsetZ, ceilingZ - height / 2 - mesh.position.z);
       // #3372: and by the lándlet's levels, as the server reads them.
@@ -4485,9 +4856,20 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
       minOffsetZ = Math.max(minOffsetZ, minZ - mesh.position.z);
       maxOffsetZ = Math.min(maxOffsetZ, maxZ - mesh.position.z);
     }
-    const offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
-    const offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);
+    let offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
+    let offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);
     const offsetZ = THREE.MathUtils.clamp(0, minOffsetZ, maxOffsetZ);
+    // #4198: the lándlet's own outline, not the square, decides where a placed bundle may stand; the Worker
+    // refuses the batch otherwise. The whole bundle slides toward the centre just far enough.
+    const placeOutline = getBuildOutline();
+    if (placeOutline) {
+      const pulled = pullGroupTowardCentre(placeOutline, placed.map((mesh) => {
+        const { width, depth } = meshDimensions(mesh);
+        return { item: { width, depth, rotationZ: mesh.rotation.z }, x: mesh.position.x, y: mesh.position.y, z: mesh.position.z + offsetZ };
+      }), footprintScaleAtHeight);
+      offsetX = pulled.x;
+      offsetY = pulled.y;
+    }
     for (const mesh of placed) {
       mesh.position.x += offsetX;
       mesh.position.y += offsetY;
@@ -4583,6 +4965,30 @@ export async function handlePlacementClick() {
     endSceneMutation();
   }
 }
+
+
+// #4163 (part of #4158, from the keyboard pass of #3818): a person who cannot tap the world places by key. Once an item
+// is chosen from the catalog (its tiles are buttons, so Tab and Enter reach them), Enter on the world places it at the
+// point the camera is looking at, exactly as a tap there would: the same raycast, the same limits, the same undo step.
+// Focus is put on the world when the item is chosen (focusWorldForPlacement), because the control that was last focused
+// is now "Cancel placing" and Enter on it would cancel instead.
+canvas.tabIndex = 0;
+canvas.setAttribute('aria-label', 'Build view. With an item chosen, press Enter to place it where the camera is looking.');
+export function focusWorldForPlacement() {
+  canvas.focus({ preventScroll: true });
+}
+export async function placePendingAtViewCentre() {
+  if (!pendingPlacement) return false;
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  await handlePlacementClick();
+  return true;
+}
+canvas.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.defaultPrevented) return;
+  if (!pendingPlacement) return;
+  event.preventDefault();
+  placePendingAtViewCentre();
+});
 
 
 // Swipe-to-select: while multi-select is on, dragging across several items
@@ -5157,15 +5563,97 @@ selectedMeshes.onAdd = (mesh) => buildBatching.releaseNow(mesh);
 const buildArrival = createBuildArrival({ parent: landletElevationGroup, anchor: () => ({ x: controls.target.x, y: controls.target.y }) });
 const buildLod = createBuildLod({ camera, target: controls.target, arrival: buildArrival, getMeshes: () => productMeshes, isSelected: (mesh) => selectedMeshes.has(mesh), onTicked: (objects) => buildBatching.sync(objects) });
 window.__testBuildBatchCounts = () => buildBatching.counts();
+window.__testBuildFadesInFlight = () => buildBatching.fadesInFlight; // e2e (#4115): version dissolves running now
+window.__testBuildFadesStarted = () => buildBatching.fadesStarted; // e2e (#4115): how many have started
+window.__testBuildWaitingGroups = () => buildBatching.waitingGroups; // e2e (#4235): a change is waiting for room
+window.__testBuildHardSwaps = () => buildBatching.hardSwapCount; // e2e (#4235): items whose version changed in one frame, no dissolve
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now
 window.__testBuildLodCounts = () => buildLod.counts();
+window.__testBuildCameraPose = () => ({ camera: { x: camera.position.x, y: camera.position.y, z: camera.position.z }, target: { x: controls.target.x, y: controls.target.y, z: controls.target.z } }); // #4159 e2e: where Build's camera is and what it looks at
 window.__testBuildArrivingCount = () => buildArrival.arrivingCount(); // e2e: items still dissolving in (not batched yet)
 window.__testSetBuildFullTriangleCap = (triangles) => buildLod.setFullTriangleCap(triangles);
 window.__testSetBuildLodProtectNear = (on) => buildLod.setProtectNear(on);
+window.__testSetBuildImplicitLodSets = (on) => buildLod.setImplicitSets(on); // #4115: loose items judged one by one again
+window.__testBuildLodSetCount = () => buildLod.setCount(); // #4115: how many sets (bundles and loose walls) the pass sees
 window.__testBuildRenderedTriangles = () => renderer.info.render.triangles; // the last frame's triangles
 window.__testBuildRenderedCalls = () => renderer.info.render.calls; // the last frame's draw calls (#3929)
 window.__testBuildLodTierOf = (instanceId) => productMeshes.find((mesh) => mesh.userData.instanceId === instanceId)?.userData.lodApplied ?? 'full';
+
+// #4159 (leaf 1 of #4158): Build's camera from a keyboard, with Shop's keys (src/build/keyboardCamera.js).
+// Keys held in Build only; a field, a dialog or a leaf with focus keeps its own keys (the same rule Shop
+// uses), and every key lets go when the page loses focus so none stays stuck.
+const buildKeysDown = new Set();
+let buildKeysLastAt = null;
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build' || !isNavigationKeyEvent(event)) return;
+  if (isItemKey(event, selectedMeshes.size === 1)) return; // #4162: Shift with these keys is the selected item's
+  event.preventDefault(); // Page Up and Page Down would otherwise scroll the page
+  buildKeysDown.add(event.code);
+});
+window.addEventListener('keyup', (event) => { buildKeysDown.delete(event.code); });
+// #4161 (leaf 3 of #4158): Delete and undo/redo by key press the button of the same name, so a key and a
+// tap do exactly the same thing (and Delete stays undoable).
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  const usable = (button) => !button.disabled && !button.hidden && !sceneMutationBusy;
+  const action = buildEditKeyAction(event, {
+    hasSelection: selectedMeshes.size > 0 && usable(deleteBtn),
+    canUndo: usable(undoBtn),
+    canRedo: usable(redoBtn),
+  });
+  if (!action) return;
+  event.preventDefault(); // Backspace would otherwise go back a page, Ctrl+Z reach the browser
+  ({ delete: deleteBtn, undo: undoBtn, redo: redoBtn })[action].click();
+});
+// #4162 (leaf 4 of #4158): Shift with the arrows, Page Up and Page Down, Q and E moves and turns the one
+// selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
+let lastItemKeyAt = 0;
+let itemKeyAnnounceFlip = false;
+function turnSelectedItem(degrees) {
+  if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
+  const [mesh] = selectedMeshes;
+  const next = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(degrees)).multiply(mesh.quaternion);
+  runSyntheticDrag(rotateControls, mesh, () => mesh.quaternion.copy(next));
+  refreshCardNumbers();
+}
+window.addEventListener('keydown', (event) => {
+  if (currentMode !== 'build') return;
+  const action = buildItemKeyAction(event, { singleSelected: selectedMeshes.size === 1 });
+  if (!action) return;
+  event.preventDefault();
+  const now = performance.now();
+  if (now - lastItemKeyAt < ITEM_KEY_MIN_GAP_MS) return;
+  lastItemKeyAt = now;
+  const [item] = selectedMeshes;
+  const was = { position: item.position.clone(), quaternion: item.quaternion.clone() };
+  if (action.type === 'nudge') nudgeSelectedItem(action.direction);
+  else turnSelectedItem(action.degrees);
+  // A press that did something says so for a screen reader; one that did nothing already said why.
+  const did = action.type === 'nudge' ? item.position.distanceTo(was.position) > 1e-4 : item.quaternion.angleTo(was.quaternion) > 1e-4;
+  if (did && buildSelectStatusEl) {
+    // The same sentence twice in a row is not read again, so every other press carries an invisible mark.
+    itemKeyAnnounceFlip = !itemKeyAnnounceFlip;
+    buildSelectStatusEl.textContent = itemKeyAnnouncement(action, getUnits()) + (itemKeyAnnounceFlip ? '\u200b' : '');
+  }
+});
+window.addEventListener('blur', () => { buildKeysDown.clear(); });
+function applyBuildKeyboardCamera(now) {
+  if (buildKeysDown.size === 0 || currentMode !== 'build') { buildKeysLastAt = null; return; }
+  const dt = buildKeysLastAt === null ? 0 : Math.min(0.1, (now - buildKeysLastAt) / 1000);
+  buildKeysLastAt = now;
+  if (dt <= 0) return;
+  const next = stepBuildCamera(
+    { camera: camera.position, target: controls.target },
+    keyboardAxes(buildKeysDown), keyboardRise(buildKeysDown), dt,
+    {
+      maxPolarRad: controls.maxPolarAngle,
+      maxTargetRadius: MAX_FLY_TARGET_DISTANCE_M,
+    },
+  );
+  controls.target.set(next.target.x, next.target.y, next.target.z);
+  camera.position.set(next.camera.x, next.camera.y, next.camera.z);
+}
 
 export function buildModeFrameUpdate(now) {
   // #3302: feed the Submit feedback ring buffer from Build too (it is
@@ -5179,12 +5667,25 @@ export function buildModeFrameUpdate(now) {
     selectedInstanceIds: [...selectedMeshes].map((m) => m.userData.instanceId).filter(Boolean).slice(0, 50), // #3302: capped so a wall of 800 items doesn't bloat the report
     selectedCount: selectedMeshes.size, // #3302: true size when the id list above is capped
     lastSelectionActionStatus: lastSelectionActionStatusText || null, // #3302: last Group/refusal text shown
+    // added for #4241 -- the owner saw Build zoom way out once while turning a bundle and could not repeat it; the pose
+    // above shows THAT the view moved, this shows what the gesture machinery thought was going on at that second (a
+    // ring held and which, how many fingers down, a re-centre tween or a free-look pin running), to tell a second
+    // finger, a tween and a pin apart. Remove once #4241 is closed and the cause (or its absence) is settled.
+    gesture: {
+      ringHeld: rotateControls.dragging ? rotateControls.axis : null,
+      moveHeld: Boolean(translateControls.dragging),
+      pointers: activePointerCount,
+      tween: targetTween.active,
+      freeLook: freeLookActive,
+    },
     ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
+  applyBuildKeyboardCamera(now);
   controls.update();
   buildLod.update(now); // #3929: what each item is drawn from, a quarter-second tick
+  buildBatching.update(now); // #4115: a change of version dissolves; nothing when none is running
   buildArrival.update(); // #4003: fog and dissolve of the items just let in; nothing when none
   updateCameraDebug(now);
   // A selected item's box must track it live while the translate/rotate
@@ -5192,7 +5693,7 @@ export function buildModeFrameUpdate(now) {
   // only on selection change (#3324: one union box per bundle, the fill
   // reading the very same box so the two never drift apart).
   updateSelectionBoxes();
-  updateItemCard(selectionBounds);
+  updateItemCard(selectionBounds, { holding: translateControls.dragging || rotateControls.dragging || trimControls.dragging });
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its
@@ -5669,6 +6170,67 @@ export function renderBuildSettingsSection() {
   };
   appendAboveFolds(historyField);
 
+  // #4094: versions kept from a lándlet this builder no longer has (released for inactivity). Closed, and
+  // drawn only when there is one. "Add to my versions" copies it onto this lándlet as one more saved
+  // version; nothing live changes, and Restore to editor / Set live then work on it like any other.
+  const archivedFold = document.createElement('details');
+  archivedFold.className = 'settings-account-fold settings-archived-versions';
+  archivedFold.hidden = true;
+  const archivedSummary = document.createElement('summary');
+  archivedSummary.textContent = 'From an earlier lándlet';
+  archivedFold.appendChild(archivedSummary);
+  const archivedHint = document.createElement('div');
+  archivedHint.className = 'settings-empty-note';
+  archivedHint.textContent = 'What you had built on a lándlet you no longer have. Adding one here saves it as a version of this lándlet; nothing live changes.';
+  archivedFold.appendChild(archivedHint);
+  const archivedList = document.createElement('div');
+  archivedList.className = 'version-list';
+  archivedFold.appendChild(archivedList);
+  appendAboveFolds(archivedFold);
+
+  async function renderArchivedVersions() {
+    let archivedVersions;
+    try {
+      ({ archivedVersions } = await fetchArchivedVersions());
+    } catch (err) {
+      console.warn('Could not load archived versions:', err); // best effort: the fold simply stays closed and hidden
+      return;
+    }
+    archivedList.innerHTML = '';
+    archivedFold.hidden = archivedVersions.length === 0;
+    for (const archived of archivedVersions) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      info.textContent = `${archived.name} — ${archived.instanceCount} ${archived.instanceCount === 1 ? 'item' : 'items'} — ${new Date(archived.createdAt).toLocaleString()}`;
+      row.appendChild(info);
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'version-action-btn';
+      addBtn.textContent = 'Add to my versions';
+      addBtn.addEventListener('click', async () => {
+        addBtn.disabled = true;
+        try {
+          const { version } = await restoreArchivedVersion(archived.versionId, landletId);
+          publishStatus.textContent = `Saved as "${version.name}" in your version history. Restore it to the editor from there when you want it.`;
+          publishStatus.classList.remove('error');
+          renderVersionHistory();
+        } catch (err) {
+          publishStatus.textContent = err.message || 'Couldn\'t add that version.';
+          publishStatus.classList.add('error');
+        } finally {
+          addBtn.disabled = false;
+        }
+      });
+      actions.appendChild(addBtn);
+      row.appendChild(actions);
+      archivedList.appendChild(row);
+    }
+  }
+
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
   // (#633) land here — reusing Version History's own .settings-field/
   // .version-list/.version-row/.version-action-btn look immediately above
@@ -6001,6 +6563,7 @@ export function renderBuildSettingsSection() {
   });
 
   renderVersionHistory();
+  renderArchivedVersions();
 }
 
 function formatAuctionTimeRemaining(isoString) {
@@ -6603,6 +7166,30 @@ async function renderLowStockSection() {
   applyFilter();
 }
 
+// #4201: the one switch for everything not live (sold out, removed, suspended), in the Tools leaf (it used to be
+// a checkbox in Settings > Build). On draws each as a faint ghost where it stood, for the builder only; the
+// setting is remembered on this device. The sold-out list is fetched here when the switch goes on, since the
+// Settings section that used to fetch it may never be opened.
+const ghostsBtn = document.getElementById('toggle-ghosts');
+const GHOSTS_PREF_KEY = 'hh_build_show_ghosts';
+function readGhostsPref() {
+  try { return localStorage.getItem(GHOSTS_PREF_KEY) === '1'; } catch { return false; }
+}
+async function setGhostsOn(on, { remember = true } = {}) {
+  setShowSoldOutMarkers(on);
+  ghostsBtn?.setAttribute('aria-pressed', String(on));
+  ghostsBtn?.classList.toggle('active', on);
+  if (remember) { try { localStorage.setItem(GHOSTS_PREF_KEY, on ? '1' : '0'); } catch { /* the switch still works for this visit */ } }
+  if (on && currentLandletId) {
+    try { setSoldOutMarkers(await fetchSoldOutMarkers(currentLandletId)); } catch { /* the removed ghosts still show; the sold-out ones wait for the next try */ }
+    if (!showSoldOutMarkers) return; // switched off while the list loaded
+  }
+  applySoldOutMarkerVisibility();
+}
+ghostsBtn?.addEventListener('click', () => { setGhostsOn(ghostsBtn.getAttribute('aria-pressed') !== 'true'); });
+// Entering Build: the switch shows, and applies, what this device remembered.
+function restoreGhostsSwitch() { setGhostsOn(readGhostsPref(), { remember: false }); }
+
 // #2068 (leaf sub-issue of #1973/#1947, owner requirement): "On the build
 // screen looking at their land, they should be able to toggle on/off
 // grayed-out items that have disappeared which they haven't dismissed
@@ -6622,16 +7209,6 @@ async function renderSoldOutMarkersSection() {
   label.textContent = 'Sold-out markers';
   field.appendChild(label);
 
-  const toggleRow = document.createElement('label');
-  toggleRow.className = 'sold-out-marker-toggle-row';
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.id = 'sold-out-marker-toggle';
-  toggle.checked = showSoldOutMarkers;
-  toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out items used to be'));
-  field.appendChild(toggleRow);
-
   const list = document.createElement('div');
   list.className = 'sold-out-marker-list';
   field.appendChild(list);
@@ -6639,11 +7216,6 @@ async function renderSoldOutMarkersSection() {
   empty.className = 'settings-empty-note';
   field.appendChild(empty);
   appendToMoreFold(field);
-
-  toggle.addEventListener('change', () => {
-    setShowSoldOutMarkers(toggle.checked);
-    applySoldOutMarkerVisibility();
-  });
 
   let markers;
   try {

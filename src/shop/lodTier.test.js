@@ -2,7 +2,7 @@
 // hysteresis, and the budget.
 import { describe, expect, it } from 'vitest';
 import {
-  apparentSizePx, nextTier, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
+  apparentSizePx, nextTier, nextSetTier, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
   TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES,
 } from './lodTier.js';
@@ -284,5 +284,52 @@ describe('holdBackUnready', () => {
 
   it('is empty for no items', () => {
     expect(holdBackUnready([])).toEqual([]);
+  });
+});
+
+describe('a set steps full, mid, far, and takes far only where its parts are tiny (#4113)', () => {
+  it('keeps a part that is 14 to 20 px wide on mid, where a lone item would already be far', () => {
+    for (const px of [14, 17, 20, 23]) {
+      expect(nextSetTier(TIER_MID, px)).toBe(TIER_MID);
+      expect(nextSetTier(TIER_FULL, px)).toBe(TIER_MID);
+    }
+    expect(nextTier(TIER_MID, 17)).toBe(TIER_FAR); // the old rule for a single item, unchanged
+  });
+
+  it('takes far only under the set far size, and has a gap before coming back', () => {
+    expect(LOD_SET_FAR_ENTER_PX).toBeLessThan(LOD_FAR_ENTER_PX);
+    expect(LOD_SET_FAR_EXIT_PX).toBeGreaterThan(LOD_SET_FAR_ENTER_PX);
+    expect(nextSetTier(TIER_MID, LOD_SET_FAR_ENTER_PX - 1)).toBe(TIER_FAR);
+    expect(nextSetTier(TIER_FAR, (LOD_SET_FAR_ENTER_PX + LOD_SET_FAR_EXIT_PX) / 2)).toBe(TIER_FAR);
+    expect(nextSetTier(TIER_FAR, LOD_SET_FAR_EXIT_PX + 1)).toBe(TIER_MID);
+  });
+
+  it('walking in from far reads far, mid, mid..., full, never skipping mid', () => {
+    let tier = TIER_FAR;
+    const seen = [];
+    for (let px = 6; px <= 130; px += 1) {
+      tier = nextSetTier(tier, px);
+      if (seen[seen.length - 1] !== tier) seen.push(tier);
+    }
+    expect(seen).toEqual([TIER_FAR, TIER_MID, TIER_FULL]);
+  });
+});
+
+describe('the read-out says why each item ended where it did (#4113)', () => {
+  it('names the rule that decided each one', () => {
+    const items = [
+      { px: 200, wanted: TIER_FULL, protected: true, tris: 5000, dist: 2 },
+      { px: 200, wanted: TIER_FULL, protected: true, tris: 5000, dist: 9 },
+      { px: 50, wanted: TIER_MID, protected: false, tris: 5000, dist: 30 },
+    ];
+    const reasons = [];
+    const tiers = budgetedTiers(items, undefined, undefined, 6000, reasons);
+    expect(tiers).toEqual([TIER_FULL, TIER_MID, TIER_MID]);
+    expect(reasons).toEqual(['beside the avatar', 'triangle budget', 'size']);
+  });
+
+  it('leaves a call without a read-out untouched', () => {
+    const items = [{ px: 50, wanted: TIER_MID, protected: false }];
+    expect(budgetedTiers(items)).toEqual([TIER_MID]);
   });
 });

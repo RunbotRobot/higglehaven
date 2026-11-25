@@ -12,6 +12,7 @@ const moreBtn = document.getElementById('item-card-more-btn');
 const moreEl = document.getElementById('item-card-more');
 const closeBtn = document.getElementById('item-card-close-btn');
 const card = createWorldCard(cardEl);
+const RING_CLEARANCE_PX = 112;
 // #3691: the Selecting brush's size slider. It lives in #tool-controls (and the Tools leaf lends it
 // out); while Selecting is on and the card shows the selection, it is hosted here, beside what is
 // being painted, so it can be adjusted without leaving the world. scene.js keeps the same element,
@@ -101,11 +102,15 @@ export function hideItemCard() {
 
 // box: the selection's world-space THREE.Box3 (already computed this frame by the
 // selection boxes, so no extra pass over the members).
-export function updateItemCard(box) {
+export function updateItemCard(box, { holding = false } = {}) {
   if (!open || !box || box.isEmpty()) return;
+  card.hold(holding); // #4242: a ring being dragged: the card stays put and lets touches through
   box.getCenter(scratchCenter);
   box.getSize(scratchSize);
-  card.place(scratchCenter, 0.5 * Math.max(scratchSize.x, scratchSize.y, scratchSize.z, 0.05));
+  // #4118: the three rings reach about 100 px from the item on a phone, and the owner: "The product
+  // information popup blocks us from accessing the rotation handle easily." The card keeps that much
+  // clear space round the item, so it opens beyond the rings, not on them.
+  card.place(scratchCenter, 0.5 * Math.max(scratchSize.x, scratchSize.y, scratchSize.z, 0.05), RING_CLEARANCE_PX);
 }
 
 window.__testItemCardAnchor = () => card.anchor();

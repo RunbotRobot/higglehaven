@@ -119,11 +119,12 @@ describe('batch tiers', () => {
     expectConsistent(batch, handles);
   });
 
-  it('falls back to the nearest version a product has, then to the full model', () => {
+  it('falls back: far to mid when there is one, then the full model; a missing mid is the full model', () => {
     const noFar = makeBatch(2, { withFar: false });
     expect(resolveBatchTier(noFar.batch, BATCH_TIER_FAR)).toBe(BATCH_TIER_MID);
     const noMid = makeBatch(2, { withMid: false });
-    expect(resolveBatchTier(noMid.batch, BATCH_TIER_MID)).toBe(BATCH_TIER_FAR);
+    expect(resolveBatchTier(noMid.batch, BATCH_TIER_MID)).toBe(BATCH_TIER_FULL); // #4111: never down to far
+    expect(resolveBatchTier(noMid.batch, BATCH_TIER_FAR)).toBe(BATCH_TIER_FAR);
     const none = makeBatch(2, { withMid: false, withFar: false });
     expect(resolveBatchTier(none.batch, BATCH_TIER_FAR)).toBe(BATCH_TIER_FULL);
     expect(moveBatchHandle(none.batch, none.handles[0], BATCH_TIER_FAR)).toBe(BATCH_TIER_FULL);

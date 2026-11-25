@@ -86,7 +86,7 @@ await page.evaluate(([x, y]) => {
 // same reasoning e2e/community-sign-edit-char-limit-guard.test.mjs gives
 // for updateSignFade's own identical per-frame shape.
 // #3889: the confirmation is a short word beside the head that goes by itself.
-await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim() === 'Credit +1', null, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelector('#account-menu-toggle .bud-word')?.textContent.trim().match(/^\d+ credits?$/) !== null, null, { timeout: 5000 });
 const toastText = await budWordText(page);
 console.log('collect confirmation toast text:', toastText);
 

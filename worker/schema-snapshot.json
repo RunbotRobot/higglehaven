@@ -310,6 +310,13 @@
       "url": "TEXT|0||0",
       "user_id": "TEXT|1||0"
     },
+    "direct_message_reports": {
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "reason": "TEXT|0||0",
+      "report_id": "TEXT|0||1",
+      "reported_user_id": "TEXT|0||0",
+      "reporter_user_id": "TEXT|0||0"
+    },
     "direct_messages": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "message_id": "TEXT|0||1",
@@ -835,6 +842,7 @@
       "failed_login_attempts": "INTEGER|1|0|0",
       "first_hints_done": "INTEGER|0||0",
       "is_admin": "INTEGER|1|0|0",
+      "is_admin_viewer": "INTEGER|1|0|0",
       "is_fleet": "INTEGER|1|0|0",
       "loading_tips_off": "INTEGER|0||0",
       "locked_until": "TEXT|0||0",
@@ -846,7 +854,8 @@
       "turnstile_failed_at": "TEXT|0||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "user_id": "TEXT|0||1",
-      "username": "TEXT|0||0"
+      "username": "TEXT|0||0",
+      "username_skeleton": "TEXT|0||0"
     },
     "version_instances": {
       "bundle_id": "TEXT|0||0",
@@ -870,6 +879,7 @@
       "builder_id": "TEXT|1||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "error_message": "TEXT|0||0",
+      "failure_detail": "TEXT|0||0",
       "job_id": "TEXT|0||1",
       "model_url": "TEXT|0||0",
       "processed_at": "TEXT|0||0",
@@ -1115,6 +1125,14 @@
     "index:idx_didit_verification_sessions_user_id": {
       "tbl": "didit_verification_sessions",
       "sql": "CREATE INDEX idx_didit_verification_sessions_user_id ON didit_verification_sessions(user_id, created_at)"
+    },
+    "index:idx_direct_message_reports_pair": {
+      "tbl": "direct_message_reports",
+      "sql": "CREATE UNIQUE INDEX idx_direct_message_reports_pair ON direct_message_reports(reporter_user_id, reported_user_id)"
+    },
+    "index:idx_direct_message_reports_reported_user": {
+      "tbl": "direct_message_reports",
+      "sql": "CREATE INDEX idx_direct_message_reports_reported_user ON direct_message_reports(reported_user_id, created_at)"
     },
     "index:idx_direct_messages_recipient_user": {
       "tbl": "direct_messages",
@@ -1447,6 +1465,10 @@
     "index:idx_users_username_nocase": {
       "tbl": "users",
       "sql": "CREATE UNIQUE INDEX idx_users_username_nocase ON users (username COLLATE NOCASE)"
+    },
+    "index:idx_users_username_skeleton": {
+      "tbl": "users",
+      "sql": "CREATE INDEX idx_users_username_skeleton ON users (username_skeleton)"
     },
     "index:idx_video_generation_jobs_builder_id": {
       "tbl": "video_generation_jobs",

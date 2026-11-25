@@ -54,38 +54,44 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
-import { setBudWord, clearBudWord } from '../ui/bud.js';
+import { setBudWord, clearBudWord, openLeaf } from '../ui/bud.js';
 import { sayAtHead, clearSaying } from '../ui/headSaying.js';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { createTierCrossfades } from './tierCrossfade.js';
+import { createBatchCrossfades, BATCH_WAITING } from './batchCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { initBatchTiers, addBatchTier, moveBatchHandle, partitionBatch } from './batchTiers.js';
+import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
-import { findImplicitSets } from './implicitLodSets.js';
+import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
+import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
+import { noteOrbLoadFailed, orbLoadDue } from './orbLoadRetry.js';
 import { applyAssistantLook, AVATAR_HEAD_TOP_Z_M } from './assistantAvatar.js';
 import { showSpeechCue, setNearbySpeechHandler } from './speechCue.js';
 import { idleState } from './assistantIdle.js';
 import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
 import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
+import { createCreditOrbFades } from './creditOrbArrival.js';
+import { beginAvatarSwapFog } from './avatarSwapFog.js';
+import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
-  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
+  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, otherAvatarBodyAction, isTemporarilyFailed,
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
@@ -204,11 +210,10 @@ const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
 const CREDIT_ORB_SHIMMER_SPEED_RAD_S = 3.2;
 const CREDIT_ORB_SHIMMER_MIN = 0.6;
 const CREDIT_ORB_SHIMMER_MAX = 1.8;
-// How long the "+1 free model-generation credit!" toast stays visible
-// after a successful collect, matching #shop-last-location-btn's own
-// opacity-transition show/auto-hide shape (see its CSS comment in
-// index.html) rather than a hard show/hide cutoff.
-const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
+// How long the "Credit +1" word stays beside the head after a successful collect, then goes by
+// itself (a success may fade). #4072: it is also a door to what was collected, so it stays long
+// enough to be read and tapped, not just glimpsed.
+const CREDIT_ORB_TOAST_VISIBLE_MS = 7000;
 // #2447: how long an unbroken streak of genuine network failures (fetch()
 // itself rejecting, never a real HTTP response -- see isNetworkError)
 // collecting any orb has to persist before this reads as "offline" rather
@@ -347,6 +352,11 @@ let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a
 // loadShopLandletInstances rather than discovered via any instance's
 // userData, but torn down the identical way in unloadShopLandletInstances.
 const shopCreditOrbs = [];
+// #4174: orbs arrive and leave through fog (src/shop/creditOrbArrival.js), the same fog and dissolve a lándlet's
+// products use.
+const creditOrbFades = createCreditOrbFades({
+  createFog: createArrivalFog, createDissolve: createArrivalDissolve, reducedMotion: () => otherAvatarReducedMotion(),
+});
 
 // #3261: distance is measured from the AVATAR (horizontal), not the camera --
 // in flight the chase camera trails well behind and above the avatar, so a
@@ -384,7 +394,7 @@ export function updateShopProximity() {
       // load/unload decision scoped to orbs alone, independent of
       // entry.loaded/entry.objects (which stay permanently empty/false for
       // every greenbelt landlet).
-      if (!entry.orbsLoaded && distance < SHOP_LOAD_RADIUS_M) {
+      if (orbLoadDue(entry, distance, SHOP_LOAD_RADIUS_M, performance.now())) {
         entry.orbsLoaded = true;
         loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
       } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
@@ -416,6 +426,8 @@ function updateFarView() {
     shopFarView = createFarView({
       queue: worldWorkQueue,
       root,
+      // e2e only (#4147): a test sets this before the page loads so a refresh does not take two minutes.
+      tileRefreshMs: typeof window.__testFarTileRefreshMs === 'number' ? window.__testFarTileRefreshMs : undefined,
       fetchTile: fetchFarPlacements,
       loadSource: async (templateId) => {
         const template = findTemplate(templateId);
@@ -547,50 +559,52 @@ window.__testSetImplicitLodSets = (enabled) => {
   implicitSetsVersion += 1;
 };
 
+// #4189: worked out in slices of SHOP_SETS_SLICE_MS a frame, not in one. A running job always finishes on the
+// items it started with and then replaces the sets at once (a job is only dropped when its load is gone, so
+// continuous placements cannot starve it); if the count changed meanwhile, the next job starts on the next
+// call. While a landlet has no finished sets for this load, updateInstanceLodTiers holds every item's version
+// (see lodSetsSeen there): a change of version is never seen, so nothing is judged alone and then re-judged.
+const SHOP_SETS_SLICE_MS = 2;
+const NO_SETS = new Map();
 function lodSetsFor(entry) {
-  if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken
-    && entry.lodSetsVersion === implicitSetsVersion) return entry.lodSets;
-  const byGroup = new Map();
-  const loose = [];
-  for (const object of entry.objects) {
-    if (!hasLodTiers(object)) continue;
-    const groupId = object.userData.groupId;
-    object.userData.lodSetId = undefined;
-    if (!groupId) { loose.push(object); continue; }
-    let members = byGroup.get(groupId);
-    if (!members) byGroup.set(groupId, members = []);
-    members.push(object);
+  const current = entry.lodSetsToken === entry.loadToken;
+  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion)) {
+    entry.lodSetsJob = null; // its load is gone (the members are disposed) or the e2e switch changed
   }
-  const sets = new Map();
-  const addSet = (setId, members) => {
-    const sphere = setBoundingSphere(members.map((object) => ({
-      x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object),
-    })));
-    for (const object of members) object.userData.lodSetId = setId;
-    sets.set(setId, { members, sphere, px: 0, near: false });
-  };
-  for (const [groupId, members] of byGroup) {
-    if (members.length < 2) continue; // a lone member is decided as a single item
-    addSet(groupId, members);
+  const upToDate = entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
+    && entry.lodSetsVersion === implicitSetsVersion;
+  if (upToDate && !entry.lodSetsJob) return entry.lodSets;
+  if (!entry.lodSetsJob) {
+    entry.lodSetsFailed = false;
+    entry.lodSetsJob = {
+      token: entry.loadToken,
+      count: entry.objects.length,
+      version: implicitSetsVersion,
+      // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
+      job: startLodSetsJob(entry.objects, {
+        hasTiers: hasLodTiers,
+        groupIdOf: (object) => object.userData.groupId,
+        templateKeyOf: (object) => object.userData.template?.templateId,
+        positionOf: (object) => object.position,
+        radiusOf: lodRadiusM,
+        implicit: implicitSetsEnabled,
+      }),
+    };
   }
-  // #4063: loose placements that stand together (the same product, touching or a small gap apart) are a
-  // set for drawing too, so a wall the builder never bundled changes detail as one, exactly as the same
-  // wall bundled does. Nothing is stored or shown; this is worked out again whenever the landlet's
-  // objects change.
-  const looseItems = [];
-  const looseObjects = [];
-  for (const object of loose) {
-    const key = object.userData.template?.templateId;
-    if (!key) continue;
-    looseObjects.push(object);
-    looseItems.push({ key, x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object) });
+  const running = entry.lodSetsJob;
+  const sets = stepLodSetsJob(running.job, SHOP_SETS_SLICE_MS);
+  if (sets) {
+    entry.lodSets = sets;
+    entry.lodSetsObjectCount = running.count;
+    entry.lodSetsVersion = running.version;
+    entry.lodSetsToken = running.token; // an unload and reload with the same count must not reuse stale members
+    entry.lodSetsFailed = running.job.failed;
+    entry.lodSetsJob = null;
+    return sets;
   }
-  (implicitSetsEnabled ? findImplicitSets(looseItems) : []).forEach((indices, n) => addSet(`auto:${n}`, indices.map((i) => looseObjects[i])));
-  entry.lodSets = sets;
-  entry.lodSetsObjectCount = entry.objects.length;
-  entry.lodSetsVersion = implicitSetsVersion;
-  entry.lodSetsToken = entry.loadToken; // an unload and reload with the same count must not reuse stale members
-  return sets;
+  // Not done: the previous sets of this same load, if any, else none. (A changed load token means the old
+  // members are gone, so they are never reused.)
+  return entry.lodSets && current ? entry.lodSets : NO_SETS;
 }
 
 // #3920: what the full model of an item costs to draw, in triangles, counted once and kept. A
@@ -614,6 +628,25 @@ function fullTrianglesOf(object) {
 let fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES;
 window.__testSetShopFullTriangleCap = (triangles) => { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; };
 
+// #4113: the read-out the issue asked for first: per set (and per item not in one), the version shown and
+// why, as of the last tick. e2e/console only; it costs nothing until it is asked for once.
+let tierReadoutOn = false;
+let lastTierReadout = null;
+window.__testShopSetTiers = () => {
+  tierReadoutOn = true;
+  if (!lastTierReadout) return [];
+  const groups = new Map();
+  for (const row of lastTierReadout.items) {
+    const key = row.object.userData.lodSetId ?? `item:${row.object.userData.instanceId ?? row.object.uuid}`;
+    let group = groups.get(key);
+    if (!group) groups.set(key, group = { set: row.object.userData.lodSetId ? key : null, members: 0, px: row.px, near: row.near, wanted: row.wanted, tiers: {}, reasons: {} });
+    group.members += 1;
+    group.tiers[row.tier] = (group.tiers[row.tier] ?? 0) + 1;
+    group.reasons[row.reason] = (group.reasons[row.reason] ?? 0) + 1;
+  }
+  return [...groups.values()].filter((g) => g.set).map((g) => ({ ...g, px: Math.round(g.px * 10) / 10 }));
+};
+
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
@@ -627,20 +660,35 @@ function updateInstanceLodTiers() {
       const dx = entry.group.position.x + sphere.x - camera.position.x;
       const dy = entry.group.position.y + sphere.y - camera.position.y;
       const dz = entry.group.position.z + sphere.z - camera.position.z;
-      set.px = apparentSizePx(sphere.radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
       // The protection has its own hysteresis (enter at 10 m, leave past 13 m),
       // judged from last tick's answer.
       const wasNear = set.near;
       set.near = false;
+      // #4089: one pass over the members also finds the nearest one and what the set costs whole.
+      let nearestSquared = Infinity;
+      let fullTriangles = 0;
       for (const member of set.members) {
-        if (isNearFullDetail(horizontalDistanceM(
+        if (!set.near && isNearFullDetail(horizontalDistanceM(
           entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
           shopAvatarPosition.x, shopAvatarPosition.y,
-        ), wasNear)) { set.near = true; break; }
+        ), wasNear)) set.near = true;
+        const mx = entry.group.position.x + member.position.x - camera.position.x;
+        const my = entry.group.position.y + member.position.y - camera.position.y;
+        const mz = entry.group.position.z + member.position.z - camera.position.z;
+        nearestSquared = Math.min(nearestSquared, mx * mx + my * my + mz * mz);
+        fullTriangles += fullTrianglesOf(member);
       }
+      set.px = setApparentPx({
+        sphere, centerDistanceM: Math.hypot(dx, dy, dz), maxMemberRadiusM: set.maxMemberRadiusM,
+        nearestMemberDistanceM: Math.sqrt(nearestSquared), fullTriangles,
+      }, camera.fov, window.innerHeight);
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
+      // #4189: an item no finished set job has looked at yet (first load, a reload, anything added since) keeps the
+      // version it has and is not judged: judged alone it would take a different version from the set it is
+      // about to join, and a person would see the change when the job finishes. A failed job releases the hold.
+      const held = isHeldForSets(object, entry.lodSetsFailed);
       const set = object.userData.lodSetId ? sets.get(object.userData.lodSetId) : undefined;
       const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
@@ -659,15 +707,22 @@ function updateInstanceLodTiers() {
       lodItemsScratch.push({
         px,
         protected: nearAvatar,
-        wanted: nearAvatar ? TIER_FULL : nextTier(currentTier, px),
+        wanted: held ? (currentTier ?? TIER_FULL) : nearAvatar ? TIER_FULL : (set ? nextSetTier(currentTier, px) : nextTier(currentTier, px)),
         tris: fullTrianglesOf(object), // #3920: the triangle budget counts protected items too
         dist: ownDistanceM,
         current: object.userData.lodApplied,
+        held,
       });
       lodObjectsScratch.push({ entry, object });
     }
   }
-  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap);
+  const reasons = tierReadoutOn ? [] : null;
+  const tiers = budgetedTiers(lodItemsScratch, undefined, undefined, fullTriangleCap, reasons);
+  // #4189: a held item (no finished set job has looked at it) keeps its version, whatever the budget says.
+  for (let i = 0; i < lodItemsScratch.length; i++) {
+    if (lodItemsScratch[i].held) tiers[i] = lodObjectsScratch[i].object.userData.lodTier ?? TIER_FULL;
+  }
+  if (reasons) lastTierReadout = { items: lodObjectsScratch.map(({ object }, i) => ({ object, px: lodItemsScratch[i].px, near: lodItemsScratch[i].protected, wanted: lodItemsScratch[i].wanted, tier: tiers[i], reason: reasons[i] })) };
   // First note every item's wanted version (and ask for the reduced versions of
   // any that will need them); the ones due to change are collected to be applied
   // largest first.
@@ -680,7 +735,12 @@ function updateInstanceLodTiers() {
       if (object.userData.batch) requestBatchTiers(entry, object.userData.batch);
       else requestInstanceTiers(entry, object);
     }
-    if (lodTiersStateOf(object) !== 'ready' || tier === object.userData.lodApplied) continue;
+    if (lodTiersStateOf(object) !== 'ready') continue;
+    if (tier === object.userData.lodApplied) {
+      // #4113: a placement that wanted a change and then wants what it has is no longer waiting for it.
+      if (object.userData.batchWaitSince !== undefined) batchCrossfades.clearWait(object);
+      continue;
+    }
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -692,17 +752,52 @@ function updateInstanceLodTiers() {
   for (const i of largestFirst(lodFlipScratch, lodItemsScratch)) {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
+    const appliedBefore = object.userData.lodApplied;
     object.userData.lodApplied = tier;
-    // #3403: a batched placement changes version by moving between the batch's instanced sets (an
-    // instant swap: the batch has no per-item children to dissolve between).
-    if (object.userData.batch) moveBatchHandle(object.userData.batch, object, tier);
-    else setInstanceLodState(object, tier, tierCrossfades);
+    // #3403: a batched placement changes version by moving between the batch's instanced sets.
+    // #4062: the ones that change dissolve from the old version to the new (a few at a time).
+    // #4113: no exception for what is beside the avatar any more: that was the one change a person saw most (the owner's
+    // wall went from flat to full in one frame at 10 m). A placement the fade caps cannot take yet WAITS (it keeps its
+    // old version and is tried again next tick, biggest first, for a few seconds) instead of swapping in one frame: an
+    // 829-brick wall used to have about nine in ten of its bricks swap at once, a hard-edged wedge across the wall.
+    if (object.userData.batch) {
+      if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: true }) === BATCH_WAITING) {
+        object.userData.lodApplied = appliedBefore;
+        // A waiting placement is a comparison when nothing has changed, but a pass over thousands of them still
+        // spends the slice like any other flip, so the ones behind them are reached on a later tick.
+        if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
+        continue;
+      }
+    } else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
 }
 // #3494: the incoming version of a changing item dissolves in over the outgoing one.
 const tierCrossfades = createTierCrossfades();
+// #4062: the same for batched placements (src/shop/batchCrossfade.js).
+// The arrival dissolve (#3407) and a cross-fade both swap the materials under a batch's root: no
+// cross-fade starts for a batch while its landlet's arrival is running.
+const batchCrossfades = createBatchCrossfades({
+  isArriving: (batch) => !!batch.arrivalRun && !batch.arrivalRun.settled(),
+});
+// A batch about to be unloaded settles its fades first.
+export function finishBatchCrossfades(batch) {
+  batchCrossfades.finishBatch(batch);
+}
+// e2e-only (main.js's draw stats): settle every running fade, so a frame counts the sets the books
+// say and not the two versions both drawn for the length of a dissolve.
+export function settleAllBatchCrossfades() {
+  batchCrossfades.finishAll();
+}
+// e2e: how many batch fades are running, and how many are in all (a fade started).
+export function batchCrossfadeStats() {
+  return {
+    inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount,
+    transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
+    hardSwaps: batchCrossfades.hardSwapCount,
+  };
+}
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
 // True if the given world point falls inside this landlet's own footprint
@@ -779,7 +874,7 @@ export function updateShopLandletInfo() {
   }
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
   // #3770: named at the top of the open menu, in the brand's lettering, with the builder under it.
-  showBudPlace({ name: found.record.name, builder: ownerLabel });
+  showBudPlace({ name: found.record.name, builder: ownerLabel, wordmarkStyle: found.record.wordmarkStyle, wordmarkColors: found.record.wordmarkColors });
 }
 
 // #2853 (leaf of #2373, Option C real terrain): the real per-landlet
@@ -1085,13 +1180,26 @@ export async function pollNearbyPresenceIfNeeded(now) {
       // driven client-side from the movement observed between polls (#3230,
       // #3777: see stepOtherAvatarMotion).
       const group = new THREE.Group();
-      const defaultAvatar = createShopAvatar();
-      const body = defaultAvatar.group;
+      // #4067: someone who wears a model is never drawn as the default body while it loads ("never
+      // replaced by a stand-in", "things arrive through fog"): nothing stands there but soft fog until
+      // their own body is ready. The default body is drawn only for someone who wears it, or when the
+      // model cannot be had (failed, or over the distinct-models cap): reconcileOtherAvatarBodies ends the fog
+      // and puts the default body in (#4107: it used to skip someone who asked for null from the start).
+      const waitsForModel = !avatar.assistant && !!normalizeEquippedAvatar(avatar.equippedAvatar)
+        && !isTemporarilyFailed(otherAvatarModelFailedAt, normalizeEquippedAvatar(avatar.equippedAvatar).templateId, now);
+      const defaultAvatar = waitsForModel ? null : createShopAvatar();
+      const body = defaultAvatar ? defaultAvatar.group : new THREE.Group();
       group.add(body);
+      group.position.set(avatar.x, avatar.y, avatar.z);
       scene.add(group);
       entry = {
         group,
         body,
+        // #4067: the fog that stands in for a body still loading; null once it is in place.
+        modelWait: waitsForModel
+          ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
+          : null,
+        bodySwapFog: null, // #4109: the fog hiding a change of avatar, while there is one
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
         motion: defaultOtherAvatarMotion(defaultAvatar),
@@ -1188,7 +1296,10 @@ function reconcileOtherAvatarBodies(now) {
   for (const [builderId, entry] of shopOtherAvatars) {
     const desired = desiredAvatarFor(entry.equippedAvatar ?? null, allowed);
     const desiredId = desired ? desired.templateId : null;
-    if (desiredId === entry.bodyRequestedTemplateId) continue;
+    // #4107: not just "is it the template already asked for": a wearer over the distinct-models cap asks
+    // for null from the start and still has fog standing, which must become the default body.
+    const action = otherAvatarBodyAction(desiredId, entry.bodyRequestedTemplateId, Boolean(entry.modelWait));
+    if (action === 'keep') continue;
     entry.bodyRequestedTemplateId = desiredId;
     const myToken = ++entry.bodySwapToken;
     if (!desired) {
@@ -1218,7 +1329,7 @@ function reconcileOtherAvatarBodies(now) {
           // A previous custom model may still be showing (the builder switched
           // avatars and the new one failed): never leave the old one up as if
           // it were current.
-          if (entry.bodyTemplateId !== null) {
+          if (entry.bodyTemplateId !== null || entry.modelWait) {
             const defaultAvatar = createShopAvatar();
             installOtherAvatarBody(entry, defaultAvatar.group, null, defaultAvatar);
           }
@@ -1229,6 +1340,37 @@ function reconcileOtherAvatarBodies(now) {
 }
 
 function installOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4109: someone changing what they wear is seen changing inside a puff of fog, not in one frame ("nothing
+  // pops in"). Only when a body is already standing there to be replaced: an arrival still waiting for its
+  // model (modelWait, #4067) has its own fog, and the first body of an entry goes straight in. A change
+  // that lands while an earlier one is still in its fog finishes that one first (its commit runs at once).
+  entry.bodySwapFog?.cancel();
+  entry.bodySwapFog = null;
+  const replacing = !entry.modelWait && entry.body && entry.body.children.length > 0;
+  const place = () => {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    reconcileOtherAvatarAnimations(performance.now());
+    refreshOtherShopAvatarsDiagnostic();
+  };
+  if (!replacing) {
+    placeOtherAvatarBody(entry, body, templateId, defaultAvatar);
+    return;
+  }
+  const swap = beginAvatarSwapFog({
+    createFog: createArrivalFog, parent: scene, getPosition: () => entry.group.position,
+    commit: place, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion(),
+  });
+  entry.bodySwapFog = swap.released ? null : swap;
+}
+
+function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
+  // #4067: the real body is in place, so the fog thins away over it; a default body put in instead
+  // (the model cannot be had) ends the wait at once.
+  if (templateId !== null) entry.modelWait?.ready(performance.now());
+  else {
+    entry.modelWait?.cancel();
+    entry.modelWait = null;
+  }
   entry.group.remove(entry.body);
   disposeOtherAvatarClips(entry); // the mixer was bound to the body being removed
   disposeObject3D(entry.body);
@@ -1437,6 +1579,10 @@ setNearbySpeechHandler((builderId) => {
 });
 
 function releaseOtherAvatarEntry(entry) {
+  entry.bodySwapFog?.cancel(); // #4109: a swap still in its fog finishes (its commit runs) before the entry goes
+  entry.bodySwapFog = null;
+  entry.modelWait?.cancel();
+  entry.modelWait = null;
   entry.speechCue?.dispose();
   entry.speechCue = null;
   entry.transition?.cancel();
@@ -1469,6 +1615,8 @@ function refreshOtherShopAvatarsDiagnostic() {
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
+    swappingBody: Boolean(entry.bodySwapFog), // added for #4109 -- e2e needs to see that someone changing avatar is fog first, with the old body still standing until the new one goes in
+    waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
 }
@@ -1533,6 +1681,8 @@ export function updateOtherShopAvatars(now) {
     // #3777: a body with no clips of its own walks too, instead of gliding.
     if (entry.motion) stepOtherAvatarMotion(entry, dt, locomotion);
     entry.lastFrameAt = now;
+    if (entry.modelWait && entry.modelWait.step(now)) entry.modelWait = null; // #4067
+    if (entry.bodySwapFog && entry.bodySwapFog.step(now)) entry.bodySwapFog = null; // #4109: a change of avatar, in fog
     // #3449: advance an assistant's arrival or departure; a finished departure
     // removes the avatar for good.
     if (entry.transition && entry.transition.step(now)) {
@@ -1690,10 +1840,12 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
+  batch.arrivalRun = run ?? null; // #4062: read by the batch cross-fades
   initBatchTiers(batch, source.parts);
   for (const handle of handles) {
     handle.userData.lodTier = TIER_FULL;
     handle.userData.lodApplied = TIER_FULL;
+    batchCrossfades.clearWait(handle); // #4113: a rebuilt batch starts from its books, not from a placement's old wait
   }
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
@@ -1715,6 +1867,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
       handles.forEach((handle, index) => {
         handle.userData.lodTier = applied[index];
         handle.userData.lodApplied = applied[index];
+        batchCrossfades.clearWait(handle);
       });
     }
   }
@@ -1813,6 +1966,7 @@ export function updateShopArrivals() {
   // #3479: far models dissolving in (a no-op when none are).
   shopFarView?.tick();
   tierCrossfades.update(); // #3494
+  batchCrossfades.update(); // #4062
 }
 
 // Diagnostics for the e2e (and a bug report): what the latest arrival did.
@@ -1840,6 +1994,7 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
   try {
     orbs = await fetchCreditOrbs(entry.record.landletId);
   } catch {
+    noteOrbLoadFailed(entry, myToken, performance.now()); // #4252: tried again after a wait, not left empty until the person leaves and returns
     return;
   }
   if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
@@ -1850,7 +2005,9 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     const mesh = createCreditOrbMesh();
     mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
     entry.group.add(mesh);
-    shopCreditOrbs.push({ mesh, group: entry.group, orbId: orb.orbId, collecting: false });
+    const loadedOrb = { mesh, group: entry.group, orbId: orb.orbId, collecting: false };
+    shopCreditOrbs.push(loadedOrb);
+    creditOrbFades.arrive(loadedOrb); // #4174: resolves out of fog instead of popping in
   }
 }
 
@@ -1865,8 +2022,11 @@ function unloadCreditOrbsForLandlet(entry) {
   for (const orb of [...shopCreditOrbs]) {
     if (orb.group !== entry.group) continue;
     shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
-    orb.group.remove(orb.mesh);
-    disposeObject3D(orb.mesh);
+    // #4174: out of the list now (so it cannot be collected), and dissolved into fog before it is released.
+    creditOrbFades.depart(orb, () => {
+      orb.group.remove(orb.mesh);
+      disposeObject3D(orb.mesh);
+    });
   }
 }
 
@@ -1958,7 +2118,16 @@ let creditOrbRateLimitedUntilMs = null;
 // An orb touched while this says "at the limit" is left in place and the
 // notice shows, instead of popping and being reversed by the next 429.
 let creditOrbStanding = null;
+// #4123: how many free credits the person holds, as the server last said (null until it has). Collecting an
+// orb adds one at once ("felt the instant it happens", #3392) and a refusal takes it back.
+let creditOrbBalance = null;
 function applyCreditOrbStanding(reply) {
+  // #4123: the server's balance (the standing read and a collect's reply both carry it) replaces whatever
+  // was expected, and the word beside the head follows it while it is still showing.
+  if (typeof reply?.credits === 'number') {
+    creditOrbBalance = reply.credits;
+    refreshCreditOrbWord();
+  }
   const state = creditOrbStandingState(reply, performance.now());
   if (state) creditOrbStanding = state;
 }
@@ -1967,6 +2136,7 @@ function applyCreditOrbStanding(reply) {
 // updateCalendarFade — the shimmer needs to read as continuous, and
 // collection should feel immediate, not stepped to SHOP_PROXIMITY_INTERVAL_MS.
 export function updateCreditOrbs(dt) {
+  creditOrbFades.update(dt); // #4174
   creditOrbShimmerElapsedS += dt;
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
@@ -2035,17 +2205,20 @@ let creditOrbLastRateLimit = null;
 
 function popAndCollectCreditOrb(orb) {
   orb.collecting = true;
+  creditOrbFades.finish(orb); // #4174: the orb a person touches is plain and whole, so its pop is instant (#3392)
   // Kept so a refusal can put the orb back or play the reversal where it was.
   const snapshot = { orbId: orb.orbId, group: orb.group, position: orb.mesh.position.clone() };
   // #2441: spawned before removeCreditOrb disposes the real orb.mesh -- the pop
   // clones it first, so it has its own geometry/material to animate.
   spawnCreditOrbPopEffect(orb);
   removeCreditOrb(orb);
-  showCreditOrbToast();
+  const countedIntoBalance = showCreditOrbToast();
+  // #4123: a refused collect takes the expected credit back, with the word it showed.
+  const takeBackCredit = () => { if (countedIntoBalance && creditOrbBalance !== null && creditOrbBalance > 0) creditOrbBalance -= 1; };
   const startedAt = performance.now();
   const attempt = () => {
     collectCreditOrb(snapshot.orbId).then((reply) => {
-      applyCreditOrbStanding(reply?.standing);
+      applyCreditOrbStanding(reply?.standing ? { ...reply.standing, credits: reply.credits } : { credits: reply?.credits });
       markCreditOrbCollectReachedServer();
       hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
     }).catch((error) => {
@@ -2062,6 +2235,7 @@ function popAndCollectCreditOrb(orb) {
         // Gave up: the orb was never confirmed, so it comes back and the
         // person is told, instead of the pop standing for something that did
         // not happen (#2264: it must not vanish for the session either).
+        takeBackCredit();
         hideCreditOrbToast();
         restoreCreditOrb(snapshot);
         showCreditOrbProblemNotice(isNetworkError(error)
@@ -2070,6 +2244,7 @@ function popAndCollectCreditOrb(orb) {
         return;
       }
       markCreditOrbCollectReachedServer();
+      takeBackCredit();
       hideCreditOrbToast();
       if (refusal === 'gone') {
         // The server's own atomic claim is authoritative: another shopper
@@ -2133,6 +2308,7 @@ function removeCreditOrb(orb) {
   const index = shopCreditOrbs.indexOf(orb);
   if (index === -1) return; // already removed (e.g. its landlet was unloaded while the request was in flight)
   shopCreditOrbs.splice(index, 1);
+  creditOrbFades.finish(orb);
   orb.group.remove(orb.mesh);
   disposeObject3D(orb.mesh);
 }
@@ -2142,6 +2318,8 @@ function removeCreditOrb(orb) {
 // -- lets a test confirm an orb survives a transient collect failure
 // (429/500/network) instead of being wrongly removed from the scene.
 window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
+// #4174: how many orbs are fading in or out, or waiting their turn; the e2e reads it to see an arrival and its end.
+window.__testCreditOrbFadeStats = () => creditOrbFades.stats();
 // #2441: same e2e-only convention as window.__testActiveCreditOrbIds just
 // above -- lets a test confirm a pop effect actually spawned on collection
 // (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
@@ -2162,12 +2340,67 @@ const ORB_LIMIT_KEY = 'orb-limit';
 const ORB_OFFLINE_KEY = 'orb-offline';
 const ORB_PROBLEM_KEY = 'orb-problem';
 let creditOrbToastHideTimer = null;
+// #4072: the word is a door ("anything the head announces is a door to it, one tap"). The leaf opens
+// with the builder's own count in it, read from the server just before; if that cannot be read the
+// sentence is said without it.
+async function openCreditOrbCollectedLeaf() {
+  let credits = creditOrbBalance; // the note's own number, so the card agrees with it (#4123)
+  if (credits === null) {
+    try { credits = (await fetchMyBuilder())?.videoGenerationCredits ?? null; } catch { /* said without the count */ }
+  }
+  openLeaf({
+    id: 'orb-collected',
+    title: 'Credit collected',
+    render: (body) => {
+      const p = document.createElement('p');
+      p.textContent = creditOrbCollectedText(credits);
+      body.appendChild(p);
+    },
+  });
+}
+let creditOrbWordShowing = false;
+function setCreditOrbWord() {
+  const word = creditOrbBalanceWord(creditOrbBalance);
+  setBudWord(ORB_CREDIT_KEY, word, {
+    open: () => { openCreditOrbCollectedLeaf(); },
+    label: `${word}. You collected a free credit. Open for details.`,
+  });
+}
+// The word follows the server's number if it arrives while the word is still up.
+function refreshCreditOrbWord() {
+  if (creditOrbWordShowing) setCreditOrbWord();
+}
+// Returns whether it counted this orb into the expected balance, so a refusal can take it back.
 function showCreditOrbToast() {
-  setBudWord(ORB_CREDIT_KEY, 'Credit +1', { label: 'You collected a free model-generation credit' });
+  const counted = creditOrbBalance !== null;
+  if (counted) creditOrbBalance += 1;
+  creditOrbWordShowing = true;
+  setCreditOrbWord();
   clearTimeout(creditOrbToastHideTimer);
-  creditOrbToastHideTimer = setTimeout(() => clearBudWord(ORB_CREDIT_KEY), CREDIT_ORB_TOAST_VISIBLE_MS);
+  creditOrbToastHideTimer = setTimeout(() => { creditOrbWordShowing = false; clearBudWord(ORB_CREDIT_KEY); }, CREDIT_ORB_TOAST_VISIBLE_MS);
+  return counted;
+}
+// #4072: the meshes a tap can land on to ask what an orb is, and the answer. Tapping never
+// collects: collecting stays a touch of the avatar, felt at once (#3392).
+export function creditOrbMeshes() {
+  return shopCreditOrbs.map((orb) => orb.mesh);
+}
+// #4072: e2e-only, the same convention as the window.__test* hooks above (a real tap needs aiming at a pixel,
+// which this suite never automates): opens the card a tap on an orb opens.
+window.__testShowCreditOrbAbout = () => showCreditOrbAbout();
+export function showCreditOrbAbout() {
+  openLeaf({
+    id: 'orb-about',
+    title: 'Glowing orb',
+    render: (body) => {
+      const p = document.createElement('p');
+      p.textContent = creditOrbAboutText(creditOrbStanding);
+      body.appendChild(p);
+    },
+  });
 }
 function hideCreditOrbToast() {
+  creditOrbWordShowing = false;
   clearTimeout(creditOrbToastHideTimer);
   clearBudWord(ORB_CREDIT_KEY);
 }

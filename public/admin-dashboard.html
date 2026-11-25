@@ -19,6 +19,7 @@
   <button class="nav-item" data-panel="purchases">Purchases (admin fallback)</button>
   <button class="nav-item" data-panel="flags">Trust &amp; Safety flags</button>
   <button class="nav-item" data-panel="accounts">Users &amp; suspension</button>
+  <button class="nav-item" data-panel="video-jobs">Video-to-3D jobs</button>
   <button class="nav-item" data-panel="fixtures">Test/Ops Fixtures</button>
   <div class="nav-title">Other admin pages</div>
   <a class="nav-item" href="/admin/control-room">Control Room <span class="ext-arrow">&#8599;</span></a>
@@ -145,9 +146,19 @@
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> / <a href="https://github.com/RunbotRobot/higglehaven/issues/1822" target="_blank" rel="noopener">#1822</a></p>
     <p class="err" id="landletsErr" hidden></p>
     <div class="toolbar">
-      <input id="landletLookupInput" placeholder="Landlet id" aria-label="Landlet id" />
+      <input id="landletLookupInput" placeholder="Name, id or owner" aria-label="Find a landlet by name, id or owner" />
       <button id="landletLookupBtn">Look up</button>
     </div>
+    <div id="outsideItemsBlock">
+      <h3>Items off their lándlet</h3>
+      <p class="hint">Items whose footprint stands outside their own lándlet's outline, by lándlet. Nothing is moved or removed. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/4198" target="_blank" rel="noopener">#4198</a>.</p>
+      <p class="err" id="outsideItemsErr" hidden></p>
+      <button class="secondary" id="outsideItemsBtn">Check</button>
+      <p class="hint" id="outsideItemsCount" role="status" aria-live="polite"></p>
+      <div id="outsideItemsWrap"></div>
+    </div>
+    <p class="hint" id="landletSearchNote" hidden></p>
+    <div id="landletSearchResults" class="landlet-search-results" hidden></div>
     <div id="landletDetailWrap" hidden>
       <div class="stat-grid" id="landletStatGrid"></div>
 
@@ -156,6 +167,19 @@
         <p class="hint">Only for a landlet stuck in <code>generating</code> — immediately makes it greenbelt/claimable if the world circle already encloses it.</p>
         <button id="landletForceCompleteBtn">Force complete generation</button>
         <p class="hint" id="landletForceCompleteNote" hidden></p>
+      </div>
+
+      <div id="landletGreenbeltWrap">
+        <h3>Make greenbelt</h3>
+        <p class="hint" id="landletGreenbeltHint">Returns this claimed landlet to the greenbelt so anyone can claim it. Everything built there is kept in the owner's saved layouts, and they are told.</p>
+        <button id="landletGreenbeltBtn" disabled>Make greenbelt</button>
+        <div id="landletGreenbeltModal" class="edit-wrap conflict" role="alertdialog" aria-modal="true" aria-labelledby="landletGreenbeltModalTitle" hidden>
+          <h3 id="landletGreenbeltModalTitle">Make this landlet greenbelt?</h3>
+          <p id="landletGreenbeltModalBody"></p>
+          <p class="err" id="landletGreenbeltModalErr" hidden></p>
+          <button id="landletGreenbeltConfirmBtn">Make greenbelt</button>
+          <button class="secondary" id="landletGreenbeltCancelBtn">Cancel</button>
+        </div>
       </div>
 
       <div id="landletReassignWrap" hidden>
@@ -264,6 +288,33 @@
     <p class="err" id="usersCapLine" hidden></p>
     <div class="users-scroll" id="usersTableWrap"></div>
     <div id="userDetailWrap"></div>
+    <!-- #4077: Delete account is confirmed in its own in-app dialog, never a browser dialog. -->
+    <dialog id="deleteAccountDialog" class="confirm-dialog" aria-labelledby="deleteAccountTitle">
+      <form method="dialog" id="deleteAccountForm">
+        <h3 id="deleteAccountTitle">Delete account</h3>
+        <div id="deleteAccountBody"></div>
+        <label id="deleteAccountFleetRow" hidden><input type="checkbox" id="deleteAccountFleetTick" /> This is a fleet account or assistant. Delete it anyway.</label>
+        <label>Type the username to confirm <input type="text" id="deleteAccountTyped" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+        <p class="err" id="deleteAccountErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="deleteAccountCancel">Cancel</button>
+          <button type="submit" class="danger" id="deleteAccountConfirm" disabled>Delete account</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- #4175: giving or removing look-only admin access is confirmed in its own in-app dialog. -->
+    <dialog id="viewerAccessDialog" class="confirm-dialog" aria-labelledby="viewerAccessTitle">
+      <form method="dialog" id="viewerAccessForm">
+        <h3 id="viewerAccessTitle">Look-only access</h3>
+        <div id="viewerAccessBody"></div>
+        <p class="err" id="viewerAccessErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="viewerAccessCancel">Cancel</button>
+          <button type="submit" class="danger" id="viewerAccessConfirm">Confirm</button>
+        </div>
+      </form>
+    </dialog>
 
     <h2>Suspend account</h2>
     <p class="err" id="suspendErr" hidden></p>
@@ -331,6 +382,13 @@
     </div>
     <div id="ncmecReportsWrap"></div>
   </section>
+  <section class="panel" id="panel-video-jobs">
+    <p class="sub">The most recent video-to-3D jobs, newest first. A failed job keeps why it failed (never shown to the builder). "Check the saved result" asks the provider about the job again, which costs nothing, and tries saving the model without saving it; the job and the builder's credit are left as they are. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/4122" target="_blank" rel="noopener">#4122</a>.</p>
+    <p class="err" id="videoJobsErr" hidden></p>
+    <div class="toolbar"><button class="secondary" id="videoJobsRefreshBtn">Refresh</button></div>
+    <p class="sub" id="videoJobsCountLine" role="status" aria-live="polite">Loading…</p>
+    <div id="videoJobsWrap"></div>
+  </section>
   <section class="panel fixtures-panel" id="panel-fixtures">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
     <span class="fixtures-badge">Test/Ops only — not a real transaction</span>
@@ -370,5 +428,8 @@
 <script src="/admin-dashboard-6.js"></script>
 <script src="/admin-dashboard-7.js"></script>
 <script src="/admin-dashboard-8.js"></script>
+<script src="/admin-dashboard-9.js"></script>
+<script src="/admin-dashboard-10.js"></script>
+<script src="/admin-tables.js"></script>
 </body>
 </html>

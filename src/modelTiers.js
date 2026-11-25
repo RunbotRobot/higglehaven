@@ -40,6 +40,7 @@ import {
   DoubleSide,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   RGBAFormat,
   SRGBColorSpace,
@@ -47,7 +48,7 @@ import {
   Vector3,
   CanvasTexture,
 } from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
 import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
 import {
@@ -154,7 +155,7 @@ function positionsAreFinite(geometry) {
 // stuck, or out of passes. Yields many times within every pass (#3483) so a
 // caller can enforce a frame budget. Never modifies or disposes the input; returns either the
 // input itself or a geometry this function created.
-export function* simplifyToTarget(geometry, targetTriangles) {
+export function* simplifyToTarget(geometry, targetTriangles, options = {}) {
   let current = geometry;
   // #3528: a pass that opens new holes in the mesh is not kept. A shopper saw a
   // toilet "all jagged with holes" from a distance: the full model is closed, its
@@ -170,7 +171,7 @@ export function* simplifyToTarget(geometry, targetTriangles) {
     let next = null;
     let nextBoundary = 0;
     for (const fraction of PASS_REMOVAL_FRACTIONS) {
-      const candidate = yield* simplifyGeometryOnePassSteps(current, targetTriangles, fraction);
+      const candidate = yield* simplifyGeometryOnePassSteps(current, targetTriangles, fraction, options);
       yield;
       if (!candidate) break;
       const count = yield* boundaryEdgeCountSteps(candidate);
@@ -376,7 +377,7 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
     if (total > target) {
       const meshTarget = Math.max(MID_MIN_TRIANGLES_PER_MESH, Math.round((triangles * target) / total));
       if (triangles > meshTarget) {
-        const simplified = yield* simplifyToTarget(geometry, meshTarget);
+        const simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders: options.lockBorders ?? true });
         if (simplified !== geometry) {
           cloneMesh.geometry = simplified;
           changed = true;
@@ -399,9 +400,54 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
 
 // ---- Fidelity (#4062) ----
 
+function triangleArea(p, at) {
+  const ux = p[at + 3] - p[at], uy = p[at + 4] - p[at + 1], uz = p[at + 5] - p[at + 2];
+  const vx = p[at + 6] - p[at], vy = p[at + 7] - p[at + 1], vz = p[at + 8] - p[at + 2];
+  return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+}
+
+// #4111: the mean colour a mesh shows when lit: material colour x mean vertex colour x mean texture
+// colour, scaled and lit as the far bake does (shadingOf), linear RGB. The far version's own vertex colours
+// already hold all of that and its material is plain white, so the same product reads right for both.
+function litColorOf(mesh, getPixels) {
+  const material = materialForMesh(mesh);
+  const base = material && material.color ? material.color.clone() : new Color(FALLBACK_BASE_COLOR);
+  const vertexColor = mesh.geometry.attributes.color;
+  if (vertexColor && (!material || material.vertexColors)) {
+    // Area-weighted, as the silhouette is: a mesh with many small triangles in one colour must not outweigh
+    // a large flat one.
+    const geometry = mesh.geometry;
+    const position = geometry.attributes.position;
+    const index = geometry.index;
+    const count = index ? index.count : position.count;
+    const pa = new Vector3(), pb = new Vector3(), pc = new Vector3();
+    let total = 0, r = 0, g = 0, b = 0;
+    for (let t = 0; t + 2 < count; t += 3) {
+      const ia = index ? index.getX(t) : t, ib = index ? index.getX(t + 1) : t + 1, ic = index ? index.getX(t + 2) : t + 2;
+      pa.fromBufferAttribute(position, ia); pb.fromBufferAttribute(position, ib); pc.fromBufferAttribute(position, ic);
+      const area = pb.sub(pa).cross(pc.sub(pa)).length() * 0.5;
+      total += area;
+      r += area * (vertexColor.getX(ia) + vertexColor.getX(ib) + vertexColor.getX(ic)) / 3;
+      g += area * (vertexColor.getY(ia) + vertexColor.getY(ib) + vertexColor.getY(ic)) / 3;
+      b += area * (vertexColor.getZ(ia) + vertexColor.getZ(ib) + vertexColor.getZ(ic)) / 3;
+    }
+    if (total > 0) { base.r *= r / total; base.g *= g / total; base.b *= b / total; }
+  }
+  const map = material && material.map ? material.map : null;
+  const pixels = map && getPixels ? getPixels(map) : null;
+  // A texture whose pixels cannot be read gives no colour to compare, not a wrong one.
+  if (map && !pixels) return null;
+  if (pixels) {
+    const mean = meanTextureColor(map, pixels);
+    base.r *= mean.r; base.g *= mean.g; base.b *= mean.b;
+  }
+  const { diffuseScale, emissive } = shadingOf(material);
+  return [base.r * diffuseScale + emissive.r, base.g * diffuseScale + emissive.g, base.b * diffuseScale + emissive.b];
+}
+
 // The triangles of `object`'s visible meshes in the object's own root space, as the flat batches
 // src/tierFidelity.js compares. A mesh whose material is single-sided shows only its front faces.
-export function fidelityBatches(object) {
+export function fidelityBatches(object, getPixels = null) {
   object.updateWorldMatrix(true, true);
   const rootInverse = object.matrixWorld.clone().invert();
   const matrix = new Matrix4();
@@ -416,6 +462,7 @@ export function fidelityBatches(object) {
     matrix.multiplyMatrices(rootInverse, mesh.matrixWorld);
     const mirrored = matrix.determinant() < 0;
     const positions = new Float32Array(Math.floor(count / 3) * 9);
+    let area = 0;
     for (let t = 0; t + 2 < count; t += 3) {
       for (let k = 0; k < 3; k++) {
         // A mirrored transform flips the winding; undo it so "front" is what the viewer sees.
@@ -427,15 +474,21 @@ export function fidelityBatches(object) {
         positions[at + 1] = point.y;
         positions[at + 2] = point.z;
       }
+      area += triangleArea(positions, (t / 3) * 9);
     }
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    batches.push({ positions, doubleSided: materials.some((material) => material && material.side === DoubleSide) });
+    batches.push({
+      positions,
+      doubleSided: materials.some((material) => material && material.side === DoubleSide),
+      area,
+      color: litColorOf(mesh, getPixels), // #4111: what this mesh looks like lit, to check a version's colour
+    });
   }
   return batches;
 }
 
-function tierIsFaithful(fullBatches, object, tier) {
-  return isFaithful(silhouetteFidelity(fullBatches, fidelityBatches(object)), tier);
+function tierIsFaithful(fullBatches, object, tier, getPixels = null) {
+  return isFaithful(silhouetteFidelity(fullBatches, fidelityBatches(object, getPixels)), tier);
 }
 
 // A far version made of the model's own outline: the convex hull of its extreme points in 26 directions
@@ -516,8 +569,12 @@ function buildHullFar(parts) {
   return geometry;
 }
 
-function farObject(geometry) {
-  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
+// #4111: a model of unlit materials (KHR_materials_unlit loads as MeshBasicMaterial) is drawn without
+// light, so its far version is too: a lit far version shaded a model that has no shading anywhere else.
+function farObject(geometry, unlit = false) {
+  const material = unlit
+    ? new MeshBasicMaterial({ vertexColors: true, side: DoubleSide })
+    : new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
   const mesh = new Mesh(geometry, material);
   mesh.name = 'far';
   const group = new Group();
@@ -579,6 +636,22 @@ function sampleTexture(texture, pixels, u, v, target) {
   return toLinear(texture, data[i], data[i + 1], data[i + 2], target);
 }
 
+// #4111: the far colour is what the full model looks like lit, not its raw base colour. This world has
+// no environment light, so a metal surface is drawn from its sun and sky light only, much darker than
+// its base colour, while the far material (metalness 0) drew that same base colour at full strength: a
+// metal fixture turned white at mid distance. A metal keeps a floor of its colour for the highlights a
+// flat far surface cannot show. A metalness map is not read (a scalar of 1 beside a map says nothing
+// about where the metal is). Emission is added, since the far material is not emissive.
+const FAR_METAL_DARKENING = 0.65;
+const FAR_CREASE_ANGLE = (75 * Math.PI) / 180; // a coarse far mesh turns 50 to 70 degrees between faces on a curve; a box edge (90) stays sharp
+function shadingOf(material) {
+  const metalness = material && !material.metalnessMap && typeof material.metalness === 'number' ? clamp(material.metalness, 0, 1) : 0;
+  const emissive = material && material.emissive && !material.emissiveMap
+    ? material.emissive.clone().multiplyScalar(material.emissiveIntensity ?? 1)
+    : new Color(0, 0, 0);
+  return { diffuseScale: 1 - FAR_METAL_DARKENING * metalness, emissive };
+}
+
 // A copy of the geometry carrying only position (and index) plus a baked
 // linear-colour attribute: material colour x texture x existing vertex colour.
 function bakeColoredGeometry(mesh, getPixels) {
@@ -588,12 +661,15 @@ function bakeColoredGeometry(mesh, getPixels) {
   const material = materialForMesh(mesh);
 
   const base = material && material.color ? material.color.clone() : new Color(FALLBACK_BASE_COLOR);
-  const vertexColor = source.attributes.color;
+  // #4111: a colour attribute is drawn only when the material asks for it; baking it in regardless made
+  // far versions a different colour from the model they stand for.
+  const vertexColor = !material || material.vertexColors ? source.attributes.color : null;
   const uv = source.attributes.uv;
   const map = material && material.map ? material.map : null;
   const pixels = map ? getPixels(map) : null;
   const sampled = !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
   const mean = pixels && !sampled ? meanTextureColor(map, pixels) : null;
+  const { diffuseScale, emissive } = shadingOf(material);
 
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
@@ -620,9 +696,9 @@ function bakeColoredGeometry(mesh, getPixels) {
       g *= mean.g;
       b *= mean.b;
     }
-    colors[i * 3] = r;
-    colors[i * 3 + 1] = g;
-    colors[i * 3 + 2] = b;
+    colors[i * 3] = r * diffuseScale + emissive.r;
+    colors[i * 3 + 1] = g * diffuseScale + emissive.g;
+    colors[i * 3 + 2] = b * diffuseScale + emissive.b;
   }
 
   const baked = new BufferGeometry();
@@ -723,9 +799,12 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
     simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
   }
 
-  const merged = mergeGeometries(simplifiedParts, false);
-  if (!merged || countTriangles(merged) === 0) return sharedModel(model);
-  merged.computeVertexNormals();
+  const joined = mergeGeometries(simplifiedParts, false);
+  if (!joined || countTriangles(joined) === 0) return sharedModel(model);
+  // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
+  // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
+  // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
+  const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
   fitBoundingBox(merged, fullBox);
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
@@ -734,12 +813,16 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
   // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
   // by the model's own outline. null means not even that held: the caller uses a more detailed version.
-  const simplified = farObject(merged);
-  if (tierIsFaithful(fullBatches, simplified.object, 'far')) return simplified;
+  const unlit = visible.every((mesh) => {
+    const material = materialForMesh(mesh);
+    return !!(material && material.isMeshBasicMaterial);
+  });
+  const simplified = farObject(merged, unlit);
+  if (tierIsFaithful(fullBatches, simplified.object, 'far', getPixels)) return simplified;
   const hull = buildHullFar(parts);
   if (hull) {
-    const outline = farObject(hull);
-    if (tierIsFaithful(fullBatches, outline.object, 'far')) return outline;
+    const outline = farObject(hull, unlit);
+    if (tierIsFaithful(fullBatches, outline.object, 'far', getPixels)) return outline;
   }
   return null;
 }
@@ -779,11 +862,11 @@ export function* modelTierSteps(model, options = {}) {
   // #4062: every simpler version is checked against the full model (src/tierFidelity.js). A mid version
   // that fails is retried gentler (MID_FRACTION_LADDER) and ends at the model's own geometry; a far version
   // that fails falls back to the model's outline, then to the mid version.
-  const fullBatches = fidelityBatches(model);
+  const fullBatches = fidelityBatches(model, getPixels);
   let mid = null;
   for (let rung = 0; rung < MID_FRACTION_LADDER.length && !mid; rung++) {
     const candidate = yield* buildMid(model, meshes, options, getPixels, rung);
-    if (candidate.sharesFullModel || tierIsFaithful(fullBatches, candidate.object, 'mid')) mid = candidate;
+    if (candidate.sharesFullModel || tierIsFaithful(fullBatches, candidate.object, 'mid', getPixels)) mid = candidate;
   }
   if (!mid) mid = sharedModel(model);
   let far = yield* buildFar(model, meshes, getPixels, fullBatches);

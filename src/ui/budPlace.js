@@ -9,13 +9,16 @@
 //                                     which is not a real place, so nothing is made up for it)
 //
 // The text is real text a person can select; tapping it does nothing.
+import { renderWordmark } from './wordmark.js';
+
 const placeEl = () => document.getElementById('account-menu-landlet-info');
 const part = (cls) => placeEl()?.querySelector(`.${cls}`);
 
-export function showBudPlace({ name, builder }) {
+export function showBudPlace({ name, builder, wordmarkStyle, wordmarkColors }) {
   const el = placeEl();
   if (!el) return;
-  part('bud-place-name').textContent = name;
+  // #3782: the lettering the builder chose (the default look when none is stored or offered).
+  renderWordmark(part('bud-place-name'), { name, styleId: wordmarkStyle, colourId: wordmarkColors });
   part('bud-place-by').textContent = builder ? `by ${builder}` : '';
   el.hidden = !name;
   watchClipping(el);

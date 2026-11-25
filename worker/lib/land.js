@@ -1171,6 +1171,7 @@ export async function handleLandlets(request, db, route, url) {
     // leaving it stale until some unrelated later action happens to
     // trigger a recompute.
     await recomputeLandCap(db, newOwnerBuilderId);
+    await invalidateFarPlacementsAt(existing.center_x_m, existing.center_y_m); // #4147: the previous owner's content is gone
     // Same post-batch, outside-the-atomic-write shape as auctionWinnerNotifications'
     // own call above (#1122) -- a self-delete race on either recipient must
     // not roll back the ownership transfer itself.
@@ -1188,6 +1189,101 @@ export async function handleLandlets(request, db, route, url) {
     ]);
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });
+  }
+
+  // #4075: admin "Make greenbelt" -- return a claimed lándlet to the greenbelt. Unlike the
+  // builder-deletion release path (builderDeletionStatements), the previous owner's build is kept
+  // as a saved layout in their account ("No silent loss") and they are told.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'make-greenbelt') {
+    const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `landlet-make-greenbelt:${admin.user_id}`, LANDLET_REASSIGN_OWNER_RATE_LIMIT_MAX);
+    const existing = await requireLandlet(db, route[1]);
+    if (existing.status !== 'claimed' || existing.owner_builder_id === null) {
+      throw new HttpError('This lándlet is already greenbelt', 409);
+    }
+    // An auction in progress has bidders; ending it is the reassign flow's decision, not this one's.
+    const auctionConflict = await activeAuctionConflict(db, route[1]);
+    if (auctionConflict) {
+      throw new HttpError(
+        'This lándlet has an active auction. Let it end or cancel it first.', 409, auctionConflict.extra,
+      );
+    }
+    const instances = (await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ?').bind(route[1]).all()).results;
+    const previousOwner = existing.owner_builder_id;
+    const savedLayoutId = instances.length > 0 ? `saved-layout-${crypto.randomUUID()}` : null;
+    const statements = [];
+    if (savedLayoutId) {
+      statements.push(db.prepare(`
+        INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        savedLayoutId, previousOwner, route[1], 0,
+        `${existing.name} returned to the greenbelt ${new Date().toISOString().slice(0, 10)}`,
+      ));
+      for (const instance of instances) {
+        statements.push(db.prepare(`
+          INSERT INTO saved_layout_instances (
+            saved_layout_id, source_instance_id, template_id, x_m, y_m, z_m,
+            rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale,
+            is_community_sign, is_community_calendar
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          savedLayoutId, instance.instance_id, instance.template_id, instance.x_m, instance.y_m, instance.z_m,
+          instance.rotation_x_rad, instance.rotation_y_rad, instance.rotation_z_rad, instance.label,
+          instance.crop_json, instance.scale, instance.is_community_sign, instance.is_community_calendar,
+        ));
+        if (instance.is_community_sign) {
+          statements.push(db.prepare(`
+            INSERT INTO saved_layout_sign_posts
+              (saved_layout_id, source_instance_id, author_label, text, created_at, user_id)
+            SELECT ?, instance_id, author_label, text, created_at, user_id
+            FROM sign_posts WHERE instance_id = ?
+          `).bind(savedLayoutId, instance.instance_id));
+        }
+        if (instance.is_community_calendar) {
+          statements.push(db.prepare(`
+            INSERT INTO saved_layout_calendar_events
+              (saved_layout_id, source_instance_id, author_label, text, created_at, scheduled_at, triggered_at, user_id)
+            SELECT ?, instance_id, author_label, text, created_at, scheduled_at, triggered_at, user_id
+            FROM calendar_events WHERE instance_id = ?
+          `).bind(savedLayoutId, instance.instance_id));
+        }
+      }
+    }
+    // The release itself runs first and standalone (D1 batches cannot skip later statements on a
+    // 0-row result), guarded on the owner we read, so nothing is cleared for a lándlet that changed.
+    const released = await db.prepare(`
+      UPDATE landlets
+      SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+          claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?
+        AND NOT EXISTS (SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active')
+    `).bind(route[1], previousOwner, route[1]).run();
+    if (released.meta.changes === 0) {
+      throw new HttpError('Lándlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
+    }
+    // The saved copy is written before the originals go, in one batch.
+    await db.batch([
+      ...statements,
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(route[1]),
+      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(route[1]),
+      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
+      db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(route[1]),
+      adminActionLogStatement(db, admin.user_id, 'landlet_made_greenbelt', 'landlet', route[1], {
+        previousOwnerBuilderId: previousOwner, savedLayoutId, instanceCount: instances.length,
+      }),
+    ]);
+    await recomputeLandCap(db, previousOwner);
+    await invalidateFarPlacementsAt(existing.center_x_m, existing.center_y_m); // #4147: an open Shop's far view lets it go
+    await fireNotifications(db, [{
+      builderId: previousOwner,
+      message: savedLayoutId
+        ? `Your lándlet ${existing.name} was returned to the greenbelt by an admin. Everything you built there is kept in your saved layouts.`
+        : `Your lándlet ${existing.name} was returned to the greenbelt by an admin.`,
+    }]);
+    const updated = await requireLandlet(db, route[1]);
+    return json({ landlet: landletFromRow(updated), savedLayoutId, savedInstanceCount: instances.length });
   }
 
   if (request.method === 'POST' && route.length === 1) {

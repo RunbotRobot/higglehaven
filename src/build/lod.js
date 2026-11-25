@@ -16,18 +16,25 @@
 //     can hit (setInstanceLodState keeps hit-testability in step with visibility). A tap on a far item
 //     therefore selects it by the version that is drawn, and the moment it is selected it is protected,
 //     so the next tick (a quarter of a second) draws it in full.
-//   - No cross-fade and no bundle sets yet: a flip is an instant swap.
+//   - A bundle, and loose items that stand together (a wall the builder never bundled), are one set and
+//     change version as one, from the set's size on screen, exactly as in Shop (src/shop/lodSets.js; #4115): without it each brick chose by its own
+//     distance from the camera, and a wall was cut by an edge between two versions that swept across it as
+//     the camera moved. Nothing about the grouping reaches the builder (no selection, no undo, no saved
+//     layout). A flip dissolves from the old version to the new one where the batches allow (src/build/batching.js, #4115); beyond
+//     its bounds, or under reduced motion, it is an instant swap.
 //   - The pass runs on a quarter-second tick inside the frame loop, and its work (attaching versions,
 //     flipping items) stops when its slice of a frame is spent (#3396); what it did not reach waits for
 //     the next tick, and the biggest on screen go first.
 import * as THREE from 'three';
 import {
-  apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, TIER_FULL, largestFirst,
-  MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready,
+  apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, TIER_FULL, TIER_MID, TIER_FAR,
+  MAX_FULL_DETAIL_TRIANGLES, countModelTriangles, holdBackUnready, setApparentPx,
 } from '../shop/lodTier.js';
+import { startLodSetsJob, stepLodSetsJob } from '../shop/lodSets.js';
 import { attachInstanceTiers, setInstanceLodState, setLodChildHitTestable, loadTierScenes, extensibleAxes, meshDimensions } from '../world/models.js';
 
 export const BUILD_LOD_INTERVAL_MS = 250;
+export const BUILD_SETS_SLICE_MS = 2; // #4189: the part of a tick the sets' discovery may use
 export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching and flipping may use
 // #4003: items whose versions have not attached yet are drawn from their full model, so on a heavy
 // lándlet the way in drew up to 8.4 million triangles in a frame. Those beyond this many triangles
@@ -37,8 +44,28 @@ export const BUILD_LOD_SLICE_MS = 4; // the part of a frame one tick's attaching
 // long after entering is judged on its own, and a single new item is always drawn.
 export const BUILD_HOLD_BACK_TRIANGLES = MAX_FULL_DETAIL_TRIANGLES;
 export const BUILD_HOLD_MAX_MS = 20000;
+// #4208: an item keeps the version it is drawn at until a finished set job has covered it, for at most this long
+// after it was first seen (a layout that keeps changing under the jobs must not pin items above the triangle cap).
+export const BUILD_SETS_HOLD_MAX_MS = 3000;
 
 const scratchPosition = new THREE.Vector3();
+const scratchSetPosition = new THREE.Vector3();
+const SET_OVERFLOW_TOLERANCE = 0.1; // #4115: see the set pass in update()
+const TIER_COST = { [TIER_FULL]: 0, [TIER_MID]: 1, [TIER_FAR]: 2 };
+
+// A cheap number for "which product and which bundle this item is", kept on the item and worked out again
+// only when either changes, so noticing that the layout changed does not allocate for every item.
+function setKeyHashOf(data) {
+  if (data.lodSigGroup !== data.groupId || data.lodSigTemplate !== data.template) {
+    data.lodSigGroup = data.groupId;
+    data.lodSigTemplate = data.template;
+    const text = `${data.template?.templateId ?? ''}|${data.groupId ?? ''}`;
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) % 1000003;
+    data.lodSigHash = hash;
+  }
+  return data.lodSigHash;
+}
 
 // A placed model that is not cropped to a per-placement shape has versions to switch between (a box
 // fallback or flooring has no loaded model container).
@@ -77,6 +104,22 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
   const objects = [];
   const flips = [];
   const attachQueue = [];
+  // #4115: the sets of items that change version as one. They are worked out again only once the layout
+  // has stood still for a tick (a drag changes it every tick, and the items being dragged are selected
+  // and so judged on their own anyway), and each tick only reads them.
+  let implicitSets = true; // e2e-only switch: false leaves loose items judged one by one (bundles stay sets)
+  let sets = new Map();
+  let setsSignature = null; // what `sets` was worked out from
+  let lastSignature = null; // what the previous pass saw
+  // #4189: the sets are worked out in slices of BUILD_SETS_SLICE_MS a tick, not in one frame; the sets in use stay
+  // the previous ones until the new ones are complete, then change at once.
+  let setsJob = null; // { job, signature, objects } while one is running
+  // #4208: the items a finished set job has looked at. An item not in it (first load, streaming in, just pasted) has
+  // not been seen by any job, so it would be judged alone and then flip when the sets arrive: it keeps what is drawn.
+  let covered = new WeakSet();
+  let justCovered = null;
+  let wholeIds = new Set(); // the sets held whole at full detail last pass
+  const accs = new Map(); // setId -> what this pass has found out about the members it saw
 
   function requestTiers(object) {
     object.userData.lodTiersState = 'loading';
@@ -179,48 +222,219 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     lastTickMs = now;
     const startMs = performance.now();
     drainAttachQueue(startMs);
+    if (justCovered) { for (const covering of justCovered) covered.add(covering); justCovered = null; }
     items.length = 0;
     objects.length = 0;
+    accs.clear();
     const height = viewportHeight();
+    let signatureHash = 0x811c9dc5; // order-sensitive hash of every item's place, size and product (#4115)
     for (const object of getMeshes()) {
       if (!hasLodTiers(object) || !object.parent) { if (object.userData.lodHeld) setHeld(object, false); continue; }
+      const data = object.userData;
       scratchPosition.setFromMatrixPosition(object.matrixWorld);
-      const px = apparentSizePx(radiusOf(object), scratchPosition.distanceTo(camera.position), camera.fov, height);
+      const radiusM = radiusOf(object);
+      const px = apparentSizePx(radiusM, scratchPosition.distanceTo(camera.position), camera.fov, height);
       const groundDistanceM = Math.hypot(scratchPosition.x - target.x, scratchPosition.y - target.y);
-      const near = isNearFullDetail(groundDistanceM, object.userData.lodNear === true);
-      object.userData.lodNear = near;
-      object.userData.lodDistM = groundDistanceM;
+      const near = isNearFullDetail(groundDistanceM, data.lodNear === true);
+      data.lodNear = near;
+      data.lodDistM = groundDistanceM;
       const selectedItem = isSelected(object);
-      const protectedItem = (protectNear && near) || selectedItem;
-      object.userData.lodProtected = protectedItem; // read by src/build/batching.js: protected items are never batched
+      signatureHash = Math.imul(signatureHash ^ Math.round(scratchPosition.x * 100), 0x01000193);
+      signatureHash = Math.imul(signatureHash ^ Math.round(scratchPosition.y * 100), 0x01000193);
+      signatureHash = Math.imul(signatureHash ^ Math.round(scratchPosition.z * 100), 0x01000193);
+      signatureHash = Math.imul(signatureHash ^ Math.round(radiusM * 100), 0x01000193);
+      signatureHash = Math.imul(signatureHash ^ setKeyHashOf(data), 0x01000193);
+      const own = (protectNear && near) || selectedItem;
+      const fullTriangles = fullTrianglesOf(object);
       items.push({
         px,
-        protected: protectedItem,
+        protected: own,
         selected: selectedItem,
-        wanted: protectedItem ? TIER_FULL : nextTier(object.userData.lodTier, px),
-        tris: fullTrianglesOf(object),
+        wanted: own ? TIER_FULL : nextTier(data.lodTier, px),
+        tris: fullTriangles,
         dist: groundDistanceM,
-        current: object.userData.lodApplied ?? TIER_FULL,
+        current: data.lodApplied ?? TIER_FULL,
       });
       objects.push(object);
+      // #4115: what this pass sees of the item's set, from the members that are still placed.
+      const setId = data.lodSetId;
+      if (setId !== undefined && sets.has(setId)) {
+        let acc = accs.get(setId);
+        if (!acc) {
+          acc = {
+            members: [], minX: Infinity, minY: Infinity, minZ: Infinity, maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
+            maxRadiusM: 0, nearestSquared: Infinity, triangles: 0, near: false, nearestGround: Infinity,
+            currentTier: undefined, px: 0, whole: false,
+          };
+          accs.set(setId, acc);
+        }
+        acc.members.push(objects.length - 1);
+        acc.minX = Math.min(acc.minX, scratchPosition.x - radiusM); acc.maxX = Math.max(acc.maxX, scratchPosition.x + radiusM);
+        acc.minY = Math.min(acc.minY, scratchPosition.y - radiusM); acc.maxY = Math.max(acc.maxY, scratchPosition.y + radiusM);
+        acc.minZ = Math.min(acc.minZ, scratchPosition.z - radiusM); acc.maxZ = Math.max(acc.maxZ, scratchPosition.z + radiusM);
+        if (radiusM > acc.maxRadiusM) acc.maxRadiusM = radiusM;
+        const squared = scratchPosition.distanceToSquared(camera.position);
+        if (squared < acc.nearestSquared) acc.nearestSquared = squared;
+        acc.triangles += fullTriangles;
+        if (near) acc.near = true;
+        if (groundDistanceM < acc.nearestGround) acc.nearestGround = groundDistanceM;
+        // The selected item is judged on its own (it is always full, and highlighted); the set's version so far
+        // is that of a member that is not selected.
+        // (a member without a tier yet, one just placed, does not reset the set to plain thresholds.)
+        if (!selectedItem && acc.currentTier === undefined) acc.currentTier = data.lodTier;
+      }
+    }
+    // #4115: the layout stood still for a tick: work the sets out again. (The first time, at once.)
+    const signature = `${objects.length}:${signatureHash >>> 0}`;
+    if (setsJob && setsJob.signature !== signature) setsJob = null; // the layout changed under it: start over
+    if (signature !== setsSignature && !setsJob && (signature === lastSignature || setsSignature === null)) {
+      setsJob = {
+        signature,
+        objects: objects.slice(),
+        job: startLodSetsJob(objects, {
+          hasTiers: () => true,
+          groupIdOf: (object) => object.userData.groupId,
+          templateKeyOf: (object) => object.userData.template?.templateId,
+          positionOf: (object) => scratchSetPosition.setFromMatrixPosition(object.matrixWorld),
+          radiusOf,
+          implicit: implicitSets,
+        }),
+      };
+    }
+    if (setsJob) {
+      const done = stepLodSetsJob(setsJob.job, BUILD_SETS_SLICE_MS);
+      if (done) {
+        sets = done;
+        setsSignature = setsJob.signature;
+        justCovered = setsJob.objects; // counts from the next pass: this one judged them with the sets before
+        setsJob = null;
+        wholeIds = new Set(); // set ids are worked out again
+      }
+    }
+    lastSignature = signature;
+    // One decision for a whole set, from its size on screen (src/shop/lodTier.js setApparentPx), and the whole
+    // set is beside the builder's work when any member is: "a wall is a wall; it does not dissolve piecemeal."
+    for (const acc of accs.values()) {
+      if (acc.members.length < 2) continue;
+      const centerX = (acc.minX + acc.maxX) / 2;
+      const centerY = (acc.minY + acc.maxY) / 2;
+      const centerZ = (acc.minZ + acc.maxZ) / 2;
+      acc.px = setApparentPx({
+        sphere: { radiusM: 0.5 * Math.hypot(acc.maxX - acc.minX, acc.maxY - acc.minY, acc.maxZ - acc.minZ) },
+        centerDistanceM: Math.hypot(centerX - camera.position.x, centerY - camera.position.y, centerZ - camera.position.z),
+        maxMemberRadiusM: acc.maxRadiusM,
+        nearestMemberDistanceM: Math.sqrt(acc.nearestSquared),
+        fullTriangles: acc.triangles,
+      }, camera.fov, height);
+    }
+    // The sets beside the builder's work stay whole at full detail, nearest first, while they and the selected
+    // items fit the triangle cap together. A set that does not fit is not held whole: its members within the ring
+    // stay protected one by one (as before sets) and the rest of it drops as one part.
+    // Hysteresis, as the ring has (10 m in, 13 m out): a set that was held whole last pass keeps its place first and
+    // stays whole while it fits within the cap plus a tenth, and a set not held whole needs the cap itself. So two
+    // sets that do not both fit cannot swap places as the target moves a few centimetres, or when a selection
+    // changes the room a little.
+    let wholeUsed = 0;
+    for (const item of items) if (item.selected && item.tris > 0) wholeUsed += item.tris;
+    const wholeNow = new Set();
+    if (protectNear) {
+      const near = [...accs.entries()].filter(([, acc]) => acc.members.length >= 2 && acc.near)
+        .sort(([idA, a], [idB, b]) => (wholeIds.has(idB) - wholeIds.has(idA)) || (a.nearestGround - b.nearestGround));
+      for (const [id, acc] of near) {
+        const room = wholeIds.has(id) ? fullTriangleCap * (1 + SET_OVERFLOW_TOLERANCE) : fullTriangleCap;
+        if (wholeUsed + acc.triangles > room) continue;
+        wholeUsed += acc.triangles;
+        acc.whole = true;
+        wholeNow.add(id);
+      }
+    }
+    wholeIds = wholeNow;
+    for (const acc of accs.values()) {
+      if (acc.members.length < 2) continue;
+      for (const index of acc.members) {
+        const entry = items[index];
+        entry.px = acc.px;
+        if (acc.whole) entry.protected = true;
+        entry.wanted = entry.protected ? TIER_FULL : nextSetTier(acc.currentTier, acc.px) // #4113: a set takes the far version only where its parts are tiny, as in Shop;
+        objects[index].userData.lodProtected = entry.protected; // not set aside for batching: only selected ones are
+      }
+    }
+    for (let i = 0; i < objects.length; i++) objects[i].userData.lodProtected = items[i].protected; // read by src/build/batching.js
+    // The budget spends the triangle cap nearest first and does not know of sets. The selected items and the
+    // sets held whole are served first (they already fit the cap together, above), then everything else by
+    // its distance, so a selection is never pushed out by a wall beside it and the cap still holds for all.
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].selected || accs.get(objects[i].userData.lodSetId)?.whole) items[i].dist -= 1e6;
     }
     const tiers = budgetedTiers(items, undefined, undefined, fullTriangleCap);
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].selected || accs.get(objects[i].userData.lodSetId)?.whole) items[i].dist += 1e6;
+    }
+    // A set that is not held whole: the members the budget kept full stay full, as they do for a loose wall (it
+    // serves the nearest first), and the part the budget cut takes the cheapest version it gave any of them, so
+    // the far part is on one version. Hysteresis: a set drawn full that the budget cuts by no more than a tenth
+    // of its cost stays full, so a marginal overflow from some other item does not flip a whole wall.
+    for (const acc of accs.values()) {
+      if (acc.members.length < 2) continue;
+      if (acc.whole) { for (const index of acc.members) tiers[index] = TIER_FULL; continue; }
+      let tier = TIER_FULL;
+      let cutTriangles = 0;
+      for (const index of acc.members) {
+        const item = items[index];
+        if (item.selected || item.protected || tiers[index] === TIER_FULL) continue;
+        if (TIER_COST[tiers[index]] > TIER_COST[tier]) tier = tiers[index];
+        cutTriangles += item.tris;
+      }
+      if (acc.currentTier === TIER_FULL && cutTriangles <= acc.triangles * SET_OVERFLOW_TOLERANCE) tier = TIER_FULL;
+      for (const index of acc.members) {
+        if (!items[index].selected && !items[index].protected && tiers[index] !== TIER_FULL) tiers[index] = tier;
+      }
+    }
+    // #4208: an item no finished set job has looked at yet keeps the version it is drawn at (a selected item is
+    // always served by the budget, above, and is never held). It is let go after BUILD_SETS_HOLD_MAX_MS, so a
+    // layout that keeps changing under the jobs cannot pin items at full detail past the cap for long, and on
+    // the way in the #4003 hold-back still keeps what does not fit the budget undrawn.
+    const judged = tiers.slice(); // what each item would be without the hold: its memory for the next pass's hysteresis
+    for (let i = 0; i < objects.length; i++) {
+      const data = objects[i].userData;
+      if (items[i].selected || covered.has(objects[i])) continue;
+      if (now - (data.lodSeenMs ?? now) > BUILD_SETS_HOLD_MAX_MS) continue;
+      tiers[i] = data.lodApplied ?? TIER_FULL;
+    }
     applyHoldBack(objects, items, tiers, now);
     flips.length = 0;
+    // A set whose members are not all ready to change (a versions still loading) waits, so it never shows two
+    // versions for as long as that takes.
+    const blocked = new Set();
+    for (let i = 0; i < objects.length; i++) {
+      const state = objects[i].userData.lodTiersState;
+      const setId = objects[i].userData.lodSetId;
+      if (setId !== undefined && !items[i].selected && state !== 'ready' && state !== 'none' && tiers[i] !== TIER_FULL) blocked.add(setId);
+    }
     for (let i = 0; i < objects.length; i++) {
       const object = objects[i];
       const tier = tiers[i];
-      object.userData.lodTier = tier;
-      if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
+      object.userData.lodTier = judged[i];
+      if (judged[i] !== TIER_FULL && object.userData.lodTiersState === undefined) requestTiers(object);
       if (object.userData.lodTiersState !== 'ready' || tier === (object.userData.lodApplied ?? TIER_FULL)) continue;
+      if (object.userData.lodSetId !== undefined && !items[i].selected && blocked.has(object.userData.lodSetId)) continue;
       flips.push(i);
     }
-    for (const i of largestFirst(flips, items)) {
+    // The biggest on screen first, a set's members together. A set changes in one pass, whole, even if that
+    // runs past the slice (flipping a member is a visibility toggle, measured at well under a millisecond per
+    // hundred), because a half-changed set is the edge this exists to remove; the slice is checked between sets.
+    flips.sort((a, b) => (items[b].px - items[a].px)
+      || ((objects[a].userData.lodSetId ?? '') < (objects[b].userData.lodSetId ?? '') ? -1 : (objects[a].userData.lodSetId ?? '') > (objects[b].userData.lodSetId ?? '') ? 1 : 0)
+      || (items[a].dist - items[b].dist));
+    for (let k = 0; k < flips.length; k++) {
+      const i = flips[k];
       const object = objects[i];
       object.userData.lodApplied = tiers[i];
       setInstanceLodState(object, tiers[i]);
       window.__buildLodFlipCount = (window.__buildLodFlipCount ?? 0) + 1; // e2e counts tier changes
-      if (performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
+      const setId = object.userData.lodSetId;
+      const lastOfRun = k + 1 >= flips.length || setId === undefined || objects[flips[k + 1]].userData.lodSetId !== setId || items[i].selected;
+      if (lastOfRun && performance.now() - startMs > BUILD_LOD_SLICE_MS * 2) break;
     }
     // #4003: what was let in this pass from the first load's hold resolves out of fog together.
     if (arrival) {
@@ -260,5 +474,10 @@ export function createBuildLod({ camera, target, getMeshes, isSelected, onTicked
     holdNew,
     setFullTriangleCap(triangles) { fullTriangleCap = triangles ?? MAX_FULL_DETAIL_TRIANGLES; },
     setProtectNear(on) { protectNear = on !== false; },
+    // #4115: e2e-only switch for the grouping of loose items; the sets are worked out again on the next pass.
+    setImplicitSets(on) { implicitSets = on !== false; setsSignature = null; setsJob = null; covered = new WeakSet(); justCovered = null; },
+    setCount() { return sets.size; },
+    // #4208: a new lándlet or a return to Build starts as a first load: nothing has been looked at by a set job.
+    reset() { sets = new Map(); setsSignature = null; lastSignature = null; setsJob = null; wholeIds = new Set(); covered = new WeakSet(); justCovered = null; },
   };
 }

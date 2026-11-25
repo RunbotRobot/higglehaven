@@ -39,6 +39,7 @@
 // claim/flow.js's own header comment already documents for an analogous
 // pair of modules.
 import * as THREE from 'three';
+import { sayAvatarDidNotLoad } from './avatarLoadNotice.js';
 import { loadModelInstance, computeSkeletonSignature, loadModelAnimations } from '../world/models.js';
 import { scene } from '../world/scene.js';
 import { currentMode } from '../world/state.js';
@@ -423,6 +424,10 @@ export function shopCameraAnchorHeightM() {
 // already resolved and swapped shopAvatar. Without this guard, the earlier
 // call would resume and silently overwrite the newer, correct equip.
 let shopAvatarEquipToken = 0;
+// #4109: Shop mode hands in the function that hides a swap of the visible body in fog (beginAvatarSwap in
+// src/shop/mode.js); it returns { done }, a promise that resolves once the commit it was given has run.
+let shopAvatarSwapStarter = null;
+export function setShopAvatarSwapStarter(starter) { shopAvatarSwapStarter = starter; }
 // #1165: called both when the "My avatars" picker equips a different
 // avatar (modelUrl changes, the applied animation doesn't) and when the
 // new "My animations" picker applies/clears an animation (modelUrl stays
@@ -445,6 +450,7 @@ export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {
       nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation, clipRoles);
     } catch (err) {
       console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
+      sayAvatarDidNotLoad(); // #4067: said once, in plain words
       nextAvatar = createShopAvatar();
     }
   } else {
@@ -466,31 +472,44 @@ export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {
     window.__supersededAvatarDisposals = (window.__supersededAvatarDisposals ?? 0) + 1;
     return;
   }
-  scene.remove(shopAvatar.group);
-  // #1358: the outgoing avatar's own meshes/materials are being discarded
-  // either way (every call site that swaps or removes a group elsewhere in
-  // this file disposes it the same way) — without this, every re-equip
-  // leaks the previous avatar's geometry/material (and, for a custom GLTF
-  // avatar, its textures) for the lifetime of the tab.
-  disposeObject3D(shopAvatar.group);
-  shopAvatar = nextAvatar;
-  scene.add(shopAvatar.group);
-  // Nothing in the DOM reflects which avatar is actually live-rendered
-  // (the Settings picker only ever shows server truth) -- exposed here so
-  // this exact race (#982) is observable from an e2e test.
-  window.__shopAvatarModelUrl = shopAvatar.modelUrl;
-  // #1091: same reasoning as __shopAvatarModelUrl above — nothing in the DOM
-  // reflects the collision/camera sizing actually in effect for whichever
-  // avatar just got equipped, so an e2e test can't otherwise tell a custom
-  // model's real measured size got threaded through instead of the default
-  // body's fixed constants.
-  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() };
-  // #1165: same reasoning again — see createCustomShopAvatar's own
-  // animationSource comment.
-  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
-  // #3777: whether this avatar is wearing the built-in motion (no clips of its
-  // own). Kept apart from __shopAvatarAnimationSource, which stays null for it.
-  window.__shopAvatarBuiltinMotion = !!shopAvatar.builtinMotion;
+  // #4109: the new body goes in inside a puff of fog (src/shop/avatarSwapFog.js), not in a single frame:
+  // "things arrive in the world through fog; nothing pops in". The starter is set by Shop mode, which
+  // steps the fog each frame; without one (a test, reduced motion) the swap is immediate.
+  const commit = () => {
+    if (myToken !== shopAvatarEquipToken) {
+      // A newer equip landed while the fog was rising: this body is stale (see the guard above).
+      disposeObject3D(nextAvatar.group);
+      window.__supersededAvatarDisposals = (window.__supersededAvatarDisposals ?? 0) + 1;
+      return;
+    }
+    scene.remove(shopAvatar.group);
+    // #1358: the outgoing avatar's own meshes/materials are being discarded
+    // either way (every call site that swaps or removes a group elsewhere in
+    // this file disposes it the same way) — without this, every re-equip
+    // leaks the previous avatar's geometry/material (and, for a custom GLTF
+    // avatar, its textures) for the lifetime of the tab.
+    disposeObject3D(shopAvatar.group);
+    shopAvatar = nextAvatar;
+    scene.add(shopAvatar.group);
+    // Nothing in the DOM reflects which avatar is actually live-rendered
+    // (the Settings picker only ever shows server truth) -- exposed here so
+    // this exact race (#982) is observable from an e2e test.
+    window.__shopAvatarModelUrl = shopAvatar.modelUrl;
+    // #1091: same reasoning as __shopAvatarModelUrl above — nothing in the DOM
+    // reflects the collision/camera sizing actually in effect for whichever
+    // avatar just got equipped, so an e2e test can't otherwise tell a custom
+    // model's real measured size got threaded through instead of the default
+    // body's fixed constants.
+    window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() };
+    // #1165: same reasoning again — see createCustomShopAvatar's own
+    // animationSource comment.
+    window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
+    // #3777: whether this avatar is wearing the built-in motion (no clips of its
+    // own). Kept apart from __shopAvatarAnimationSource, which stays null for it.
+    window.__shopAvatarBuiltinMotion = !!shopAvatar.builtinMotion;
+  };
+  if (shopAvatarSwapStarter) await shopAvatarSwapStarter(commit).done;
+  else commit();
   await reportRendererMemoryDiagnostic();
 }
 

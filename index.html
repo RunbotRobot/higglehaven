@@ -46,6 +46,7 @@
     </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <div id="shop-nearby-status" class="visually-hidden" role="status" aria-live="polite"></div>
+    <div id="build-select-status" class="visually-hidden" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to last location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an event</button>
@@ -143,7 +144,6 @@
           <button id="my-purchases-btn" type="button">My purchases</button>
           <button id="my-lands-btn" type="button">My lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
-          <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
           <div id="bud-head-row">
             <div id="account-menu-landlet-info" class="bud-place" hidden><span class="bud-place-name"></span><span class="bud-place-by"></span></div>
@@ -173,13 +173,12 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled hidden>Redo</button>
-      <button id="pending-restoration-btn" type="button" hidden>Removed items</button>
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
       <button id="camera-debug-copy" type="button">Copy</button>
     </div>
-    <div id="product-info"></div>
+    <div id="product-info" role="status" aria-live="polite"></div>
     <div id="seller-showcase-pager">
       <button id="seller-showcase-prev-btn" type="button" aria-label="Previous page">&#9664;</button>
       <span id="seller-showcase-page-label">Page 1 of 1</span>
@@ -220,6 +219,10 @@
       </div>
       <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled hidden>Paste</button>
+      <!-- #4201: the one switch for everything not live (sold out, removed, suspended): on draws each as a faint ghost where it stood. Build only; remembered. -->
+      <button id="toggle-ghosts" type="button" aria-pressed="false">Faded items</button>
+      <!-- #4201: Removed items lives in the Tools leaf, not on the world; it is drawn only while something is pending. -->
+      <button id="pending-restoration-btn" type="button" hidden>Removed items</button>
     </div>
     <div id="add-item-panel">
       <div id="catalog-picker" role="dialog" aria-modal="true" aria-label="Add item" tabindex="-1">
@@ -418,7 +421,7 @@
         <!-- #3703: the one leaf a seller starts from (the bud's Add a product petal). It asks
              the one question first; each answer carries on in the place it always has. -->
         <div id="upload-step-choose" hidden>
-          <button id="add-product-upload-btn" type="button" class="add-product-choice">Upload my own model</button>
+          <button id="add-product-upload-btn" type="button" class="add-product-choice">Create or upload my own model</button>
           <button id="add-product-sell-too-btn" type="button" class="add-product-choice">Sell one that is already here</button>
         </div>
         <div id="upload-step-file" hidden>
@@ -444,7 +447,19 @@
               <option value="avatar-model">Avatar model</option>
             </select>
           </label>
-          <div id="upload-file-field-row" class="field-with-tooltip">
+          <!-- #4078: making a model from a video comes first (most sellers have no model of their
+               product yet); uploading a file they already have is the quieter second way. The
+               two are one at a time: setUploadFileMode in src/catalog/upload.js. -->
+          <div id="upload-video-section">
+            <div id="upload-video-title">Make a model from a video</div>
+            <div id="upload-video-credits"></div>
+            <p id="upload-video-intro">Walk slowly all the way around one well-lit object with your camera. It takes a couple of minutes.</p>
+            <button id="upload-video-record-btn" type="button">Record</button>
+            <input id="upload-video-input" class="visually-hidden" type="file" accept="video/*" capture="environment" tabindex="-1" aria-label="Video of the object" />
+            <div id="upload-video-chosen" role="status"></div>
+            <button id="upload-mode-file-btn" type="button" class="auth-link-btn">Upload a model file I already have</button>
+          </div>
+          <div id="upload-file-field-row" class="field-with-tooltip" hidden>
             <label id="upload-file-label">
               .glb or .fbx file
               <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
@@ -454,23 +469,10 @@
           <div id="upload-hint" class="info-tooltip-popup" hidden>
             Up to 20MB. We shrink it for you, and a .fbx is converted to .glb in your browser first.
           </div>
-          <button id="upload-mode-video-btn" type="button" class="auth-link-btn">
-            &#128249; Or generate a model from a video instead
+          <button id="upload-mode-video-btn" type="button" class="auth-link-btn" hidden>
+            Make a model from a video instead
           </button>
-          <div id="upload-video-section" hidden>
-            <div id="upload-video-credits"></div>
-            <div class="field-with-tooltip">
-              <label id="upload-video-label">
-                Short video of the object
-                <input id="upload-video-input" type="file" accept="video/*" capture="environment" />
-              </label>
-              <button id="upload-video-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-video-hint" aria-label="More info about video generation">?</button>
-            </div>
-            <div id="upload-video-hint" class="info-tooltip-popup" hidden>
-              One well-lit object on its own; walk slowly all the way around it. It takes a couple of minutes.
-            </div>
-            <button id="upload-mode-file-btn" type="button" class="auth-link-btn">Back to manual file upload</button>
-          </div>
+          <div id="upload-video-off-note" class="settings-empty-note" hidden>Turning a video into a model is not switched on yet.</div>
         </div>
         <div id="upload-step-dimensions" hidden>
           <div class="upload-step-heading">
@@ -483,7 +485,7 @@
           </div>
           <div id="upload-dimensions-preview"></div>
           <button id="upload-retry-video-btn" type="button" class="auth-link-btn" hidden>
-            &#128249; Not quite right? Generate from a different video
+            Not quite right? Make a model from a different video
           </button>
           <div id="upload-animations-detected" hidden></div>
           <label id="upload-avatar-category-label">
@@ -752,7 +754,10 @@
       <div id="dm-modal-content">
         <button id="dm-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="dm-modal-title">Messages</h2>
-        <button id="dm-block-btn" type="button">Block this person</button>
+        <div id="dm-person-actions">
+          <button id="dm-report-btn" type="button">Report this person</button>
+          <button id="dm-block-btn" type="button">Block this person</button>
+        </div>
         <div id="dm-status" role="status" aria-live="polite"></div>
         <button id="dm-load-more-btn" type="button" hidden>Load older messages</button>
         <div id="dm-list"></div>
@@ -768,6 +773,12 @@
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="my-lands-modal-title">My lándlets</h2>
         <div id="my-lands-status" role="status" aria-live="polite"></div>
+        <!-- #4202: how much ground a builder holds against how much they may hold, as a meter inside this leaf. -->
+        <div id="my-lands-cap" hidden>
+          <div id="my-lands-cap-meter" role="meter" aria-label="Ground held" aria-valuemin="0"><span id="my-lands-cap-fill"></span></div>
+          <div id="my-lands-cap-words"></div>
+          <div id="my-lands-cap-note">The cap grows as your products earn higgles.</div>
+        </div>
         <div id="my-lands-list"></div>
         <div id="my-lands-empty" class="empty-state">You don't own a lándlet yet. Claim one in Build mode to start building.</div>
       </div>

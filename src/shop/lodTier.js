@@ -29,6 +29,13 @@ export const LOD_MID_ENTER_PX = 80;
 export const LOD_MID_EXIT_PX = 110;
 export const LOD_FAR_ENTER_PX = 24;
 export const LOD_FAR_EXIT_PX = 36;
+// #4113: the same two sizes for the members of a set (a wall, a house: things built together). The far
+// version keeps a silhouette and a colour, which reads as a different object once a wall's bricks are
+// more than a few pixels wide: the owner watched a wall of 14 to 20 px bricks go dull and flat, then
+// jump to full in one frame at 10 m. A set steps full, mid, far, and takes the far version only where
+// its parts are too small to tell from a colour.
+export const LOD_SET_FAR_ENTER_PX = 10;
+export const LOD_SET_FAR_EXIT_PX = 14;
 
 // The most items kept at each detail level at once, however big they look: the
 // budget that stands in for the old fixed distance as the cost bound on a phone.
@@ -89,18 +96,23 @@ export function apparentSizePx(radiusM, distanceM, fovDeg, viewportHeightPx) {
 // hysteresis) and its apparent size in CSS pixels. Hysteresis applies at each
 // boundary separately: an item in 'mid' stays there until it falls below the far
 // enter size or rises above the mid exit size.
-export function nextTier(currentTier, apparentPx) {
+export function nextTier(currentTier, apparentPx, farEnterPx = LOD_FAR_ENTER_PX, farExitPx = LOD_FAR_EXIT_PX) {
   if (currentTier === TIER_FAR) {
-    if (apparentPx < LOD_FAR_EXIT_PX) return TIER_FAR;
+    if (apparentPx < farExitPx) return TIER_FAR;
     return apparentPx < LOD_MID_EXIT_PX ? TIER_MID : TIER_FULL;
   }
   if (currentTier === TIER_MID) {
-    if (apparentPx < LOD_FAR_ENTER_PX) return TIER_FAR;
+    if (apparentPx < farEnterPx) return TIER_FAR;
     return apparentPx < LOD_MID_EXIT_PX ? TIER_MID : TIER_FULL;
   }
   // 'full', or no tier yet: both step down at the plain enter sizes.
-  if (apparentPx < LOD_FAR_ENTER_PX) return TIER_FAR;
+  if (apparentPx < farEnterPx) return TIER_FAR;
   return apparentPx < LOD_MID_ENTER_PX ? TIER_MID : TIER_FULL;
+}
+
+// #4113: the tier a member of a set wants (see LOD_SET_FAR_ENTER_PX).
+export function nextSetTier(currentTier, apparentPx) {
+  return nextTier(currentTier, apparentPx, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX);
 }
 
 // The tier every item ends up in once the budget is applied. `items` is a list
@@ -109,7 +121,7 @@ export function nextTier(currentTier, apparentPx) {
 // budget). Returns an array of the final tiers in the same order. The smallest
 // on screen drop first: full overflow goes to mid, and mid overflow (the items
 // that wanted mid plus those just dropped) goes to far.
-export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = MAX_MID_DETAIL_ITEMS, fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES) {
+export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = MAX_MID_DETAIL_ITEMS, fullTriangleCap = MAX_FULL_DETAIL_TRIANGLES, reasons = null) {
   let protectedCount = 0;
   const fullPxs = [];
   for (const item of items) {
@@ -122,16 +134,31 @@ export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = M
     if (item.wanted === TIER_FULL && item.px < fullFloorPx) return TIER_MID;
     return item.wanted;
   });
+  const afterItemCap = reasons ? afterFull.slice() : null;
   applyFullTriangleBudget(items, afterFull, fullTriangleCap);
   const midPxs = [];
   items.forEach((item, index) => {
     if (!item.protected && afterFull[index] === TIER_MID) midPxs.push(item.px);
   });
   const midFloorPx = fullDetailFloorPx(midPxs, midCap);
-  return items.map((item, index) => {
+  const finalTiers = items.map((item, index) => {
     if (afterFull[index] === TIER_MID && item.px < midFloorPx) return TIER_FAR;
     return afterFull[index];
   });
+  if (reasons) {
+    // #4113: why each item ended where it did, for the read-out (window.__testShopSetTiers). Only filled when asked.
+    reasons.length = 0;
+    items.forEach((item, index) => {
+      let reason;
+      if (finalTiers[index] === TIER_FAR && afterFull[index] === TIER_MID && item.wanted !== TIER_FAR) reason = 'mid cap (count)';
+      else if (afterFull[index] !== afterItemCap[index]) reason = 'triangle budget';
+      else if (afterItemCap[index] !== item.wanted && !item.protected) reason = 'full cap (count)';
+      else if (item.protected) reason = 'beside the avatar';
+      else reason = 'size';
+      reasons.push(reason);
+    });
+  }
+  return finalTiers;
 }
 
 // #3920: items may also carry `tris` (the triangle count of the item's full model; 0 or absent when
@@ -223,6 +250,28 @@ export function setBoundingSphere(members) {
     z: (minZ + maxZ) / 2,
     radiusM: 0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ),
   };
+}
+
+// #4089 (part of #4063): a set's whole size is the right input for keeping every member on one decision
+// (no line sweeping across a wall, #4062) and the wrong input for how much detail each member gets: a brick
+// 60 m away is a few pixels wide whatever the wall's width, but the 27 m wall it belongs to is hundreds of
+// pixels, so judged by its whole size the wall kept most of its bricks on full or mid detail out to 60 m
+// (1.66 M triangles a frame on the 1,650-brick wall, above what a phone takes comfortably, #3920).
+// So a set that would cost more than this to draw whole in full detail is judged by its biggest member,
+// seen from its nearest one. A set that costs less (a house, a short wall) keeps being judged by its whole
+// size, exactly as before: drawing it whole is cheap and it reads as one thing at a distance.
+export const SET_WHOLE_JUDGEMENT_MAX_TRIANGLES = 300_000;
+
+// The apparent size a set is decided from, in CSS pixels. `set`: { sphere: { radiusM }, centerDistanceM,
+// maxMemberRadiusM, nearestMemberDistanceM, fullTriangles }. For a big set the answer is the biggest
+// member's size at the nearest member's distance, which is never smaller than any member's own apparent
+// size (radius over distance), so no member loses detail it would have had alone; it is still one number
+// for the whole set, so all members still make one decision.
+export function setApparentPx(set, fovDeg, viewportHeightPx) {
+  if (set.fullTriangles > SET_WHOLE_JUDGEMENT_MAX_TRIANGLES) {
+    return apparentSizePx(set.maxMemberRadiusM, set.nearestMemberDistanceM, fovDeg, viewportHeightPx);
+  }
+  return apparentSizePx(set.sphere.radiusM, set.centerDistanceM, fovDeg, viewportHeightPx);
 }
 
 // #3494 / #3396: when several items are due to change version in one tick, the

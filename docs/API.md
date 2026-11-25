@@ -374,6 +374,18 @@ its own endpoint. Counted against the rate limit below the same as every
 other rejection on this endpoint — a cheap validation failure isn't a free
 way to probe past the limiter.
 
+`username` (#4136, `worker/lib/username-rules.js`; the same rules apply to a rename,
+`PUT`/`PATCH /api/builders/:id`): stored in NFC with odd spaces turned into a plain space
+and runs of white space collapsed; at most 40 characters; refused with `400` ("That name
+contains a character we cannot show...") when it holds control, zero-width, direction-override
+or other format characters, private-use or unassigned characters, line separators or a lone
+surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
+Cyrillic and Greek look-alike letters), so a name that reads as an existing one is `409`; the
+misleading names (admin, administrator, support, staff, moderator, higglehaven) and every
+assistant's name are reserved in that form, also with spaces taken out. Accounts older than
+migration 0235 have the column filled in the next time any name is checked
+(`worker/lib/username-store.js`); existing names are never changed.
+
 `email` is normalized (trimmed, lowercased) and validated against a
 deliberately permissive pattern — "does this look roughly like an email,"
 not a full RFC-5322 parser, since the only real validation of an address
@@ -679,6 +691,14 @@ leaves literally everything untouched in one atomic transaction, not a
 separate check-then-act step. The response clears the request's own
 session cookie too. Returns `{ "accountDeleted": true }`.
 
+Bug reports the account submitted through Submit Feedback (#4266) keep
+their description but lose the person: in the same batch `user_id`,
+`user_agent`, `platform`, `render_state_buffer_json` and `screenshot_url`
+are cleared, and once the deletion has gone through each report's
+screenshot is removed from the FEEDBACK bucket (best-effort, logged on
+failure). The same holds for an admin deletion and a suspension that
+escalates into one.
+
 ### `GET /api/auth/me`
 
 Deliberately always `200`, never a `401` — even with no cookie or an
@@ -727,6 +747,29 @@ every ID-verification session this account started (`sessionId`, `status`,
 `createdAt`, `processedAt`) — status/timestamps only, deliberately never a
 raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
+
+**#4142 (money and auctions):** `commerce.commissionHolds` (a builder's own
+earnings held back: `amountCents`, `releaseAt`, `releasedAt`, `revokedAt`),
+`commerce.auctionsRun` (auctions on the builder's lándlets) and
+`commerce.auctionBidsPlaced` (bids the builder placed) are exported for builders,
+without internal resolution fields.
+
+`commerce.listings` is a seller's own listings (what they put up for sale: name,
+category, dimensions, `priceCents`, `stockQuantity`, `delistedAt`, model and image links;
+not embeddings or moderation fields), and `commerce.creditOrbsCollected` the orbs a builder
+collected, `commerce.suspendedPlacements` what a suspension took down from the builder's
+lándlets (kept so they are never left wondering what stood there), and
+`communication.contentEditHistory` the earlier versions of the account's own reviews
+and sign posts. `ownedAvatars`/`ownedAnimations` stay what the person owns.
+
+**#4142:** a top-level `communication` section, present for every account
+(builder or not), holds what keys on the account itself: `assistantConversations`
+(each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and
+its `messages` as `{sender, text, sentAt}`), `assistantQuestions` (a question left
+while no assistant was free, with its `answer`), and `blocksMade` (who this
+account blocked and when) and `bugReports` (feedback the account submitted: description,
+screenshot link, device facts; not the render-state dump). Who blocked the account
+is deliberately not exported ("A block is silent").
 
 **#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
 survey left open): `profile.moderationDecisions` lists every
@@ -1306,6 +1349,65 @@ activity, avatar presence and latest sign-in. `suspended` is an active, not lift
 `admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
 what it did, and a row's name opens the same detail).
 
+### Look-only admin (#4175)
+
+A second role, `users.is_admin_viewer` (never `is_admin`), for an account that needs to look at the owner's tools
+and change nothing. Default deny: every check that reads `is_admin` refuses a viewer; only a handler that calls
+`requireAdminOrViewer` (`worker/lib/auth.js`) lets one in, and only for `GET` and `HEAD`. Opted in today: the
+users table, `admin-user-search`, `admin-user-detail`, `admin-landlet-search`, the delete-account preview and
+`admin-video-jobs` (its re-check is a `POST`, so a viewer is refused). Same routes, masked for a viewer
+(`worker/lib/admin-viewer-mask.js`): emails read `j***@g***.com`; card and tax form details come back `null`;
+a suspension's free-text `evidenceNote` is `null`; and `admin-user-search` matches usernames only, never emails.
+`worker/admin-viewer.test.js` lists every file that may opt a route in.
+
+`POST /api/auth/admin-set-viewer` `{ userId, enabled }` (full admin only; `401`, `403`) is the owner's switch,
+used by the dashboard's "Give look-only access" / "Remove look-only access" on a user's detail. It answers
+`{ userId, adminViewer, changed }`. Giving the role is refused with `409` and a reason for a person's account
+(only fleet accounts), an assistant, an admin and a deleted account; removing it is always allowed. Each change
+is written to the admin log in the same batch (`admin_viewer_granted`, `admin_viewer_removed`); a request that
+changes nothing writes nothing. `admin-user-detail` carries `adminViewer` and `adminViewerRefusal` so the
+dashboard draws the switch only where it can work.
+
+`GET /api/auth/admin-role` answers `{ role: 'admin' }` or `{ role: 'viewer' }` (`403` for anyone else). The
+dashboard page asks it once when it opens; for a viewer the page then says it is look-only, disables every
+form submit button, danger button and account action with the reason, and stops any non-GET request locally
+(the server refuses it too). Use by a viewer is logged: each ask here is an `admin_viewer_page_open` line, each
+fleet sign-in by an account holding the role is `admin_viewer_sign_in`. `/admin/dashboard` lets a viewer
+through; `/admin/control-room` and `/admin/action-log` and the Control Room API stay admin-only.
+
+### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
+
+Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns
+`{ account: { userId, username, email, kind }, counts: { landletsClaimed, productsListed, ordersAsBuyer,
+ordersAsSeller, friends }, refusal, needsFleetTick }`; `refusal` is the plain-words reason the account
+cannot be deleted, or `null`. The POST takes `{ userId, confirmUsername, includeFleet? }`, runs the same
+`cascadeDeleteAccount` a person's own deletion runs, and answers `{ accountDeleted: true, userId }`.
+Refused with `409` and a reason: the caller's own account, any admin, an already deleted account, an
+account that still owns a lándlet, a fleet account or assistant unless `includeFleet` is `true`, and
+money still owed (the cascade's own guards). `400` when `confirmUsername` is not the exact username.
+Recorded in the admin action log as `delete_account` (username, email, kind and the counts) after it succeeds.
+
+### `GET /api/auth/admin-landlet-search?q=...` (#4074)
+
+The Admin Dashboard's lándlet search (Landlet overrides): one `requireAdmin`-gated read that finds a lándlet
+by its name, its id or its owner's username. Not rate-limited, like the other admin `GET`s. `q` is up to 100
+characters; an empty one returns an empty list. It is split into words after lowercasing and treating any run
+of punctuation as one space, so `central-mosaic 2`, `central mosaic 2` and `central_mosaic_2` read the same.
+Every word has to match somewhere in the id, the name or the owner's username (a substring for letters; for
+a number, the same number whatever its leading zeros, or a longer number that starts with it, so `2` finds
+`central-mosaic-002`). Ranked: the exact id, then the exact name, then every word in the name, then in the
+id, then anywhere. Returns:
+
+```json
+{ "query": "central-mosaic 2", "total": 1, "shown": 1, "scanCapped": false,
+  "landlets": [{ "landletId": "central-mosaic-002", "name": "central-mosaic-002", "status": "claimed",
+                 "areaM2": 1000, "ownerBuilderId": "...", "ownerUsername": "runbot" }] }
+```
+
+At most 25 rows come back (`shown`), `total` is how many matched in what the database returned, and
+`scanCapped` is true when it stopped handing rows back before the end (500 rows when a word narrows the
+search, 2,000 when the query is only numbers), so `total` may then be higher. `403` for a non-admin.
+
 ### `GET /api/auth/admin-user-search?q=...` and `GET /api/auth/admin-user-detail?userId=...` (#2757)
 
 Back the Admin Dashboard's "Find user" workflow: `suspend-account` above
@@ -1358,12 +1460,22 @@ either), and the same probe confirmed it never hits this rejection.
     "userId", "username", "email", "trustTier", "createdAt", "emailVerifiedAt",
     "builderId", "builderLabel", "sellerId", "sellerLabel"
   },
+  "landlets": [{
+    "landletId", "name", "status", "areaM2", "centerXM", "centerYM",
+    "publishedVersion", "updatedAt"
+  }],
   "suspensions": [{
     "suspensionId", "adminUserId", "reason", "evidenceNote", "suspendedAt",
     "gracePeriodEndsAt", "liftedAt", "liftedByAdminUserId", "escalatedAt"
   }]
 }
 ```
+
+`landlets` (#4135) is every lándlet the account's builder profile owns now,
+ordered by id (`[]` for a person with none or no builder profile), with
+`publishedVersion` the number of the active version shoppers see (`null`
+when nothing is published). Read-only, one query, no paging: a person holds a
+handful, and it needs paging only if one account ever holds hundreds.
 
 `builderId`/`sellerId` (and their `label`) are `null` when the account has
 no linked profile of that kind — note a `builders` row is always
@@ -4300,15 +4412,20 @@ scale, crop?], ...] }] }`; positions are landlet-local (add `cx`, `cy`), and
 `crop` appears only when set. Published versions are used, falling back to the
 draft; suspended builders' landlets and delisted or suspended-seller products
 are left out. `400` for a malformed or out-of-world tile. Cached at the edge
-for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
-drops its tile's entry in the same data centre, other changes show within the
-TTL.
+for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version,
+Make greenbelt, admin reassign-owner, builder or account deletion, an auction
+resolving, an account suspension and its lifting, a seller's placements removed at
+suspension or closure, a delisted product and a flagged product's placements
+removed everywhere drop the tile's entry in the same data centre (#4147), other changes
+show within the TTL. A Shop that is open reads each tile in range again every two
+minutes (src/shop/farView.js `TILE_REFRESH_MS`), so an emptied landlet leaves its
+far view without a reload.
 
 Decisions recorded for this read (#3417):
 
-- **Freshness.** Draft edits, delisting a product, suspending or closing a
-  seller and suspending a builder are not wired to invalidate the cache. They
-  reach far view within the 60 s TTL. The cache (`caches.default`) is per data
+- **Freshness.** Draft edits (and restoring an archived version or a draft) are
+  not wired to invalidate the cache; they reach far view within the 60 s TTL.
+  (Suspensions, closures, delistings and moderation removals are, since #4147.) The cache (`caches.default`) is per data
   centre, so an explicit drop could only ever help the one data centre that
   handled the write and every other one would wait out the TTL anyway; more than
   twenty write paths (every placement edit, plus the suspension and delist
@@ -4478,6 +4595,18 @@ Returns the newly claimed landlet. Errors are:
 - `404` when the landlet does not exist.
 - `409` when the landlet is unavailable or the builder already owns a claimed
   landlet.
+
+### `POST /api/landlets/:landletId/make-greenbelt`
+
+Admin-only (`403` otherwise), rate-limited with reassign-owner's budget (#4075).
+Returns a **claimed** lándlet to the greenbelt (`409` if it is already greenbelt, or
+if an auction is active on it: let it end or cancel it first). Unlike the release in
+builder deletion, nothing is lost silently: every placed item (with community sign
+posts and calendar events) is copied into a saved layout in the previous owner's
+account, then items, versions, levels and sold-out markers are cleared, the land cap
+is recomputed, the previous owner gets a notification, and `landlet_made_greenbelt`
+is written to the admin log. Response: `{ landlet, savedLayoutId (null when nothing
+was placed), savedInstanceCount }`.
 
 ### `POST /api/landlets/:landletId/reassign-owner`
 
@@ -4857,6 +4986,26 @@ Requires a session logged in as the landlet's owner (`403` otherwise).
 Moves the landlet's active-version pointer to an existing snapshot belonging to
 that landlet. This endpoint does not overwrite the builder's current draft.
 The response includes both the updated landlet and selected version metadata.
+
+**Frontend wiring (#4094):** Settings > Build draws a closed "From an earlier lándlet" row under Version history, only when the builder has an archived version; each row's "Add to my versions" calls the restore route for the lándlet being built on, then redraws Version history.
+
+### `GET /api/builders/me/archived-versions`
+
+The signed-in builder's own archived lándlet versions (#4094): the versions the no-bid inactivity
+release moved off a lándlet instead of deleting (`archived_landlet_versions`, migrations/0140). Newest
+first; `limit` 1 to 100, default 100. Each record has `versionId`, `sourceLandletId` (informational, may be
+`null`), `versionNumber`, `name`, `instanceCount`, `metadata` and `createdAt`. Only the caller's own
+versions are listed. `401` without a session.
+
+### `POST /api/builders/me/archived-versions/:versionId/restore`
+
+Body `{ "landletId": "..." }`: copies the archived version's items onto a lándlet the caller owns, as a
+**new saved version** (`201`, `{ version }`, named `Restored: <name>`, its `metadata` carrying
+`restoredFromArchivedVersionId`). It never changes the lándlet's live draft or its active version: the
+builder then uses that lándlet's own version history ("Restore to Editor", "Set Live", each with its own
+confirmation). `404` for an archived version that is not the caller's (the same answer as one that does not
+exist), `403` for a lándlet the caller does not own. Rate-limited in the same per-builder bucket as
+`POST .../versions`.
 
 ## Placed instances
 
@@ -5723,12 +5872,29 @@ an open DM thread (on open, and again after every message sent), not
 just on a deliberate user action the way notification mark-read's own
 20/15min limit is.
 
+### `POST /api/direct-messages/reports` (#4169)
+
+A conduct report about someone the caller has a conversation with, the third of its kind beside
+`POST /api/nearby-chat/report` and `POST /api/voice/report` ("Parity across sibling surfaces"). ID-verified
+callers only. Body `{ reportedBuilderId, reason? }` (reason at most 280 characters). Answers `201 { reportId }`
+and nothing more, the same whether the report is new or a repeat.
+
+The caller must have exchanged at least one message with the person, in either direction: otherwise `403`; the
+caller themselves or an unknown id is `400`. It writes one `direct_message_reports` row per reporter and reported
+account pair and one Control Room card of kind `direct-message-report` (repeats append to the card and re-queue it
+if closed, through the shared `fileConductReport`). The report holds who reported whom and the reason, never any
+message text, and an admin does not read the thread; the reported person is told nothing (a conduct report is
+invisible to them, like the other two). Deleting the reporter's account removes their reports.
+
+
 ### Frontend wiring
 
 Reached only from an accepted friend's own row in the Friends modal (no
 top-level nav entry of its own) — a "Message" button next to Remove
 opens `#dm-modal` (`openDmModal`), which lists the thread and lets the
-caller compose a reply. `#dm-badge`, next to `#friends-badge` on the
+caller compose a reply, and carries "Report this person" and "Block this person" side by side in its header
+(#4169, #3140); Report asks for an optional reason in the shared report dialog and says the outcome in the thread's
+own status line. `#dm-badge`, next to `#friends-badge` on the
 account-menu toggle, shows the unread count from `GET
 /api/direct-messages/unread-count` (#1661).
 
@@ -8671,8 +8837,14 @@ restored.
   session; never another builder's, never visible to shoppers). Returns
   `{ pendingRestorations: [...] }`, newest removal first, each
   `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
-  position: { x, y, z }, removedAt, removedInstanceId, sellerSuspended,
-  permanentAt }`. `removedInstanceId` is the placement's original id (#3095): a
+  position: { x, y, z }, rotation: { x, y, z }, scale, crop, label, template, removedAt,
+  removedInstanceId, sellerSuspended, permanentAt }`. `rotation`, `scale`, `crop`
+  and `label` are the saved pose (#4201), so Build can draw a ghost where the
+  item stood. `template` is `{ templateId, name, color, dimensions, modelUrl,
+  metadata }` from the live template row (the builder's catalog hides a removed
+  product, so the client cannot look it up), or `null` once the template is
+  gone; Build draws the item's own model translucent from it, an outline when
+  it is `null`. `removedInstanceId` is the placement's original id (#3095): a
   Build tab that was open during the removal drops exactly those meshes when
   it regains focus, never an item the builder just placed. The
   template fields come from the live template while it exists and otherwise
@@ -9773,21 +9945,21 @@ refetch and retry"`, distinct from the marker-level `404` above.
 
 ### Frontend wiring
 
-Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
-right below the existing Low Stock panel, #1949/#1950's own sibling) — a
-checkbox toggle (`#sold-out-marker-toggle`, defaults off) plus a list of
-this landlet's own un-dismissed markers, each with a `Dismiss` button.
-Unlike the Low Stock panel (which highlights an **already-placed, still-
-live** mesh — `addLowStockHighlight`), a sold-out marker has no live
-instance left to decorate, so checking the toggle instead spawns a
-standalone grayed-out ghost box (`THREE.MeshBasicMaterial`, 35% opacity,
-non-interactive) at each marker's own recorded position — cleared and
-re-applied via `applySoldOutMarkerVisibility` whenever the toggle flips or
-a fresh list loads. Same Build-mode-only lifecycle as the Low Stock
-panel's own `activeLowStockTemplateIds`: both the toggle state and the
-ghost boxes reset the moment Build mode is left (`enterShopMode`/
-`enterSellMode`), so re-entering Build later starts clean rather than
-silently reapplying a stale toggle with nothing behind it yet.
+Settings > Build has a "Sold-out markers" panel (`renderSoldOutMarkersSection`,
+right below the existing Low Stock panel, #1949/#1950's own sibling): a list of
+this landlet's own un-dismissed markers, each with a `Dismiss` button. Unlike the
+Low Stock panel (which highlights an **already-placed, still-live** mesh), a
+sold-out marker has no live instance left to decorate.
+
+The switch that draws them is **"Faded items"** in Build's Tools leaf (#4201;
+`#toggle-ghosts`, it used to be a Settings checkbox). One switch covers everything not
+live: each sold-out marker and each removed item (`pending-restoration`) is drawn where
+it stood as the item's own model, translucent and pulled toward grey (an outline of its
+size while the model loads or when it cannot). The switch fetches the marker list itself,
+applies via `applySoldOutMarkerVisibility`, and is remembered on the device
+(`localStorage` `hh_build_show_ghosts`); Build's scene-ready step re-applies it. Both the
+state and the ghosts reset when Build is left (`enterShopMode`/`enterSellMode`), and the
+next Build entry restores the remembered setting.
 `window.__testSoldOutMarkerMeshIds()` exposes which markers are currently
 rendered, the same `window.__test*` convention
 `window.__testLowStockHighlightedInstanceIds` already established for
@@ -11471,7 +11643,11 @@ Tripo's own file-upload endpoint to obtain a `file_token`, then a single
 `POST /v3/generation/multiview-to-model` call kicks off the real job pinned
 to Tripo's `v3.0-20250812` model version (pinned rather than "latest" so a
 provider-side default change can't silently alter output quality/cost out
-from under this integration). Response (`201`):
+from under this integration). The call also sends `face_limit: 50000` (the top
+of Tripo's own web/mobile range) and `texture_quality: "standard"`, so the
+result stays well under the 20 MB model cap (#4122: an uncapped result was
+30 MB); `compress` is not sent, because a meshopt GLB cannot be read by our
+loader yet. Response (`201`):
 
 ```json
 { "jobId": "job-<uuid>", "status": "processing" }
@@ -11589,6 +11765,38 @@ field names above come from https://developers.tripo3d.ai/ (checked against its 
 independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment. A model costs 30 credits, $0.30, as sent today (H series, multiview, standard texture).
+
+### `GET /api/admin-items-outside-landlets` (#4198, admin only)
+
+A read-only list of the placed items whose footprint stands outside their own lándlet's outline
+(`landlets.polygon_json`, in the lándlet's own coordinates), shown in the dashboard's Landlet overrides panel as
+"Items off their lándlet". Answers `{ checkedItems, outsideItems, landlets: [{ landletId, name, owner, items,
+outside, examples: [{ instanceId, product, x, y }] }] }`, only for lándlets with something outside (at most five
+examples each). The footprint is the item's width and depth (crop and scale applied; flooring uses its template's
+raw size) turned by its rotation about the vertical axis, against the outline scaled to the item's height;
+`shared/landlet-outline.js` holds the one definition. Nothing is moved or removed. Built for today's size (one pass
+over every owned lándlet's items, no paging).
+
+The same rule now guards writes (#4198): `POST /api/instances`, `PUT /api/instances/:id` and the batch save refuse, with
+`400` "extends outside lándlet … outline", an item whose footprint (same definition) is off its lándlet's outline, after
+the older square check. Only items whose position, size, level, lándlet or product changed are re-checked, so an item
+already standing off the outline does not block saving something else; a lándlet with no usable polygon keeps the square.
+
+### `GET /api/admin-video-jobs`, `POST /api/admin-video-jobs/:jobId/check` (#4122, admin only)
+
+The dashboard's Video-to-3D jobs panel. The list returns the latest 50 jobs, newest first: `jobId`, `status`,
+`createdAt`, `finishedAt`, `username`, `message` (what the builder was told), `detail` (why it failed, admin
+only: `reason` is one of `download_refused`, `too_big`, `not_a_glb`, `no_model_url`, `store_error`, plus the HTTP
+status, byte count, content type, the validator's message and the keys the provider's output held) and `canCheck`.
+`detail` is stored in `video_generation_jobs.failure_detail` (migration 0234) and is never part of
+`GET /api/video-generation-jobs/:jobId`.
+
+`POST .../check` is for a `failed` job that reached the provider. It reads the provider's task (no charge) and runs
+the same download, size and GLB checks the save step runs, writing no model; it records the finding as the job's
+`detail` (`would_save_now` when saving would work) and one admin-log row (`video_job_result_checked`). The job's
+status and the builder's credit are not changed. Refused with 403 for a non-admin, 404 for an unknown job and 409
+for a job that did not fail or never reached the provider.
+
 
 ### Frontend wiring (#1620)
 
@@ -11733,9 +11941,9 @@ eligible landlet (`status = 'greenbelt'`, via `ORDER BY RANDOM() LIMIT 1` —
 no prior precedent for this in the codebase) is picked at the same time,
 inside the same statement, so no greenbelt landlet to spawn into is simply a
 0-row no-op rather than a separate branch. The spawned position is a random
-point inside the landlet's own buildable footprint
-(`LANDLET_SIDE_M`, #789), scaled by `CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) to
-keep it off the very edge.
+point inside the landlet's own outline (`landlets.polygon_json`, #4198), shrunk by
+`CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) about its centre to keep it off the very edge; a landlet with no
+usable polygon falls back to the old square (`LANDLET_SIDE_M`, #789).
 
 ### `GET /api/credit-orbs`
 
@@ -11764,7 +11972,9 @@ the collect limit, `{ "standing": { "limit", "windowSeconds", "remaining",
 the current window (every attempt, including a 404 or 403, counts, exactly as
 `POST .../collect` enforces it); `retryAfterSeconds` is when the oldest
 in-window attempt ages out (when the next slot frees), `0` when none is used.
-It never spends a slot. The Shop reads it when a landlet's orbs load, and a
+It never spends a slot. The reply also carries `"credits"` (#4123): how many
+free credits the builder holds now, so the Shop can show the balance rather than
+an increment. The Shop reads it when a landlet's orbs load, and a
 successful collect returns the same object, so an orb touched at `remaining: 0`
 is left in place with the limit notice instead of being popped and reversed by
 a `429`; a `429` that still happens (two tabs, another device) is handled as
@@ -11794,8 +12004,10 @@ orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
 statement in the same batch has actually committed that builder as the
 collector, so the two statements either both land or neither does, and two
 shoppers racing the same orb can never both be credited for it. Returns
-`{ "collected": true, "standing": { ... } }` on success (`standing` as in
-`GET /api/credit-orbs/standing`, #3441). `404` if the orb doesn't exist, or
+`{ "collected": true, "standing": { ... }, "credits": <n> }` on success
+(`standing` as in `GET /api/credit-orbs/standing`, #3441; `credits` is the
+builder's balance after this orb, read in the same round trip as the grant,
+#4123). `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
 Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like

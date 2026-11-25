@@ -173,6 +173,8 @@ const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
 const uploadVideoCreditsEl = document.getElementById('upload-video-credits');
 const uploadVideoInput = document.getElementById('upload-video-input');
+const uploadVideoRecordBtn = document.getElementById('upload-video-record-btn');
+const uploadVideoChosenEl = document.getElementById('upload-video-chosen');
 const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
@@ -216,7 +218,7 @@ let uploadDimensionPreview = null;
 // generate one from (mode 'video') -- mutually exclusive input methods
 // sharing the same name/price/digital-good fields and the same eventual
 // handoff into step 'dimensions'.
-let uploadFileMode = 'file';
+let uploadFileMode = 'video'; // #4078: making a model from a video is the first way offered
 // #1622 (sub-issue of #1616): which path produced the model currently
 // showing in step 'dimensions' -- 'video' only while finishVideoGeneration
 // is mid-handoff into handleUploadFileStep, reset to 'file' the moment
@@ -309,19 +311,57 @@ async function refreshUploadVideoCredits() {
   }
 }
 
+// #4078: the video control is a Record button in the app's own style, not the browser's "Choose file".
+// It opens the phone's camera (the input's capture attribute), through the browser's own permission
+// prompt; where the device has no camera it reads "Choose a video" and opens a file picker. It reads
+// "Record again" once a video is chosen. A refused camera permission is the browser's to explain: the
+// input never reports it, so nothing here can say more than the browser does.
+let uploadDeviceHasCamera = true;
+function refreshUploadVideoRecordLabel() {
+  const chosen = uploadVideoInput.files.length > 0;
+  uploadVideoRecordBtn.textContent = uploadDeviceHasCamera
+    ? (chosen ? 'Record again' : 'Record')
+    : (chosen ? 'Choose another video' : 'Choose a video');
+  uploadVideoChosenEl.textContent = chosen ? `Video ready: ${uploadVideoInput.files[0].name}` : '';
+}
+navigator.mediaDevices?.enumerateDevices?.().then((devices) => {
+  uploadDeviceHasCamera = devices.some((device) => device.kind === 'videoinput');
+  refreshUploadVideoRecordLabel();
+}).catch(() => { /* unknown: keep the camera wording */ });
+uploadVideoRecordBtn.addEventListener('click', () => uploadVideoInput.click());
+uploadVideoInput.addEventListener('change', refreshUploadVideoRecordLabel);
+
 // Switches step 'file' between its two mutually-exclusive input methods.
 // #1602's info-tooltip popups (upload-hint, upload-video-hint) are
 // siblings of their own field row, not nested inside it, so each one is
 // force-collapsed here rather than relying on hiding the row above it to
 // also hide the popup -- video mode's own hint lives inside
 // uploadVideoSectionEl and so is already covered by that toggle alone.
+// #4076: whether the Worker has the video-to-model provider connected; read from the builder profile when
+// the modal opens. While it is off the entry point says so (one sentence) and nothing is offered to record.
+let videoGenerationAvailable = true;
+let videoAvailabilityKnown = false; // until the first look comes back, nothing about video is shown either way
+const uploadVideoOffNoteEl = document.getElementById('upload-video-off-note');
+async function refreshVideoGenerationAvailability() {
+  try {
+    const { videoGenerationAvailable: available } = await fetchMyBuilder();
+    videoGenerationAvailable = available !== false;
+  } catch (err) {
+    videoGenerationAvailable = true; // a failed look never blocks the feature: the server still decides
+  }
+  videoAvailabilityKnown = true;
+  if (!videoGenerationAvailable && uploadFileMode === 'video') setUploadFileMode('file');
+  else setUploadFileMode(uploadFileMode);
+}
 function setUploadFileMode(mode) {
+  if (mode === 'video' && !videoGenerationAvailable) mode = 'file';
   uploadFileMode = mode;
+  uploadVideoOffNoteEl.hidden = videoGenerationAvailable || mode !== 'file';
   uploadFileFieldRowEl.hidden = mode !== 'file';
   uploadHintEl.hidden = true;
   uploadHintBtn.setAttribute('aria-expanded', 'false');
-  uploadModeVideoBtn.hidden = mode !== 'file';
-  uploadVideoSectionEl.hidden = mode !== 'video';
+  uploadModeVideoBtn.hidden = mode !== 'file' || !videoGenerationAvailable;
+  uploadVideoSectionEl.hidden = mode !== 'video' || !videoAvailabilityKnown;
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate model' : 'Add product';
   // #2442: refreshed every time video mode is (re-)entered, not just once
   // per modal open -- a generation attempt since the last time this
@@ -335,9 +375,9 @@ uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
 
 // mode lets a caller land back on step 'file' already in video mode
 // (uploadRetryVideoBtn below) rather than always defaulting to the plain
-// file picker -- every other caller (closing/opening the modal) wants the
-// plain 'file' default.
-function resetUploadModalToFileStep(mode = 'file') {
+// video first (#4078) -- every other caller (closing/opening the modal) wants the
+// default, which is making a model from a video.
+function resetUploadModalToFileStep(mode = 'video') {
   uploadFlowToken++; // invalidate any in-flight handleUploadFileStep/startVideoGeneration call
   stopVideoGenPoll();
   uploadStep = 'file';
@@ -351,7 +391,7 @@ function resetUploadModalToFileStep(mode = 'file') {
   uploadAvatarCategoryCheckbox.checked = false;
   uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
-  uploadModalTitleEl.textContent = 'Upload model';
+  uploadModalTitleEl.textContent = 'Create or upload a model'; // #4078
   uploadStepChooseEl.hidden = true;
   uploadModalActionsEl.hidden = false;
   uploadStepFileEl.hidden = false;
@@ -378,10 +418,12 @@ function openUploadModal() {
   uploadDigitalGoodDisclaimerSelect.value = 'gift-card';
   uploadFileInput.value = '';
   uploadVideoInput.value = '';
+  refreshUploadVideoRecordLabel();
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
   uploadOpenedOverSeller = sellerModalEl.classList.contains('visible');
   resetUploadModalToFileStep();
+  refreshVideoGenerationAvailability();
   uploadModalEl.classList.add('visible');
   openModalA11y(uploadModalEl, closeUploadModal);
 }
@@ -992,7 +1034,7 @@ async function handleUploadVideoStep() {
   if (validateUploadPrice() === null) return;
   const videoFile = uploadVideoInput.files[0];
   if (!videoFile) {
-    setUploadStatus('Choose a video first.', true);
+    setUploadStatus(uploadDeviceHasCamera ? 'Record a video first.' : 'Choose a video first.', true);
     return;
   }
   if (!(await confirmDuplicateProductName(name))) return;
@@ -1005,6 +1047,13 @@ async function handleUploadVideoStep() {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     // #1954: err.message is player copy for a coded server error; keep the server's own text in the log for diagnosis.
     console.error('Video-to-3D generation failed:', err, err.serverMessage || '');
+    // #4076: the provider went away after the video was chosen. Nothing was charged and the chosen video is still
+    // in the field, so say both instead of "try again later".
+    if (err.code === 'service_unavailable') {
+      setUploadStatus("Turning a video into a model isn't available right now. Your free generation was not used, and your video is still here to try again.", true);
+      uploadSubmitBtn.disabled = false;
+      return;
+    }
     // #2440: previously a generic "Something went wrong starting video generation."
     setUploadStatus(err.message || "Couldn't start turning that video into a 3D model. Try again in a moment.", true);
     uploadSubmitBtn.disabled = false;

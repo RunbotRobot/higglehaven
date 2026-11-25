@@ -32,6 +32,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 // rendering only) does.
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
+import { promptReportReason } from '../ui/reportReasonModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import {
@@ -55,6 +56,7 @@ import {
   fetchBuilders,
   fetchDirectMessages,
   sendDirectMessage,
+  sendDirectMessageReport,
   clearDirectMessageIdempotencyKey,
   markDirectMessagesRead,
   fetchUnreadDirectMessageCount,
@@ -339,36 +341,15 @@ async function refreshAccountMenuPlace() {
       hideBudPlace();
       return;
     }
-    showBudPlace({ name: mine.name || mine.landletId, builder: me.label });
+    showBudPlace({ name: mine.name || mine.landletId, builder: me.label, wordmarkStyle: mine.wordmarkStyle, wordmarkColors: mine.wordmarkColors });
   } catch (err) {
     console.warn('Could not refresh the lándlet name in the menu:', err);
     hideBudPlace();
   }
 }
 
-const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
-async function refreshAccountMenuLandCap() {
-  // #3700 (follow-up, from #3655): the cap is Build information, and in Shop and Sell it showed as
-  // a bare line of text between the bud's petals ("Lándlet cap: 0m² / 1,000m²"). It stays in
-  // Settings > Build everywhere; in the account column it is shown in Build only, like My lándlets.
-  if (!builderId || currentMode !== 'build') {
-    accountMenuLandCapEl.hidden = true;
-    return;
-  }
-  try {
-    // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
-    // renderLandCapField's own comment (src/build/scene.js) on why.
-    const me = await fetchMyBuilder();
-    accountMenuLandCapEl.textContent = `Lándlet cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
-    accountMenuLandCapEl.hidden = false;
-  } catch (err) {
-    console.warn('Could not refresh land cap menu display:', err);
-    accountMenuLandCapEl.hidden = true;
-  }
-}
-
 // Tax reporting notice (#613, sub-issue of #350) — same "no live polling,
-// refresh on open" approach as refreshAccountMenuLandCap just above. This
+// refresh on open" approach as refreshAccountMenuPlace. This
 // notice itself is purely informational and never blocks anything — #615's
 // actual earnings-above-threshold gate (worker/index.js's
 // taxThresholdPayoutBlockedError, both live) re-derives "crossed" straight
@@ -599,6 +580,27 @@ dmBlockBtn.addEventListener('click', async () => {
     }
   } finally {
     dmBlockBtn.disabled = false;
+  }
+});
+
+// #4169: Report from the DM header, like the nearby chat and voice reports: the reason is optional, the outcome is
+// said in the thread's own status line and stays until the next action, and the other person is told nothing.
+const dmReportBtn = document.getElementById('dm-report-btn');
+dmReportBtn.addEventListener('click', async () => {
+  if (!dmOtherBuilderId) return;
+  const answer = await promptReportReason({ title: 'Report this person for inappropriate conduct?' });
+  if (answer === null) return;
+  dmReportBtn.disabled = true;
+  dmStatusEl.classList.remove('error');
+  dmStatusEl.textContent = '';
+  try {
+    await sendDirectMessageReport({ reportedBuilderId: dmOtherBuilderId, reason: answer.reason || undefined });
+    dmStatusEl.textContent = 'Report sent. Thank you.';
+  } catch (err) {
+    dmStatusEl.classList.add('error');
+    dmStatusEl.textContent = `Couldn't submit the report. ${err?.message || 'Try again.'}`;
+  } finally {
+    dmReportBtn.disabled = false;
   }
 });
 
@@ -1153,13 +1155,12 @@ accountMenuToggle.addEventListener('click', () => {
     // #3701: a leaf-shaped sheet that is open (Sell's My products) folds when the bud opens, so
     // the petals never unfold over it.
     document.dispatchEvent(new CustomEvent('bud-opening'));
-    refreshAccountMenuLandCap();
     refreshAccountMenuPlace();
     refreshAccountMenuTaxNotice();
     // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
     // the Build tab, not Shop or Sell — it shipped visible in every mode
     // since nothing here ever gated it on currentMode. Recomputed on open
-    // rather than at mode-switch time, same timing refreshAccountMenuLandCap
+    // rather than at mode-switch time, same timing the place line
     // just above already uses for this same panel.
     myLandsBtn.hidden = currentMode !== 'build';
   }
@@ -1198,6 +1199,30 @@ const myLandsCloseBtn = document.getElementById('my-lands-close-btn');
 const myLandsStatusEl = document.getElementById('my-lands-status');
 const myLandsListEl = document.getElementById('my-lands-list');
 const myLandsEmptyEl = document.getElementById('my-lands-empty');
+// #4202: the lándlet cap, drawn as a small meter in this leaf (it was a bare line of text lying on the world
+// under the menu). Two figures in the unit the rest of Build uses, and what raises the cap, in words.
+const myLandsCapEl = document.getElementById('my-lands-cap');
+const myLandsCapMeterEl = document.getElementById('my-lands-cap-meter');
+const myLandsCapFillEl = document.getElementById('my-lands-cap-fill');
+const myLandsCapWordsEl = document.getElementById('my-lands-cap-words');
+async function renderMyLandsCap(myToken) {
+  try {
+    const me = await fetchMyBuilder();
+    if (myToken !== myLandsLoadToken) return;
+    const held = me.ownedAreaM2 ?? 0;
+    const cap = me.landCapM2;
+    const share = cap > 0 ? Math.min(1, held / cap) : 0;
+    myLandsCapMeterEl.setAttribute('aria-valuemax', String(cap));
+    myLandsCapMeterEl.setAttribute('aria-valuenow', String(Math.min(held, cap)));
+    myLandsCapMeterEl.setAttribute('aria-valuetext', `${formatArea(held, 0)} of ${formatArea(cap, 0)}`);
+    myLandsCapFillEl.style.width = `${Math.round(share * 100)}%`;
+    myLandsCapWordsEl.textContent = `You hold ${formatArea(held, 0)} of the ${formatArea(cap, 0)} you may hold.`;
+    myLandsCapEl.hidden = false;
+  } catch (err) {
+    if (myToken === myLandsLoadToken) myLandsCapEl.hidden = true;
+    console.warn('Could not load the lándlet cap:', err);
+  }
+}
 
 // Monotonic-token guard, same idiom as friendsLoadToken/notificationsLoadToken
 // above: myLandsBtn's click handler calls renderMyLands() directly on every
@@ -1212,7 +1237,9 @@ async function renderMyLands() {
   myLandsStatusEl.textContent = '';
   myLandsStatusEl.classList.remove('error');
   myLandsEmptyEl.hidden = true;
+  myLandsCapEl.hidden = true;
   myLandsListEl.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+  if (builderId) renderMyLandsCap(myToken);
   if (!builderId) {
     myLandsListEl.innerHTML = '';
     myLandsEmptyEl.hidden = false;

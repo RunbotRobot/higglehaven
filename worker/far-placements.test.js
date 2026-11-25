@@ -5,10 +5,10 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  api, signupAdmin, signupSeller, createGreenbeltLandletAs,
+  api, signupAdmin, signupBuilder, signupSeller, createGreenbeltLandletAs,
 } from './test-helpers.js';
 import { decodeFarPlacements } from './lib/far-placements-encoding.js';
-import { FAR_PLACEMENT_TILE_M } from './lib/far-placements.js';
+import { FAR_PLACEMENT_TILE_M, farPlacementCentersForTemplates, invalidateFarPlacementCenters } from './lib/far-placements.js';
 
 let adminSession;
 
@@ -220,5 +220,79 @@ describe('GET /api/far-placements (#3417)', () => {
     expect(body.landlets[0].items).toHaveLength(829);
     expect(raw.length).toBeLessThan(40_000);
     expect(gzipped.length).toBeLessThan(8_000);
+  });
+});
+
+// #4147: what far view draws for a lándlet is dropped when an admin returns it to the greenbelt, reassigns it, or
+// deletes the builder who owns it, so an open Shop is not told a stale tile for up to a minute more.
+describe('far placements are dropped when a lándlet is emptied (#4147)', () => {
+  async function standing(name) {
+    const tile = freshTile();
+    const seller = await signupSeller(`${name}-seller`);
+    const builder = await signupAdmin(`${name}-builder`);
+    await createTemplate(`${name}-template`, seller);
+    await setupLandlet(`${name}-landlet`, tile.center, builder);
+    await place(builder, `${name}-landlet`, `${name}-template`);
+    const first = await readTile(tile);
+    expect(first.body.landlets[0].items).toHaveLength(1);
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('hit');
+    return { tile, builder };
+  }
+
+  it('Make greenbelt', async () => {
+    const { tile } = await standing('far-greenbelt');
+    const res = await api('/landlets/far-greenbelt-landlet/make-greenbelt', adminSession({ method: 'POST', body: '{}' }));
+    expect(res.response.status).toBe(200);
+    const after = await readTile(tile);
+    expect(after.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(after.body.landlets ?? []).toHaveLength(0);
+  });
+
+  it('admin reassign-owner', async () => {
+    const { tile } = await standing('far-reassign');
+    const target = await signupBuilder('far-reassign-target');
+    const res = await api('/landlets/far-reassign-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(res.response.status).toBe(200);
+    const after = await readTile(tile);
+    expect(after.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(after.body.landlets ?? []).toHaveLength(0);
+  });
+
+  it('suspending a builder, and lifting it', async () => {
+    const { tile, builder } = await standing('far-suspend');
+    const suspended = await api('/auth/suspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: builder.email, reason: 'far view test' }),
+    }));
+    expect(suspended.response.status).toBe(200);
+    const during = await readTile(tile);
+    expect(during.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(during.body.landlets ?? []).toHaveLength(0);
+    const lifted = await api('/auth/unsuspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: builder.email }),
+    }));
+    expect(lifted.response.status).toBe(200);
+    const after = await readTile(tile);
+    expect(after.response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect(after.body.landlets[0].items).toHaveLength(1);
+  });
+
+  it('finds the tile of every lándlet that places a product, for the writes that delist or remove it', async () => {
+    const tile = freshTile();
+    const seller = await signupSeller('far-centers-seller');
+    const builder = await signupAdmin('far-centers-builder');
+    await createTemplate('far-centers-template', seller);
+    await setupLandlet('far-centers-landlet', tile.center, builder);
+    await place(builder, 'far-centers-landlet', 'far-centers-template');
+    expect(await farPlacementCentersForTemplates(env.DB, ['far-centers-template'])).toEqual([
+      { center_x_m: tile.center.x, center_y_m: tile.center.y },
+    ]);
+    expect(await farPlacementCentersForTemplates(env.DB, ['no-such-template'])).toEqual([]);
+    expect(await farPlacementCentersForTemplates(env.DB, [])).toEqual([]);
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('miss');
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('hit');
+    await invalidateFarPlacementCenters(await farPlacementCentersForTemplates(env.DB, ['far-centers-template']));
+    expect((await readTile(tile)).response.headers.get('x-far-placements-cache')).toBe('miss');
   });
 });

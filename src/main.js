@@ -283,6 +283,8 @@ import {
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
   shopOtherAvatars, assistantFromHit, assistantGroups, otherPersonGroups, personFromHit, personForBuilderId,
+  settleAllBatchCrossfades, batchCrossfadeStats,
+  creditOrbMeshes, showCreditOrbAbout,
 } from './shop/presenceAndContent.js';
 // #3555: tapping another person in the Shop world offers friendship.
 import { confirmAndOfferFriendship } from './friends.js';
@@ -353,10 +355,11 @@ import {
   measurePointA, measurePointB, updateMeasureResultText,
   syncUpdate, footprintsOverlap, footprintCorners,
   removeLowStockHighlight, landletElevationGroup, markBuildSceneReady,
+  removedGhostUnderRay,
 } from './build/scene.js';
 // #2987: builder-facing "Removed items" view of suspended-seller removals
 // (wires its own button/modal; enterBuildMode below triggers its load).
-import { refresh as refreshPendingRestorations } from './build/pendingRestoration.js';
+import { refresh as refreshPendingRestorations, openRemovedItemsAt } from './build/pendingRestoration.js';
 
 // Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
 // currentBundleTabList/bundle-tab-click handler need this same state; a
@@ -939,6 +942,12 @@ renderer.domElement.addEventListener('click', (event) => {
   // Object3D pushed into productMeshes.
   const hits = raycaster.intersectObjects(productMeshes, true);
   const hitRoot = hits.length > 0 ? findRootProduct(hits[0].object) : null;
+  // #4201: a tap on a removed item's ghost opens the Removed items list at its row.
+  const ghostId = removedGhostUnderRay();
+  if (ghostId) {
+    openRemovedItemsAt(ghostId);
+    return;
+  }
   if (multiSelectMode) {
     if (hitRoot) toggleInSelection(hitRoot);
   } else {
@@ -1338,7 +1347,11 @@ window.__testSetShopSkyElapsedSeconds = (seconds) => {
 // and the renderer's live geometry and texture counts, so a test can tell a
 // landlet drawn as a few instanced meshes from one cloned mesh per item, and
 // can tell an unload released what the batches held.
-window.__testShopDrawStats = () => {
+window.__testShopDrawStats = (options) => {
+  // #4062: a version change dissolves over about 0.4 s with both versions drawn; the figures here are
+  // the settled frame (the sets the books say), so a test does not read the two versions at once.
+  // `{ settle: false }` reads the frame as it is, fades running.
+  if (options?.settle !== false) settleAllBatchCrossfades();
   renderer.render(scene, camera);
   let batches = 0;
   let instancedMeshes = 0;
@@ -1362,6 +1375,8 @@ window.__testShopDrawStats = () => {
     geometries: memory.geometries, textures: memory.textures,
   };
 };
+// #4062: e2e-only. Whether a batch version change has dissolved (a fade is running) and how many have.
+window.__testShopBatchCrossfades = () => batchCrossfadeStats();
 // #3404: e2e-only. Where a loaded placement is on screen (client pixels) and
 // whether it is in front of the camera, so a test can tap exactly on it; and
 // which placement the last tap resolved to.
@@ -1638,6 +1653,8 @@ renderer.domElement.addEventListener('click', (event) => {
     // #3403: a batch's placements may be drawn from its mid or far set, whose meshes a tap can hit too.
     for (const batch of entry.batches) {
       for (const tier of Object.values(batch.tiers ?? { full: { meshes: batch.meshes } })) tapTargets.push(...tier.meshes);
+      // #4062: a placement changing version is drawn by transient meshes while it dissolves.
+      if (batch.fadeMeshes) tapTargets.push(...batch.fadeMeshes);
     }
   }
   const hits = raycaster.intersectObjects(tapTargets, true);
@@ -1673,6 +1690,15 @@ renderer.domElement.addEventListener('click', (event) => {
     setShopTappedProduct(null);
     closeProductCard();
     confirmAndOfferFriendship(tappedPerson.builderId, tappedPerson.label);
+    return;
+  }
+  // #4072: a glowing orb in front of a product is what was tapped, the nearer hit wins. A tap on one
+  // says what it is and never collects it (collecting stays a touch of the avatar).
+  const orbHit = raycaster.intersectObjects(creditOrbMeshes(), true)[0];
+  if (orbHit && (hits.length === 0 || orbHit.distance < hits[0].distance)) {
+    setShopTappedProduct(null);
+    closeProductCard();
+    showCreditOrbAbout();
     return;
   }
   const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;

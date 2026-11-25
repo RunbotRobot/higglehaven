@@ -208,9 +208,15 @@ const settled = await page.waitForFunction(() => {
   return t.full === 0;
 }, null, { timeout: 90000, polling: 500 }).then(() => true).catch(() => false);
 const far = await stats();
-console.log('26 m away:', JSON.stringify(far.batchTiers), 'triangles', far.triangles);
+console.log('26 m away:', JSON.stringify(far.batchTiers), 'triangles', far.triangles, 'draw calls', far.drawCalls);
 check(settled, `at 26 m every placement leaves the full model (${JSON.stringify(far.batchTiers)})`);
 check(sum(far.batchTiers) === COUNT, `the sets always sum to the placements (${sum(far.batchTiers)})`);
+// #4062: the change of version at 26 m dissolved (a batch has no children of its own to dissolve between, so it
+// is one cohort of transient meshes); the draw stats above settle any fade still running, so the counts are the sets'.
+const crossfades = await page.evaluate(() => window.__testShopBatchCrossfades());
+console.log('batch version fades started:', crossfades.started, 'still running after the stats:', crossfades.inFlight);
+check(crossfades.started > 0, `leaving the full model at 26 m dissolved at least one cohort of placements (${crossfades.started} started)`);
+check(crossfades.inFlight === 0, 'and none is left running once the stats settle them');
 // Whole-frame counts, not minus the baseline: the baseline was taken looking at other scenery.
 check(far.triangles < near.triangles * 0.25, `at 26 m the frame draws under a quarter of the triangles (${far.triangles} against ${near.triangles})`);
 
@@ -253,10 +259,26 @@ if (target) {
 
 // Away and back, with the sets summing to the placements at every step.
 const steps = [at(26), at(40), [cx, cy], at(30), [cx, cy]];
-for (const point of steps) {
+for (const [stepIndex, point] of steps.entries()) {
   await moveTo(point);
+  // #4062: leaving the protected radius (beside the wall to 30 m) changes every placement's version, which
+  // dissolves; read one frame with the fade running (not settled), with the view level on the wall.
+  let during = null;
+  if (stepIndex === 3) {
+    during = await page.waitForFunction(() => {
+      const c = window.__testShopBatchCrossfades();
+      if (!c.inFlight) return null;
+      return { ...window.__testShopDrawStats({ settle: false }), fade: window.__testShopBatchCrossfades() };
+    }, null, { timeout: 10000, polling: 'raf' }).then((handle) => handle.jsonValue()).catch(() => null);
+  }
   await page.waitForTimeout(700);
-  const t = (await stats()).batchTiers;
+  const afterStats = await stats();
+  const t = afterStats.batchTiers;
+  if (stepIndex === 3) {
+    console.log('a frame with a fade running:', JSON.stringify(during && { drawCalls: during.drawCalls, triangles: during.triangles, fade: during.fade }), 'settled:', JSON.stringify({ drawCalls: afterStats.drawCalls, triangles: afterStats.triangles }));
+    check(during !== null, 'leaving the protected radius runs a fade that a frame can be read in');
+    check(!during || during.fade.transientMeshes <= 16, `the fade adds at most 16 draw calls (${during?.fade.transientMeshes} transient meshes)`);
+  }
   check(sum(t) === COUNT, `no placement is lost or doubled at (${Math.round(point[0])}, ${Math.round(point[1])}): ${JSON.stringify(t)}`);
 }
 // Back beside it: full again.

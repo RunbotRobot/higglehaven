@@ -143,6 +143,21 @@
           </tr>
         `).join('')
         : '<tr><td colspan="5"><p class="empty">No suspension history.</p></td></tr>';
+      // #4135: the person's lándlets, each a door to the Landlet overrides panel (where Make greenbelt and the
+      // rest already are); nothing is changed from here.
+      const landlets = detail.landlets || [];
+      const landletRows = landlets.length
+        ? landlets.map((l) => `
+          <tr>
+            <td>${escapeHtml(l.name)}</td>
+            <td class="mono">${escapeHtml(l.landletId)}</td>
+            <td>${escapeHtml(Math.round(l.centerXM))}, ${escapeHtml(Math.round(l.centerYM))} (${escapeHtml(Math.round(l.areaM2))} m²)</td>
+            <td>${l.publishedVersion ? 'Version ' + escapeHtml(l.publishedVersion) : 'None'}</td>
+            <td>${escapeHtml(l.updatedAt)}</td>
+            <td><button class="secondary open-landlet-btn" type="button" data-landlet-id="${escapeHtml(l.landletId)}">Open</button></td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="6"><p class="empty">This person has no lándlets.</p></td></tr>';
       userDetailWrap.innerHTML = `
         <div class="stat-grid">
           <div class="stat"><div class="n">${escapeHtml(user.username)}</div><div class="l">Username</div></div>
@@ -154,6 +169,13 @@
           <div class="stat"><div class="n">${user.cardRefusal ? escapeHtml(user.cardRefusal.code + (user.cardRefusal.declineCode ? ' / ' + user.cardRefusal.declineCode : '') + ' x' + user.cardRefusal.count + ', last ' + user.cardRefusal.at) : '—'}</div><div class="l">Card refusals (Stripe)</div></div>
         </div>
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
+        <button class="secondary delete-account-btn" type="button">Delete account</button>
+        ${user.adminViewer || !user.adminViewerRefusal ? `<button class="secondary viewer-access-btn" type="button">${user.adminViewer ? 'Remove look-only access' : 'Give look-only access'}</button>` : ''}
+        <h3 id="userLandletsHeading">Lándlets (${landlets.length})</h3>
+        <table class="user-landlets" aria-labelledby="userLandletsHeading">
+          <thead><tr><th>Name</th><th>Id</th><th>Where (x, y)</th><th>Published</th><th>Last changed</th><th></th></tr></thead>
+          <tbody>${landletRows}</tbody>
+        </table>
         <h3>Suspension history</h3>
         <table>
           <thead><tr><th>Suspended at</th><th>Reason</th><th>Grace period ends</th><th>Status</th><th></th></tr></thead>
@@ -161,10 +183,84 @@
         </table>
       `;
       userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
+      userDetailWrap.querySelector('.delete-account-btn').addEventListener('click', () => openDeleteAccount(user.userId));
+      // #4175: the owner's switch for the look-only admin role (public/admin-dashboard-10.js holds the dialog).
+      const viewerBtn = userDetailWrap.querySelector('.viewer-access-btn');
+      if (viewerBtn) viewerBtn.addEventListener('click', () => window.__adminOpenViewerDialog(user));
+      userDetailWrap.querySelectorAll('.open-landlet-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelector('nav button[data-panel="landlets"]').click();
+          document.getElementById('landletLookupInput').value = btn.dataset.landletId;
+          document.getElementById('landletLookupBtn').click();
+        });
+      });
       userDetailWrap.querySelectorAll('.use-for-ncmec-btn').forEach((btn) => {
         btn.addEventListener('click', () => useSuspensionForNcmecReport(btn.dataset.suspensionId));
       });
     }
+
+    // #4077: Delete account. The preview says what goes with the account and any refusal; the destructive
+    // button enables only once the admin has typed the username; a refusal from the server shows here.
+    const delDialog = document.getElementById('deleteAccountDialog');
+    const delBody = document.getElementById('deleteAccountBody');
+    const delTyped = document.getElementById('deleteAccountTyped');
+    const delConfirm = document.getElementById('deleteAccountConfirm');
+    const delErr = document.getElementById('deleteAccountErr');
+    const delFleetRow = document.getElementById('deleteAccountFleetRow');
+    const delFleetTick = document.getElementById('deleteAccountFleetTick');
+    let delTarget = null;
+    function syncDeleteConfirm() {
+      const typedOk = delTarget && delTyped.value === delTarget.account.username;
+      const fleetOk = !delTarget || !delTarget.needsFleetTick || delFleetTick.checked;
+      delConfirm.disabled = !(typedOk && fleetOk) || Boolean(delTarget && delTarget.refusal && !delTarget.needsFleetTick);
+    }
+    async function openDeleteAccount(userId) {
+      delErr.hidden = true; delErr.textContent = '';
+      delTyped.value = ''; delFleetTick.checked = false; delTarget = null;
+      delConfirm.disabled = true;
+      try {
+        delTarget = await fetchJson('/api/auth/admin-delete-account-preview?userId=' + encodeURIComponent(userId));
+      } catch (error) {
+        showErr(userSearchErr, error.message);
+        return;
+      }
+      const c = delTarget.counts;
+      delBody.innerHTML = `
+        <p>This permanently deletes <strong>${escapeHtml(delTarget.account.username)}</strong> (${escapeHtml(delTarget.account.email)}).
+        Their builder and seller profiles go with it, and they are signed out everywhere. Orders other people hold keep their own record.</p>
+        <ul>
+          <li>${c.landletsClaimed} lándlets claimed</li>
+          <li>${c.productsListed} products listed</li>
+          <li>${c.ordersAsBuyer} orders as buyer, ${c.ordersAsSeller} as seller</li>
+          <li>${c.friends} friends</li>
+        </ul>
+        ${delTarget.refusal && !delTarget.needsFleetTick ? '<p class="err">' + escapeHtml(delTarget.refusal) + '</p>' : ''}`;
+      delFleetRow.hidden = !delTarget.needsFleetTick;
+      delDialog.showModal();
+      delTyped.focus();
+    }
+    delTyped.addEventListener('input', syncDeleteConfirm);
+    delFleetTick.addEventListener('change', syncDeleteConfirm);
+    document.getElementById('deleteAccountCancel').addEventListener('click', () => delDialog.close());
+    document.getElementById('deleteAccountForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      delConfirm.disabled = true;
+      delErr.hidden = true;
+      try {
+        await fetchJson('/api/auth/admin-delete-account', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ userId: delTarget.account.userId, confirmUsername: delTyped.value, includeFleet: delFleetTick.checked }),
+        });
+        delDialog.close();
+        userDetailWrap.innerHTML = '<p class="ok">Account deleted.</p>';
+        const refreshUsers = document.getElementById('usersRefreshBtn');
+        if (refreshUsers) refreshUsers.click();
+      } catch (error) {
+        showErr(delErr, error.message);
+        syncDeleteConfirm();
+      }
+    });
 
     async function loadUserDetail(userId) {
       clearMsg(userSearchErr);

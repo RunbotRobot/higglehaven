@@ -101,8 +101,8 @@ a soft white wash, no dimming scrim, close in its upper right, one at a time, no
 wider than the screen, scrolling inside itself.
 
 Everything else is a gesture on the world itself: drag on the left half of the
-screen to walk, drag on the right half to look, double-tap to fly (the view's
-pitch is the climb: point it up to rise, down to descend), tap a product to open
+screen to walk, drag on the right half to look, double-tap to fly (flight is level, so you can look
+straight down; slide a thumb up or down along the right edge to rise or sink), tap a product to open
 its card. A gesture cannot be seen until it is taught once, so the head teaches (it
 pulses and says Menu until first opened) and the instructions live in it, one tap
 away, under Help. Under `prefers-reduced-motion` nothing animates.
@@ -121,7 +121,11 @@ Not built yet; do not describe these to a person as if they exist:
   that a graphic wants, and the logo is large and the word "Menu" sits beside it; the
   unread dot sits on the bud's shoulder, ringed in white.
 - **Wordmarks** (#3771, #3780 to #3784): a lándlet's name at the top of the open
-  menu in lettering the builder chooses from a set.
+  menu in lettering the builder chooses from a set. One renderer (`src/ui/wordmark.js`,
+  #3782) draws it: the name stays selectable text with the style and colours as data
+  attributes and variables, a face is fetched once and only when a name asks for it, and an
+  id that `shared/wordmark-set.js` does not offer draws the default look. The owner's pick
+  from the lettering page is one line in that set.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
   Settings, kept under Help.
 
@@ -331,6 +335,10 @@ looks. A row, field or button that is not one of these five is either an
 exception named on #3933 or the next thing to bring onto them.
 `npm test` holds the count of distinct row looks at one (`scripts/leaf-parts-baseline.json`,
 #3939): a new `-row` class joins the shared row rule in `src/app.css` and keeps only its layout.
+In Sell > My products a product's detail lines (size, price, digital good, returns, shipping) are
+`--text-sm` in full ink, and the Edit/More/Reviews/Sales links are 44px tall tap targets in full ink
+(`--pill-text-soft` on the expanded row's green measures about 4.3, under the 4.5 floor);
+`scripts/check-seller-row-readable.mjs` holds it (#3589).
 
 ## Motion
 
@@ -501,7 +509,12 @@ by touching the world. The module is `src/ui/bud.js`:
   reader on a phone, #3824), Build's (Add item, My Lándlets, Levels, Undo and Redo, Tools, and the
   lándlet cap line) and Sell's (My products, Add a product, Payouts, Storefront, Orders). The row is the
   same in every place and is part of the flower: it grows with the petals and folds with them (the
-  leaves fold into the stem, the stem draws up, then the petals and the row close). A tap on a place you
+  leaves fold into the stem, the stem draws up, then the petals and the row close). **The row draws no
+  words (#4199, owner 2026-11-24):** its four icons (person, bell, gear, question mark) are known
+  everywhere, so each is a round 44px chip (pill-green wash, `--shadow-petal`) with the icon alone. This is
+  the one place the "icon with its word" rule is relaxed: petals and leaves keep their words. The word is
+  still in each button for a screen reader and is its `title`, so a mouse hover or a long-press says it.
+  A tap on a place you
   are not in takes you there (the page reloads and the ring stays out); a tap on the place you are in
   only marks where you are, since its menu is already open; the head, Escape or the world folds all of
   it. At 390 px the row sits to the right of the head, above the lándlet's name card and the compass,
@@ -599,7 +612,12 @@ by touching the world. The module is `src/ui/bud.js`:
   never a tooltip. Icons are inline SVG in src/ui/budIcons.js, one line weight, drawn in the ink
   colour; a leaf with no icon there gets a plain leaf and a console warning, so a new leaf cannot
   ship as words only. src/ui/bud.js places the stem by walking the *visible* leaves (never
-  :nth-child) and again whenever one is added, shown, hidden or has its text replaced. The stem
+  :nth-child) and again whenever one is added, shown, hidden or has its text replaced. **(#4200)** Each leaf
+  joins the stem at its tip, not along its side: a right leaf's pointed upper-left corner is on the stem and it
+  opens down and away to the right, a left leaf is the mirror image, with a small knob where the tip meets the
+  stem; the icon and word stay upright. The head is turned to point down and to the right, toward the petals,
+  so its base is at its upper left, where the stem enters it and runs down the left behind it (the logo inside
+  stays upright; public/bud-head.svg rotates only the bud). The stem
   grows from the head and the leaves open in turn (about a third of a second in all); under
   reduced motion they simply appear. The lines that are not leaves (the lándlet cap) sit below
   the last leaf.

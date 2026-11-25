@@ -10,6 +10,7 @@ import {
   locomotionStateFor,
   chooseAllowedTemplateIds,
   desiredAvatarFor,
+  otherAvatarBodyAction,
 } from './otherAvatarModels.js';
 
 const eq = (id) => ({ templateId: id, modelUrl: `/uploads/${id}.glb` });
@@ -153,5 +154,75 @@ describe('locomotionStateFor (#3230)', () => {
   it('survives a zero duration', () => {
     expect(Number.isFinite(OTHER_AVATAR_WALK_SPEED_MPS)).toBe(true);
     expect(['idle', 'walk']).toContain(locomotionStateFor(0, 0, 1, 0, 0, 0));
+  });
+});
+
+describe('otherAvatarBodyAction (#4107)', () => {
+  it('keeps what already matches: the same template asked for, or the default with nothing standing', () => {
+    expect(otherAvatarBodyAction('t1', 't1', true)).toBe('keep'); // still loading it: leave the fog and the request alone
+    expect(otherAvatarBodyAction('t1', 't1', false)).toBe('keep');
+    expect(otherAvatarBodyAction(null, null, false)).toBe('keep');
+    expect(otherAvatarBodyAction(undefined, null, false)).toBe('keep');
+  });
+
+  it('ends a fog wait that has no model coming: over the cap asks for null from the start', () => {
+    // The #4107 case: desired null === requested null used to skip, and the fog stood there for good.
+    expect(otherAvatarBodyAction(null, null, true)).toBe('default');
+  });
+
+  it('loads a different template, and returns to the default body when one is no longer allowed', () => {
+    expect(otherAvatarBodyAction('t2', 't1', true)).toBe('load'); // changed avatar while waiting
+    expect(otherAvatarBodyAction('t1', null, false)).toBe('load');
+    expect(otherAvatarBodyAction(null, 't1', false)).toBe('default'); // allowed, then displaced
+    expect(otherAvatarBodyAction(null, 't1', true)).toBe('default'); // unequipped while the model was still loading
+  });
+
+  // Replays reconcileOtherAvatarBodies' loop with the real cap logic: each avatar starts as fog and
+  // requested null (a wearer of a model that has not failed), and a body only arrives through 'load'.
+  function reconcile(people, failedAt = new Map(), now = 0) {
+    const wanted = new Map(people.map((p) => [p.id, p.equipped]));
+    const shown = new Set(people.filter((p) => p.requested).map((p) => p.requested));
+    const allowed = chooseAllowedTemplateIds(wanted, shown, failedAt, now);
+    const actions = {};
+    for (const p of people) {
+      const desired = desiredAvatarFor(p.equipped, allowed);
+      const action = otherAvatarBodyAction(desired ? desired.templateId : null, p.requested, p.waiting);
+      actions[p.id] = action;
+      if (action === 'keep') continue;
+      p.requested = desired ? desired.templateId : null;
+      if (action === 'default') p.waiting = false; // installOtherAvatarBody(..., null) cancels the wait
+    }
+    return actions;
+  }
+  const newcomers = (n) => Array.from({ length: n }, (_, i) => ({ id: `b${i}`, equipped: eq(`t${i}`), requested: null, waiting: true }));
+
+  it('with 7 distinct models the first 6 load theirs and the 7th gets the default body, its fog ended', () => {
+    const people = newcomers(MAX_DISTINCT_CUSTOM_AVATAR_MODELS + 1);
+    const actions = reconcile(people);
+    for (let i = 0; i < MAX_DISTINCT_CUSTOM_AVATAR_MODELS; i += 1) expect(actions[`b${i}`]).toBe('load');
+    expect(actions[`b${MAX_DISTINCT_CUSTOM_AVATAR_MODELS}`]).toBe('default');
+    expect(people[MAX_DISTINCT_CUSTOM_AVATAR_MODELS].waiting).toBe(false);
+    expect(people.slice(0, MAX_DISTINCT_CUSTOM_AVATAR_MODELS).every((p) => p.waiting)).toBe(true); // theirs ends when the model is in
+    // And a second poll changes nothing.
+    const again = reconcile(people);
+    expect(Object.values(again).every((a) => a === 'keep')).toBe(true);
+  });
+
+  it('a wearer whose model failed (and so never waited) is not touched, and one whose model fails later ends up default', () => {
+    const failed = new Map([['t0', 0]]);
+    const alone = [{ id: 'b0', equipped: eq('t0'), requested: null, waiting: false }];
+    expect(reconcile(alone, failed, 1000).b0).toBe('keep');
+    // Fog standing for a model that has just been marked failed: the wait must end.
+    const waiting = [{ id: 'b0', equipped: eq('t0'), requested: null, waiting: true }];
+    expect(reconcile(waiting, failed, 1000).b0).toBe('default');
+    expect(waiting[0].waiting).toBe(false);
+  });
+
+  it('someone who changes avatar while their first model is still loading asks for the new one', () => {
+    const people = [{ id: 'b0', equipped: eq('t0'), requested: 't0', waiting: true }];
+    people[0].equipped = eq('t9');
+    expect(reconcile(people).b0).toBe('load');
+    expect(people[0].requested).toBe('t9');
+    expect(people[0].waiting).toBe(true); // the fog stays until the new body is in
   });
 });

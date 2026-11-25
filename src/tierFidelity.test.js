@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { silhouetteFidelity, isFaithful, boundsOfBatches } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem } from './tierFidelity.js';
 
 // A unit cube as twelve triangles with outward-facing (counter-clockwise from outside) windings.
 function cube(scale = 1, doubleSided = false, flip = false) {
@@ -50,7 +50,7 @@ describe('silhouetteFidelity (#4062)', () => {
   });
 
   it('a slightly shrunken version still passes the mid bar and a model with no triangles is trivially faithful', () => {
-    expect(isFaithful(silhouetteFidelity(cube(), cube(0.96)), 'mid')).toBe(true);
+    expect(isFaithful(silhouetteFidelity(cube(), cube(0.98)), 'mid')).toBe(true);
     expect(isFaithful(silhouetteFidelity([], []), 'mid')).toBe(true);
   });
 
@@ -58,5 +58,64 @@ describe('silhouetteFidelity (#4062)', () => {
     const { min, max } = boundsOfBatches([...cube(1), ...cube(3)]);
     expect(min).toEqual([-1.5, -1.5, -1.5]);
     expect(max).toEqual([1.5, 1.5, 1.5]);
+  });
+});
+
+describe('colour (#4111)', () => {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const batch = (color) => ({ positions: tri, doubleSided: true, area: 0.5, color });
+  const report = (a, b) => silhouetteFidelity([batch(a)], [batch(b)]);
+
+  it('reports no shift when a side carries no colour', () => {
+    expect(silhouetteFidelity([{ positions: tri, doubleSided: true }], [batch([1, 1, 1])]).colorShift).toBeNull();
+  });
+
+  it('rejects a version that is a different colour although its outline matches (a dark grey model drawn white)', () => {
+    const dark = [0.05, 0.05, 0.05];
+    expect(isFaithful(report(dark, [0.9, 0.9, 0.9]), 'far')).toBe(false);
+    expect(isFaithful(report(dark, [0.9, 0.9, 0.9]), 'mid')).toBe(false);
+  });
+
+  it('accepts the same colour', () => {
+    expect(isFaithful(report([0.2, 0.3, 0.1], [0.2, 0.3, 0.1]), 'far')).toBe(true);
+  });
+});
+
+describe('surface checks (#4114)', () => {
+  it('surfaceStats measures area and open edge length; a closed cube has no open edges', () => {
+    const closed = surfaceStats(cube());
+    expect(closed.area).toBeCloseTo(6, 5);
+    expect(closed.openEdgeLength).toBe(0);
+    const open = surfaceStats([{ positions: cube()[0].positions.slice(0, 9 * 10), doubleSided: false }]);
+    expect(open.openEdgeLength).toBeGreaterThan(0);
+  });
+
+  it('a version that keeps the outline but loses surface fails the mid bar', () => {
+    const report = silhouetteFidelity(cube(), cube(0.9));
+    expect(report.areaKept).toBeCloseTo(0.81, 2);
+    expect(isFaithful(report, 'mid')).toBe(false);
+  });
+
+  it('a version torn open where the model was closed fails the mid bar', () => {
+    const torn = [{ positions: cube()[0].positions.slice(0, 9 * 11), doubleSided: false }];
+    const report = silhouetteFidelity(cube(), torn);
+    expect(report.openGrowth).toBeGreaterThan(1.15);
+    expect(isFaithful(report, 'mid')).toBe(false);
+  });
+});
+
+describe('material kind (#4111)', () => {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const batch = (unlit) => ({ positions: tri, doubleSided: true, unlit });
+  it('is fine when both are unlit or both lit', () => {
+    expect(materialKindProblem([batch(true)], [batch(true)])).toBeNull();
+    expect(materialKindProblem([batch(false)], [batch(false)])).toBeNull();
+  });
+  it('names a lit version of an unlit model, and the reverse', () => {
+    expect(materialKindProblem([batch(true)], [batch(false)])).toMatch(/unlit, this version is lit/);
+    expect(materialKindProblem([batch(false)], [batch(true)])).toMatch(/lit, this version is unlit/);
+  });
+  it('gives no verdict with nothing to compare', () => {
+    expect(materialKindProblem([], [batch(true)])).toBeNull();
   });
 });

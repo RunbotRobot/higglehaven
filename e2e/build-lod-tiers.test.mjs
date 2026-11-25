@@ -88,7 +88,15 @@ const reduced = await settle((c) => c.full <= 2 && c.mid + c.far >= COUNT - 2, '
 const afterDrop = await counts();
 console.log('after lowering the budget to two models:', JSON.stringify(afterDrop));
 check(reduced, 'most of the items are drawn from a reduced version once over the budget');
-check(afterDrop.full + afterDrop.mid + afterDrop.far === COUNT, 'every item is still drawn: none is lost');
+// #4115: the change of version dissolved (a fade started) instead of swapping in one frame, and none is left running.
+check((await page.evaluate(() => window.__testBuildFadesStarted())) > 0, 'the change of version started a dissolve');
+await page.waitForFunction(() => window.__testBuildFadesInFlight() === 0, null, { timeout: 10000 });
+// #4235: and no item changed version in one frame without a dissolve (a wall past the fade bounds waits its turn).
+await page.waitForFunction(() => !window.__testBuildWaitingGroups() && window.__testBuildFadesInFlight() === 0, null, { timeout: 15000 }); // a change that waits has no fade running yet
+check((await page.evaluate(() => window.__testBuildHardSwaps())) === 0, 'no item swapped version in one frame');
+console.log('dissolves started:', await page.evaluate(() => window.__testBuildFadesStarted()));
+// (An item that stayed in full never needed its reduced versions, so it counts as without them.)
+check(afterDrop.full + afterDrop.mid + afterDrop.far + afterDrop.withoutVersions === COUNT, 'every item is still drawn: none is lost');
 await page.waitForTimeout(800);
 const drawnAfter = await page.evaluate(() => window.__testBuildRenderedTriangles());
 console.log(`triangles in the last frame: ${drawnBefore} before, ${drawnAfter} after`);
@@ -136,7 +144,7 @@ if (reducedId) {
 
 // Raising the budget and protecting the neighbourhood of the orbit target returns everything to full.
 await page.evaluate(() => { window.__testSetBuildFullTriangleCap(null); window.__testSetBuildLodProtectNear(true); });
-const back = await settle((c) => c.full === COUNT, 'everything returns to full');
+const back = await settle((c) => c.full + c.withoutVersions === COUNT && c.mid + c.far === 0, 'everything returns to full');
 check(back, 'with the default budget again every item is drawn in full');
 
 await finish(browser, { pass: pass && errors.length === 0, label: 'build-lod-tiers (#3929)', errors });

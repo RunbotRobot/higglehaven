@@ -323,20 +323,19 @@ animation you have applied (see the avatar entry below) replaces that motion.
 1. You start each visit in the air. To come down, double-tap the world: two quick
    taps in the same place. It works while your other thumb is walking or looking,
    so you do not have to stop first. On a keyboard, press T once instead.
-2. While you are flying, you go where the view points.
-   Drag on the left half of the screen to fly forward. To climb, drag on the
-   right half of the screen to look up while you fly forward. To descend, look down and walk forward. A level view flies level,
-   and when you stop walking you hold your height. On a keyboard, R looks up and
-   F looks down.
+2. While you are flying, you fly level: drag on the left half of the screen to fly forward, and the view can look anywhere,
+   straight down included, without changing your height. Slide a thumb up or down along the right edge of the screen to rise or sink.
+   When you let go you hold your height. On a keyboard, Page Up rises and Page Down sinks, and R and F look up and down.
 3. Walk and look by dragging, as usual.
 4. To go up again from the ground, double-tap the world again, or press T.
 
-**You will see:** the bird tips its nose up or down with your view, and a
+**You will see:** the bird flies level whichever way you look, and a
 double-tap switches between flying and standing. At the top of the sky, or as low
 as you can fly, a short note says so and you stay there.
 
 **If something goes wrong:**
-- You do not climb: you are on the ground. Double-tap the world to fly.
+- You do not rise: you are on the ground. Double-tap the world to fly.
+- Dragging at the very edge of the right side moves your height, not the view: drag a little further in to look around.
 - A double-tap on a product opens that product instead: double-tap on open ground.
 - You cannot find the ground: double-tap the world and let it come down by itself.
 
@@ -486,16 +485,21 @@ the card does not offer it.
 
 ### What are the glowing orbs, and what if I hit the limit?
 
-1. Glowing orbs float around the world. Walk or fly into one to collect it.
-2. A short word, "Credit +1", shows beside the round logo at the top left (the Account menu button) for a moment
-   and goes by itself. Credits are free and are used when you make a model from a picture or a
-   description in Build.
+1. Glowing orbs float around the world. Walk through one to collect it.
+2. A short word shows beside the round logo at the top left (the Account menu button) for a few seconds
+   and goes by itself. It says how many free credits you hold now, for example "1 credit" or "3 credits".
+   Tap it while it shows to read what you collected: a free credit that turns a short video into a 3D
+   model for your lándlet, the same number, and where to use one (in Build, when you add a product from a
+   short video).
+   To ask an orb what it is without collecting it, tap it in the world: a card opens saying what an orb is,
+   that walking through it collects it, and how many you can collect (for example "You can collect up
+   to 20 orbs every 15 minutes."). Tapping never collects an orb.
 3. There is a limit on how many you can collect in a short time. When you reach it, the word
    "Orb limit" shows beside the logo. Tap it to read how many you can collect and in how long you
    can collect more, for example "You can collect up to 20 orbs every 15 minutes. Try again in
    about 7 minutes." The numbers can change, so go by what your own screen says.
 
-**You will see:** a short word beside the round logo when you collect an orb, and, when you reach
+**You will see:** a short word beside the round logo when you collect an orb, saying how many credits you now hold, and, when you reach
 the limit, the word "Orb limit" that stays until you have opened it and closed it again.
 
 **If something goes wrong:**
@@ -682,7 +686,8 @@ are inside it: tap the Build petal to see them (the bud opens on the menu of the
    the top, beside the close button.
 3. Tap an item's name. The list closes and the top of the screen says "Tap a spot
    to place" and the item's name.
-4. Tap the ground where you want it.
+4. Tap the ground where you want it. On a keyboard, press Enter instead: it places the
+   item where the camera is looking, in the middle of the screen.
 
 **You will see:** the item stands where you tapped and is already selected, with a
 a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
@@ -706,6 +711,31 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
 #undo-btn | Undo
 ```
 
+### How do I look around my lándlet from a keyboard?
+
+1. Open Build. The keys work whenever you are not typing in a box or have a window
+   open in front of the view.
+2. Press W, A, S and D (or the arrow keys) to slide the view forward, left, back and
+   right over your lándlet.
+3. Press Q and E to turn the view around what it is looking at, and R and F to tip
+   it down and up.
+4. Press Page Up to zoom in and Page Down to zoom out. When you want to place
+   something, use "Add item" as usual.
+
+**You will see:** the view moves smoothly while a key is held and stops when you let
+go. It stops at the edge of how far you can go and never turns upside down.
+
+**If something goes wrong:**
+- Nothing moves: a box or a window is open and has the keys. Close it, or press
+  Escape, and try again.
+- You can move the view, move and turn the selected item, and delete or undo by
+  key so far: picking and placing items still need a mouse or a touch screen for now.
+  With an item selected, Shift with the arrow keys moves the item instead of the view.
+
+```controls build
+#add-item-btn | Add item
+```
+
 ### How do I move an item?
 
 1. Tap the item. It gets a ring around it and a small card beside it.
@@ -714,7 +744,9 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
    instead, the view turns and the item stays put.
 3. Let go where you want it. It saves by itself.
 4. To lift it, lower it or move it in small exact steps, tap "More" on the card:
-   see "Nudge" below.
+   see "Nudge" below. On a keyboard, hold Shift: Shift with the arrow keys slides the
+   selected item a small step, Shift with Page Up and Page Down lifts and lowers it,
+   and Shift with Q and E turns it.
 
 **You will see:** the item follows your finger and stays where you leave it.
 
@@ -738,12 +770,13 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
 
 ### How do I turn an item?
 
-1. Tap the item. A blue ring appears around it, and a line on the card reads the
+1. Tap the item. Three rings appear around it, and a line on the card reads the
    angles.
-2. Drag the ring to turn the item flat, like a record on a turntable. The line
+2. Drag the blue ring to turn the item flat, like a record on a turntable. The line
    calls this "Turn".
-3. To tip it over instead, tap "More" on the card and type a number under "Angles":
-   "Tilt red" or "Tilt green" (the line calls these "Tilt").
+3. To tip it over instead, drag the red ring (tips it one way) or the green ring (tips it the
+   other way). The line calls these "Tilt red" and "Tilt green". To type an exact number instead,
+   tap "More" on the card and use "Angles".
 
 **You will see:** the item turns as you drag, and the line on the card shows how far.
 
@@ -786,13 +819,14 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
 ### How do I remove an item, or get it back?
 
 1. Tap the item.
-2. Tap "Delete" on the card beside it.
+2. Tap "Delete" on the card beside it. On a keyboard, press Delete or Backspace
+   with the item selected instead.
 
 **You will see:** the item disappears at once. There is no "are you sure" for a
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back.
+- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back. On a keyboard, press Ctrl and Z (Cmd and Z on a Mac), and Ctrl, Shift and Z to redo.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed
   Items". If that button shows, tap it. Otherwise offer to pass it to the team.
@@ -971,15 +1005,18 @@ lándlets are shown here.
 ### How do I put my own product up for sale?
 
 1. In Sell, tap the round logo at the top left (the bud), then the Sell petal, then "Add a product". A
-   small window opens under it and asks which way. Tap "Upload my own model". The
-   window is now called "Upload model".
+   small window opens under it and asks which way. Tap "Create or upload my own model". The
+   window is now called "Create or upload a model".
 2. Fill in "Name". Fill in "Price": it starts empty on purpose, so type a number
    in dollars, or 0 for a free product.
-3. Choose the model file with "Choose File". It must be a .glb or .fbx file, up to
-   20MB. Tick "This is a digital good" only for things like an avatar or an art
-   file that is delivered, not placed.
-4. Tap "Add product". The app shrinks the model and shows a preview; this can take
-   a moment.
+3. Most people have no model of their product yet, so the window offers making one first: "Make a
+   model from a video". Tap "Record" (it reads "Choose a video" on a computer with no camera) and
+   film one well-lit object, walking slowly all the way around it. If you already have a model file,
+   tap "Upload a model file I already have" under it, and choose the .glb or .fbx file with
+   "Choose File" (up to 20MB). Tick "This is a digital good" only for things like an avatar or an
+   art file that is delivered, not placed.
+4. Tap "Generate model" for a video, or "Add product" for a file. The app shows a preview; this can
+   take a moment, and a video takes a couple of minutes.
 5. The window is now called "Confirm dimensions". Set the product's real size with
    "Width (X)", "Depth (Y)" and "Height (Z)" in metres; changing one changes the
    other two so the proportions stay the same.
@@ -989,12 +1026,15 @@ lándlets are shown here.
 your "My products" list).
 
 **If something goes wrong:**
-- The window says "Name is required.", "Enter a price — use 0 for a free product."
-  or "Choose a .glb or .fbx file first." Fill in the one it names and tap "Add
-  Product" again. The app checks the price on this first step, not later.
-- You have no model file: tap "Or generate a model from a video instead" at the
-  bottom of the first step. It takes a short video of one object and uses one of
-  your video credits, which that part of the window shows. "Back to manual file upload" returns.
+- The window says "Name is required.", "Enter a price — use 0 for a free product.",
+  "Record a video first." or "Choose a .glb or .fbx file first." Fill in the one it names and
+  tap the button again. The app checks the price on this first step, not later.
+- You are on the file way and have no model file: tap "Make a model from a video instead" under
+  the file picker. It takes a short video of one object and uses one of your video credits, which
+  the video part of the window shows. "Upload a model file I already have" goes back to the file.
+- Turning a video into a model is not switched on: the window opens on the file way, has no
+  "Make a model from a video" button, and says "Turning a video into a model is not switched on
+  yet." Tell the person it is not available yet and that uploading a model file still works.
 - The window shows an error after "Add product" that is not one of those: ask the
   person to read it out, and offer to pass it to the team.
 - You already have a product with that name: the app asks you to confirm before it
@@ -1002,9 +1042,11 @@ your "My products" list).
 
 ```controls sell
 #bud-petal-sell-add-product | Add a product
-#add-product-upload-btn | Upload my own model
+#add-product-upload-btn | Create or upload my own model
+#upload-video-input | video
+#upload-mode-file-btn | Upload a model file I already have
+#upload-mode-video-btn | Make a model from a video instead
 #upload-submit-btn | Add product
-#upload-mode-video-btn | generate a model from a video
 ```
 
 ### How do I sell a product someone else already made?
@@ -1040,9 +1082,10 @@ price and stock. The original maker's listing is not changed.
    category and sort boxes beside it.
 3. To rename it, tap "Rename", type the new name in the window that opens and
    confirm.
-4. To change its price, tap "More settings" on the product, then "Edit price", type the new
-   price and tap "Save price". The other "Edit" lines (size, shipping, returns) are under
-   "More settings" too and work the same way: open it, change it, tap its own Save button.
+4. To change its price, tap "Edit price" on the product (it sits right under the price, or under
+   "Not priced" for a product with no price yet), type the new price and tap "Save price". The
+   other "Edit" lines (size, shipping, returns) are under "More settings" and work the same way:
+   open it, change it, tap its own Save button.
 5. To change how many are in stock, tap the product in your showroom. A small card opens
    beside it showing its price and its stock ("No limit on stock", "3 in stock" or "Sold out").
    Tap "Stock" on that card, type how many you have left (a whole number, 0 or more) and

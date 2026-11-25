@@ -176,6 +176,39 @@ describe('Admin find-user search/detail (#2757)', () => {
       expect(result.body.suspensions).toEqual([]);
     });
 
+    it('lists the lándlets a person holds: none, one and several, with their published version (#4135)', async () => {
+      const builder = await signupBuilder('detail-landlets');
+      const userId = await currentUserId(builder.sessionToken);
+      const detail = async () => (await api('/auth/admin-user-detail?userId=' + encodeURIComponent(userId), adminSession())).body;
+      expect((await detail()).landlets).toEqual([]);
+
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const insert = (id, name) => env.DB.prepare(
+        `INSERT INTO landlets (landlet_id, name, status, owner_builder_id, area_m2, center_x_m, center_y_m)
+         VALUES (?1, ?2, 'claimed', ?3, 400, 1200.4, -800.6)`,
+      ).bind(id, name, builder.builderId).run();
+      await insert(`zz4135-b-${suffix}`, 'Second place');
+      let one = (await detail()).landlets;
+      expect(one).toHaveLength(1);
+      expect(one[0]).toMatchObject({ landletId: `zz4135-b-${suffix}`, name: 'Second place', status: 'claimed', areaM2: 400, publishedVersion: null });
+
+      const versionId = `zz4135-v-${suffix}`;
+      await env.DB.prepare('INSERT INTO landlets (landlet_id, name, status, owner_builder_id) VALUES (?1, ?2, \'claimed\', ?3)')
+        .bind(`zz4135-a-${suffix}`, 'First place', builder.builderId).run();
+      await env.DB.prepare('INSERT INTO landlet_versions (version_id, landlet_id, version_number, name) VALUES (?1, ?2, 3, \'v3\')')
+        .bind(versionId, `zz4135-a-${suffix}`).run();
+      await env.DB.prepare('UPDATE landlets SET active_version_id = ?1 WHERE landlet_id = ?2').bind(versionId, `zz4135-a-${suffix}`).run();
+      const several = (await detail()).landlets;
+      expect(several.map((l) => l.landletId)).toEqual([`zz4135-a-${suffix}`, `zz4135-b-${suffix}`]);
+      expect(several[0].publishedVersion).toBe(3);
+      expect(several[1].publishedVersion).toBeNull();
+      // Someone else's lándlet never shows here.
+      const other = await signupBuilder('detail-landlets-other');
+      await env.DB.prepare('INSERT INTO landlets (landlet_id, name, status, owner_builder_id) VALUES (?1, \'Theirs\', \'claimed\', ?2)')
+        .bind(`zz4135-c-${suffix}`, other.builderId).run();
+      expect((await detail()).landlets).toHaveLength(2);
+    });
+
     it('shows linked builder and seller profile ids/labels when both exist', async () => {
       const email = `detail-both-${crypto.randomUUID()}@example.com`;
       const signedUp = await signup(email, TEST_PASSWORD, { username: 'detail-both-profiles' });

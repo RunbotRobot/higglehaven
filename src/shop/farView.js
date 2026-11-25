@@ -26,6 +26,12 @@ const REPLAN_MIN_INTERVAL_MS = 500;
 const REPLAN_MAX_INTERVAL_MS = 3000;
 const REPLAN_MOVE_M = 25;
 const TILE_RETRY_MS = 30000;
+// #4147: a tile is not read once for the whole session. While it is in range it is read again after this long, so a
+// lándlet emptied or returned to the greenbelt while a Shop is open is gone from the far view within a couple of minutes
+// without a reload (the owner's report: far models drawn where a table could be walked through). It is one small request
+// per tile, which the server edge-caches for 60 s, and what changed is replaced through the same plan and build
+// path as any other change (no flash: unchanged products keep their meshes).
+export const TILE_REFRESH_MS = 120000;
 // #3396 ("moving, looking and drawing never wait on loading"): the far view is
 // the last thing the world does. It starts only after START_DELAY_MS since the
 // first call and once the world's work queue has been quiet for QUIET_MS, then
@@ -59,7 +65,7 @@ function prefersReducedMotion() {
 
 export function createFarView({
   queue, root, fetchTile, loadSource, dimensionsFor, elevationFor, loadedLandletIds, getCamera, getView,
-  now = () => performance.now(), rangeM = FAR_VIEW_RANGE_M,
+  now = () => performance.now(), rangeM = FAR_VIEW_RANGE_M, tileRefreshMs = TILE_REFRESH_MS,
   createDissolve = createArrivalDissolve, reducedMotion = prefersReducedMotion(),
 }) {
   const group = {}; // queue group, so dispose() cancels what has not run
@@ -86,16 +92,34 @@ export function createFarView({
 
   function startTile(tile) {
     const key = farViewTileKey(tile);
-    const record = { state: 'loading', landlets: [], failedAt: 0 };
+    const record = { state: 'loading', landlets: [], failedAt: 0, readAt: 0, refreshing: false };
     tiles.set(key, record);
     tilesInFlight += 1;
     Promise.resolve().then(() => fetchTile(tile.x, tile.y)).then((payload) => {
       record.landlets = decodeFarPlacementsPayload(payload);
       record.state = 'ready';
+      record.readAt = now();
     }).catch(() => {
       record.state = 'failed';
       record.failedAt = now();
     }).finally(() => {
+      tilesInFlight -= 1;
+      dirty = true;
+    });
+  }
+
+  // #4147: read a tile that is already drawn again. The old answer stays in use until the new one arrives, and a
+  // failed read keeps it (it is retried after TILE_RETRY_MS like any other).
+  function refreshTile(tile, record) {
+    record.refreshing = true;
+    tilesInFlight += 1;
+    Promise.resolve().then(() => fetchTile(tile.x, tile.y)).then((payload) => {
+      record.landlets = decodeFarPlacementsPayload(payload);
+      record.readAt = now();
+    }).catch(() => {
+      record.readAt = now() - tileRefreshMs + TILE_RETRY_MS;
+    }).finally(() => {
+      record.refreshing = false;
       tilesInFlight -= 1;
       dirty = true;
     });
@@ -261,6 +285,9 @@ export function createFarView({
       } else if (record.state === 'failed' && t - record.failedAt > TILE_RETRY_MS && mayFetch) {
         lastTileStartAt = t;
         startTile(tile);
+      } else if (record.state === 'ready' && !record.refreshing && t - record.readAt > tileRefreshMs && mayFetch) {
+        lastTileStartAt = t;
+        refreshTile(tile, record);
       }
     }
     for (const [key, record] of tiles) {

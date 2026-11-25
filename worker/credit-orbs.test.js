@@ -369,6 +369,7 @@ describe('collect standing (#3441)', () => {
     expect(first.body.standing).toEqual({ limit: 20, windowSeconds: 900, remaining: 20, retryAfterSeconds: 0 });
     const again = await api('/credit-orbs/standing', builder.session());
     expect(again.body.standing.remaining).toBe(20); // reading never counts
+    expect(first.body.credits).toBe(0); // #4123: the balance rides along
   });
 
   it('a successful collect reports what is left, and the standing agrees', async () => {
@@ -383,6 +384,9 @@ describe('collect standing (#3441)', () => {
     expect(collected.body.standing.retryAfterSeconds).toBeGreaterThan(0);
     const read = await api('/credit-orbs/standing', builder.session());
     expect(read.body.standing.remaining).toBe(19);
+    // #4123: the reply carries the balance after this orb, and the standing read agrees with it.
+    expect(collected.body.credits).toBe(1);
+    expect(read.body.credits).toBe(1);
   });
 
   it('reaches zero remaining exactly when the next attempt would be a 429', async () => {
@@ -523,5 +527,24 @@ describe('Builder self-delete after collecting a credit orb (#2309)', () => {
     // historical data -- not cascaded away, not nulled out.
     const row = await env.DB.prepare('SELECT * FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
     expect(row.collected_by_builder_id).toBe(builder.builderId);
+  });
+});
+
+// #4198: an orb is drawn on the landlet's own outline, not anywhere in the 31.6 m square.
+import { orbSpawnPoint } from './lib/credit-orbs.js';
+describe('orbSpawnPoint (#4198)', () => {
+  const TRIANGLE = JSON.stringify([{ x: -10, y: -10 }, { x: 10, y: -10 }, { x: -10, y: 10 }]);
+  it('always lands inside the outline, shrunk toward the centre', () => {
+    for (let i = 0; i < 200; i += 1) {
+      const { x, y } = orbSpawnPoint(TRIANGLE);
+      expect(x).toBeGreaterThanOrEqual(-8);
+      expect(y).toBeGreaterThanOrEqual(-8);
+      expect(x + y).toBeLessThanOrEqual(-0 + 1e-9); // under the slanted edge x + y = 0
+    }
+  });
+  it('falls back to the square for an unusable polygon', () => {
+    const { x, y } = orbSpawnPoint('[]', () => 1);
+    expect(x).toBeCloseTo((Math.sqrt(1000) / 2) * 0.8, 6);
+    expect(y).toBeCloseTo((Math.sqrt(1000) / 2) * 0.8, 6);
   });
 });

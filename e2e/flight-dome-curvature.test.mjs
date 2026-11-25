@@ -18,7 +18,7 @@
 // shrunk) radius at that altitude, and confirm the avatar/camera stay
 // inside the dome's actual curved surface rather than just under its flat
 // apex.
-import { launchPage, chooseIdentity, finish, shopStickBox, flyByView } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish, shopStickBox, flyWithHeight } from './helpers.mjs';
 
 const LABEL = 'Flight Dome Curvature Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -29,9 +29,9 @@ await page.waitForSelector('body.shop-ready', { timeout: 10000 });
 // tail finishes (same wait flight-dome-ceiling.test.mjs/flight.test.mjs rely on).
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-// Climb near the dome's own ceiling first: look up and fly forward (#3769: no arrows;
-// the view steers height).
-await flyByView(page, 'up', { moveMs: 6000 });
+// Climb near the dome's own ceiling first: rise and fly forward (#4105: no arrows; the height
+// gesture, here Page Up, changes height and flight is level).
+await flyWithHeight(page, 'up', { moveMs: 6000 });
 
 // ...then, while still elevated, hold the move joystick (left stick) at
 // full forward deflection long enough to try to reach — and overshoot —

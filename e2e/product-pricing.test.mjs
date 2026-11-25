@@ -153,6 +153,13 @@ await page.waitForTimeout(300);
 const unpricedRowPriceTextBefore = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('unpriced product\'s row price text before editing (should be "Not priced"):', unpricedRowPriceTextBefore);
 
+// A copy of a product with no price is refused by the server, so the button says what to do instead of
+// showing the server's field-name message.
+await unpricedRow().locator('button', { hasText: 'Duplicate' }).click();
+const duplicateUnpricedStatus = await unpricedRow().locator('.seller-row-status').textContent();
+console.log('Duplicate on an unpriced product says to set a price first (should mention "Set a price"):', JSON.stringify(duplicateUnpricedStatus));
+const duplicateUnpricedOk = /Set a price/.test(duplicateUnpricedStatus ?? '') && !/priceCents/.test(duplicateUnpricedStatus ?? '');
+
 // Give it a price after the fact via Edit price.
 await unpricedRow().locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
@@ -189,7 +196,7 @@ await page.waitForFunction(
 const clearedRowPriceText = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('row price text after clearing it back to blank (should be "Not priced"):', clearedRowPriceText);
 
-const pass = uploadPriceAfterBlur === '$1,234.50' &&
+const pass = duplicateUnpricedOk && uploadPriceAfterBlur === '$1,234.50' &&
   blankPriceStatus.toLowerCase().includes('price') &&
   blankPriceModalStillOpen === true &&
   editPriceAfterBlur === '$1,234.50' &&

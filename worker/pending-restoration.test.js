@@ -103,6 +103,11 @@ describe('Builder-facing pending restoration (#2987)', () => {
     });
     expect(pending[0].snapshotId).toBeTruthy();
     expect(pending[0].removedAt).toBeTruthy();
+    // #4201: ghosts need the saved pose.
+    expect(pending[0].rotation).toEqual({ x: expect.any(Number), y: expect.any(Number), z: expect.any(Number) });
+    expect(pending[0].scale).toBeGreaterThan(0);
+    // #4201: and the removed product's own model, which the builder's catalog no longer lists.
+    expect(pending[0].template).toMatchObject({ templateId, dimensions: { width: expect.any(Number), depth: expect.any(Number), height: expect.any(Number) } });
 
     // Another builder's view never includes it.
     expect(await listPending(stranger)).toEqual([]);

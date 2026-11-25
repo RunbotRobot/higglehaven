@@ -9,7 +9,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish, removedItemsButtonShown } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -141,7 +141,7 @@ await page.waitForTimeout(800);
 const after = await page.evaluate(() => window.__testProductScreenPositions());
 const phantomsAfter = after.filter((p) => p.instanceId.startsWith('open-tab-focus-instance-')).length;
 const alerts = await page.evaluate(() => window.__alerts);
-const buttonShown = await page.locator('#pending-restoration-btn').isVisible();
+const buttonShown = await removedItemsButtonShown(page);
 console.log('phantom removed after focus (should be 0):', phantomsAfter);
 console.log('builder\'s own items still shown (should be totalBefore - 1):', after.length, 'of', totalBefore);
 console.log('Removed items button visible (should be true):', buttonShown);

@@ -11,7 +11,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker from './index.js';
 import {
-  api, extractSessionCookie, signup, signupBuilder, withSession,
+  api, extractSessionCookie, signup, signupBuilder, signupSeller, withSession,
 } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -147,6 +147,12 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
+      suspendedPlacements: [],
+      creditOrbsCollected: [],
+      listings: [],
       tax1099Forms: [],
     });
   });
@@ -163,6 +169,12 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
+      suspendedPlacements: [],
+      creditOrbsCollected: [],
+      listings: [],
       tax1099Forms: [],
     });
   });
@@ -601,5 +613,192 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
       friendships: [], directMessages: [], notifications: [], productReviews: [], sellerFeedback: [],
       signPosts: [], calendarEvents: [], savedLevelLayouts: [], landletVersions: [], archivedLandletVersions: [],
     });
+  });
+});
+
+// #4142: the account's own assistant conversations and blocks it made.
+describe('GET /auth/export-data -- communication section (#4142)', () => {
+  async function userIdOf(builder) {
+    return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+  }
+
+  it('includes the account\'s assistant thread, left questions and own blocks, and nothing of anyone else', async () => {
+    const shopper = await signupBuilder('export-comm-shopper');
+    const assistant = await signupBuilder('export-comm-assistant');
+    const other = await signupBuilder('export-comm-other');
+    const shopperId = await userIdOf(shopper);
+    const assistantId = await userIdOf(assistant);
+    const otherId = await userIdOf(other);
+    await env.DB.prepare(`
+      INSERT INTO assistant_conversations (conversation_id, assistant_user_id, shopper_user_id, status, ended_by, ended_at)
+      VALUES ('export-comm-conv', ?, ?, 'ended', 'shopper', '2026-01-01T00:10:00.000Z'),
+             ('export-comm-conv-other', ?, ?, 'open', NULL, NULL)
+    `).bind(assistantId, shopperId, assistantId, otherId).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES
+        ('export-comm-m1', 'export-comm-conv', 'shopper', 'How do I place a wall?', '2026-01-01T00:01:00.000Z'),
+        ('export-comm-m2', 'export-comm-conv', 'assistant', 'Open Build, then the catalog.', '2026-01-01T00:02:00.000Z'),
+        ('export-comm-m3', 'export-comm-conv-other', 'shopper', 'someone else secret', '2026-01-01T00:03:00.000Z')
+    `).run();
+    await env.DB.prepare(`
+      INSERT INTO assistant_questions (question_id, shopper_user_id, text, status, answer_text, answered_at)
+      VALUES ('export-comm-q1', ?, 'Is anyone there?', 'answered', 'Yes, now.', '2026-01-02T00:00:00.000Z')
+    `).bind(shopperId).run();
+    await env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?), (?, ?)')
+      .bind(shopperId, otherId, otherId, shopperId).run();
+
+    const result = await api('/auth/export-data', shopper.session());
+    expect(result.response.status).toBe(200);
+    const comm = result.body.communication;
+    expect(comm.assistantConversations).toHaveLength(1);
+    expect(comm.assistantConversations[0]).toMatchObject({ status: 'ended', endedBy: 'shopper' });
+    expect(comm.assistantConversations[0].messages.map((m) => [m.sender, m.text])).toEqual([
+      ['shopper', 'How do I place a wall?'],
+      ['assistant', 'Open Build, then the catalog.'],
+    ]);
+    expect(comm.assistantQuestions).toHaveLength(1);
+    expect(comm.assistantQuestions[0]).toMatchObject({ question: 'Is anyone there?', answer: 'Yes, now.', status: 'answered' });
+    // Only the block this account made; the one against it stays out.
+    expect(comm.blocksMade).toHaveLength(1);
+    expect(JSON.stringify(result.body)).not.toContain('someone else secret');
+  });
+
+  it('lists the bug reports the account submitted, without the render-state dump or anyone else\'s', async () => {
+    const reporter = await signupBuilder('export-comm-reporter');
+    const stranger = await signupBuilder('export-comm-stranger');
+    await env.DB.prepare(`
+      INSERT INTO bug_reports (report_id, user_id, description, user_agent, platform, render_state_buffer_json, submitted_at)
+      VALUES ('report-mine', ?, 'The wall flickers', 'TestAgent/1', 'Linux', '{"big":"dump"}', '2026-01-03T00:00:00.000Z'),
+             ('report-theirs', ?, 'Not mine', 'Other/1', 'Mac', '{}', '2026-01-03T00:00:00.000Z')
+    `).bind((await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(reporter.builderId).first()).user_id,
+      (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(stranger.builderId).first()).user_id).run();
+    const result = await api('/auth/export-data', reporter.session());
+    expect(result.body.communication.bugReports).toEqual([expect.objectContaining({
+      reportId: 'report-mine', description: 'The wall flickers', userAgent: 'TestAgent/1', platform: 'Linux',
+    })]);
+    expect(JSON.stringify(result.body)).not.toContain('"big":"dump"');
+    expect(JSON.stringify(result.body)).not.toContain('Not mine');
+  });
+
+  it('is present, and empty, for an account that has never used any of it', async () => {
+    const quiet = await signupBuilder('export-comm-quiet');
+    const result = await api('/auth/export-data', quiet.session());
+    expect(result.body.communication).toEqual({
+      assistantConversations: [], assistantQuestions: [], blocksMade: [], bugReports: [], contentEditHistory: [],
+    });
+  });
+});
+
+// #4142: a builder's held commissions and the auctions they ran or bid in.
+describe('GET /auth/export-data -- commission holds and auctions (#4142)', () => {
+  async function purchaseFor(label, buyerBuilderId) {
+    const templateId = `export-hold-template-${crypto.randomUUID()}`;
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({ templateId, name: `Hold test ${templateId}`, color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } }),
+    });
+    expect(created.response.status).toBe(201);
+    const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host ${label} ${crypto.randomUUID()}` }) })).body.builder;
+    const purchaseId = `purchase-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5)
+    `).bind(purchaseId, `instance-${crypto.randomUUID()}`, templateId, host.builderId, `seller-${crypto.randomUUID()}`, label, buyerBuilderId).run();
+    return purchaseId;
+  }
+
+  it('lists the builder\'s own holds, auctions run and bids placed, and nobody else\'s', async () => {
+    const me = await signupBuilder('export-hold-me');
+    const other = await signupBuilder('export-hold-other');
+    const purchaseId = await purchaseFor('export-hold-buyer', other.builderId);
+    await env.DB.prepare(`
+      INSERT INTO landlets (landlet_id, name, owner_builder_id, status) VALUES
+        ('export-hold-landlet-mine', 'Mine', ?, 'claimed'), ('export-hold-landlet-theirs', 'Theirs', ?, 'claimed')
+    `).bind(me.builderId, other.builderId).run();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO commission_holds (hold_id, purchase_id, builder_id, amount_cents, release_at) VALUES
+        ('hold-mine', ?, ?, 250, '2026-12-01T00:00:00.000Z'), ('hold-theirs', ?, ?, 999, '2026-12-01T00:00:00.000Z')`)
+        .bind(purchaseId, me.builderId, purchaseId, other.builderId),
+      env.DB.prepare(`INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at) VALUES
+        ('auction-mine', 'export-hold-landlet-mine', ?, 0, '2026-12-02T00:00:00.000Z'),
+        ('auction-theirs', 'export-hold-landlet-theirs', ?, 5, '2026-12-02T00:00:00.000Z')`)
+        .bind(me.builderId, other.builderId),
+      env.DB.prepare(`INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES
+        ('bid-mine', 'auction-theirs', ?, 700), ('bid-theirs', 'auction-mine', ?, 800)`)
+        .bind(me.builderId, other.builderId),
+    ]);
+    const result = await api('/auth/export-data', me.session());
+    expect(result.response.status).toBe(200);
+    const { commissionHolds, auctionsRun, auctionBidsPlaced } = result.body.commerce;
+    expect(commissionHolds.map((h) => [h.holdId, h.amountCents])).toEqual([['hold-mine', 250]]);
+    expect(auctionsRun.map((a) => a.auctionId)).toEqual(['auction-mine']);
+    expect(auctionBidsPlaced.map((b) => [b.bidId, b.amountCents])).toEqual([['bid-mine', 700]]);
+  });
+});
+
+// #4142: a seller's own listings, and the orbs a builder collected.
+describe('GET /auth/export-data -- listings and collected orbs (#4142)', () => {
+  it('lists the seller\'s own listings (not what they own) and the orbs they collected', async () => {
+    const seller = await signupSeller('export-listing-seller');
+    const other = await signupSeller('export-listing-other');
+    // Listings are written straight into the tables (the upload route has its own
+    // tests); what matters here is which seller_id each row carries.
+    const mineId = `export-listing-mine-${crypto.randomUUID()}`;
+    const theirsId = `export-listing-theirs-${crypto.randomUUID()}`;
+    for (const [templateId, name, sellerId] of [[mineId, 'My export listing', seller.sellerId], [theirsId, 'Their export listing', other.sellerId]]) {
+      await env.DB.prepare(`INSERT INTO products (product_id, name, color, width_m, depth_m, height_m) VALUES (?, ?, '#abcdef', 1, 1, 1)`)
+        .bind(templateId, name).run();
+      await env.DB.prepare(`
+        INSERT INTO catalog_templates (template_id, name, color, width_m, depth_m, height_m, price_cents, seller_id, product_id, stock_quantity)
+        VALUES (?, ?, '#abcdef', 1, 1, 1, 750, ?, ?, 3)
+      `).bind(templateId, name, sellerId, templateId).run();
+    }
+    const builderOf = async (s) => (await env.DB.prepare(
+      'SELECT builder_id FROM builders WHERE user_id = (SELECT user_id FROM sellers WHERE seller_id = ?)',
+    ).bind(s.sellerId).first())?.builder_id;
+    const mineBuilder = await builderOf(seller);
+    const theirBuilder = await builderOf(other);
+    expect(mineBuilder).toBeTruthy();
+    expect(theirBuilder).toBeTruthy();
+    await env.DB.prepare(`
+      INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, collected_at, collected_by_builder_id)
+      VALUES ('export-orb-mine', 'greenbelt', 1, 1, '2026-01-04T00:00:00.000Z', ?), ('export-orb-theirs', 'greenbelt', 1, 1, '2026-01-04T00:00:00.000Z', ?)
+    `).bind(mineBuilder, theirBuilder).run();
+    const result = await api('/auth/export-data', seller.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.commerce.listings.map((l) => l.name)).toEqual(['My export listing']);
+    expect(result.body.commerce.listings[0]).toMatchObject({ priceCents: 750, stockQuantity: 3 });
+    expect(JSON.stringify(result.body)).not.toContain('Their export listing');
+    expect(result.body.commerce.creditOrbsCollected.map((o) => o.orbId)).toEqual(['export-orb-mine']);
+  });
+});
+
+// #4142: earlier versions of the person's own content, and what a suspension took down.
+describe('GET /auth/export-data -- edit history and suspended placements (#4142)', () => {
+  it('lists the account\'s own edit history and its builder\'s suspension snapshots, not anyone else\'s', async () => {
+    const me = await signupBuilder('export-edit-me');
+    const other = await signupBuilder('export-edit-other');
+    const userOf = async (b) => (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(b.builderId).first()).user_id;
+    await env.DB.prepare(`
+      INSERT INTO user_content_edit_history (history_id, source_table, source_id, action, snapshot_json, actor_user_id) VALUES
+        ('hist-mine', 'sign_posts', 'post-1', 'edit', '{"text":"my earlier words"}', ?),
+        ('hist-theirs', 'sign_posts', 'post-2', 'edit', '{"text":"their earlier words"}', ?)
+    `).bind(await userOf(me), await userOf(other)).run();
+    await env.DB.prepare(`
+      INSERT INTO suspended_seller_instance_snapshots (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json) VALUES
+        ('snap-mine', 'seller-a', ?, 'landlet-a', 'template-a', '{"x":1}'),
+        ('snap-theirs', 'seller-b', ?, 'landlet-b', 'template-b', '{"x":2}')
+    `).bind(me.builderId, other.builderId).run();
+    const result = await api('/auth/export-data', me.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.communication.contentEditHistory).toEqual([
+      expect.objectContaining({ source: 'sign_posts', sourceId: 'post-1', action: 'edit', snapshot: { text: 'my earlier words' } }),
+    ]);
+    expect(result.body.commerce.suspendedPlacements).toEqual([
+      expect.objectContaining({ landletId: 'landlet-a', templateId: 'template-a', instance: { x: 1 } }),
+    ]);
+    expect(JSON.stringify(result.body)).not.toContain('their earlier words');
   });
 });

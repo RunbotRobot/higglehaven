@@ -20,6 +20,11 @@ import { clampAnchorRadius, placeProductCard } from '../shop/productCardLayout.j
 // skips animations, a hidden tab).
 const BLOOM_FALLBACK_MS = 800;
 
+// #4242: a thing whose on-screen radius is at least this share of the screen's width fills the view.
+let fillsViewShare = 0.4;
+// e2e only: a catalog item small enough never reaches the real share at the camera's closest, so a test lowers it.
+window.__testSetCardFillsViewShare = (share) => { fillsViewShare = share; };
+
 const scratchRight = new THREE.Vector3();
 const scratchForward = new THREE.Vector3();
 const scratchProjected = new THREE.Vector3();
@@ -32,6 +37,7 @@ export function createWorldCard(cardEl) {
   // Where the last frame put the thing on screen. Read only by e2e hooks;
   // recomputed every frame the card is open.
   let lastAnchor = null;
+  let held = false;
 
   function setBloomState(state) {
     clearTimeout(bloomTimer);
@@ -49,7 +55,9 @@ export function createWorldCard(cardEl) {
 
   function measure() {
     const width = cardEl.offsetWidth;
-    const height = cardEl.offsetHeight;
+    // #4118: the card's whole content height, not what is shown, or a card shortened to fit would measure as short
+    // and the next frame would put it back beside the thing at full height.
+    const height = Math.max(cardEl.offsetHeight, cardEl.scrollHeight);
     if (width > 0 && height > 0) measuredSize = { width, height };
     sizeDirty = false;
   }
@@ -67,6 +75,12 @@ export function createWorldCard(cardEl) {
     anchor() {
       return lastAnchor;
     },
+    // #4242: a handle on the thing is being dragged: freeze the card's place and let touches through it.
+    hold(on) {
+      if (held === on) return;
+      held = on;
+      cardEl.dataset.held = on ? 'true' : 'false';
+    },
     // Restart the bloom, also for a different thing while a card is open.
     bloom() {
       setBloomState('closed');
@@ -75,6 +89,8 @@ export function createWorldCard(cardEl) {
       setBloomState('blooming');
     },
     close() {
+      held = false;
+      cardEl.dataset.held = 'false';
       lastPlacement = null;
       lastAnchor = null;
       clearTimeout(bloomTimer);
@@ -83,7 +99,12 @@ export function createWorldCard(cardEl) {
     },
     // worldPosition: a THREE.Vector3 (the thing's centre); halfSize: half its
     // largest dimension in metres.
-    place(worldPosition, halfSize) {
+    // minRadiusPx (optional): a clear space to keep round the thing, for a card whose thing wears
+    // handles that reach past its own size (Build's rings, #4118): the card sits beyond it.
+    place(worldPosition, halfSize, minRadiusPx = 0) {
+      // #4242: while a ring or arrow is held the card stays exactly where it is (and out of the way, see
+      // [data-held] in app.css); it does not move under the finger.
+      if (held) return;
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       camera.getWorldDirection(scratchForward);
       const behind = scratchProjected.copy(worldPosition).sub(camera.position).dot(scratchForward) <= camera.near;
@@ -98,22 +119,30 @@ export function createWorldCard(cardEl) {
         // sideways to the camera, lands from its centre.
         scratchRight.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(halfSize).add(worldPosition).project(camera);
         const rightX = (scratchRight.x * 0.5 + 0.5) * viewport.width;
-        anchor = { x, y, radius: clampAnchorRadius(Math.abs(rightX - x)), behind: false };
+        const rawRadius = Math.max(Math.abs(rightX - x), minRadiusPx);
+        // #4242: a thing that covers most of the screen's width has no clear place beside it; the card docks.
+        anchor = { x, y, radius: clampAnchorRadius(rawRadius), behind: false, fills: rawRadius >= viewport.width * fillsViewShare };
       }
       lastAnchor = anchor;
 
       if (sizeDirty) measure();
-      const place = placeProductCard({ anchor, card: measuredSize, viewport });
+      // #4118: the side it had is passed back in, so a thing on the middle of the screen does not flip the card.
+      const place = placeProductCard({ anchor, card: measuredSize, viewport, previousSide: lastPlacement?.side ?? null });
       const left = Math.round(place.left * 2) / 2;
       const top = Math.round(place.top * 2) / 2;
       const pointerY = Math.round(place.pointerY);
       const pointerX = Math.round(place.pointerX);
       const last = lastPlacement;
+      const maxHeight = place.maxHeight ?? null;
       if (last && last.left === left && last.top === top && last.side === place.side
-        && last.edge === place.edge && last.pointerY === pointerY && last.pointerX === pointerX) return;
+        && last.edge === place.edge && last.pointerY === pointerY && last.pointerX === pointerX
+        && last.maxHeight === maxHeight) return;
       lastPlacement = {
-        left, top, side: place.side, edge: place.edge, pointerY, pointerX,
+        left, top, side: place.side, edge: place.edge, pointerY, pointerX, maxHeight,
       };
+      if (maxHeight === null) cardEl.style.removeProperty('--card-max-height');
+      else cardEl.style.setProperty('--card-max-height', `${maxHeight}px`);
+      cardEl.dataset.capped = maxHeight === null ? 'false' : 'true';
       cardEl.style.setProperty('--card-x', `${left}px`);
       cardEl.style.setProperty('--card-y', `${top}px`);
       cardEl.style.setProperty('--pointer-y', `${pointerY}px`);

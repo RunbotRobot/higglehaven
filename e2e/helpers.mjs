@@ -4,6 +4,7 @@
 // and claiming a landlet — so individual test files read as "what's
 // actually being verified" rather than repeating this boilerplate each time.
 import { chromium } from 'playwright';
+import { execFileSync } from 'node:child_process';
 
 // #2728: a test file that throws an uncaught error (most often a
 // page.waitForSelector/waitForFunction that genuinely times out, with
@@ -409,7 +410,7 @@ export async function openBudMenuOf(page, menu, click = page.click.bind(page)) {
 }
 // #3691: Multi-Select, its Brush slider, Measure and Paste are lent to the Tools petal's leaf, so
 // they are only drawn while it is open. Reaching one is bud -> Tools -> the control.
-const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#paste-btn', '#multiselect-brush-size-input']);
+const TOOL_CONTROLS = new Set(['#toggle-multiselect', '#toggle-measure', '#toggle-ghosts', '#paste-btn', '#multiselect-brush-size-input']);
 // #3693: Community sign, Community calendar and Backup chain sit in the item card's More, so they
 // are only drawn while the card is open with More expanded.
 const CARD_MORE_CONTROLS = new Set(['#toggle-community-sign', '#toggle-community-calendar', '#toggle-backup-chain']);
@@ -798,8 +799,20 @@ export async function openMyProducts(page) {
 }
 
 // #3703 (Sell in the bud, 5/6): every way of adding a product starts at the bud's Add a product
-// petal, which opens one leaf asking which way. `way` is 'upload' (the upload steps) or
-// 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
+// petal, which opens one leaf asking which way. `way` is 'upload' (the steps for a model file the
+// seller already has), 'video' (the steps open on making a model from a video, #4078: the first way
+// offered) or 'sell-this-too' (the catalog grid). Replaces clicking #upload-model-btn / #sell-this-too-btn.
+// #4076: the e2e Worker has no video-to-model provider key, so the profile says video is off and the
+// Add a product steps open on the file way. A test of the video way makes the profile say it is on.
+export async function videoGenerationOn(page) {
+  await page.route('**/api/builders/me', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (body.builder) body.builder.videoGenerationAvailable = true;
+    await route.fulfill({ response, json: body });
+  });
+}
+
 export async function openAddProductLeaf(page, way = 'upload') {
   const expanded = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!expanded) await openAccountMenu(page);
@@ -811,6 +824,16 @@ export async function openAddProductLeaf(page, way = 'upload') {
   } else {
     await page.click('#add-product-upload-btn');
     await page.waitForSelector('#upload-step-file:not([hidden])', { timeout: 5000 });
+    if (way === 'upload') {
+      // The steps open on the video way (or on the file way when video-to-model is off, #4076); most
+      // callers want the file picker, one tap away.
+      await page.waitForFunction(() => {
+        const shown = (id) => { const el = document.getElementById(id); return !!el && el.getClientRects().length > 0; };
+        return shown('upload-file-field-row') || shown('upload-mode-file-btn');
+      }, null, { timeout: 15000 });
+      if (!(await page.isVisible('#upload-file-field-row'))) await page.click('#upload-mode-file-btn');
+      await page.waitForSelector('#upload-file-field-row:not([hidden])', { timeout: 5000 });
+    }
   }
 }
 
@@ -890,6 +913,14 @@ export async function budClick(page, selector) {
   const menu = budMenuOf(selector);
   if (menu && !(await page.locator(selector).isVisible())) await openBudMenuOf(page, menu);
   await page.click(selector);
+}
+
+// #4201: "Removed items" lives in the Tools leaf now, so to see it (or tap it) the Tools petal is opened first.
+// Returns whether the button is drawn; leaves the leaf open so the caller can tap it.
+export async function removedItemsButtonShown(page) {
+  await budClick(page, '#bud-petal-build-tools');
+  await page.waitForTimeout(500);
+  return page.locator('#pending-restoration-btn').isVisible();
 }
 
 // Whether `selector` is drawn right now, with the bud opened first when it is closed.
@@ -1030,20 +1061,17 @@ export async function shopLookStickBox(page) {
   return { x: width - 20 - 108, y: height - 24 - 108, width: 108, height: 108 };
 }
 
-// #3769: the up and down arrows in flight are gone; the avatar goes where the view
-// points. Tip the view up (R) or down (F) for lookMs, then hold forward (W) for moveMs.
-// The view stays where it was left, so a later call can just walk on at that pitch.
-// An automated browser has a keyboard, so this is the keyboard way of the same gesture.
-export async function flyByView(page, direction, { lookMs = 1200, moveMs = 3000 } = {}) {
-  const lookKey = direction === 'up' ? 'KeyR' : 'KeyF';
-  if (lookMs > 0) {
-    await page.keyboard.down(lookKey);
-    await page.waitForTimeout(lookMs);
-    await page.keyboard.up(lookKey);
-  }
+// #4105: flight is level; height changes by a thumb along the right edge, and on a keyboard by Page Up
+// (rise) and Page Down (sink). Hold the height key and forward (W) together for moveMs, so the avatar
+// climbs or dives along its path. An automated browser has a keyboard, so this is the keyboard way of
+// the same gesture. The view is left where it was.
+export async function flyWithHeight(page, direction, { moveMs = 3000 } = {}) {
+  const heightKey = direction === 'up' ? 'PageUp' : 'PageDown';
+  await page.keyboard.down(heightKey);
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(moveMs);
   await page.keyboard.up('KeyW');
+  await page.keyboard.up(heightKey);
 }
 
 // #3889: the orb messages (and the other things said out of turn) are a word beside the flower's
@@ -1081,4 +1109,26 @@ export async function openBuildMoreFold(page) {
 export async function openEarlierVersions(page) {
   await page.waitForSelector('.settings-earlier-versions:not([hidden])', { state: 'attached', timeout: 10000 });
   await page.evaluate(() => document.querySelectorAll('.settings-earlier-versions').forEach((el) => el.setAttribute('open', '')));
+}
+
+// #4117: a test reaches into the local D1 with `wrangler d1 execute --local`, a second process opening
+// the same SQLite file the running `wrangler dev` has open. When the server writes during that
+// process's snapshot it fails with SQLITE_BUSY ("database is locked"), which once ended
+// assistant-shift-scripts on both in-job attempts. Every e2e that shells out to the local database goes
+// through here: a busy database is tried again after a short, growing pause (about 6 s in all), and any
+// other failure throws as before. `json: true` parses the `--json` output.
+const LOCAL_D1_REPO_ROOT = new URL('..', import.meta.url).pathname;
+const D1_BUSY = /SQLITE_BUSY|database is locked/i;
+export function localD1(sql, { json = false, attempts = 8 } = {}) {
+  const args = ['wrangler', 'd1', 'execute', 'higglehaven-db', '--local', ...(json ? ['--json'] : []), '--command', sql];
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const out = execFileSync('npx', args, { cwd: LOCAL_D1_REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+      return json ? JSON.parse(out) : out;
+    } catch (error) {
+      const text = `${error.stderr || ''}${error.stdout || ''}${error.message || ''}`;
+      if (attempt >= attempts || !D1_BUSY.test(text)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+    }
+  }
 }

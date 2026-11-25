@@ -6,11 +6,14 @@
 import { json, HttpError, clientIp } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
-import { requireCurrentUser, requireAdmin } from './auth.js';
+import { requireCurrentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
+import { emailFor, isViewer } from './admin-viewer-mask.js';
+import { viewerRefusalFor } from './admin-viewer-grant.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { landletLevelZRange } from './land.js';
+import { invalidateFarPlacementsForLandlets, farPlacementCentersForUser, invalidateFarPlacementCenters, invalidateFarPlacementsForUser } from './far-placements.js';
 // #2542 (landed on main while this leaf's PR was in flight): normalizeEmail/
 // userFromRow stay defined in worker/index.js itself (re-exported for
 // worker/lib/auth-routes.js and worker/lib/stripe.js too) rather than
@@ -378,6 +381,8 @@ async function snapshotAndRemoveSellerInstances(db, sellerId, { permanent }) {
     namesByBuilder.set(builderId, names);
   }
   if (statements.length > 0) await db.batch(statements);
+  // #4147: a permanent closure comes through here too, and a draft's far tile must let go of what was removed.
+  await invalidateFarPlacementsForLandlets(db, instances.map((instance) => instance.landlet_id));
   return { removedByBuilder, namesByBuilder, removed: statements.length / 2 };
 }
 
@@ -653,12 +658,16 @@ export async function handleSuspendAccount(request, db) {
   // #2032: run only after the suspension itself is confirmed landed -- a
   // removeContent request against an account that turned out to already be
   // suspended (the 409 above) must not remove anything.
+  // #4147: read before the removal below, which deletes the placements this finds, and drop the far tiles
+  // after it: a suspended builder's lándlet and a suspended seller's products leave the far view too.
+  const farCenters = await farPlacementCentersForUser(db, row.user_id);
   const removedContent = removeContent
     ? await removeSuspendedUserPostedContent(db, admin.user_id, row.user_id)
     : null;
   // #2986: unconditional, unlike removedContent above -- see that
   // function's own comment for why.
   const { instancesRemoved } = await removeSuspendedSellerPlacedInstances(db, row.user_id);
+  await invalidateFarPlacementCenters(farCenters);
 
   return json({
     suspension: {
@@ -715,6 +724,7 @@ export async function handleUnsuspendAccount(request, db) {
   const { instancesRestored } = unsuspendedSeller
     ? await restoreSuspendedSellerPlacedInstances(db, unsuspendedSeller.seller_id)
     : { instancesRestored: 0 };
+  await invalidateFarPlacementsForUser(db, row.user_id); // #4147: what the suspension hid is back in the far view
 
   return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt }, instancesRestored });
 }
@@ -782,7 +792,9 @@ export async function handleSuspensionStatus(request, db, url) {
 const ADMIN_USER_SEARCH_RESULT_LIMIT = 25;
 
 export async function handleAdminUserSearch(request, db, url) {
-  await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it, with details masked
+  // A viewer's search matches usernames only: searching by email would reveal which addresses exist.
+  const viewer = isViewer(admin);
   const q = (url.searchParams.get('q') || '').trim();
   if (!q) throw new HttpError('q query parameter is required', 400);
   // Substring search via instr(), not LIKE -- confirmed directly against a
@@ -812,15 +824,15 @@ export async function handleAdminUserSearch(request, db, url) {
     LEFT JOIN builders ON builders.user_id = users.user_id
     LEFT JOIN sellers ON sellers.user_id = users.user_id
     WHERE instr(lower(users.username), ?) > 0
-       OR instr(lower(users.email), ?) > 0
+       OR (? = 0 AND instr(lower(users.email), ?) > 0)
     ORDER BY users.username COLLATE NOCASE ASC
     LIMIT ?
-  `).bind(needle, needle, ADMIN_USER_SEARCH_RESULT_LIMIT).all();
+  `).bind(needle, viewer ? 1 : 0, needle, ADMIN_USER_SEARCH_RESULT_LIMIT).all();
   return json({
     users: results.map((row) => ({
       userId: row.user_id,
       username: row.username,
-      email: row.email,
+      email: emailFor(admin, row.email),
       trustTier: row.trust_tier,
       createdAt: row.created_at,
       hasBuilderProfile: row.builder_id !== null,
@@ -831,17 +843,31 @@ export async function handleAdminUserSearch(request, db, url) {
 }
 
 export async function handleAdminUserDetail(request, db, url) {
-  await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it, with details masked
+  const viewer = isViewer(admin);
   const userId = (url.searchParams.get('userId') || '').trim();
   if (!userId) throw new HttpError('userId query parameter is required', 400);
   const row = await db.prepare(
-    `SELECT user_id, username, email, trust_tier, created_at, email_verified_at,
+    `SELECT user_id, username, email, trust_tier, created_at, email_verified_at, is_admin, is_fleet, is_admin_viewer, deleted_at,
       card_refusal_code, card_refusal_decline_code, card_refusal_at, card_refusal_count
     FROM users WHERE user_id = ?`,
   ).bind(userId).first();
   if (!row) throw new HttpError('No account with that userId', 404);
   const builder = await db.prepare('SELECT builder_id, label FROM builders WHERE user_id = ?').bind(userId).first();
   const seller = await db.prepare('SELECT seller_id, label FROM sellers WHERE user_id = ?').bind(userId).first();
+  // #4135: the lándlets this person holds now, found through their builder profile (the account is the
+  // person, the builder profile is the role that owns lándlets, so a reset profile shows what it holds
+  // today). One query, no paging: a person holds a handful. Revisit if one account ever holds hundreds.
+  const landletRows = builder
+    ? (await db.prepare(`
+      SELECT landlets.landlet_id, landlets.name, landlets.status, landlets.area_m2, landlets.center_x_m,
+        landlets.center_y_m, landlets.updated_at, landlet_versions.version_number AS published_version
+      FROM landlets
+      LEFT JOIN landlet_versions ON landlet_versions.version_id = landlets.active_version_id
+      WHERE landlets.owner_builder_id = ?
+      ORDER BY landlets.landlet_id
+    `).bind(builder.builder_id).all()).results
+    : [];
   // Every past suspend/lift/escalate cycle for this account, not just
   // whether one is currently active (handleSuspensionStatus's own job) --
   // the whole point of this detail view is to let an admin see the full
@@ -855,11 +881,11 @@ export async function handleAdminUserDetail(request, db, url) {
     user: {
       userId: row.user_id,
       username: row.username,
-      email: row.email,
+      email: emailFor(admin, row.email),
       trustTier: row.trust_tier,
       createdAt: row.created_at,
       emailVerifiedAt: row.email_verified_at,
-      cardRefusal: row.card_refusal_count > 0 ? {
+      cardRefusal: !viewer && row.card_refusal_count > 0 ? {
         code: row.card_refusal_code,
         declineCode: row.card_refusal_decline_code,
         at: row.card_refusal_at,
@@ -869,12 +895,25 @@ export async function handleAdminUserDetail(request, db, url) {
       builderLabel: builder ? builder.label : null,
       sellerId: seller ? seller.seller_id : null,
       sellerLabel: seller ? seller.label : null,
+      // #4175: the dashboard draws the look-only switch from these (and not for an account it can only refuse).
+      adminViewer: row.is_admin_viewer === 1,
+      adminViewerRefusal: viewerRefusalFor(row),
     },
+    landlets: landletRows.map((l) => ({
+      landletId: l.landlet_id,
+      name: l.name,
+      status: l.status,
+      areaM2: l.area_m2,
+      centerXM: l.center_x_m,
+      centerYM: l.center_y_m,
+      publishedVersion: l.published_version ?? null,
+      updatedAt: l.updated_at,
+    })),
     suspensions: suspensionRows.map((s) => ({
       suspensionId: s.suspension_id,
       adminUserId: s.admin_user_id,
       reason: s.reason,
-      evidenceNote: s.evidence_note,
+      evidenceNote: viewer ? null : s.evidence_note, // #4175: free text an admin wrote; not for a look-only admin
       suspendedAt: s.suspended_at,
       gracePeriodEndsAt: s.grace_period_ends_at,
       liftedAt: s.lifted_at,

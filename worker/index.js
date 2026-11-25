@@ -1,4 +1,6 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './lib/username-rules.js';
+import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
@@ -36,7 +38,7 @@ import {
   savedLayoutFromRow, savedLayoutInstanceFromRow,
 } from './lib/models.js';
 import {
-  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
+  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage, gateAdminStaticFile,
   handleControlRoom, handleAdminActionLogList,
 } from './lib/control-room.js';
 // #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
@@ -86,6 +88,11 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminSetViewer, handleAdminRole } from './lib/admin-viewer-grant.js';
+import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
+import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
+import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
+import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -96,9 +103,10 @@ import { checkSchemaDrift } from './lib/schema-drift.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
-  expireStaleVideoGenerationJobs,
+  expireStaleVideoGenerationJobs, tripoConfigured,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+import { handleArchivedVersions } from './lib/archived-versions.js';
 import { handleAssistant } from './lib/assistant-shift.js';
 // #2614: the instance-purchase creation/checkout domain (simulated and
 // real-money paths), extracted into worker/lib/purchase-creation.js -- see
@@ -168,8 +176,9 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
-import { handleFarPlacements } from './lib/far-placements.js';
+import { handleFarPlacements, invalidateFarPlacementsForLandlets } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
+import { itemInsideLandletOutline } from '../shared/landlet-outline.js';
 import { DEFAULT_WORDMARK_ID, isWordmarkStyleId, isWordmarkColorId } from '../shared/wordmark-set.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
@@ -435,6 +444,10 @@ async function routeRequest(request, env, ctx) {
     });
   }
 
+  // #4232: the admin pages' own static files are served only to an admin (or a look-only admin for the dashboard).
+  const adminFileRefusal = await gateAdminStaticFile(request, env, url);
+  if (adminFileRefusal) return adminFileRefusal;
+
   // Uploaded/imported model files live in R2, not the static ASSETS
   // bundle (which only has whatever shipped with the build) — served
   // from their own path prefix so they never collide with the built-in
@@ -573,7 +586,7 @@ export default {
     // #2033 (sub-issue of #1201): without this, an unreversed admin
     // suspension's own grace_period_ends_at passing silently does nothing
     // -- nothing else ever acts on it.
-    ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
+    ctx.waitUntil(escalateExpiredSuspensions(env.DB, env).catch((error) => {
       console.error('escalateExpiredSuspensions failed', error);
     }));
     // #1109: without this, an escrowed commission (a sale capped by the
@@ -584,9 +597,13 @@ export default {
     }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
-    ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
-      console.error('spawnCreditOrbIfDue failed', error);
-    }));
+    // #4076: an orb hands out a free video-to-model credit, so none spawns while the provider is not connected
+    // (a credit nobody can use would be a prize that cannot be spent). Orbs already in the world stay.
+    if (tripoConfigured(env)) {
+      ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
+        console.error('spawnCreditOrbIfDue failed', error);
+      }));
+    }
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -853,6 +870,16 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'GET' && route[0] === 'video-generation-jobs' && route.length === 2) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
+  }
+
+  // #4198: a read-only list of the items standing off their own lándlet's outline (admin only).
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-items-outside-landlets') {
+    return handleAdminItemsOutsideLandlets(request, env.DB);
+  }
+
+  // #4122: the admin dashboard's Video-to-3D jobs panel (why a finished model was not kept; a free re-check).
+  if (route[0] === 'admin-video-jobs') {
+    return handleAdminVideoJobs(request, env, env.DB, route);
   }
 
   if (route[0] === 'credit-orbs') {
@@ -1258,7 +1285,7 @@ async function handleBuilders(request, env, db, route, url) {
   // but so a reader hits "my own profile" before the generic CRUD story —
   // see handleMyBuilder's own comment for why this exists at all.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
-    return handleMyBuilder(request, db);
+    return handleMyBuilder(request, db, tripoConfigured(env));
   }
 
   // #624 (sub-issue of #349/#324): builder-side Stripe Connect onboarding,
@@ -1295,6 +1322,11 @@ async function handleBuilders(request, env, db, route, url) {
 
   // #680 (sub-issue of #679, N53): every "avatar"-category template this
   // account has purchased, for a future picker UI (#681) to offer.
+  // #4094: the builder's own archived lándlet versions, and restoring one as a new saved version.
+  if (route.length >= 3 && route[1] === 'me' && route[2] === 'archived-versions') {
+    return handleArchivedVersions(request, db, route, url);
+  }
+
   if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'avatars') {
     return handleMyOwnedAvatars(request, db);
   }
@@ -1475,13 +1507,20 @@ async function handleBuilders(request, env, db, route, url) {
     // unlike POST /api/builders' own create path just above (already
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
-    const label = labelValue(input.label, 'label');
     // #3142 (owner decision 2026-11-05, "One alias per person"): a person's
     // name is the account's username, and builders.label is only a copy of
     // it, so a rename here sets the username and the label follows in the
-    // same batch -- the two can no longer drift apart. The signup cap on
-    // usernames applies, since this is now where one is set.
-    if (label.length > 40) throw new HttpError('label must be 40 characters or fewer', 400);
+    // same batch -- the two can no longer drift apart. #4136: since this is
+    // where a username is set, signup's rules apply here too, from the same
+    // function (spaces collapsed, unshowable characters refused, look-alikes
+    // and the reserved names compared in folded form).
+    // labelValue first: its 100-character bound runs before anything is normalised.
+    const label = normalizeUsername(labelValue(input.label, 'label'));
+    const labelSkeleton = usernameSkeleton(label);
+    if (isReservedSkeleton(labelSkeleton)) {
+      throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
+    }
+    await ensureUsernameSkeletons(db);
     const userId = sessionBuilder.user_id;
     // #1187's case-insensitive uniqueness, now against both other accounts'
     // usernames (the schema's own idx_users_username_nocase) and any other
@@ -1491,11 +1530,12 @@ async function handleBuilders(request, env, db, route, url) {
     // username UPDATE just before it did (the batch is one transaction).
     const [usernameResult, labelResult] = await db.batch([
       db.prepare(`
-        UPDATE users SET username = ?
+        UPDATE users SET username = ?, username_skeleton = ?
         WHERE user_id = ?
           AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND user_id != ?)
+          AND NOT EXISTS (SELECT 1 FROM users WHERE username_skeleton = ? AND user_id != ?)
           AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
-      `).bind(label, userId, label, userId, label, route[1]),
+      `).bind(label, labelSkeleton, userId, label, userId, labelSkeleton, userId, label, route[1]),
       db.prepare(`
         UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE builder_id = ? AND EXISTS (SELECT 1 FROM users WHERE user_id = ? AND username = ?)
@@ -1559,7 +1599,9 @@ async function handleBuilders(request, env, db, route, url) {
       if (!stillExists) throw new HttpError('Builder not found', 404);
       throw new HttpError(await builderDeletionBlockMessage(db, route[1], 'this builder'), 409);
     }
-    return json({ deleted: true, releasedLandletIds: released.results.map((row) => row.landlet_id) });
+    const releasedIds = released.results.map((row) => row.landlet_id);
+    await invalidateFarPlacementsForLandlets(db, releasedIds); // #4147: far view lets go of what was released
+    return json({ deleted: true, releasedLandletIds: releasedIds });
   }
 
   // Admin-only test/ops fixture support — mirrors POST /api/landlets'
@@ -2502,6 +2544,7 @@ async function resolveAuction(db, auction) {
       return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
     }
   }
+  await invalidateFarPlacementsForLandlets(db, [auction.landlet_id]); // #4147: a transfer or release empties what far view drew
   await fireNotifications(db, pendingNotifications);
   return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
 }
@@ -3141,7 +3184,7 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
-    return handleDeleteAccount(request, db, url);
+    return handleDeleteAccount(request, db, url, env);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'change-password') {
     return handleChangePassword(request, db);
@@ -3190,6 +3233,25 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4175: which dashboard the caller has (admin or look-only), asked by the page when it opens.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-role') {
+    return handleAdminRole(request, db);
+  }
+  // #4175: the owner's switch for the look-only admin role (full admin only, logged).
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-set-viewer') {
+    return handleAdminSetViewer(request, db);
+  }
+  // #4077: the admin dashboard's Delete account: a preview of what goes with it, then the same cascade a person's own deletion runs.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-delete-account-preview') {
+    return handleAdminDeleteAccountPreview(request, db, url);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
+    return handleAdminDeleteAccount(request, db, env);
+  }
+  // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {
+    return handleAdminLandletSearch(request, db, url);
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-detail') {
     return handleAdminUserDetail(request, db, url);
@@ -3296,7 +3358,10 @@ const STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX = 20;
 // Exported for worker/lib/auth-routes.js (#2542) -- also called from this
 // file's own escalateExpiredSuspensions cron job above, so it stays here
 // rather than moving with handleDeleteAccount itself.
-export async function cascadeDeleteAccount(db, userId) {
+// #4266: `env` (optional) lets the cascade also remove the person's bug-report
+// screenshots from the FEEDBACK bucket; without it the report rows are still
+// detached and the screenshot link cleared.
+export async function cascadeDeleteAccount(db, userId, env = null) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -3321,6 +3386,13 @@ export async function cascadeDeleteAccount(db, userId) {
   const sellerRow = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
   const builderId = builderRow?.builder_id ?? null;
   const sellerId = sellerRow?.seller_id ?? null;
+
+  // #4266: bug reports keep their description (the team triaged from it) but
+  // not the person: no account link, no device details, no screenshot. Read
+  // the screenshot ids first, delete the objects only once the deletion went through.
+  const reportScreenshots = (await db.prepare(
+    'SELECT report_id FROM bug_reports WHERE user_id = ? AND screenshot_url IS NOT NULL',
+  ).bind(userId).all()).results.map((row) => row.report_id);
 
   const statements = [];
   let landletsReleasedIndex = -1;
@@ -3357,7 +3429,7 @@ export async function cascadeDeleteAccount(db, userId) {
   // reports the account filed (a deleted reporter's own reports have no
   // durable evidentiary role; the reported side is kept by user id, #3121).
   // Gated like the statements around it.
-  for (const reportsTable of ['voice_conduct_reports', 'nearby_chat_reports']) {
+  for (const reportsTable of ['voice_conduct_reports', 'nearby_chat_reports', 'direct_message_reports']) {
     statements.push(db.prepare(`
       DELETE FROM ${reportsTable}
       WHERE reporter_user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
@@ -3382,11 +3454,17 @@ export async function cascadeDeleteAccount(db, userId) {
     `).bind(...columns.map(() => userId), ...guardBinds));
   }
 
+  statements.push(db.prepare(`
+    UPDATE bug_reports SET user_id = NULL, user_agent = NULL, platform = NULL,
+      render_state_buffer_json = NULL, screenshot_url = NULL
+    WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+  `).bind(userId, ...guardBinds));
+
   const usersUpdateIndex = statements.length;
   statements.push(
     db.prepare(`
       UPDATE users SET
-        email = ?, email_canonical = NULL, username = ?, password_hash = ?,
+        email = ?, email_canonical = NULL, username = ?, username_skeleton = NULL, password_hash = ?,
         failed_login_attempts = 0, locked_until = NULL,
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -3433,6 +3511,12 @@ export async function cascadeDeleteAccount(db, userId) {
     // the builder/seller endpoints' own "concurrent delete" case.
     throw new HttpError('Account deletion did not complete. Retry', 409);
   }
+  if (env?.FEEDBACK) {
+    for (const reportId of reportScreenshots) {
+      await env.FEEDBACK.delete(`bug-reports/${reportId}.png`)
+        .catch((error) => console.error('cascadeDeleteAccount: failed to delete a bug-report screenshot', reportId, error));
+    }
+  }
   // #3065: the seller (if any) is really gone now -- take their products off
   // builders' land and tell the builders. Best-effort: the account is
   // already deleted and cannot be retried, and closed_sellers (written in
@@ -3442,11 +3526,11 @@ export async function cascadeDeleteAccount(db, userId) {
     await removeClosedSellerPlacedInstances(db, sellerId)
       .catch((error) => console.error('cascadeDeleteAccount: failed to remove a closed seller\'s placed products', sellerId, error));
   }
-  return {
-    releasedLandletIds: landletsReleasedIndex >= 0
-      ? batchResults[landletsReleasedIndex].results.map((row) => row.landlet_id)
-      : [],
-  };
+  const releasedLandletIds = landletsReleasedIndex >= 0
+    ? batchResults[landletsReleasedIndex].results.map((row) => row.landlet_id)
+    : [];
+  await invalidateFarPlacementsForLandlets(db, releasedLandletIds); // #4147: far view lets go of what was released
+  return { releasedLandletIds };
 }
 
 // #2542: handleDeleteAccount moved to worker/lib/auth-routes.js (calls
@@ -3465,7 +3549,7 @@ export async function cascadeDeleteAccount(db, userId) {
 // partway through one account's cascade can't leave it stuck
 // unprocessed forever, and a second concurrent run of this same cron
 // can't double-escalate the same suspension.
-export async function escalateExpiredSuspensions(db) {
+export async function escalateExpiredSuspensions(db, env = null) {
   const due = await db.prepare(`
     UPDATE account_suspensions
     SET escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -3499,7 +3583,7 @@ export async function escalateExpiredSuspensions(db) {
       // #3057: before the cascade deletes the sellers row.
       closedRecord = await recordSellerClosure(db, row.user_id);
       closure = await prepareSellerPermanentClosure(db, row.user_id);
-      await cascadeDeleteAccount(db, row.user_id);
+      await cascadeDeleteAccount(db, row.user_id, env);
     } catch (error) {
       // The deletion itself did not complete, so the closure is not real:
       // undo its marks and re-arm.
@@ -3689,6 +3773,85 @@ async function exportSocialSection(db, builderId, userId) {
   };
 }
 
+// #4142: the account's own conversations with the assistants and the blocks it
+// made. These key on the account (user_id), not on a builder profile, so they
+// are exported for every account, builder or not. Both sides of an assistant
+// thread are the person's to read (the assistant's replies are addressed to
+// them); the assistant is named by its username. Who blocked the person is
+// deliberately not here ("A block is silent").
+async function exportCommunicationData(db, userId) {
+  const conversations = await db.prepare(`
+    SELECT c.conversation_id, c.status, c.ended_by, c.created_at, c.ended_at, u.username AS assistant_name
+    FROM assistant_conversations c LEFT JOIN users u ON u.user_id = c.assistant_user_id
+    WHERE c.shopper_user_id = ? ORDER BY c.created_at ASC
+  `).bind(userId).all();
+  const messages = await db.prepare(`
+    SELECT m.conversation_id, m.sender, m.text, m.created_at FROM assistant_messages m
+    WHERE m.conversation_id IN (SELECT conversation_id FROM assistant_conversations WHERE shopper_user_id = ?)
+    ORDER BY m.created_at ASC
+  `).bind(userId).all();
+  const questions = await db.prepare(`
+    SELECT status, text, answer_text, answered_at, created_at, closed_at FROM assistant_questions
+    WHERE shopper_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const blocks = await db.prepare(`
+    SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
+    LEFT JOIN users u ON u.user_id = b.blocked_user_id
+    WHERE b.blocker_user_id = ? ORDER BY b.created_at ASC
+  `).bind(userId).all();
+  // The feedback reports this account submitted. The attached device facts are
+  // the person's own; the render-state ring buffer is a large diagnostic dump
+  // and stays out, like the screenshot bytes (only the link is listed).
+  const bugReports = await db.prepare(`
+    SELECT report_id, description, screenshot_url, user_agent, platform, submitted_at, created_at
+    FROM bug_reports WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  // Earlier versions of the person's own reviews and sign posts, kept for
+  // disputes (#1975, #2041): the text they wrote before editing or deleting.
+  const editHistory = await db.prepare(`
+    SELECT source_table, source_id, action, snapshot_json, created_at
+    FROM user_content_edit_history WHERE actor_user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const byConversation = new Map();
+  for (const row of messages.results) {
+    if (!byConversation.has(row.conversation_id)) byConversation.set(row.conversation_id, []);
+    byConversation.get(row.conversation_id).push({ sender: row.sender, text: row.text, sentAt: row.created_at });
+  }
+  return {
+    assistantConversations: conversations.results.map((row) => ({
+      assistant: row.assistant_name,
+      status: row.status,
+      endedBy: row.ended_by,
+      startedAt: row.created_at,
+      endedAt: row.ended_at,
+      messages: byConversation.get(row.conversation_id) ?? [],
+    })),
+    assistantQuestions: questions.results.map((row) => ({
+      status: row.status,
+      question: row.text,
+      answer: row.answer_text,
+      askedAt: row.created_at,
+      answeredAt: row.answered_at,
+      closedAt: row.closed_at,
+    })),
+    blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    contentEditHistory: editHistory.results.map((row) => {
+      let snapshot = null;
+      try { snapshot = JSON.parse(row.snapshot_json); } catch { snapshot = row.snapshot_json; }
+      return { source: row.source_table, sourceId: row.source_id, action: row.action, snapshot, at: row.created_at };
+    }),
+    bugReports: bugReports.results.map((row) => ({
+      reportId: row.report_id,
+      description: row.description,
+      screenshotUrl: row.screenshot_url,
+      userAgent: row.user_agent,
+      platform: row.platform,
+      submittedAt: row.submitted_at,
+      createdAt: row.created_at,
+    })),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -3740,8 +3903,9 @@ async function handleExportData(request, db) {
         decidedAt: row.decided_at,
       })),
     },
-    commerce: await exportCommerceData(db, builderRow, user.user_id),
+    commerce: await exportCommerceData(db, builderRow, user.user_id, sellerRow?.seller_id ?? null),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
+    communication: await exportCommunicationData(db, user.user_id),
   });
 }
 
@@ -3769,7 +3933,7 @@ async function handleExportData(request, db) {
 // purchase-grants-ownership flow), not independent user-facing data: every
 // field either of them carries (purchase_id, template_id) is already present
 // on the corresponding owned_avatars/owned_animations row itself.
-async function exportCommerceData(db, builderRow, userId) {
+async function exportCommerceData(db, builderRow, userId, sellerId) {
   const tax1099Forms = await db.prepare(`
     SELECT form_id, tax_year, form_type, status, gross_income_cents, generated_at, approved_at, filed_at, filing_reference
     FROM tax_1099_forms WHERE user_id = ? ORDER BY tax_year DESC, form_type ASC
@@ -3786,6 +3950,31 @@ async function exportCommerceData(db, builderRow, userId) {
     filingReference: row.filing_reference,
   }));
 
+  // #4142: a seller's own listings (what they put up for sale). The joins on
+  // catalog_templates further down describe what a person OWNS; this is what
+  // they SELL. No embedding, moderation flag or test-model marker.
+  const listingRows = sellerId ? (await db.prepare(`
+    SELECT template_id, product_id, name, category, subcategory, color, width_m, depth_m, height_m,
+           price_cents, stock_quantity, model_url, image_url, delisted_at, created_at, updated_at
+    FROM catalog_templates WHERE seller_id = ? ORDER BY created_at DESC
+  `).bind(sellerId).all()).results : [];
+  const listings = listingRows.map((row) => ({
+    templateId: row.template_id,
+    productId: row.product_id,
+    name: row.name,
+    category: row.category,
+    subcategory: row.subcategory,
+    color: row.color,
+    dimensions: { width: row.width_m, depth: row.depth_m, height: row.height_m },
+    priceCents: row.price_cents,
+    stockQuantity: row.stock_quantity,
+    modelUrl: row.model_url,
+    imageUrl: row.image_url,
+    delistedAt: row.delisted_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
   if (!builderRow) {
     return {
       purchasesAsBuyer: [],
@@ -3795,6 +3984,12 @@ async function exportCommerceData(db, builderRow, userId) {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      commissionHolds: [],
+      auctionsRun: [],
+      auctionBidsPlaced: [],
+      suspendedPlacements: [],
+      creditOrbsCollected: [],
+      listings,
       tax1099Forms: tax1099FormsExport,
     };
   }
@@ -3836,6 +4031,33 @@ async function exportCommerceData(db, builderRow, userId) {
     SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC, bundle_id DESC
   `).bind(builderId).all();
 
+  // #4142: the builder's own money held back from release, and the auctions
+  // they ran or bid in. Plain fields only (no resolution tokens or internal
+  // timestamps); the amounts and dates are what the person could be asked about.
+  const commissionHolds = await db.prepare(`
+    SELECT hold_id, purchase_id, amount_cents, release_at, released_at, revoked_at, created_at
+    FROM commission_holds WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  const auctionsRun = await db.prepare(`
+    SELECT auction_id, landlet_id, starting_bid_cents, status, ends_at, winning_bid_id, created_at
+    FROM auctions WHERE seller_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+  // What the builder had placed when a suspension took it down, so they are
+  // never left wondering what used to stand there (the builder has full
+  // information about their own landlet).
+  const suspendedPlacements = await db.prepare(`
+    SELECT landlet_id, template_id, instance_json, removed_at, restored_at, cleared_at
+    FROM suspended_seller_instance_snapshots WHERE builder_id = ? ORDER BY removed_at DESC
+  `).bind(builderId).all();
+  const creditOrbsCollected = await db.prepare(`
+    SELECT orb_id, landlet_id, collected_at FROM credit_orbs
+    WHERE collected_by_builder_id = ? ORDER BY collected_at DESC
+  `).bind(builderId).all();
+  const auctionBidsPlaced = await db.prepare(`
+    SELECT bid_id, auction_id, amount_cents, created_at
+    FROM auction_bids WHERE bidder_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
   return {
     purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
@@ -3862,6 +4084,48 @@ async function exportCommerceData(db, builderRow, userId) {
       createdAt: row.created_at,
     })),
     bundles: bundles.results.map(bundleFromRow),
+    commissionHolds: commissionHolds.results.map((row) => ({
+      holdId: row.hold_id,
+      purchaseId: row.purchase_id,
+      amountCents: row.amount_cents,
+      releaseAt: row.release_at,
+      releasedAt: row.released_at,
+      revokedAt: row.revoked_at,
+      createdAt: row.created_at,
+    })),
+    auctionsRun: auctionsRun.results.map((row) => ({
+      auctionId: row.auction_id,
+      landletId: row.landlet_id,
+      startingBidCents: row.starting_bid_cents,
+      status: row.status,
+      endsAt: row.ends_at,
+      winningBidId: row.winning_bid_id,
+      createdAt: row.created_at,
+    })),
+    auctionBidsPlaced: auctionBidsPlaced.results.map((row) => ({
+      bidId: row.bid_id,
+      auctionId: row.auction_id,
+      amountCents: row.amount_cents,
+      createdAt: row.created_at,
+    })),
+    suspendedPlacements: suspendedPlacements.results.map((row) => {
+      let instance = null;
+      try { instance = JSON.parse(row.instance_json); } catch { instance = row.instance_json; }
+      return {
+        landletId: row.landlet_id,
+        templateId: row.template_id,
+        instance,
+        removedAt: row.removed_at,
+        restoredAt: row.restored_at,
+        clearedAt: row.cleared_at,
+      };
+    }),
+    creditOrbsCollected: creditOrbsCollected.results.map((row) => ({
+      orbId: row.orb_id,
+      landletId: row.landlet_id,
+      collectedAt: row.collected_at,
+    })),
+    listings,
     tax1099Forms: tax1099FormsExport,
   };
 }
@@ -4307,6 +4571,16 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
     rows.push(...results);
   }
   const templatesById = new Map(rows.map((row) => [row.template_id, templateFromRow(row)]));
+  // #4198: the lándlet's own outline, read once per lándlet (a lándlet with no usable polygon keeps the square).
+  const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
+  const polygonsByLandlet = new Map();
+  for (let i = 0; i < landletIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = landletIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const { results } = await db.prepare(
+      `SELECT landlet_id, polygon_json FROM landlets WHERE landlet_id IN (${chunk.map(() => '?').join(', ')})`,
+    ).bind(...chunk).all();
+    for (const row of results) polygonsByLandlet.set(row.landlet_id, row.polygon_json);
+  }
   for (const instance of instances) {
     const halfSpan = (LANDLET_SIDE_M / 2) * footprintScaleAtHeight(instance.z);
     const template = templatesById.get(instance.templateId);
@@ -4327,7 +4601,25 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
         + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(halfWidth, halfDepth)).toFixed(2)} `
         + `given its current size/scale)`,
         400,
+        { code: ERROR_CODES.OUTSIDE_LANDLET_OUTLINE },
       );
+    }
+    if (template) {
+      const flooring = template.metadata?.flooring === true;
+      const inside = itemInsideLandletOutline(polygonsByLandlet.get(instance.landletId), {
+        x: instance.x,
+        y: instance.y,
+        width: flooring ? template.dimensions.width : (instance.crop?.x ?? template.dimensions.width) * instance.scale,
+        depth: flooring ? template.dimensions.depth : (instance.crop?.y ?? template.dimensions.depth) * instance.scale,
+        rotationZ: instance.rotationZ ?? 0,
+      }, footprintScaleAtHeight(instance.z));
+      if (!inside) {
+        throw new HttpError(
+          `Instance at (${instance.x}, ${instance.y}) extends outside lándlet "${instance.landletId}"'s outline`,
+          400,
+          { code: ERROR_CODES.OUTSIDE_LANDLET_OUTLINE },
+        );
+      }
     }
   }
 }
@@ -4716,7 +5008,7 @@ export function versionFromRow(row) {
 // own comment on why it can't be the identity column). versionInstanceFromRow
 // below is reused as-is for archived_version_instances rows -- every
 // column it reads is shared verbatim between the two tables.
-function archivedVersionFromRow(row) {
+export function archivedVersionFromRow(row) {
   return {
     versionId: row.version_id,
     sourceLandletId: row.source_landlet_id,

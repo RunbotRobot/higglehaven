@@ -9,7 +9,8 @@
 // tokens (only how many are open), anything from a KYC form. Every field below has an honest source in
 // the schema; a field without one is left out rather than approximated.
 import { json } from './http.js';
-import { requireAdmin } from './auth.js';
+import { requireAdminOrViewer } from './auth.js';
+import { emailFor, isViewer } from './admin-viewer-mask.js';
 import { isAssistantUsername } from './fleet-agents.js';
 
 export const ADMIN_USERS_LIMIT = 1000;
@@ -97,7 +98,8 @@ function byKey(results, keyField = 'k') {
 }
 
 export async function handleAdminUsers(request, db) {
-  await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4175: a look-only admin may read it, with details masked
+  const viewer = isViewer(admin);
   const nowIso = new Date().toISOString();
   const users = (await db.prepare(`
     SELECT users.user_id, users.email, users.username, users.email_verified_at, users.failed_login_attempts,
@@ -144,10 +146,10 @@ export async function handleAdminUsers(request, db) {
     db.prepare(`SELECT recipient_user_id AS k, count(*) AS n FROM friendships WHERE status = 'pending' AND recipient_user_id IS NOT NULL GROUP BY recipient_user_id`).all(),
     db.prepare('SELECT blocker_user_id AS k, count(*) AS n FROM user_blocks GROUP BY blocker_user_id').all(),
     db.prepare(`SELECT u AS k, count(*) AS n FROM (
-        SELECT reported_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reported_user_id AS u FROM voice_conduct_reports
+        SELECT reported_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reported_user_id AS u FROM voice_conduct_reports UNION ALL SELECT reported_user_id AS u FROM direct_message_reports
       ) WHERE u IS NOT NULL GROUP BY u`).all(),
     db.prepare(`SELECT u AS k, count(*) AS n FROM (
-        SELECT reporter_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reporter_user_id AS u FROM voice_conduct_reports
+        SELECT reporter_user_id AS u FROM nearby_chat_reports UNION ALL SELECT reporter_user_id AS u FROM voice_conduct_reports UNION ALL SELECT reporter_user_id AS u FROM direct_message_reports
       ) WHERE u IS NOT NULL GROUP BY u`).all(),
     db.prepare(`SELECT assistant_conversations.shopper_user_id AS k, max(assistant_messages.created_at) AS last_at
       FROM assistant_conversations LEFT JOIN assistant_messages ON assistant_messages.conversation_id = assistant_conversations.conversation_id
@@ -174,7 +176,7 @@ export async function handleAdminUsers(request, db) {
       return {
         userId: row.user_id,
         username: row.username,
-        email: row.email,
+        email: emailFor(admin, row.email),
         kind: kindOf(row),
         createdAt: row.created_at,
         emailVerifiedAt: row.email_verified_at,
@@ -185,12 +187,13 @@ export async function handleAdminUsers(request, db) {
         failedLoginAttempts: row.failed_login_attempts,
         deletedAt: row.deleted_at,
         updatedAt: row.updated_at,
-        cardFunding: row.card_funding,
-        cardRefusalCount: row.card_refusal_count ?? 0,
-        cardRefusalCode: row.card_refusal_code,
-        cardRefusalAt: row.card_refusal_at,
-        taxFormType: row.tax_form_type,
-        taxFormCompletedAt: row.tax_form_completed_at,
+        // #4175: card and tax form details are not shown to a look-only admin (null, not a made-up value).
+        cardFunding: viewer ? null : row.card_funding,
+        cardRefusalCount: viewer ? null : (row.card_refusal_count ?? 0),
+        cardRefusalCode: viewer ? null : row.card_refusal_code,
+        cardRefusalAt: viewer ? null : row.card_refusal_at,
+        taxFormType: viewer ? null : row.tax_form_type,
+        taxFormCompletedAt: viewer ? null : row.tax_form_completed_at,
         taxIdOnFile: row.tax_id_on_file === 1,
         loadingTipsOff: row.loading_tips_off === 1,
         firstHintsDone: row.first_hints_done,

@@ -210,6 +210,12 @@ function parseStepWithoutBurst(token, command, args) {
       if (!AIM_DIRECTIONS.includes(args[0])) throw new Error(`step "${token}": direction must be one of ${AIM_DIRECTIONS.join(', ')}`);
       if (args[1] !== undefined && !(Number(args[1]) > 0)) throw new Error(`step "${token}": milliseconds must be a positive number`);
       return { command, args: [args[0], Number(args[1] ?? 1000)] };
+    case 'rise':
+      // #4105: a thumb sliding along the right edge, up to rise and down to sink.
+      need(1);
+      if (!['up', 'down'].includes(args[0])) throw new Error(`step "${token}": direction must be up or down`);
+      if (args[1] !== undefined && !(Number(args[1]) > 0)) throw new Error(`step "${token}": milliseconds must be a positive number`);
+      return { command, args: [args[0], Number(args[1] ?? 1000)] };
     case 'look':
       need(2);
       if (!Number.isFinite(Number(args[0])) || !Number.isFinite(Number(args[1]))) throw new Error(`step "${token}": look needs two numbers (pixels right, pixels down)`);
@@ -295,7 +301,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
   }
 }
 

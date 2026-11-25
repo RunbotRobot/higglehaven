@@ -54,6 +54,8 @@ import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
 import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
 import { isReservedUsername } from './fleet-agents.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './username-rules.js';
+import { ensureUsernameSkeletons } from './username-store.js';
 import { verifyEmailMessage, passwordResetMessage } from './email-layout.js'; // #3877
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser,
@@ -123,10 +125,9 @@ function passwordValue(value) {
   return value;
 }
 
+// #4136: one set of rules for every route that sets a username (worker/lib/username-rules.js).
 function usernameValue(value) {
-  const username = stringValue(value, 'username');
-  if (username.length > 40) throw new HttpError('username must be at most 40 characters', 400);
-  return username;
+  return normalizeUsername(value);
 }
 
 export async function createSession(db, userId) {
@@ -173,11 +174,14 @@ export async function handleSignup(request, env, db, url) {
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
+  const usernameSkeletonValue = usernameSkeleton(username);
   // #3445: the assistants' agent names belong to the fleet; nobody else can
-  // sign up as one.
-  if (isReservedUsername(username)) {
+  // sign up as one. #4136: nor can they be matched by a look-alike, and the
+  // plainly misleading names (admin, support, ...) are reserved the same way.
+  if (isReservedUsername(username) || isReservedSkeleton(usernameSkeletonValue)) {
     throw new HttpError('Username is already taken', 409);
   }
+  await ensureUsernameSkeletons(db);
 
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
 
@@ -198,12 +202,12 @@ export async function handleSignup(request, env, db, url) {
   const passwordHash = await hashPassword(password);
   const ageAttestedAt = new Date().toISOString();
   const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at, turnstile_failed_at)
-    SELECT ?, ?, ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
+    INSERT INTO users (user_id, email, password_hash, username, username_skeleton, email_canonical, age_attested_at, turnstile_failed_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ? OR username_skeleton = ?)
   `).bind(
-    userId, email, passwordHash, username, emailCanonical, ageAttestedAt, turnstileFailedAt,
-    email, emailCanonical, username,
+    userId, email, passwordHash, username, usernameSkeletonValue, emailCanonical, ageAttestedAt, turnstileFailedAt,
+    email, emailCanonical, username, usernameSkeletonValue,
   ).run();
   if (inserted.meta.changes === 0) {
     const emailConflict = await db.prepare('SELECT 1 FROM users WHERE email = ? OR email_canonical = ?').bind(email, emailCanonical).first();
@@ -325,7 +329,7 @@ export async function handleLogout(request, db, url) {
 
 const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 
-export async function handleDeleteAccount(request, db, url) {
+export async function handleDeleteAccount(request, db, url, env = null) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
   const input = await readJson(request);
@@ -334,7 +338,7 @@ export async function handleDeleteAccount(request, db, url) {
     throw new HttpError('Incorrect password', 401);
   }
 
-  await cascadeDeleteAccount(db, user.user_id);
+  await cascadeDeleteAccount(db, user.user_id, env);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
 }

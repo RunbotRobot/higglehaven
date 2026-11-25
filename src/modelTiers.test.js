@@ -279,6 +279,14 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(stats.mid).toBeLessThanOrEqual(stats.full);
   });
 
+  it('keeps the surface of an open scan in the mid version: borders stay put (#4114)', () => {
+    const full = noisyOpenScan();
+    const { mid } = buildModelTiersSync(full);
+    const report = silhouetteFidelity(fidelityBatches(full), fidelityBatches(mid.object));
+    expect(report.areaKept).toBeGreaterThanOrEqual(0.95);
+    expect(report.openGrowth).toBeLessThanOrEqual(1.15);
+  });
+
   it('draws the far version from both sides, so nothing the simplifier left facing away disappears', () => {
     const { far } = buildModelTiersSync(chair());
     const meshes = [];
@@ -370,6 +378,20 @@ describe('buildModelTiersSync', () => {
     expect(Math.abs(actual.r - expected.r)).toBeLessThan(0.12);
     expect(Math.abs(actual.g - expected.g)).toBeLessThan(0.12);
     expect(Math.abs(actual.b - expected.b)).toBeLessThan(0.12);
+  });
+
+  it('draws a metal model darker than its base colour and adds emission, as the lit full model looks (#4111)', () => {
+    const farOf = (props) => {
+      const model = chair();
+      model.traverse((o) => { if (o.isMesh) Object.assign(o.material, props); });
+      return farAverageColor(buildModelTiersSync(model).far.object);
+    };
+    const plain = farOf({ metalness: 0 });
+    const metal = farOf({ metalness: 1 });
+    expect(metal.r).toBeLessThan(plain.r * 0.5);
+    expect(metal.r).toBeGreaterThan(plain.r * 0.2);
+    const glowing = farOf({ metalness: 0, emissive: new THREE.Color(0.2, 0, 0), emissiveIntensity: 1 });
+    expect(glowing.r).toBeCloseTo(plain.r + 0.2, 1);
   });
 
   it('keeps every part of a multi-mesh model in the far version, merged into one mesh', () => {
@@ -536,5 +558,65 @@ describe('hole guard (#3528)', () => {
     const flat = new THREE.IcosahedronGeometry(1, 8);
     const flatResult = runToEnd(simplifyToTarget(flat, Math.round(countTriangles(flat) * 0.1)));
     expect(runToEnd(boundaryEdgeCountSteps(flatResult))).toBe(0);
+  });
+});
+
+describe('far shading (#4111)', () => {
+  const normalSpread = (far) => {
+    // How different the normals at one shared corner are, over the far mesh's corners.
+    const mesh = meshesOf(far.object)[0];
+    const pos = mesh.geometry.attributes.position;
+    const nor = mesh.geometry.attributes.normal;
+    const byCorner = new Map();
+    for (let i = 0; i < pos.count; i++) {
+      const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
+      const list = byCorner.get(key) || [];
+      list.push(new THREE.Vector3(nor.getX(i), nor.getY(i), nor.getZ(i)));
+      byCorner.set(key, list);
+    }
+    // The share of corners whose copies all agree (normals within about 25 degrees of one another).
+    let agree = 0;
+    for (const list of byCorner.values()) if (list.every((n) => n.dot(list[0]) > 0.9)) agree++;
+    return agree / byCorner.size;
+  };
+
+  it('smooths a rounded model across shared corners', () => {
+    const ball = new THREE.Group();
+    ball.add(new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), material(0x888888)));
+    const { far } = buildModelTiersSync(ball);
+    // Corners share one normal, where flat shading gave every face its own (none agreed).
+    expect(normalSpread(far)).toBeGreaterThan(0.5);
+  });
+
+  it('keeps a box edge sharp', () => {
+    const model = new THREE.Group();
+    model.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material(0x888888)));
+    const { far } = buildModelTiersSync(model);
+    expect(normalSpread(far)).toBeLessThan(0.2);
+  });
+});
+
+describe('colour fidelity (#4111)', () => {
+  it('reads a metal mesh as the darker colour it is drawn in, and a plain one as its own', () => {
+    const colorOf = (props) => {
+      const model = chair();
+      model.traverse((o) => { if (o.isMesh) Object.assign(o.material, props); });
+      return fidelityBatches(model)[0].color;
+    };
+    const plain = colorOf({ metalness: 0 });
+    const metal = colorOf({ metalness: 1 });
+    expect(metal[0]).toBeLessThan(plain[0] * 0.5);
+  });
+});
+
+describe('unlit far (#4111)', () => {
+  it('draws the far version of an unlit model without light, and a lit one with it', () => {
+    const farMaterial = (mat) => {
+      const model = new THREE.Group();
+      model.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat));
+      return meshesOf(buildModelTiersSync(model).far.object)[0].material;
+    };
+    expect(farMaterial(new THREE.MeshBasicMaterial({ color: 0x336699 })).isMeshBasicMaterial).toBe(true);
+    expect(farMaterial(material(0x336699)).isMeshStandardMaterial).toBe(true);
   });
 });
