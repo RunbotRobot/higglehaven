@@ -20,6 +20,12 @@ describe('buildItemKeyAction', () => {
     expect(buildItemKeyAction(press('KeyE'), one)).toEqual({ type: 'turn', degrees: -ITEM_TURN_DEGREES });
   });
 
+  it('Shift with Z, X, C and V tips it about the red and green rings (#4118)', () => {
+    expect(buildItemKeyAction(press('KeyZ'), one)).toEqual({ type: 'tilt', axis: 'x', degrees: ITEM_TURN_DEGREES });
+    expect(buildItemKeyAction(press('KeyV'), one)).toEqual({ type: 'tilt', axis: 'y', degrees: -ITEM_TURN_DEGREES });
+    expect(itemKeyAnnouncement({ type: 'tilt', axis: 'x', degrees: 5 }, 'm')).toBe('Tilted 5 degrees about the red ring.');
+  });
+
   it('nothing without Shift (those keys are the camera\'s), or with Ctrl, Cmd or Alt', () => {
     expect(buildItemKeyAction(press('ArrowLeft', { shiftKey: false }), one)).toBeNull();
     expect(buildItemKeyAction(press('ArrowLeft', { ctrlKey: true }), one)).toBeNull();
