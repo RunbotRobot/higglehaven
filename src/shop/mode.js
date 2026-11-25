@@ -255,6 +255,7 @@ export function disposeObject3D(object) {
 const DISPOSE_QUEUE_PRIORITY = 1e9;
 
 export function unloadShopLandletInstances(entry) {
+  console.warn('DBG4295 unload', entry.record.landletId, entry.objects.length, entry.loaded);
   entry.loaded = false;
   entry.loadToken++; // invalidate any in-flight loadShopLandletInstances call, reload or not
   // #3396: items still waiting to be built are cancelled; items already in the
