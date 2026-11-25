@@ -83,6 +83,7 @@ import {
 import { camera as worldCamera } from '../world/scene.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
+import { duplicateName } from './duplicateName.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -1242,7 +1243,7 @@ function renderSellerList() {
       duplicateBtn.disabled = true;
       try {
         const copy = await createCatalogTemplate({
-          name: `${template.name} (copy)`,
+          name: duplicateName(template.name), // #4344: trimmed so the copy fits the server's 100 characters
           category: template.category,
           subcategory: template.subcategory,
           dimensions: template.dimensions,
