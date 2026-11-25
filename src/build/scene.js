@@ -5609,6 +5609,17 @@ export function buildModeFrameUpdate(now) {
     selectedInstanceIds: [...selectedMeshes].map((m) => m.userData.instanceId).filter(Boolean).slice(0, 50), // #3302: capped so a wall of 800 items doesn't bloat the report
     selectedCount: selectedMeshes.size, // #3302: true size when the id list above is capped
     lastSelectionActionStatus: lastSelectionActionStatusText || null, // #3302: last Group/refusal text shown
+    // added for #4241 -- the owner saw Build zoom way out once while turning a bundle and could not repeat it; the pose
+    // above shows THAT the view moved, this shows what the gesture machinery thought was going on at that second (a
+    // ring held and which, how many fingers down, a re-centre tween or a free-look pin running), to tell a second
+    // finger, a tween and a pin apart. Remove once #4241 is closed and the cause (or its absence) is settled.
+    gesture: {
+      ringHeld: rotateControls.dragging ? rotateControls.axis : null,
+      moveHeld: Boolean(translateControls.dragging),
+      pointers: activePointerCount,
+      tween: targetTween.active,
+      freeLook: freeLookActive,
+    },
     ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
   updateTargetTween(now);
