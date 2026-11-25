@@ -32,6 +32,13 @@ await page.waitForTimeout(500);
 const row = page.locator('.seller-row').filter({ hasText: NAME });
 await row.locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
+// #3584: the price control is out in the open under the price, not folded into More settings.
+const priceInTheOpen = await page.evaluate(() => {
+  const toggle = document.querySelector('.seller-row.expanded .seller-price-toggle');
+  const more = document.querySelector('.seller-row.expanded .seller-more-settings');
+  return !!toggle && toggle.offsetParent !== null && !!more && more.hidden && !more.contains(toggle);
+});
+console.log('Edit price is visible with More settings closed (should be true):', priceInTheOpen);
 await row.locator('button', { hasText: 'Edit price' }).click();
 await page.waitForTimeout(300);
 
@@ -44,7 +51,14 @@ async function check() {
   });
   // Scrolling only the modal must be enough to bring Save fully into view.
   const save = row.locator('.seller-price-save-btn');
-  await page.evaluate(() => { document.getElementById('seller-modal-content').scrollTop = 1e6; });
+  // #3584: Edit price now sits right under the price, with the rest of the row below it, so the end of the
+  // modal is no longer where Save is. Scroll the modal (and only the modal) until Save is at its top edge.
+  await page.evaluate(() => {
+    const modalEl = document.getElementById('seller-modal-content');
+    const button = document.querySelector('.seller-row.expanded .seller-price-save-btn');
+    if (!button) return;
+    modalEl.scrollTop += button.getBoundingClientRect().top - modalEl.getBoundingClientRect().top - 24;
+  });
   await page.waitForTimeout(150);
   const reachable = await page.evaluate(() => {
     const modal = document.getElementById('seller-modal-content').getBoundingClientRect();
@@ -66,7 +80,7 @@ console.log('desktop:', JSON.stringify(desktop));
 
 const ok = (l) => Object.values(l).every(Boolean);
 await finish(browser, {
-  pass: ok(phone) && ok(desktop),
+  pass: priceInTheOpen && ok(phone) && ok(desktop),
   label: '#3583: Sell > Manage has one scroll, and Edit price\'s Save is reachable by scrolling only the modal',
   errors,
 });

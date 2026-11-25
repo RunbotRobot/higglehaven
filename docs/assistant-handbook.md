@@ -1082,9 +1082,10 @@ price and stock. The original maker's listing is not changed.
    category and sort boxes beside it.
 3. To rename it, tap "Rename", type the new name in the window that opens and
    confirm.
-4. To change its price, tap "More settings" on the product, then "Edit price", type the new
-   price and tap "Save price". The other "Edit" lines (size, shipping, returns) are under
-   "More settings" too and work the same way: open it, change it, tap its own Save button.
+4. To change its price, tap "Edit price" on the product (it sits right under the price, or under
+   "Not priced" for a product with no price yet), type the new price and tap "Save price". The
+   other "Edit" lines (size, shipping, returns) are under "More settings" and work the same way:
+   open it, change it, tap its own Save button.
 5. To change how many are in stock, tap the product in your showroom. A small card opens
    beside it showing its price and its stock ("No limit on stock", "3 in stock" or "Sold out").
    Tap "Stock" on that card, type how many you have left (a whole number, 0 or more) and
