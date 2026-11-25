@@ -425,6 +425,8 @@ function updateFarView() {
     shopFarView = createFarView({
       queue: worldWorkQueue,
       root,
+      // e2e only (#4147): a test sets this before the page loads so a refresh does not take two minutes.
+      tileRefreshMs: typeof window.__testFarTileRefreshMs === 'number' ? window.__testFarTileRefreshMs : undefined,
       fetchTile: fetchFarPlacements,
       loadSource: async (templateId) => {
         const template = findTemplate(templateId);
