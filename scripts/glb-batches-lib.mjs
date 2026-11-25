@@ -66,7 +66,47 @@ function readAccessor(json, bin, index, asIndices) {
   return out;
 }
 
-// { batches: [{ positions, doubleSided }], triangles } for the default scene.
+// #4111: the colour a primitive shows lit, as src/modelTiers.js's litColorOf computes it for the app: linear
+// base colour x mean vertex colour (COLOR_0, area-weighted) x the metal darkening and plus the emission the far
+// bake uses. A primitive with a base-colour texture has no colour this reader can know (it decodes no images),
+// so it carries none and the scan gives no colour verdict for it. Mirrors FAR_METAL_DARKENING there.
+const FAR_METAL_DARKENING = 0.65;
+function triangleArea(p, at) {
+  const ux = p[at + 3] - p[at], uy = p[at + 4] - p[at + 1], uz = p[at + 5] - p[at + 2];
+  const vx = p[at + 6] - p[at], vy = p[at + 7] - p[at + 1], vz = p[at + 8] - p[at + 2];
+  return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+}
+function litColor(json, bin, prim, material, positions, indexList) {
+  const pbr = (material && material.pbrMetallicRoughness) || {};
+  if (pbr.baseColorTexture) return null;
+  const base = (pbr.baseColorFactor || [1, 1, 1, 1]).slice(0, 3);
+  const unlit = Boolean(material && material.extensions && material.extensions.KHR_materials_unlit);
+  if (prim.attributes.COLOR_0 !== undefined) {
+    const acc = json.accessors[prim.attributes.COLOR_0];
+    const comps = acc.type === 'VEC4' ? 4 : 3;
+    const raw = readAccessor(json, bin, prim.attributes.COLOR_0, false);
+    const norm = acc.componentType === 5121 ? 255 : acc.componentType === 5123 ? 65535 : 1;
+    let total = 0;
+    const sum = [0, 0, 0];
+    for (let t = 0; t + 2 < indexList.length; t += 3) {
+      const a = triangleArea(positions, t * 3);
+      total += a;
+      for (let k = 0; k < 3; k++) {
+        let c = 0;
+        for (let corner = 0; corner < 3; corner++) c += raw[indexList[t + corner] * comps + k] / norm;
+        sum[k] += (a * c) / 3;
+      }
+    }
+    if (total > 0) for (let k = 0; k < 3; k++) base[k] *= sum[k] / total;
+  }
+  if (unlit) return base;
+  const metal = pbr.metallicRoughnessTexture ? 0 : Math.min(1, Math.max(0, pbr.metallicFactor ?? 1));
+  const emissive = material && material.emissiveFactor && !material.emissiveTexture ? material.emissiveFactor : [0, 0, 0];
+  const scale = 1 - FAR_METAL_DARKENING * metal;
+  return base.map((v, k) => v * scale + emissive[k]);
+}
+
+// { batches: [{ positions, doubleSided, area, color? }], triangles } for the default scene.
 export function glbBatches(buffer) {
   const { json, bin } = readGlbJson(buffer);
   const batches = [];
@@ -94,7 +134,11 @@ export function glbBatches(buffer) {
         const det = world[0] * (world[5] * world[10] - world[6] * world[9]) - world[4] * (world[1] * world[10] - world[2] * world[9]) + world[8] * (world[1] * world[6] - world[2] * world[5]);
         if (det < 0) for (let t = 0; t + 8 < out.length; t += 9) for (let k = 0; k < 3; k++) { const tmp = out[t + 3 + k]; out[t + 3 + k] = out[t + 6 + k]; out[t + 6 + k] = tmp; }
         const material = prim.material !== undefined ? json.materials[prim.material] : null;
-        batches.push({ positions: out, doubleSided: Boolean(material && material.doubleSided) });
+        let area = 0;
+        for (let t = 0; t + 8 < out.length; t += 9) area += triangleArea(out, t);
+        const indexList = idx || Uint32Array.from({ length: count }, (_, i) => i);
+        const color = litColor(json, bin, prim, material, out, indexList);
+        batches.push({ positions: out, doubleSided: Boolean(material && material.doubleSided), area, ...(color ? { color } : {}) });
         triangles += count / 3;
       }
     }

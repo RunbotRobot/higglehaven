@@ -2,6 +2,38 @@
 // (admin-dashboard-5.js) only for an account that can hold the role or already does; this file holds its
 // confirmation dialog. The server decides and writes the admin log line; a refusal shows here.
 (function () {
+  // The look-only admin's dashboard (GET /api/auth/admin-role says which one this is). It says so, and
+  // does not draw controls that can only be refused: every form's submit button, every danger button and the
+  // account actions are disabled with the reason, and any other change the page tries to send is stopped here
+  // (the server refuses it as well). Reading is untouched.
+  async function enterViewerMode() {
+    const REASON = 'Look-only access cannot change anything.';
+    const banner = document.createElement('p');
+    banner.className = 'viewer-banner';
+    banner.setAttribute('role', 'status');
+    banner.textContent = 'Look-only access: you can read everything here and change nothing. Emails are masked and some details are hidden.';
+    document.querySelector('main').prepend(banner);
+    const WRITE = 'form button[type="submit"], button.danger, .delete-account-btn, .use-for-suspend-btn, .viewer-access-btn';
+    const lock = () => document.querySelectorAll(WRITE).forEach((button) => {
+      if (button.disabled && button.title === REASON) return;
+      button.disabled = true;
+      button.title = REASON;
+    });
+    lock();
+    new MutationObserver(lock).observe(document.body, { childList: true, subtree: true });
+    const realFetch = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      const method = String((options && options.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        return Promise.resolve(new Response(JSON.stringify({ error: REASON }), { status: 403, headers: { 'content-type': 'application/json' } }));
+      }
+      return realFetch(input, options);
+    };
+  }
+
+  // Asked once when the page opens. For an admin nothing changes; for a viewer this is also the admin log's page-open line.
+  fetch('/api/auth/admin-role').then((r) => (r.ok ? r.json() : null)).then((r) => { if (r && r.role === 'viewer') enterViewerMode(); }).catch(() => {});
+
   const dialog = document.getElementById('viewerAccessDialog');
   if (!dialog) return;
   const title = document.getElementById('viewerAccessTitle');

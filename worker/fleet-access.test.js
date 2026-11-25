@@ -118,6 +118,18 @@ describe('POST /api/auth/fleet-login', () => {
     }
   });
 
+  it('writes every sign-in by an account holding look-only admin access to the admin log, and no other (#4175)', async () => {
+    await fleetLogin('higglehaven12');
+    const id = (await env.DB.prepare("SELECT user_id FROM users WHERE username = 'higglehaven12'").first()).user_id;
+    const count = async () => (await env.DB.prepare("SELECT count(*) AS n FROM admin_action_log WHERE action_type = 'admin_viewer_sign_in' AND target_id = ?").bind(id).first()).n;
+    await fleetLogin('higglehaven12');
+    expect(await count()).toBe(0);
+    await env.DB.prepare('UPDATE users SET is_admin_viewer = 1 WHERE user_id = ?').bind(id).run();
+    await fleetLogin('higglehaven12');
+    await fleetLogin('higglehaven12');
+    expect(await count()).toBe(2);
+  });
+
   it('repairs a fleet account left at the lowest trust tier on its next login (#3430)', async () => {
     await fleetLogin('higglehaven7');
     await env.DB.prepare("UPDATE users SET trust_tier = 'none' WHERE username = 'higglehaven7'").run();
