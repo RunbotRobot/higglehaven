@@ -537,4 +537,122 @@ describe('Build batching: what the bounds cannot take yet waits (#4235)', () => 
     expect(batching.hardSwapCount).toBe(0);
     expect(batching.fadesStarted).toBeGreaterThan(10);
   });
+  // Items whose full version is dearer than their mid one (the usual case), in two squares of ground.
+  function dearFull(options = {}) {
+    const geometryOf = (triangles) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(triangles * 3), 1));
+      return geometry;
+    };
+    const full = geometryOf(100);
+    const mid = geometryOf(10);
+    const scene = new THREE.Scene();
+    let now = 1000;
+    const added = [];
+    const baseAdd = scene.add.bind(scene);
+    scene.add = (...objects) => { added.push(...objects.filter((object) => object.isInstancedMesh)); return baseAdd(...objects); };
+    const batching = createBuildBatching({ scene, isSelected: () => false, clock: () => now, reducedMotion: () => false, createDissolve: () => ({ setLevel: () => {}, restore: () => {} }), ...options });
+    const make = (id, x) => {
+      const object = new THREE.Group();
+      const model = new THREE.Group();
+      model.add(new THREE.Mesh(full, sharedMaterial));
+      const reduced = new THREE.Group();
+      reduced.add(new THREE.Mesh(mid, sharedMaterial));
+      reduced.visible = false;
+      object.add(model, reduced);
+      object.userData = { instanceId: id, template, crop: {}, scale: 1, model, lodTiers: { mid: reduced }, lodShown: 'full' };
+      object.position.set(x, 0, 0);
+      object.updateMatrixWorld(true);
+      scene.add(object);
+      return object;
+    };
+    const near = Array.from({ length: 6 }, (_, index) => make(`dn${index}`, index * 2));
+    const far = Array.from({ length: 6 }, (_, index) => make(`dw${index}`, 32 + index * 2));
+    const set = (list, tier) => list.forEach((object) => {
+      object.userData.lodShown = tier;
+      object.userData.model.visible = tier === 'full';
+      object.userData.lodTiers.mid.visible = tier === 'mid';
+    });
+    return { scene, batching, near, far, objects: [...near, ...far], set, added: () => added.length, at: (ms) => { now = ms; batching.update(now); }, now: () => now };
+  }
+
+  it('a change that sheds triangles never waits: the dearer old group must not draw on top of the budget', () => {
+    const w = dearFull({ maxCohorts: 1 });
+    w.batching.sync(w.objects);
+    w.set(w.near, 'mid');
+    w.batching.sync(w.objects); // admitted: the only cohort allowed
+    w.set(w.far, 'mid'); // the pass is over its budget and drops the far group too
+    w.batching.sync(w.objects);
+    expect(w.batching.deferredCount).toBe(0);
+    expect(w.batching.hardSwapCount).toBe(6);
+    expect(w.batching.waitingGroups).toBe(false);
+  });
+
+  it('a change that costs more triangles still waits (the same caps)', () => {
+    const w = dearFull({ maxCohorts: 1 });
+    w.set(w.near, 'mid');
+    w.set(w.far, 'mid');
+    w.batching.sync(w.objects);
+    w.set(w.near, 'full');
+    w.batching.sync(w.objects); // admitted
+    w.set(w.far, 'full');
+    w.batching.sync(w.objects);
+    expect(w.batching.deferredCount).toBe(1);
+    expect(w.batching.waitingGroups).toBe(true);
+    expect(w.batching.hardSwapCount).toBe(0);
+  });
+
+  it('builds nothing again while a change waits and the room has not changed', () => {
+    const w = dearFull({ maxCohorts: 1 });
+    w.set(w.near, 'mid');
+    w.set(w.far, 'mid');
+    w.batching.sync(w.objects);
+    w.set(w.near, 'full');
+    w.batching.sync(w.objects);
+    w.set(w.far, 'full');
+    w.batching.sync(w.objects); // waits: built once, taken back
+    const built = w.added();
+    for (let i = 0; i < 5; i++) { w.at(w.now() + 10); w.batching.sync(w.objects); }
+    expect(w.added()).toBe(built); // no mesh built for the waiting group in five more ticks
+    expect(w.batching.waitingGroups).toBe(true);
+    w.at(w.now() + 450); // the fade ends: room
+    w.batching.sync(w.objects);
+    expect(w.added()).toBeGreaterThan(built);
+    expect(w.batching.fadesStarted).toBe(2);
+    expect(w.batching.hardSwapCount).toBe(0);
+  });
+
+  it('an item that was moved without being selected while its group waits cannot stay in the old group: the change swaps', () => {
+    const w = dearFull({ maxCohorts: 1 });
+    w.set(w.near, 'mid');
+    w.set(w.far, 'mid');
+    w.batching.sync(w.objects);
+    w.set(w.near, 'full');
+    w.batching.sync(w.objects);
+    w.far[2].position.x += 1; // undo/redo, a programmatic move
+    w.far[2].updateMatrixWorld(true);
+    w.set(w.far, 'full');
+    w.batching.sync(w.objects);
+    expect(w.batching.deferredCount).toBe(0);
+    expect(w.batching.hardSwapCount).toBe(6);
+  });
+
+  it('finishAll and switching off forget what waits', () => {
+    const w = dearFull({ maxCohorts: 1 });
+    w.set(w.near, 'mid');
+    w.set(w.far, 'mid');
+    w.batching.sync(w.objects);
+    w.set(w.near, 'full');
+    w.batching.sync(w.objects);
+    w.set(w.far, 'full');
+    w.batching.sync(w.objects);
+    expect(w.batching.waitingGroups).toBe(true);
+    w.batching.setEnabled(false);
+    expect(w.batching.waitingGroups).toBe(false);
+    w.batching.setEnabled(true);
+    w.batching.sync(w.objects);
+    w.batching.finishAll();
+    expect(w.batching.waitingGroups).toBe(false);
+  });
 });

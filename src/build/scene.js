@@ -5335,6 +5335,7 @@ const buildLod = createBuildLod({ camera, target: controls.target, arrival: buil
 window.__testBuildBatchCounts = () => buildBatching.counts();
 window.__testBuildFadesInFlight = () => buildBatching.fadesInFlight; // e2e (#4115): version dissolves running now
 window.__testBuildFadesStarted = () => buildBatching.fadesStarted; // e2e (#4115): how many have started
+window.__testBuildWaitingGroups = () => buildBatching.waitingGroups; // e2e (#4235): a change is waiting for room
 window.__testBuildHardSwaps = () => buildBatching.hardSwapCount; // e2e (#4235): items whose version changed in one frame, no dissolve
 window.__testSetBuildBatching = (on) => buildBatching.setEnabled(on);
 window.__testBuildLodTick = () => buildLod.update(performance.now(), true); // e2e: run a pass now

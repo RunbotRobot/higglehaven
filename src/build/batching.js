@@ -120,8 +120,13 @@ export function createBuildBatching({
   const groups = new Map();
   const slots = new Map(); // item -> { group, index }, rewritten by every sync
   let fadesStarted = 0;
-  let waitSince = null; // #4235: when the first group of the current run of waits began to wait (null: nothing waits)
-  let lastAdmitMs = -Infinity; // #4235: when a fade was last admitted
+  // #4235: changes that wait for room. key of the NEW group -> { members, roots, matrices, epoch, cohorts, old, since }:
+  // what was tried last and not admitted. While the room has not changed (no fade ended, the same number running) and
+  // the same items stand in the same places, the next tick does not build it again: the answer would be the same.
+  let waiting = new Map();
+  let nextWaiting = new Map();
+  let roomEpoch = 0; // moves every time a fade ends: room may have opened
+  let deferrals = 0;
   let hardSwaps = 0; // #4235: items whose group changed version in one frame (no fade): the cap, a limit or reduced motion said so
   const cohorts = new Set(); // #4115: fades in flight: { dissolve, entering: group[], leaving: group[], startMs }
   let enabled = true;
@@ -170,6 +175,7 @@ export function createBuildBatching({
   }
 
   function finishCohort(cohort) {
+    roomEpoch += 1;
     cohort.dissolve.restore();
     for (const group of cohort.leaving) dispose(group);
     cohorts.delete(cohort);
@@ -215,12 +221,30 @@ export function createBuildBatching({
       }
     }
     const kept = new Set();
+    const heldOld = new Set(); // old groups a waiting change keeps drawing: not to be given back below
+    nextWaiting = new Map();
     for (const [key, members] of [...wanted]) {
       if (members.length < minBatchSize) { wanted.delete(key); continue; }
       for (const member of members) member.updateMatrixWorld(true);
       const matrices = new Float32Array(members.length * 16);
       members.forEach((member, index) => member.matrixWorld.toArray(matrices, index * 16));
       const roots = members.map(shownRoot);
+      const attempt = waiting.get(key);
+      if (attempt && attempt.epoch === roomEpoch && attempt.cohorts === cohorts.size
+        && clock() - attempt.since <= maxWaitMs
+        && attempt.members.length === members.length
+        && attempt.members.every((member, index) => member === members[index] && attempt.roots[index] === roots[index])
+        && sameMatrices(attempt.matrices, matrices)
+        && attempt.old.every((was) => groups.get(was.key) === was)) {
+        // Still waiting, nothing changed: the old groups keep drawing, nothing is built.
+        nextWaiting.set(key, attempt);
+        for (const was of attempt.old) heldOld.add(was);
+        for (let i = 0; i < members.length; i++) {
+          members[i].userData.batchRoot = roots[i];
+          roots[i].visible = false;
+        }
+        continue;
+      }
       const old = groups.get(key);
       const unchanged = old && old.members.length === members.length
         && old.members.every((member, index) => member === members[index] && old.roots[index] === roots[index])
@@ -253,11 +277,12 @@ export function createBuildBatching({
     // A group that no longer exists: its meshes go, and its members draw themselves again unless
     // they moved into another group above (their batchRoot was then set to a hidden root).
     for (const [key, group] of [...groups]) {
-      if (kept.has(key)) continue;
+      if (kept.has(key) || heldOld.has(group)) continue;
       leaving.push(group);
       groups.delete(key);
     }
     startFade(before, leaving, created);
+    waiting = nextWaiting;
     const batched = new Set();
     slots.clear();
     for (const group of groups.values()) {
@@ -326,6 +351,8 @@ export function createBuildBatching({
       }
       return { meshes, triangles };
     };
+    // Triangles one item costs in these groups (a group with fewer items than another is not cheaper for that).
+    const perItemTriangles = (list) => list.reduce((sum, group) => sum + group.meshes.reduce((inner, mesh) => inner + meshTriangles(mesh) / Math.max(1, mesh.count), 0), 0) / Math.max(1, list.length);
     const candidates = [...components.values()].filter((component) => component.entering.length > 0).sort((a, b) => b.items - a.items);
     const used = inFlight();
     const runningBefore = cohorts.size > 0;
@@ -345,12 +372,34 @@ export function createBuildBatching({
         continue;
       }
       const fitsAlone = own.meshes <= maxTransientMeshes && own.triangles <= maxTriangles;
-      const stalled = waitSince !== null && now - Math.max(waitSince, lastAdmitMs) > maxWaitMs;
-      const restorable = component.old.every((old) => {
+      // Only this component's own wait counts (a small one admitted every tick must not keep a big one waiting for ever).
+      const since = Math.min(now, ...component.old.map((old) => old.waitSince ?? now));
+      const stalled = now - since > maxWaitMs;
+      // A change that SHEDS triangles (the pass is over its budget) never waits: the old, dearer group would keep
+      // drawing on top of the budget for the whole wait.
+      const sheds = perItemTriangles(component.entering) < perItemTriangles([...component.keep]);
+      let restorable = component.old.every((old) => {
         const current = groups.get(old.key);
         return current === undefined || current === old || component.created.includes(current);
       });
-      if (fitsAlone && (runningBefore || fadingIn.length > 0) && !stalled && restorable) deferred.push(component);
+      // An item that stands somewhere else than the old group drew it (undo, a programmatic move) cannot be left in it.
+      if (restorable) {
+        for (const group of component.created) {
+          for (const member of group.members) {
+            const slot = before.get(member);
+            if (!slot || !leavingSet.has(slot.group)) continue;
+            const at = slot.index * 16;
+            const elements = member.matrixWorld.elements;
+            for (let k = 0; k < 16 && restorable; k++) if (slot.group.matrices[at + k] !== Math.fround(elements[k])) restorable = false;
+            if (!restorable) break;
+          }
+          if (!restorable) break;
+        }
+      }
+      if (fitsAlone && !sheds && (runningBefore || fadingIn.length > 0) && !stalled && restorable) {
+        for (const old of component.old) old.waitSince = since;
+        deferred.push(component);
+      }
     }
     // A component that waits: the old groups go back as they were, the new ones are taken back.
     const restored = new Set();
@@ -374,10 +423,15 @@ export function createBuildBatching({
         });
       }
     }
-    if (deferred.length > 0) {
-      if (waitSince === null) waitSince = now;
-    } else waitSince = null;
-    if (fadingIn.length > 0) lastAdmitMs = now;
+    // Remember what waits, so the next tick does not build it again while the room is the same.
+    const cohortsAfter = cohorts.size + (fadingIn.length > 0 ? 1 : 0);
+    for (const component of deferred) {
+      deferrals += 1;
+      const since = Math.min(now, ...component.old.map((old) => old.waitSince ?? now));
+      for (const group of component.created) {
+        nextWaiting.set(group.key, { members: group.members, roots: group.roots, matrices: group.matrices, epoch: roomEpoch, cohorts: cohortsAfter, old: component.old, since });
+      }
+    }
     // Counted: what changes version in this frame without a fade (reduced motion is the person's own choice).
     if (!reduced) {
       const fading = new Set(fadingIn);
@@ -403,6 +457,7 @@ export function createBuildBatching({
   // Settles every fade now (a teardown, or a test that wants the end state).
   function finishAll() {
     for (const cohort of [...cohorts]) finishCohort(cohort);
+    waiting = new Map();
   }
 
   function counts() {
@@ -419,9 +474,10 @@ export function createBuildBatching({
     get fadesInFlight() { return cohorts.size; },
     get fadesStarted() { return fadesStarted; },
     get hardSwapCount() { return hardSwaps; },
-    get waitingGroups() { return waitSince !== null; },
+    get waitingGroups() { return waiting.size > 0; },
+    get deferredCount() { return deferrals; },
     releaseNow,
     counts,
-    setEnabled(on) { enabled = on !== false; },
+    setEnabled(on) { enabled = on !== false; if (!enabled) waiting = new Map(); },
   };
 }
