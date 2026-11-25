@@ -561,6 +561,41 @@ describe('hole guard (#3528)', () => {
   });
 });
 
+describe('far shading (#4111)', () => {
+  const normalSpread = (far) => {
+    // How different the normals at one shared corner are, over the far mesh's corners.
+    const mesh = meshesOf(far.object)[0];
+    const pos = mesh.geometry.attributes.position;
+    const nor = mesh.geometry.attributes.normal;
+    const byCorner = new Map();
+    for (let i = 0; i < pos.count; i++) {
+      const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
+      const list = byCorner.get(key) || [];
+      list.push(new THREE.Vector3(nor.getX(i), nor.getY(i), nor.getZ(i)));
+      byCorner.set(key, list);
+    }
+    // The share of corners whose copies all agree (normals within about 25 degrees of one another).
+    let agree = 0;
+    for (const list of byCorner.values()) if (list.every((n) => n.dot(list[0]) > 0.9)) agree++;
+    return agree / byCorner.size;
+  };
+
+  it('smooths a rounded model across shared corners', () => {
+    const ball = new THREE.Group();
+    ball.add(new THREE.Mesh(new THREE.IcosahedronGeometry(1, 3), material(0x888888)));
+    const { far } = buildModelTiersSync(ball);
+    // Corners share one normal, where flat shading gave every face its own (none agreed).
+    expect(normalSpread(far)).toBeGreaterThan(0.5);
+  });
+
+  it('keeps a box edge sharp', () => {
+    const model = new THREE.Group();
+    model.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material(0x888888)));
+    const { far } = buildModelTiersSync(model);
+    expect(normalSpread(far)).toBeLessThan(0.2);
+  });
+});
+
 describe('colour fidelity (#4111)', () => {
   it('reads a metal mesh as the darker colour it is drawn in, and a plain one as its own', () => {
     const colorOf = (props) => {
