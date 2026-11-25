@@ -956,10 +956,29 @@ function bundleBounds() {
   };
 }
 let bundleRotateLimitShown = false;
+let bundleRotateOutlineHit = false; // #4198: the last refused turn was the outline's, not the bundle's size
 function applyBundleRotation(delta) {
   const raw = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  bundleRotateOutlineHit = false;
   const { transforms, fits } = reseatInBounds(raw, bundleBounds());
   if (!fits) return false;
+  // #4198: every member must also stand on the lándlet's real outline at its new place and angle, the same
+  // rule the single-item move uses. A turn that would swing a member over the edge stops at the last angle
+  // that was legal, with one line saying why.
+  const outline = getBuildOutline();
+  if (outline) {
+    const meshes = groupMoveMeshes ?? [];
+    const probe = new THREE.Euler();
+    for (let i = 0; i < meshes.length; i += 1) {
+      const { width, depth } = meshDimensions(meshes[i]);
+      probe.setFromQuaternion(transforms[i].quaternion, meshes[i].rotation.order);
+      const at = transforms[i].position;
+      if (!itemLegalAt(outline, { width, depth, rotationZ: probe.z }, at.x, at.y, at.z, footprintScaleAtHeight)) {
+        bundleRotateOutlineHit = true;
+        return false;
+      }
+    }
+  }
   (groupMoveMeshes ?? []).forEach((mesh, i) => {
     mesh.position.copy(transforms[i].position);
     mesh.quaternion.copy(transforms[i].quaternion);
@@ -979,7 +998,9 @@ rotateControls.addEventListener('objectChange', () => {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
     if (!bundleRotateLimitShown) {
       bundleRotateLimitShown = true;
-      showSelectionActionStatus('This bundle is too big to turn any further here.');
+      showSelectionActionStatus(bundleRotateOutlineHit
+        ? "That's the edge of this lándlet."
+        : 'This bundle is too big to turn any further here.');
     }
   }
 });
