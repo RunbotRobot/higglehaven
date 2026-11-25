@@ -770,12 +770,13 @@ go. It stops at the edge of how far you can go and never turns upside down.
 
 ### How do I turn an item?
 
-1. Tap the item. A blue ring appears around it, and a line on the card reads the
+1. Tap the item. Three rings appear around it, and a line on the card reads the
    angles.
-2. Drag the ring to turn the item flat, like a record on a turntable. The line
+2. Drag the blue ring to turn the item flat, like a record on a turntable. The line
    calls this "Turn".
-3. To tip it over instead, tap "More" on the card and type a number under "Angles":
-   "Tilt red" or "Tilt green" (the line calls these "Tilt").
+3. To tip it over instead, drag the red ring (tips it one way) or the green ring (tips it the
+   other way). The line calls these "Tilt red" and "Tilt green". To type an exact number instead,
+   tap "More" on the card and use "Angles".
 
 **You will see:** the item turns as you drag, and the line on the card shows how far.
 
