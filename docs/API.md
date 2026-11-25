@@ -1341,6 +1341,17 @@ activity, avatar presence and latest sign-in. `suspended` is an active, not lift
 `admin-user-search` below stays for API callers; the dashboard no longer uses it (the table's search covers
 what it did, and a row's name opens the same detail).
 
+### Look-only admin (#4175)
+
+A second role, `users.is_admin_viewer` (never `is_admin`), for an account that needs to look at the owner's tools
+and change nothing. Default deny: every check that reads `is_admin` refuses a viewer; only a handler that calls
+`requireAdminOrViewer` (`worker/lib/auth.js`) lets one in, and only for `GET` and `HEAD`. Opted in today: the
+users table, `admin-user-search`, `admin-user-detail`, `admin-landlet-search`, the delete-account preview and
+`admin-video-jobs` (its re-check is a `POST`, so a viewer is refused). Same routes, masked for a viewer
+(`worker/lib/admin-viewer-mask.js`): emails read `j***@g***.com`; card and tax form details come back `null`;
+a suspension's free-text `evidenceNote` is `null`; and `admin-user-search` matches usernames only, never emails.
+`worker/admin-viewer.test.js` lists every file that may opt a route in.
+
 ### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
 
 Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns

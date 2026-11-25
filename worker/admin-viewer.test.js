@@ -4,6 +4,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { api, signupBuilder, signupAdmin } from './test-helpers.js';
+import { maskEmail } from './lib/admin-viewer-mask.js';
 
 const sources = import.meta.glob(['./index.js', './lib/*.js'], { query: '?raw', import: 'default', eager: true });
 
@@ -37,6 +38,71 @@ describe('the read routes a look-only admin may open (#4175)', () => {
       const asPerson = await api(path, target.session());
       expect(asPerson.response.status, `person on GET ${path}`).toBe(403);
     }
+  });
+});
+
+describe('what a look-only admin does not see (#4175, slice b)', () => {
+  it('masks an email so its shape reads and the address does not', () => {
+    expect(maskEmail('jane.doe@gmail.com')).toBe('j***@g***.com');
+    expect(maskEmail('a@b.co.uk')).toBe('a***@b***.uk');
+    expect(maskEmail('weird@localhost')).toBe('w***@l***');
+    expect(maskEmail(null)).toBeNull();
+    expect(maskEmail('no-at-sign')).toBe('***');
+  });
+
+  it('shows the same rows to an admin in full and to a viewer masked, in every place an email appears', async () => {
+    const id = await userIdOf(target.email);
+    const masked = maskEmail(target.email);
+    expect(masked).not.toBe(target.email);
+
+    const table = (who) => api('/auth/admin-users', who.session()).then((r) => r.body.users.find((u) => u.userId === id));
+    expect((await table(admin)).email).toBe(target.email);
+    const viewerRow = await table(viewer);
+    expect(viewerRow.email).toBe(masked);
+    expect(viewerRow.username).toBe('viewer-test-target'); // everything else still reads
+
+    const detail = (who) => api(`/auth/admin-user-detail?userId=${id}`, who.session()).then((r) => r.body.user.email);
+    expect(await detail(admin)).toBe(target.email);
+    expect(await detail(viewer)).toBe(masked);
+
+    const preview = (who) => api(`/auth/admin-delete-account-preview?userId=${id}`, who.session()).then((r) => r.body.account.email);
+    expect(await preview(admin)).toBe(target.email);
+    expect(await preview(viewer)).toBe(masked);
+
+    const search = (who, q) => api(`/auth/admin-user-search?q=${encodeURIComponent(q)}`, who.session()).then((r) => r.body.users.map((u) => ({ id: u.userId, email: u.email })));
+    expect((await search(viewer, 'viewer-test-target')).find((u) => u.id === id).email).toBe(masked);
+  });
+
+  it('does not let a viewer find an account by its email, which would reveal that the address exists', async () => {
+    const id = await userIdOf(target.email);
+    const search = (who) => api(`/auth/admin-user-search?q=${encodeURIComponent(target.email)}`, who.session()).then((r) => r.body.users.map((u) => u.userId));
+    expect(await search(admin)).toContain(id);
+    expect(await search(viewer)).not.toContain(id);
+  });
+
+  it('hides card details, tax form details and free-text evidence notes from a viewer', async () => {
+    const id = await userIdOf(target.email);
+    await env.DB.prepare(`UPDATE users SET card_funding = 'credit', card_refusal_code = 'card_declined', card_refusal_count = 2,
+      card_refusal_at = '2026-11-01T00:00:00.000Z', tax_form_type = 'w9', tax_form_completed_at = '2026-11-02T00:00:00.000Z' WHERE user_id = ?`).bind(id).run();
+    await env.DB.prepare(`INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, evidence_note, grace_period_ends_at, lifted_at)
+      VALUES ('susp-viewer-test', ?, ?, 'test', 'private evidence text', '2026-11-03T00:00:00.000Z', '2026-11-04T00:00:00.000Z')`).bind(id, await userIdOf(admin.email)).run();
+
+    const adminRow = (await api('/auth/admin-users', admin.session())).body.users.find((u) => u.userId === id);
+    expect(adminRow.cardFunding).toBe('credit');
+    expect(adminRow.taxFormType).toBe('w9');
+    const viewerRow = (await api('/auth/admin-users', viewer.session())).body.users.find((u) => u.userId === id);
+    for (const key of ['cardFunding', 'cardRefusalCount', 'cardRefusalCode', 'cardRefusalAt', 'taxFormType', 'taxFormCompletedAt']) {
+      expect(viewerRow[key], key).toBeNull();
+    }
+
+    const adminDetail = (await api(`/auth/admin-user-detail?userId=${id}`, admin.session())).body;
+    expect(adminDetail.user.cardRefusal.code).toBe('card_declined');
+    expect(adminDetail.suspensions[0].evidenceNote).toBe('private evidence text');
+    const viewerDetail = (await api(`/auth/admin-user-detail?userId=${id}`, viewer.session())).body;
+    expect(viewerDetail.user.cardRefusal).toBeNull();
+    expect(viewerDetail.suspensions[0].evidenceNote).toBeNull();
+    expect(viewerDetail.suspensions[0].reason).toBe('test'); // the reason is not personal data and still reads
+    expect(JSON.stringify(viewerDetail)).not.toContain('private evidence text');
   });
 });
 
