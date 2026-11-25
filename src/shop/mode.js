@@ -65,6 +65,7 @@ import {
   removeSelectionOutline,
 } from '../build/scene.js';
 import { CATALOG as FALLBACK_CATALOG } from '../catalog.js';
+import { retryCatalogLater } from './catalogRetry.js';
 import {
   fetchCatalog, fetchWorld, fetchAllLandlets, fetchBuildersByIds,
   fetchMyEquippedAvatar, fetchMyEquippedAnimation, fetchOwnLastPresence,
@@ -546,6 +547,16 @@ export async function enterShopMode() {
     markStartup('catalog-loaded');
   } catch {
     setActiveCatalog(FALLBACK_CATALOG);
+    // #4295: the sample catalog has none of the real products, so every placement would stay "never arrives" for
+    // the whole visit. Ask again in the background; when the real catalog arrives, the landlets that loaded without
+    // it are put away and the next proximity pass loads them again with it (arriving through fog as usual).
+    retryCatalogLater({
+      fetchCatalog,
+      onCatalog: (catalog) => {
+        setActiveCatalog(catalog);
+        for (const entry of shopLandlets.values()) if (entry.loaded) unloadShopLandletInstances(entry);
+      },
+    });
   }
 
   // #681: which custom avatar (if any) this account has equipped — never
