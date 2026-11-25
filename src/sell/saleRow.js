@@ -95,7 +95,8 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
       // decision "A destructive action is confirmed in its own in-app modal"); a refusal shows in that modal.
       const confirmed = await confirmDestructive({
         title: 'Refund this order?',
-        message: `Refund ${purchase.buyerLabel || 'the buyer'} ${formatPriceCents(purchase.totalCents)} for ${purchase.productName || 'this order'}? This can't be undone.`,
+        // #4340: a card order sends back 99% of its total (the server says how much); say that figure.
+        message: `Refund ${purchase.buyerLabel || 'the buyer'} ${formatPriceCents(purchase.refundCents ?? purchase.totalCents)}${purchase.refundCents != null && purchase.refundCents !== purchase.totalCents ? ` (99% of ${formatPriceCents(purchase.totalCents)})` : ''} for ${purchase.productName || 'this order'}? This can't be undone.`,
         confirmLabel: 'Refund',
         returnFocusEl: refundBtn,
         onConfirm: async () => {

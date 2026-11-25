@@ -26,6 +26,7 @@
 // it turns out nothing in this file actually calls it (only
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
+import { refundAmountCents } from './purchase-record.js';
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -1373,5 +1374,8 @@ export function purchaseFromRow(row) {
     shippedAt: row.shipped_at,
     deliveryConfirmedAt: row.delivery_confirmed_at,
     paidOutAt: row.paid_out_at,
+    // #4340: what a refund of this order sends back (a real-money order returns 99%, see purchase-record.js); null
+    // for an order with no card payment, where nothing goes to Stripe.
+    refundCents: row.payment_intent_id ? refundAmountCents(row.total_cents) : null,
   };
 }
