@@ -8696,6 +8696,10 @@ the real-money path below.
 `totalCents` for a card order (`paymentIntentId` set), `null` otherwise. The
 Sell > Orders refund confirmation shows it.
 
+`noReturns` (#4341) is added to the rows of `GET /api/purchases?mine=seller` and
+`?templateId=`: true when the product is set to not accept returns, so the sale
+row shows that instead of a Refund button the server would refuse.
+
 `buyerBuilderId` (#1112) is the buyer's own `builder_id`, captured at
 purchase time now that every real purchase already requires a verified
 session (N44) — distinct from `builderId` above, which is the *host*

@@ -1061,6 +1061,10 @@ describe('Simulated purchases', () => {
     // #4341: it names the setting and where the seller changes it, not "the seller's" rule.
     expect(rejected.body.error).toMatch(/set to not accept returns.*Edit returns policy/);
     expect(rejected.body.error).not.toMatch(/seller does not/);
+    // #4341: the seller's own order list says so too, so a sale row can leave the Refund button out (same flag on the mine=seller list).
+    const listed = await api('/purchases?templateId=purchase-no-returns-template', seller.session());
+    const row = listed.body.purchases.find((p) => p.purchaseId === purchased.body.purchase.purchaseId);
+    expect(row.noReturns).toBe(true);
   });
 
   it('rejects a non-boolean metadata.noReturns', async () => {
