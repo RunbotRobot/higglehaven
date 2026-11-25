@@ -112,7 +112,7 @@ const reloadedA = positionsAfterReload.find((p) => p.instanceId === instanceAId)
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
 const selectionAfterTappingOneMember = await page.textContent('#item-card-name');
-console.log('status after tapping only A post-reload (should still be "2 items selected" -- Save bundle\'s grouping expanded the selection):', selectionAfterTappingOneMember);
+console.log('status after tapping only A post-reload (should say Bundle, #4335 -- Save bundle\'s grouping expanded the selection to the whole bundle):', selectionAfterTappingOneMember);
 
 const pass =
   multiSelectInfo.includes('2 items selected') &&
@@ -122,7 +122,7 @@ const pass =
   afterSaveFetch.groupIdA === afterSaveFetch.groupIdB &&
   ungroupEnabledAfterSave &&
   !!reloadedA &&
-  selectionAfterTappingOneMember.includes('2 items selected') &&
+  selectionAfterTappingOneMember === 'Bundle' &&
   errors.length === 0;
 await finish(browser, {
   pass,

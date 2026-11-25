@@ -102,8 +102,11 @@ const reloadedA = positionsAfterReload.find((p) => p.instanceId === instanceAId)
 await page.mouse.click(reloadedA.x, reloadedA.y);
 await page.waitForTimeout(300);
 const selectionAfterTappingOneMember = await page.textContent('#item-card-name');
-console.log('status after tapping only A post-reload (should still be "2 items selected" -- the group expanded the selection):', selectionAfterTappingOneMember);
+console.log('status after tapping only A post-reload (should say Bundle, #4335 -- the group expanded the selection to the whole bundle):', selectionAfterTappingOneMember);
 
+// #4335: Bundle on a selection that is already exactly one bundle would change nothing, so it is not offered.
+const groupHiddenForWholeBundle = await page.locator('#group-item').isHidden();
+console.log('Bundle button not offered on a whole bundle (should be true):', groupHiddenForWholeBundle);
 const ungroupEnabledAfterReload = await page.locator('#ungroup-item').isEnabled();
 console.log('Ungroup enabled after the group-expanded tap (should be true):', ungroupEnabledAfterReload);
 
@@ -134,7 +137,8 @@ const pass =
   !!afterGroupFetch.groupIdA &&
   afterGroupFetch.groupIdA === afterGroupFetch.groupIdB &&
   !!reloadedA &&
-  selectionAfterTappingOneMember.includes('2 items selected') &&
+  selectionAfterTappingOneMember === 'Bundle' &&
+  groupHiddenForWholeBundle &&
   ungroupEnabledAfterReload &&
   afterUngroupFetch.groupIdA === null &&
   afterUngroupFetch.groupIdB === null &&

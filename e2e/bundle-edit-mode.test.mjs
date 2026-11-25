@@ -68,7 +68,7 @@ await editBtn.click(); // Done
 await page.waitForTimeout(300);
 const unitInfo = await info();
 const unsavedBack = await editBtn.textContent();
-console.log('Done returns to the unit (should say "2 items selected"):', unitInfo, '| button:', unsavedBack);
+console.log('Done returns to the unit (should say Bundle, #4335):', unitInfo, '| button:', unsavedBack);
 
 // --- Save it (shared) so it becomes a linked template. ---
 await saveBundleAs(page, OWNER, { shared: true });
@@ -121,7 +121,7 @@ await other.waitForTimeout(500);
 await other.locator('.bundle-tile').filter({ hasText: OWNER }).locator('.bundle-tile-place').click();
 await other.waitForTimeout(300);
 await other.mouse.click(210, 500);
-await other.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 60000 });
+await other.waitForFunction(() => document.getElementById('item-card-name').textContent === 'Bundle', null, { timeout: 60000 });
 await other.waitForFunction(() => document.getElementById('edit-bundle-reason').textContent.includes('Only the builder'), null, { timeout: 15000 });
 const otherEditDisabled = await other.locator('#edit-bundle-item').isDisabled();
 const reason = await other.textContent('#edit-bundle-reason');
@@ -131,10 +131,10 @@ console.log('other builder: Edit disabled / reason / Unbundle enabled:', otherEd
 const errors = [...ownerSession.errors, ...otherSession.errors];
 const pass = unsavedEnabled && unsavedModal === 0 && unsavedLabel === 'Done' &&
   !memberInfo.includes('items selected') && memberInfo.includes('Tree') &&
-  unitInfo.includes('2 items selected') && unsavedBack === 'Edit' &&
+  unitInfo === 'Bundle' && unsavedBack === 'Edit' &&
   modalMessage.includes("other builders' lándlets") &&
-  afterNever.includes('2 items selected') && labelAfterNever === 'Edit' &&
-  labelAfterConfirm === 'Done' && labelAfterEscape === 'Edit' && unitAfterEscape.includes('2 items selected') &&
+  afterNever === 'Bundle' && labelAfterNever === 'Edit' &&
+  labelAfterConfirm === 'Done' && labelAfterEscape === 'Edit' && unitAfterEscape === 'Bundle' &&
   secondModal === 0 && labelSecond === 'Done' &&
   otherEditDisabled && reason.includes('Only the builder who saved this bundle can change it') && unbundleEnabled &&
   errors.length === 0;

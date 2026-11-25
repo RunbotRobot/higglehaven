@@ -48,7 +48,7 @@ await other.waitForTimeout(500);
 await other.locator('.bundle-tile').filter({ hasText: OWNER }).locator('.bundle-tile-place').click();
 await other.waitForTimeout(300);
 await other.mouse.click(210, 500);
-await other.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 60000 });
+await other.waitForFunction(() => document.getElementById('item-card-name').textContent === 'Bundle', null, { timeout: 60000 });
 await other.waitForTimeout(800);
 
 const bundleItems = () => page.evaluate(async () => {
@@ -60,7 +60,7 @@ const before = await bundleItems();
 
 // Owner selects the bundle, opens it, moves one member, and leaves edit mode.
 await page.evaluate(() => window.__testSelectAllProducts());
-await page.waitForFunction(() => document.getElementById('item-card-name').textContent.includes('items selected'), null, { timeout: 15000 });
+await page.waitForFunction(() => document.getElementById('item-card-name').textContent === 'Bundle', null, { timeout: 15000 });
 await page.waitForSelector('#edit-bundle-item', { state: 'visible', timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('edit-bundle-item').disabled, null, { timeout: 15000 });
 await page.click('#edit-bundle-item');
