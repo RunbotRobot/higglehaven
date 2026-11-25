@@ -172,7 +172,7 @@ export async function handleControlRoomAdminPage(request, env) {
   // Vite copies verbatim into dist/) is fetched through the same ASSETS
   // binding every other static file already uses — this route only adds
   // the requireAdmin gate in front of it, not a separate rendering path.
-  return env.ASSETS.fetch(new Request(new URL('/admin-control-room.html', request.url), request));
+  return env.ASSETS.fetch(new Request(new URL('/admin-control-room', request.url), request));
 }
 
 function controlRoomSignInPage(error, title = 'higglehaven Control Room') {
@@ -199,7 +199,7 @@ export async function handleAdminActionLogPage(request, env) {
     if (!(error instanceof HttpError)) throw error;
     return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Action Log'), error.status);
   }
-  return env.ASSETS.fetch(new Request(new URL('/admin-action-log.html', request.url), request));
+  return env.ASSETS.fetch(new Request(new URL('/admin-action-log', request.url), request));
 }
 
 // #1818 (sub-issue of #1817): same "gate, then hand off to a plain static
@@ -214,7 +214,7 @@ export async function handleAdminDashboardPage(request, env) {
     if (!(error instanceof HttpError)) throw error;
     return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Dashboard'), error.status);
   }
-  return env.ASSETS.fetch(new Request(new URL('/admin-dashboard.html', request.url), request));
+  return env.ASSETS.fetch(new Request(new URL('/admin-dashboard', request.url), request));
 }
 
 export async function handleControlRoom(request, env, route, url) {

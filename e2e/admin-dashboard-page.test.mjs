@@ -251,6 +251,20 @@ const actionLogHref = await page.getAttribute('a[href="/admin/action-log"]', 'hr
 console.log('nav links out to the Control Room page (actual href):', controlRoomHref);
 console.log('nav links out to the Action Log page (actual href):', actionLogHref);
 
+// #4232: the admin tools' static files are gated by their own paths too, not only through /admin/...
+const staticPaths = ['/admin-dashboard', '/admin-dashboard.html', '/admin-control-room', '/admin-control-room.html', '/admin-action-log', '/admin-action-log.html', '/admin-dashboard-1.js', '/admin-tables.js', '/admin-dashboard.css'];
+const anonStatic = [];
+const adminStatic = [];
+for (const path of staticPaths) {
+  const anon = await fetch(`${BASE_URL}${path}`, { redirect: 'manual' });
+  anonStatic.push({ path, status: anon.status });
+  const asAdmin = await fetch(`${BASE_URL}${path}`, { headers: { cookie: sessionCookie } });
+  adminStatic.push({ path, status: asAdmin.status, url: asAdmin.url.replace(BASE_URL, '') });
+}
+console.log('signed-out static paths (each should be 401 or 404, never 200 or a redirect):', JSON.stringify(anonStatic));
+console.log('admin static paths (each should be 200 at its own path):', JSON.stringify(adminStatic));
+const staticGated = anonStatic.every((row) => row.status === 401 || row.status === 404) && adminStatic.every((row) => row.status === 200 && row.url === row.path.replace(/\.html$/, '') || row.status === 200 && row.url === row.path);
+
 const pass = anonStatus === 401 &&
   anonSeesSignIn &&
   heading === 'Admin Dashboard' &&
@@ -278,6 +292,7 @@ const pass = anonStatus === 401 &&
   taxConnectionErrorText.toLowerCase().includes('not configured') &&
   controlRoomHref === '/admin/control-room' &&
   actionLogHref === '/admin/action-log' &&
+  staticGated &&
   unexpectedErrors.length === 0;
 await finish(browser, {
   pass,

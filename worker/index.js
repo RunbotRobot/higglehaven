@@ -22,7 +22,7 @@ import {
 } from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import {
-  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
+  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, requireAdminOrViewer, assertOwner,
   assertVerified, requireSessionBuilder, requireVerifiedSession, builderIdsForUsers,
 } from './lib/auth.js';
 // #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
@@ -414,6 +414,34 @@ async function routeRequest(request, env, ctx) {
   // into a bare unhandled-exception response instead of this app's own
   // consistent JSON error shape. Same catch-all fallback the /api/ branch
   // already uses.
+  // #4232: the admin pages' static files (public/admin-*.html, .js, .css) were also reachable by their own
+  // path, ungated: the page handlers' ASSETS.fetch of the .html answers 307 to the extensionless path, and
+  // that path fell through to the static bundle below. Each shell path now goes through the same gate as
+  // its /admin/... page; the scripts and styles need an admin (or the look-only role) too, so a signed-out
+  // visitor reads none of the admin tools' source. (Not a data leak either way: every API they call is gated.)
+  const adminStatic = adminStaticRoute(url.pathname);
+  if (adminStatic) {
+    const handle = adminStatic.shell === 'admin-control-room' ? handleControlRoomAdminPage
+      : adminStatic.shell === 'admin-action-log' ? handleAdminActionLogPage
+      : adminStatic.shell === 'admin-dashboard' ? handleAdminDashboardPage : null;
+    if (handle) {
+      return handle(request, env).catch((error) => {
+        console.error(error);
+        return json({ error: 'Internal server error' }, 500);
+      });
+    }
+    try {
+      await requireAdminOrViewer(request, env.DB);
+    } catch (error) {
+      if (!(error instanceof HttpError)) {
+        console.error(error);
+        return json({ error: 'Internal server error' }, 500);
+      }
+      return json({ error: 'Not found' }, 404);
+    }
+    return env.ASSETS.fetch(request);
+  }
+
   if (url.pathname === '/admin/control-room') {
     return handleControlRoomAdminPage(request, env).catch((error) => {
       console.error(error);
@@ -457,6 +485,16 @@ async function routeRequest(request, env, ctx) {
   }
 
   return withNotFoundPage(request, env, await env.ASSETS.fetch(request));
+}
+
+// #4232: '/admin-dashboard', '/admin-dashboard.html', '/admin-dashboard-3.js', '/admin-tables.js' and the like:
+// the static files of the owner's tools. { shell } is set for the three HTML pages (either spelling).
+export function adminStaticRoute(pathname) {
+  const match = /^\/(admin-[a-z0-9-]+)(\.html|\.js|\.css)?$/.exec(pathname);
+  if (!match) return null;
+  const [, name, ext] = match;
+  const isShell = ['admin-dashboard', 'admin-control-room', 'admin-action-log'].includes(name) && (ext === undefined || ext === '.html');
+  return { name, shell: isShell ? name : null };
 }
 
 export default {
