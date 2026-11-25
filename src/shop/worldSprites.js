@@ -61,7 +61,7 @@ import { addSelectionOutline, removeSelectionOutline } from '../build/scene.js';
 import {
   fetchSignPosts, fetchCalendarEvents, triggerCalendarEvent, fetchProductReviews,
 } from '../api.js';
-import { createReviewCache } from './reviewCache.js';
+import { createReviewCache, REVIEW_FAILURE_BACKOFF_MS } from './reviewCache.js';
 import {
   shopEquippedAvatarSkeletonSignature, formatPriceCents, DIGITAL_GOOD_DISCLAIMER_TEXT,
 } from '../main.js';
@@ -355,6 +355,9 @@ export function updateCalendarFade() {
 // its own copy of the answer, so a review a shopper posts next to one
 // placement still changes only that one until the next load (the same
 // cosmetic edge case as before).
+// Every wait is longer than the cache's own failure backoff, or the retry would
+// just be handed the same remembered failure.
+const REVIEW_LOAD_RETRY_DELAYS_MS = [REVIEW_FAILURE_BACKOFF_MS + 1000, 15000, 40000];
 const productReviewCache = createReviewCache({ fetchReviews: (templateId) => fetchProductReviews(templateId) });
 
 // A shopper's own post, edit or delete: the next placement to load must ask again.
@@ -365,11 +368,19 @@ export function invalidateProductReviews(templateId) {
 export function registerShopReview(mesh, entry) {
   const review = { mesh, group: entry.group, templateId: mesh.userData.template.templateId, reviews: [], sprites: [] };
   shopReviews.push(review);
-  productReviewCache.get(review.templateId).then(({ reviews }) => {
-    if (!shopReviews.includes(review)) return;
-    review.reviews = reviews.slice();
-    rebuildReviewSprites(review);
-  }).catch(() => {});
+  // #4313: the cache remembers a failure for REVIEW_FAILURE_BACKOFF_MS and
+  // only another placement asked again, so a product with one placement showed
+  // no ratings for the whole visit. Ask again while this placement is in the
+  // scene, the first time after the backoff has passed.
+  loadWhileInScene({
+    fetch: () => productReviewCache.get(review.templateId),
+    isInScene: () => shopReviews.includes(review),
+    delays: REVIEW_LOAD_RETRY_DELAYS_MS,
+    onResult: ({ reviews }) => {
+      review.reviews = reviews.slice();
+      rebuildReviewSprites(review);
+    },
+  });
 }
 
 export function disposeReviewSprites(review) {
