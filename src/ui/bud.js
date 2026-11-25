@@ -49,7 +49,6 @@ const STATIC_MENU = {
   'friends-btn': 'shop',
   'my-purchases-btn': 'shop',
   'account-menu-tax-notice': 'sell',
-  'account-menu-landcap': 'build',
   // The lándlet name at the top of the open menu (#3770) is a heading, not a tool: it is in no menu, so it
   // shows above whichever one is open (its own `hidden` decides when there is a lándlet to name).
 };

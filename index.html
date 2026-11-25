@@ -144,7 +144,6 @@
           <button id="my-purchases-btn" type="button">My purchases</button>
           <button id="my-lands-btn" type="button">My lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
-          <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
           <div id="bud-head-row">
             <div id="account-menu-landlet-info" class="bud-place" hidden><span class="bud-place-name"></span><span class="bud-place-by"></span></div>
@@ -772,6 +771,12 @@
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="my-lands-modal-title">My lándlets</h2>
         <div id="my-lands-status" role="status" aria-live="polite"></div>
+        <!-- #4202: how much ground a builder holds against how much they may hold, as a meter inside this leaf. -->
+        <div id="my-lands-cap" hidden>
+          <div id="my-lands-cap-meter" role="meter" aria-label="Ground held" aria-valuemin="0"><span id="my-lands-cap-fill"></span></div>
+          <div id="my-lands-cap-words"></div>
+          <div id="my-lands-cap-note">The cap grows as your products earn higgles.</div>
+        </div>
         <div id="my-lands-list"></div>
         <div id="my-lands-empty" class="empty-state">You don't own a lándlet yet. Claim one in Build mode to start building.</div>
       </div>

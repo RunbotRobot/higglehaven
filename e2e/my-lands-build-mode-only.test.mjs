@@ -4,7 +4,7 @@
 // gated its visibility on currentMode, so it showed in Shop and Sell too,
 // not just Build as the owner wanted. Fixed by toggling myLandsBtn.hidden
 // alongside the account menu's other mode-conditional rows
-// (accountMenuLandCapEl), recomputed each time the menu is opened.
+// (the place line), recomputed each time the menu is opened.
 //
 // Verified here across all three modes in one session (no page reload
 // between Shop and Build, since claimLandlet already lands on Build) --
