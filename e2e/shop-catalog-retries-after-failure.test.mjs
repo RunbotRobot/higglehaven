@@ -96,6 +96,7 @@ for (let i = 0; i < 60 && drawn < ITEMS; i += 1) {
   await page.evaluate(() => window.__testForceShopProximityCheck());
   await page.waitForTimeout(500);
   drawn = await page.evaluate(() => window.__testShopLoadedInstanceCount());
+  if (i % 12 === 0) console.log('dbg', JSON.stringify(await page.evaluate(() => window.__dbg4295?.())));
   if (i % 6 === 0) console.log('poll', i, 'drawn', drawn, 'catalog requests', catalogRequests);
 }
 console.log('placements drawn after the catalog was asked for again (should be', ITEMS + '):', drawn, '| catalog requests:', catalogRequests);

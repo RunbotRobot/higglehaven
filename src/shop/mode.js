@@ -553,6 +553,7 @@ export async function enterShopMode() {
     retryCatalogLater({
       fetchCatalog,
       onCatalog: (catalog) => {
+        window.__dbg4295 = () => [...shopLandlets.values()].map((e) => ({ id: e.record.landletId, loaded: e.loaded, status: e.record.status, n: e.objects.length, d: Math.round(Math.hypot(e.record.center.x - window.__testShopAvatarX?.(), 0)) }));
         console.warn('DBG4295 catalog arrived', Array.isArray(catalog) ? catalog.length : typeof catalog, [...shopLandlets.values()].map((e) => e.loaded));
         setActiveCatalog(catalog);
         for (const entry of shopLandlets.values()) if (entry.loaded) unloadShopLandletInstances(entry);
