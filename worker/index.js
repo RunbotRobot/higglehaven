@@ -38,7 +38,7 @@ import {
   savedLayoutFromRow, savedLayoutInstanceFromRow,
 } from './lib/models.js';
 import {
-  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
+  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage, gateAdminStaticFile,
   handleControlRoom, handleAdminActionLogList,
 } from './lib/control-room.js';
 // #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
@@ -443,6 +443,10 @@ async function routeRequest(request, env, ctx) {
       return json({ error: 'Internal server error', code: ERROR_CODES.INTERNAL_ERROR }, 500);
     });
   }
+
+  // #4232: the admin pages' own static files are served only to an admin (or a look-only admin for the dashboard).
+  const adminFileRefusal = await gateAdminStaticFile(request, env, url);
+  if (adminFileRefusal) return adminFileRefusal;
 
   // Uploaded/imported model files live in R2, not the static ASSETS
   // bundle (which only has whatever shipped with the build) — served

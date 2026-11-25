@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal, removedItemsButtonShown } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal, removedItemsButtonShown, openAccountMenu, openBuildMoreFold } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -132,6 +132,25 @@ const rowCount = await page.locator('.pending-restoration-row').count();
 console.log('exactly one row listed (should be 1):', rowCount);
 console.log('row names the removed product (should include the product name):', rowText);
 
+// #4201: the removed item can be shown as a ghost where it stood, under the one switch, and is never a placed item.
+await page.click('#pending-restoration-close-btn');
+await page.waitForSelector('#pending-restoration-modal.visible', { state: 'hidden', timeout: 5000 });
+const ghostsBeforeToggle = await page.evaluate(() => window.__testRemovedGhostIds());
+await openAccountMenu(page);
+await page.click('#settings-btn');
+await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+await page.click('.settings-tab-btn[data-section="build"]');
+await openBuildMoreFold(page);
+await page.click('#sold-out-marker-toggle');
+await page.waitForFunction(() => window.__testRemovedGhostIds().length === 1, undefined, { timeout: 5000 });
+console.log('no ghost before the switch, one after (should be 0 then 1):', ghostsBeforeToggle.length, 1);
+await page.click('#sold-out-marker-toggle');
+await page.waitForFunction(() => window.__testRemovedGhostIds().length === 0, undefined, { timeout: 5000 });
+await page.keyboard.press('Escape');
+await page.waitForSelector('#settings-modal.visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+await page.click('#pending-restoration-btn').catch(async () => { await removedItemsButtonShown(page); await page.click('#pending-restoration-btn'); });
+await page.waitForSelector('.pending-restoration-row', { timeout: 5000 });
+
 // Clear it for good (#3278: confirmed in the in-app modal).
 await page.locator('.pending-restoration-row-clear').first().click();
 await acceptConfirmModal(page);
@@ -160,6 +179,7 @@ const pass = placeRes.status === 201
   && /Removed items/.test(noteBefore ?? '')
   && /1/.test(buttonText)
   && rowCount === 1
+  && ghostsBeforeToggle.length === 0
   && rowText.includes(PRODUCT_NAME)
   && emptyShown
   && buttonHiddenAfterClear

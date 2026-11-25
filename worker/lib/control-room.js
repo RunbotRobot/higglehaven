@@ -219,6 +219,29 @@ export async function handleAdminDashboardPage(request, env) {
   return env.ASSETS.fetch(new Request(new URL('/admin-dashboard.html', request.url), request));
 }
 
+// #4232: the three admin page handlers above hand off to the static file, which the assets binding answers
+// with a redirect to the file's own path (`/admin-dashboard`), and that path used to be served to anyone. The
+// static files of the admin pages (the pages, their scripts and styles) are now gated where they are served:
+// an unknown caller gets the same plain 404 any unknown path gets. The Control Room and Action Log files need
+// a full admin; the dashboard's files also let a look-only admin through. Returns null to let the request
+// go on to the static file, or the refusal.
+const ADMIN_STATIC_FILE = /^\/admin-(control-room|action-log|dashboard(?:-\d+)?|tables)(?:\.(?:html|js|css))?$/;
+export async function gateAdminStaticFile(request, env, url) {
+  const match = ADMIN_STATIC_FILE.exec(url.pathname);
+  if (!match) return null;
+  try {
+    if (match[1] === 'control-room' || match[1] === 'action-log') await requireAdmin(request, env.DB);
+    else await requireAdminOrViewer(request, env.DB);
+    return null;
+  } catch (error) {
+    if (!(error instanceof HttpError)) {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    }
+    return json({ error: 'Not found' }, 404);
+  }
+}
+
 export async function handleControlRoom(request, env, route, url) {
   const db = env.DB;
   if (route.length === 2 && route[1] === 'tasks') {
