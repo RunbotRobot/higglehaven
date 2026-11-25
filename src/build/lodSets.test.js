@@ -386,6 +386,24 @@ describe('Build judges a wall as one set (#4115)', () => {
     expect(lod.setCount()).toBe(1);
   });
 
+  // #4208 (review): the hold must not take the selected item's first call on the cap, and the cap holds once released.
+  it('keeps a selected item at full under the cap while the wall is held, and the cap holds once the wall is covered', () => {
+    const objects = wall('brick', 20, 20);
+    const selected = new Set([objects[objects.length - 1]]); // the far end of the wall
+    const { lod, look, tick } = setup(objects, { selected });
+    lod.setProtectNear(false);
+    lod.setFullTriangleCap(24 * 1200); // room for about twenty of these bricks in full
+    look(0, -12, 0);
+    tick(1);
+    expect(tierOf(objects[objects.length - 1])).toBe('full');
+    tick(5); // the set job has finished and covered the wall
+    expect(lod.setCount()).toBe(1);
+    expect(tierOf(objects[objects.length - 1])).toBe('full'); // still first on the cap
+    const others = objects.slice(0, -1);
+    expect(tiersOf(others).has('full')).toBe(false); // the wall itself no longer fits, so it is on one reduced version
+    expect(tiersOf(others).size).toBe(1);
+  });
+
   it('works the sets out again after the layout changes and stands still', () => {
     const objects = wall('brick', 6, 6);
     const { lod, look, tick, place } = setup(objects);
