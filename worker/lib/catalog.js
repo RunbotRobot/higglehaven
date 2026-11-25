@@ -35,6 +35,7 @@
 // function/class binding, not a plain const.
 import { assertNotProhibitedContent } from './prohibited-content.js';
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
+import { isValidStockQuantity, stockLimitMessage } from '../stockLimit.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
 import { assertOwner, requireSessionBuilder } from './auth.js';
@@ -314,14 +315,14 @@ function optionalModelSizeBytes(value) {
 
 // #1948: bounded generously -- this is a count of physical units, not money
 // or bytes, so MAX_MONEY_CENTS would be the wrong bound wearing the right
-// shape the same way optionalModelSizeBytes already explains above.
-const MAX_STOCK_QUANTITY = 1_000_000;
-
+// shape the same way optionalModelSizeBytes already explains above. #4343: the
+// limit and its wording live in worker/stockLimit.js, which the Sell screens
+// read too, so what a person is told is what the server enforces.
 function optionalStockQuantity(value) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_STOCK_QUANTITY) {
-    throw new HttpError(`stockQuantity must be a non-negative integer no greater than ${MAX_STOCK_QUANTITY}`, 400);
+  if (!isValidStockQuantity(number)) {
+    throw new HttpError(stockLimitMessage(), 400);
   }
   return number;
 }

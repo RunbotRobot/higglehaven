@@ -7,6 +7,7 @@ import {
 } from './index.js';
 import { writePurchaseRow } from './lib/purchase-creation.js';
 import { cosineSimilarity } from './lib/catalog.js';
+import { stockLimitMessage } from './stockLimit.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin, grantAdminTo, glbFile,
 } from './test-helpers.js';
@@ -1542,6 +1543,9 @@ describe('Finite stock tracking (#1948)', () => {
 
     const overCap = await createTemplateWithStock('stock-over-cap-template', { stockQuantity: 1_000_001 });
     expect(overCap.response.status).toBe(400);
+    // #4343: the refusal reads as a sentence for a person and names the limit, from the one shared definition.
+    expect(overCap.body.error).toBe(stockLimitMessage());
+    expect(overCap.body.error).toContain('1,000,000');
   });
 
   it('never touches stock_quantity for the default (unlimited) template', async () => {

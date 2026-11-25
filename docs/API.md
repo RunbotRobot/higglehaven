@@ -2993,8 +2993,10 @@ below still allows clearing an existing listing's price back to `null`.
 `name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
 `stockQuantity` (#1948), when present, must be a non-negative integer no
-greater than 1,000,000; omit it (or pass `null`) for the default unlimited
-behavior — see "Catalog template object" above and "Sold-out templates"
+greater than 1,000,000 (one definition, `worker/stockLimit.js`, which the Sell
+screens read too, #4343; a refusal is `400` with the person-facing sentence
+"Stock must be a whole number from 0 to 1,000,000, or left blank."); omit it
+(or pass `null`) for the default unlimited behavior — see "Catalog template object" above and "Sold-out templates"
 below "Commission math".
 
 Deliberately **not** rate-limited (#362 flagged the gap, same as
