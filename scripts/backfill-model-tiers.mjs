@@ -46,7 +46,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { glbBatches } from './glb-batches-lib.mjs';
-import { silhouetteFidelity, isFaithful } from '../src/tierFidelity.js';
+import { silhouetteFidelity, isFaithful, materialKindProblem } from '../src/tierFidelity.js';
 import {
   CANDIDATES_SQL, CRACKED_CANDIDATES_SQL, GLB_CONTENT_TYPE, buildRecordStatements, buildRecordedCountStatement, buildReplaceStatements, formatRedoSummary,
   formatSummary, groupCandidates, groupCrackCandidates, parseArgs, runBackfill, runRedoCracked,
@@ -64,7 +64,7 @@ let options;
 try {
   options = parseArgs(process.argv.slice(2));
 } catch (err) {
-  fail(`${err.message}\nUsage: node scripts/backfill-model-tiers.mjs (--local | --remote) [--dry-run] [--redo-cracked] [--limit n] [--max-total-bytes n]`);
+  fail(`${err.message}\nUsage: node scripts/backfill-model-tiers.mjs (--local | --remote) [--dry-run] [--redo-cracked | --redo-all] [--limit n] [--max-total-bytes n]`);
 }
 if (options.mode === 'remote' && !process.env.CLOUDFLARE_API_TOKEN) {
   fail('--remote needs CLOUDFLARE_API_TOKEN in the environment (wrangler cannot reach production without it). Nothing was changed.');
@@ -145,6 +145,20 @@ async function main() {
       const parsed = glbBatches(Buffer.from(tierBytes));
       return isFaithful(silhouetteFidelity(full.batches, parsed.batches), tier);
     },
+    // #4111: what the current generator would make differently from this stored version, read from the files
+    // alone: the material kind (an unlit model's version stored lit) and a colour shift over the limit.
+    async staleReasons(fullBytes, tierBytes, tier) {
+      const full = glbBatches(Buffer.from(fullBytes));
+      const parsed = glbBatches(Buffer.from(tierBytes));
+      const reasons = [];
+      const kind = materialKindProblem(full.batches, parsed.batches);
+      if (kind) reasons.push(kind);
+      const report = silhouetteFidelity(full.batches, parsed.batches);
+      if (report.colorShift != null && !isFaithful({ coverage: 1, extra: 0, colorShift: report.colorShift }, tier)) {
+        reasons.push(`colour is off by ${report.colorShift.toFixed(2)}`);
+      }
+      return reasons;
+    },
     async replaceTiers(modelUrl, oldTiers, urls) {
       for (const statement of buildReplaceStatements(modelUrl, oldTiers, urls)) runSql(statement);
       return runSql(buildRecordedCountStatement(modelUrl, urls))[0].results[0].recorded;
@@ -158,7 +172,7 @@ async function main() {
   try {
     const run = options.redoCracked ? runRedoCracked : runBackfill;
     const summary = await run({
-      candidates, io, dryRun: options.dryRun, limit: options.limit, maxTotalBytes: options.maxTotalBytes, log: (line) => console.log(line),
+      candidates, io, dryRun: options.dryRun, redoAll: options.redoAll, limit: options.limit, maxTotalBytes: options.maxTotalBytes, log: (line) => console.log(line),
     });
     console.log(options.redoCracked ? formatRedoSummary(summary) : formatSummary(summary));
     if (!options.dryRun && !options.redoCracked) {
