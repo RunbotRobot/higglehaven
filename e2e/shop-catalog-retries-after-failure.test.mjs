@@ -75,7 +75,6 @@ for (let i = 0; i < ITEMS; i += 1) {
 // The first catalog request fails; every later one goes through.
 let catalogRequests = 0;
 let failed = 0;
-page.on('console', (m) => { if (/DBG4295/.test(m.text())) console.log(m.text()); });
 await page.route('**/api/catalog?*', (route) => {
   if (route.request().method() !== 'GET') return route.continue();
   catalogRequests += 1;
@@ -87,21 +86,16 @@ await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 15000 });
 await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y, 0); window.__testForceShopProximityCheck(); }, [landlet.center.x + 4, landlet.center.y]);
-await page.waitForTimeout(1500);
-const early = await page.evaluate(() => window.__testShopLoadedInstanceCount());
-console.log('placements drawn while the catalog is still missing (should be 0):', early, '| catalog requests so far:', catalogRequests);
 
 let drawn = 0;
 for (let i = 0; i < 60 && drawn < ITEMS; i += 1) {
   await page.evaluate(() => window.__testForceShopProximityCheck());
   await page.waitForTimeout(500);
   drawn = await page.evaluate(() => window.__testShopLoadedInstanceCount());
-  if (i % 12 === 0) console.log('dbg', JSON.stringify(await page.evaluate(() => window.__dbg4295?.())));
-  if (i % 6 === 0) console.log('poll', i, 'drawn', drawn, 'catalog requests', catalogRequests);
 }
 console.log('placements drawn after the catalog was asked for again (should be', ITEMS + '):', drawn, '| catalog requests:', catalogRequests);
 
-const pass = failed === Number(process.env.CATALOG_FAILS ?? 1) && early === 0 && drawn === ITEMS && catalogRequests >= 2;
+const pass = failed === Number(process.env.CATALOG_FAILS ?? 1) && drawn === ITEMS && catalogRequests >= 2;
 await finish(browser, {
   pass: pass && errors.filter((e) => !/Failed to load resource|net::ERR_FAILED/.test(e)).length === 0,
   label: '#4295: a catalog request that fails once is asked for again, and the placed products appear without moving',

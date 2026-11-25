@@ -1731,6 +1731,10 @@ async function loadShopLandletInstances(entry, myToken) {
     if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
     return;
   }
+  // #4295: a load that was put away while its requests were in flight (an unload, then a newer load) must not go
+  // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
+  // stale, so nothing would be drawn at all.
+  if (myToken !== entry.loadToken) return;
   // #3396: moving, looking and drawing never wait on loading. Each item is its
   // own small unit of work, run inside the per-frame time budget (see
   // src/world/frameBudgetQueue.js), nearest and largest on screen first, so a
