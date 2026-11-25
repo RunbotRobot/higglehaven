@@ -710,6 +710,46 @@ async function withOneModelLoadRetry(load, templateId) {
   }
 }
 
+// #4253: a model that could not be loaded is drawn as a box for now, and brought back by trying again in the background
+// (a dropped request or a file still being written usually passes within a minute), never left as a box for the whole
+// session. The box is a Group holding a box mesh, so the real model can take its place inside the same object that
+// Build and Shop already hold, with nothing for them to swap.
+const MODEL_RECOVERY_DELAYS_MS = [15000, 45000, 120000, 300000];
+const modelRecoveryStats = { pending: 0, recovered: 0, gaveUp: 0 };
+if (typeof window !== 'undefined') window.__modelRecoveryStats = modelRecoveryStats;
+
+function scheduleModelRecovery(object, load, templateId) {
+  const delays = (typeof window !== 'undefined' && window.__testModelRecoveryDelaysMs) || MODEL_RECOVERY_DELAYS_MS;
+  modelRecoveryStats.pending += 1;
+  let attempt = 0;
+  const tryAgain = async () => {
+    try {
+      const recovered = await load();
+      const box = object.userData.fallbackBox;
+      if (box) {
+        object.remove(box);
+        box.geometry.dispose();
+        box.material.dispose();
+      }
+      for (const child of [...recovered.children]) object.add(child);
+      object.userData.model = recovered.userData.model;
+      object.userData.fallbackBox = null;
+      modelRecoveryStats.pending -= 1;
+      modelRecoveryStats.recovered += 1;
+    } catch (err) {
+      attempt += 1;
+      if (attempt >= delays.length) {
+        console.warn(`Model for "${templateId}" still would not load after ${attempt} later tries; leaving its box.`, err);
+        modelRecoveryStats.pending -= 1;
+        modelRecoveryStats.gaveUp += 1;
+        return;
+      }
+      setTimeout(tryAgain, delays[attempt]);
+    }
+  };
+  setTimeout(tryAgain, delays[0]);
+}
+
 // `knownTemplate` is for a ghost of a removed product (#4201), which the builder's catalog no longer lists.
 export async function createMeshForInstance(instance, knownTemplate = null) {
   const template = knownTemplate ?? findTemplate(instance.templateId);
@@ -757,19 +797,26 @@ export async function createMeshForInstance(instance, knownTemplate = null) {
   const depth = effectiveLength(template, instance, 'y', 'depth');
   const height = effectiveLength(template, instance, 'z', 'height');
   let object;
+  const loadModel = () => (extensibleAxes(template)
+    ? loadCroppedModelInstance(template, instance)
+    : loadModelInstance(template.modelUrl));
+  let modelFailed = false;
   if (template.modelUrl) {
     try {
-      object = await withOneModelLoadRetry(() => (extensibleAxes(template)
-        ? loadCroppedModelInstance(template, instance)
-        : loadModelInstance(template.modelUrl)), template.templateId);
+      object = await withOneModelLoadRetry(loadModel, template.templateId);
     } catch (err) {
+      modelFailed = true;
       console.warn(`Failed to load model for "${template.templateId}" (${template.modelUrl}), falling back to a colored box:`, err);
     }
   }
   if (!object) {
     const geometry = new THREE.BoxGeometry(width, depth, height);
     const material = new THREE.MeshStandardMaterial({ color: template.color });
-    object = new THREE.Mesh(geometry, material);
+    const box = new THREE.Mesh(geometry, material);
+    object = new THREE.Group();
+    object.add(box);
+    object.userData.fallbackBox = box;
+    if (modelFailed) scheduleModelRecovery(object, loadModel, template.templateId);
   }
   object.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
   object.rotation.set(instance.rotationX ?? 0, instance.rotationY ?? 0, instance.rotationZ ?? 0);
