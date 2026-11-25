@@ -1809,7 +1809,9 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
     return;
   }
   const template = findTemplate(members[0].templateId);
+  console.warn('DBG4295 batch start', members.length, myToken, entry.loadToken, !!template);
   const source = await loadBatchSource(template);
+  console.warn('DBG4295 batch source', !!source, myToken, entry.loadToken);
   if (!source) {
     for (const instance of members) {
       worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
@@ -1843,6 +1845,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
       return;
     }
   }
+  console.warn('DBG4295 batch attach', handles.length);
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
@@ -1913,6 +1916,7 @@ function instanceLoadPriority(entry, instance) {
 async function buildAndAttachInstance(entry, instance, myToken, run) {
   if (myToken !== entry.loadToken) return; // superseded while queued
   const object = await createMeshForInstance(instance);
+  console.warn('DBG4295 single built', !!object, myToken, entry.loadToken);
   if (!object) {
     run?.itemSettled(instance.instanceId); // never arrives; do not hold its fog
     return;
