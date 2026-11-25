@@ -29,4 +29,5 @@ export const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
 // area -- a builder comparing two numbers the UI itself only ever shows
 // rounded to the nearest whole m² shouldn't get a different answer than
 // what those rounded numbers themselves imply.
-export const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
+// #4331: now defined in shared/level-cap.js, so the Build client reads the same number.
+export { LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from '../../shared/level-cap.js';
