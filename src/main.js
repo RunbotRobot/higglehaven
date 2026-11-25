@@ -681,7 +681,7 @@ startFirstVisitHints();
 import {
   addItemBtn, buildCatalogPickerButtons, closeCatalogPicker,
   openCatalogPickerForPick, renderBundlePicker,
-  bundlePickerLoadToken, bumpBundlePickerLoadToken,
+  bundlePickerLoadToken, bumpBundlePickerLoadToken, loadBundlesIntoPicker,
 } from './catalog/picker.js';
 
 // #2330: mirrors worker/index.js's own MAX_MONEY_CENTS -- the ceiling
@@ -2451,15 +2451,7 @@ async function bootstrap() {
     // in flight by the time Build mode's scene renders, so a builder who
     // saves a new bundle before it resolves must not have it clobbered by
     // this slower, now-stale snapshot landing after.
-    const bundlesLoadToken = bumpBundlePickerLoadToken();
-    Promise.all([fetchBundles(), fetchSharedBundles()])
-      .then(([bundles, shared]) => {
-        if (bundlesLoadToken !== bundlePickerLoadToken) return; // superseded while loading -- a newer bundle-picker action owns the picker now
-        setMyBundles(bundles);
-        setCommunityBundles(shared);
-        renderBundlePicker();
-      })
-      .catch((err) => console.warn('Could not load bundles:', err));
+    loadBundlesIntoPicker(); // #4314: also keeps a failed request visible in the picker and asks again when it opens
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     setActiveCatalog(FALLBACK_CATALOG);
