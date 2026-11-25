@@ -573,3 +573,15 @@ describe('colour fidelity (#4111)', () => {
     expect(metal[0]).toBeLessThan(plain[0] * 0.5);
   });
 });
+
+describe('unlit far (#4111)', () => {
+  it('draws the far version of an unlit model without light, and a lit one with it', () => {
+    const farMaterial = (mat) => {
+      const model = new THREE.Group();
+      model.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat));
+      return meshesOf(buildModelTiersSync(model).far.object)[0].material;
+    };
+    expect(farMaterial(new THREE.MeshBasicMaterial({ color: 0x336699 })).isMeshBasicMaterial).toBe(true);
+    expect(farMaterial(material(0x336699)).isMeshStandardMaterial).toBe(true);
+  });
+});
