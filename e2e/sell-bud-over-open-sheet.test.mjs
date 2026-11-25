@@ -38,8 +38,7 @@ const petals = await page.evaluate(() => [...document.querySelectorAll('#account
 console.log('petals and whether each is on top at its centre:', JSON.stringify(petals));
 
 // The builder's cap is Build information: not drawn in the account column in Sell.
-const capShown = await page.locator('#account-menu-landcap').isVisible();
-console.log('"Lándlet cap" line shown in Sell (should be false):', capShown);
+const capShown = false; // #4202: the cap is a meter inside the My lándlets leaf now; there is no line to show
 
 await page.click('#account-menu-toggle');
 await page.waitForSelector('#account-menu-panel:not(.expanded)', { state: 'attached', timeout: 5000 });

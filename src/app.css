@@ -991,9 +991,8 @@
         margin: 0;
       }
       body[data-bud="on"] #account-menu-panel button[hidden] { display: none; }
-      /* The lines that are not leaves (the lándlet cap, the tax notice, where you are standing) go
+      /* The lines that are not leaves (the tax notice, where you are standing) go
          below the last leaf, not between two of them across the stem. */
-      body[data-bud="on"] #account-menu-landcap,
       body[data-bud="on"] #account-menu-tax-notice {
         order: 100;
         width: calc(var(--stem-x) + var(--leaf-w));
@@ -1372,14 +1371,6 @@
         opacity: 0.28;
         pointer-events: none;
       }
-      #account-menu-landcap {
-        padding: var(--space-sm) var(--space-lg);
-        margin-top: var(--space-3xs);
-        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
-        font: var(--text-xs)/var(--leading-normal) var(--font-sans);
-        color: var(--pill-text);
-        opacity: 0.75;
-      }
       #account-menu-tax-notice {
         padding: var(--space-sm) var(--space-lg);
         font: var(--text-xs)/var(--leading-normal) var(--font-sans);
@@ -1395,7 +1386,7 @@
          world" — was a fixed top-right HUD overlay (#shop-landlet-info)
          shown any time the shopper stood on a claimed landlet; moved into
          the account menu instead, same as #build-info's own earlier move
-         into Settings (see the account-menu-landcap comment above). Kept
+         into Settings (see #my-lands-cap). Kept
          live-updating (updateShopLandletInfo in src/main.js) even while the
          menu panel itself is collapsed, so it's current the moment the menu
          opens rather than stale until the next landlet crossing. */
@@ -7116,6 +7107,28 @@
         margin: 0;
         font-size: var(--text-lg);
       }
+      /* #4202: the lándlet cap as a meter in this leaf: a soft track, a brand-green fill, two plain lines. */
+      #my-lands-cap {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+      }
+      #my-lands-cap[hidden] { display: none; }
+      #my-lands-cap-meter {
+        height: 10px;
+        border-radius: var(--radius-pill, 999px);
+        background: rgb(var(--ink-rgb) / 0.12);
+        overflow: hidden;
+      }
+      #my-lands-cap-fill {
+        display: block;
+        height: 100%;
+        width: 0;
+        border-radius: inherit;
+        background: var(--brand-green);
+      }
+      #my-lands-cap-words { font-size: var(--text-sm); }
+      #my-lands-cap-note { font-size: var(--text-xs); opacity: 0.75; }
       #my-lands-status.error {
         color: var(--danger-text);
         font-size: var(--text-sm);
