@@ -91,6 +91,8 @@ check(reduced, 'most of the items are drawn from a reduced version once over the
 // #4115: the change of version dissolved (a fade started) instead of swapping in one frame, and none is left running.
 check((await page.evaluate(() => window.__testBuildFadesStarted())) > 0, 'the change of version started a dissolve');
 await page.waitForFunction(() => window.__testBuildFadesInFlight() === 0, null, { timeout: 10000 });
+// #4235: and no item changed version in one frame without a dissolve (a wall past the fade bounds waits its turn).
+check((await page.evaluate(() => window.__testBuildHardSwaps())) === 0, 'no item swapped version in one frame');
 // (An item that stayed in full never needed its reduced versions, so it counts as without them.)
 check(afterDrop.full + afterDrop.mid + afterDrop.far + afterDrop.withoutVersions === COUNT, 'every item is still drawn: none is lost');
 await page.waitForTimeout(800);

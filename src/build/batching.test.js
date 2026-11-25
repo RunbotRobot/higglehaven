@@ -338,3 +338,203 @@ describe('Build batching: a change of version dissolves (#4115)', () => {
     expect(instanced(scene)).toHaveLength(1);
   });
 });
+
+describe('Build batching: what the bounds cannot take yet waits (#4235)', () => {
+  // Two squares of ground (BATCH_CELL_M is 16 m), so two groups that can change version on their own.
+  function twoCells(options = {}) {
+    const scene = new THREE.Scene();
+    let now = 1000;
+    const batching = createBuildBatching({
+      scene, isSelected: () => false, clock: () => now, reducedMotion: () => false,
+      createDissolve: () => ({ setLevel: () => {}, restore: () => {} }),
+      ...options,
+    });
+    const near = Array.from({ length: 6 }, (_, index) => item(`n${index}`, index * 2, { withMid: true }));
+    const far = Array.from({ length: 6 }, (_, index) => item(`w${index}`, 32 + index * 2, { withMid: true }));
+    const objects = [...near, ...far];
+    objects.forEach((object) => scene.add(object));
+    const flip = (list, tier = 'mid') => list.forEach((object) => { object.userData.lodShown = tier; });
+    const instanced = () => scene.children.filter((child) => child.isInstancedMesh);
+    const m = new THREE.Matrix4();
+    // The instanced meshes drawing the items whose first instance stands near x.
+    const meshesAt = (x) => instanced().filter((mesh) => { mesh.getMatrixAt(0, m); return Math.abs(m.elements[12] - x) < 0.5; });
+    return { scene, batching, near, far, meshesAt, objects, flip, instanced, at: (ms) => { now = ms; batching.update(now); }, now: () => now };
+  }
+
+  it('keeps the old version drawing while the fade caps are busy, then fades it in when there is room', () => {
+    const w = twoCells({ maxCohorts: 1 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects); // the first group fades: the only cohort allowed
+    w.flip(w.far);
+    w.batching.sync(w.objects); // the second must wait
+    expect(w.batching.fadesInFlight).toBe(1);
+    expect(w.batching.hardSwapCount).toBe(0);
+    expect(w.batching.waitingGroups).toBe(true);
+    // near: full + mid; far: still its full version only (the new mid group was taken back)
+    expect(w.instanced()).toHaveLength(3);
+    expect(w.batching.counts().items).toBe(12);
+    w.at(w.now() + 450); // the first fade ends
+    w.batching.sync(w.objects);
+    expect(w.batching.fadesInFlight).toBe(1); // the second fades now
+    expect(w.batching.fadesStarted).toBe(2);
+    expect(w.batching.hardSwapCount).toBe(0);
+    expect(w.batching.waitingGroups).toBe(false);
+    w.at(w.now() + 450);
+    expect(w.batching.fadesInFlight).toBe(0);
+    expect(w.instanced()).toHaveLength(2);
+  });
+
+  it('swaps at once, and counts it, when the change could never fit', () => {
+    const w = twoCells({ maxTriangles: 10 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects);
+    expect(w.batching.fadesInFlight).toBe(0);
+    expect(w.batching.hardSwapCount).toBe(6);
+    expect(w.batching.waitingGroups).toBe(false);
+  });
+
+  it('swaps at once when nothing is running to make room', () => {
+    const w = twoCells({ maxCohorts: 0 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects);
+    expect(w.batching.hardSwapCount).toBe(6);
+  });
+
+  it('gives up waiting only when no fade has been admitted for the wait limit', () => {
+    const w = twoCells({ maxCohorts: 1, durationMs: 1e9, maxWaitMs: 100 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects); // admitted; it never ends
+    w.flip(w.far);
+    w.at(w.now() + 50);
+    w.batching.sync(w.objects); // waits
+    expect(w.batching.hardSwapCount).toBe(0);
+    w.at(w.now() + 60);
+    w.batching.sync(w.objects); // still within the limit
+    expect(w.batching.hardSwapCount).toBe(0);
+    w.at(w.now() + 200);
+    w.batching.sync(w.objects); // the limit passed with nothing admitted
+    expect(w.batching.hardSwapCount).toBe(6);
+    expect(w.batching.waitingGroups).toBe(false);
+  });
+
+  it('does not carry an old wait over to a later change', () => {
+    const w = twoCells({ maxCohorts: 1, maxWaitMs: 100 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects);
+    w.flip(w.far);
+    w.batching.sync(w.objects); // waits
+    w.at(w.now() + 450);
+    w.batching.sync(w.objects); // admitted: the wait is over
+    expect(w.batching.waitingGroups).toBe(false);
+    w.at(w.now() + 450);
+    w.flip(w.near, 'full'); // a new change much later: it fades at once, no stale timer
+    w.batching.sync(w.objects);
+    expect(w.batching.hardSwapCount).toBe(0);
+    expect(w.batching.fadesStarted).toBe(3);
+  });
+
+  it('stops drawing, in the old group, an item that is held while its group waits', () => {
+    const w = twoCells({ maxCohorts: 1 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects);
+    w.flip(w.far);
+    w.far[1].userData.lodHeld = true; // leaves the batch while its group waits
+    w.batching.sync(w.objects);
+    const out = new THREE.Matrix4();
+    const oldFar = w.meshesAt(32);
+    expect(oldFar).toHaveLength(1); // only the old version draws there; the mid group was taken back
+    oldFar[0].getMatrixAt(1, out);
+    expect(out.elements[0]).toBe(0); // zero scale: not drawn
+  });
+
+  it('an item selected while its group waits is zeroed in the old group and drawn as itself', () => {
+    const w = twoCells({ maxCohorts: 1 });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects);
+    w.flip(w.far);
+    w.batching.sync(w.objects); // waits
+    w.batching.releaseNow(w.far[1]);
+    const out = new THREE.Matrix4();
+    const oldFar = w.meshesAt(32);
+    expect(oldFar).toHaveLength(1);
+    oldFar[0].getMatrixAt(1, out);
+    expect(out.elements[0]).toBe(0);
+    expect(w.far[1].userData.lodTiers.mid.visible).toBe(true); // its own copy of what it now shows
+  });
+
+  it('makes the biggest waiting group go first', () => {
+    const w = twoCells({ maxCohorts: 1, maxTriangles: 200 }); // room for one of the two at a time
+    w.far.push(item('w6', 44, { withMid: true }), item('w7', 46, { withMid: true }));
+    w.far.slice(6).forEach((object) => { w.scene.add(object); w.objects.push(object); });
+    w.batching.sync(w.objects);
+    w.flip(w.near);
+    w.batching.sync(w.objects); // the near group fades; the cohort slot is busy
+    w.flip(w.far); // eight bricks wait
+    w.flip(w.near, 'full');
+    w.batching.sync(w.objects); // both want a turn; both wait
+    w.at(w.now() + 450);
+    w.batching.sync(w.objects);
+    expect(w.batching.fadesInFlight).toBe(1);
+    // the far group (8 items) was admitted before the near one (6): it has its old and new version drawing
+    expect(w.meshesAt(32)).toHaveLength(2);
+    expect(w.meshesAt(0)).toHaveLength(1);
+  });
+  it('an 829-brick wall changing version in slices has no item that swaps in one frame', () => {
+    // The real sizes: 5,320 / 1,282 / 34 triangles. Walking up to the wall, far to mid: before #4235 about 120 to 190
+    // bricks of it swapped at once.
+    const geometryOf = (triangles) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(triangles * 3), 1));
+      return geometry;
+    };
+    const full = geometryOf(5320);
+    const mid = geometryOf(1282);
+    const far = geometryOf(34);
+    const scene = new THREE.Scene();
+    let now = 1000;
+    const batching = createBuildBatching({ scene, isSelected: () => false, clock: () => now, reducedMotion: () => false, createDissolve: () => ({ setLevel: () => {}, restore: () => {} }) });
+    const wall = [];
+    for (let row = 0; row < 21; row++) {
+      for (let column = 0; column < 40 && wall.length < 829; column++) {
+        const object = new THREE.Group();
+        const model = new THREE.Group();
+        model.add(new THREE.Mesh(full, sharedMaterial));
+        const reduced = new THREE.Group();
+        reduced.add(new THREE.Mesh(mid, sharedMaterial));
+        reduced.visible = false;
+        const distant = new THREE.Group();
+        distant.add(new THREE.Mesh(far, sharedMaterial));
+        object.add(model, reduced, distant);
+        model.visible = false;
+        object.userData = { instanceId: `wall${wall.length}`, template, crop: {}, scale: 1, model, lodTiers: { mid: reduced, far: distant }, lodShown: 'far' };
+        object.position.set(column * 0.7, 0, row * 0.3);
+        object.updateMatrixWorld(true);
+        scene.add(object);
+        wall.push(object);
+      }
+    }
+    batching.sync(wall);
+    let flipped = 0;
+    while (flipped < wall.length) {
+      for (let k = 0; k < 20 && flipped < wall.length; k++) {
+        const object = wall[flipped++];
+        object.userData.lodShown = 'mid';
+        object.userData.lodTiers.far.visible = false;
+        object.userData.lodTiers.mid.visible = true;
+      }
+      batching.sync(wall);
+      now += 250;
+      batching.update(now);
+    }
+    expect(batching.hardSwapCount).toBe(0);
+    expect(batching.fadesStarted).toBeGreaterThan(10);
+  });
+});

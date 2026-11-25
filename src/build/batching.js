@@ -24,14 +24,18 @@
 // while the NEW group's meshes dissolve in over them (a discard-based dissolve: no transparency, no
 // sorting), and the old ones are given back when it ends. Both versions draw for the length of a fade,
 // so the work is bounded exactly as Shop's is (cohorts, meshes and triangles in flight; the same
-// constants); a change over any bound, or under reduced motion, swaps at once as it always did. An item
+// constants); under reduced motion, or when a change could never fit (over a bound on its own, or nothing running
+// to make room), it swaps at once as it always did. #4235: a change the bounds cannot take YET waits for the
+// running fades to end (the old version keeps drawing, the new groups are taken back, tried again on the next tick,
+// biggest first), as Shop's placements do since #4113; it swaps at once only when no fade has been admitted for
+// BATCH_CROSSFADE_MAX_WAIT_MS. `hardSwapCount` counts what still changed in one frame. An item
 // that is selected or deleted while a fade runs is zeroed in the old group too (releaseNow), so nothing
 // is left behind under a drag.
 import * as THREE from 'three';
 import { batchKey, MIN_BATCH_SIZE } from '../shop/instanceBatching.js';
 import { TIER_FULL, TIER_MID, TIER_FAR } from '../shop/lodTier.js';
 import { createArrivalDissolve } from '../shop/arrivalEffect.js';
-import { BATCH_CROSSFADE_MS, BATCH_CROSSFADE_MAX_COHORTS, BATCH_CROSSFADE_MAX_TRANSIENT_MESHES, BATCH_CROSSFADE_MAX_TRIANGLES } from '../shop/batchCrossfade.js';
+import { BATCH_CROSSFADE_MS, BATCH_CROSSFADE_MAX_COHORTS, BATCH_CROSSFADE_MAX_TRANSIENT_MESHES, BATCH_CROSSFADE_MAX_TRIANGLES, BATCH_CROSSFADE_MAX_WAIT_MS } from '../shop/batchCrossfade.js';
 
 // A batch is culled as a whole, so one batch for a whole wall is drawn while any of it is in view.
 // Items are grouped by the square of the ground they stand on (identical items in one square share a
@@ -109,12 +113,16 @@ export function createBuildBatching({
   maxCohorts = BATCH_CROSSFADE_MAX_COHORTS,
   maxTransientMeshes = BATCH_CROSSFADE_MAX_TRANSIENT_MESHES,
   maxTriangles = BATCH_CROSSFADE_MAX_TRIANGLES,
+  maxWaitMs = BATCH_CROSSFADE_MAX_WAIT_MS,
   reducedMotion = readReducedMotion,
 }) {
   // key -> { members: Object3D[], roots: Object3D[], matrices: Float32Array, meshes: InstancedMesh[] }
   const groups = new Map();
   const slots = new Map(); // item -> { group, index }, rewritten by every sync
   let fadesStarted = 0;
+  let waitSince = null; // #4235: when the first group of the current run of waits began to wait (null: nothing waits)
+  let lastAdmitMs = -Infinity; // #4235: when a fade was last admitted
+  let hardSwaps = 0; // #4235: items whose group changed version in one frame (no fade): the cap, a limit or reduced motion said so
   const cohorts = new Set(); // #4115: fades in flight: { dissolve, entering: group[], leaving: group[], startMs }
   let enabled = true;
 
@@ -232,7 +240,7 @@ export function createBuildBatching({
           scene.add(mesh);
           return mesh;
         });
-        const group = { members, roots, matrices, meshes, tier: members[0].userData.lodShown ?? TIER_FULL };
+        const group = { key, members, roots, matrices, meshes, tier: members[0].userData.lodShown ?? TIER_FULL };
         groups.set(key, group);
         created.push(group);
       }
@@ -262,45 +270,133 @@ export function createBuildBatching({
 
   // #4115: the groups that replace ones of another version dissolve in over them, within the bounds; everything
   // else is given back now.
+  // #4235: what the bounds cannot take YET waits instead of swapping in one frame (as Shop's placements do since
+  // #4113): the component of old and new groups stays as it was (the old version keeps drawing, the new groups
+  // are taken back) and is tried again on the next tick, biggest first, while a running fade makes room. A wait
+  // ends in a swap only when no fade at all has been admitted for `maxWaitMs`, or when the change could never
+  // fit (over a bound alone, or nothing running to make room), as it always did. Reduced motion swaps at once.
   function startFade(before, leaving, created) {
-    let fadingIn = [];
-    if (leaving.length > 0 && created.length > 0 && cohorts.size < maxCohorts && !reducedMotion()) {
-      const leavingSet = new Set(leaving);
-      fadingIn = created.filter((group) => group.members.some((member) => {
-        const was = before.get(member)?.group;
-        return was && leavingSet.has(was) && was.tier !== group.tier;
-      }));
-    }
-    let keep = [];
-    if (fadingIn.length > 0) {
-      const enteringSet = new Set(fadingIn);
-      const fromSet = new Set();
-      for (const group of enteringSet) {
+    const now = clock();
+    const reduced = created.length > 0 && reducedMotion();
+    const leavingSet = new Set(leaving);
+    // Components: new groups and the old groups their members were drawn from.
+    const parent = new Map();
+    const find = (group) => {
+      let root = group;
+      while (parent.get(root) !== root) root = parent.get(root);
+      parent.set(group, root);
+      return root;
+    };
+    const entersFrom = new Map(); // new group -> old groups of another version its members came from
+    if (!reduced && leaving.length > 0 && created.length > 0) {
+      for (const group of created) parent.set(group, group);
+      for (const group of created) {
         for (const member of group.members) {
           const was = before.get(member)?.group;
-          if (was && leaving.includes(was) && was.tier !== group.tier) fromSet.add(was);
+          if (!was || !leavingSet.has(was)) continue;
+          if (!parent.has(was)) parent.set(was, was);
+          parent.set(find(group), find(was));
+          if (was.tier !== group.tier) {
+            if (!entersFrom.has(group)) entersFrom.set(group, new Set());
+            entersFrom.get(group).add(was);
+          }
         }
       }
-      keep = [...fromSet];
-      const used = inFlight();
-      let meshes = used.meshes;
-      let triangles = used.triangles;
-      for (const group of [...enteringSet, ...keep]) {
+    }
+    const components = new Map();
+    for (const group of parent.keys()) {
+      const root = find(group);
+      if (!components.has(root)) components.set(root, { created: [], old: [], entering: [], keep: new Set(), items: 0 });
+      const component = components.get(root);
+      if (created.includes(group)) {
+        component.created.push(group);
+        if (entersFrom.has(group)) {
+          component.entering.push(group);
+          component.items += group.members.length;
+          for (const was of entersFrom.get(group)) component.keep.add(was);
+        }
+      } else component.old.push(group);
+    }
+    const trianglesOf = (groups) => {
+      let meshes = 0;
+      let triangles = 0;
+      for (const group of groups) {
         meshes += group.meshes.length;
         for (const mesh of group.meshes) triangles += meshTriangles(mesh);
       }
-      if (meshes > maxTransientMeshes || triangles > maxTriangles) {
-        fadingIn = [];
-        keep = [];
+      return { meshes, triangles };
+    };
+    const candidates = [...components.values()].filter((component) => component.entering.length > 0).sort((a, b) => b.items - a.items);
+    const used = inFlight();
+    const runningBefore = cohorts.size > 0;
+    const canStart = cohorts.size < maxCohorts;
+    let meshes = used.meshes;
+    let triangles = used.triangles;
+    const fadingIn = [];
+    const keep = new Set();
+    const deferred = [];
+    for (const component of candidates) {
+      const own = trianglesOf([...component.entering, ...component.keep]);
+      if (canStart && meshes + own.meshes <= maxTransientMeshes && triangles + own.triangles <= maxTriangles) {
+        meshes += own.meshes;
+        triangles += own.triangles;
+        fadingIn.push(...component.entering);
+        for (const was of component.keep) keep.add(was);
+        continue;
+      }
+      const fitsAlone = own.meshes <= maxTransientMeshes && own.triangles <= maxTriangles;
+      const stalled = waitSince !== null && now - Math.max(waitSince, lastAdmitMs) > maxWaitMs;
+      const restorable = component.old.every((old) => {
+        const current = groups.get(old.key);
+        return current === undefined || current === old || component.created.includes(current);
+      });
+      if (fitsAlone && (runningBefore || fadingIn.length > 0) && !stalled && restorable) deferred.push(component);
+    }
+    // A component that waits: the old groups go back as they were, the new ones are taken back.
+    const restored = new Set();
+    const takenBack = new Set();
+    for (const component of deferred) {
+      const stays = new Set();
+      for (const group of component.created) for (const member of group.members) stays.add(member);
+      for (const group of component.created) {
+        if (groups.get(group.key) === group) groups.delete(group.key);
+        takenBack.add(group);
+      }
+      for (const old of component.old) {
+        groups.set(old.key, old);
+        restored.add(old);
+        // What the old group drew but no new group of this component takes (selected, held, removed, below the minimum): stops drawing.
+        old.members.forEach((member, index) => {
+          if (member && stays.has(member)) return;
+          for (const mesh of old.meshes) mesh.setMatrixAt(index, zero);
+          for (const mesh of old.meshes) mesh.instanceMatrix.needsUpdate = true;
+          old.members[index] = null;
+        });
       }
     }
-    for (const group of leaving) if (!keep.includes(group)) dispose(group);
+    if (deferred.length > 0) {
+      if (waitSince === null) waitSince = now;
+    } else waitSince = null;
+    if (fadingIn.length > 0) lastAdmitMs = now;
+    // Counted: what changes version in this frame without a fade (reduced motion is the person's own choice).
+    if (!reduced) {
+      const fading = new Set(fadingIn);
+      for (const group of created) {
+        if (fading.has(group) || takenBack.has(group)) continue;
+        for (const member of group.members) {
+          const was = before.get(member)?.group;
+          if (was && was.tier !== group.tier) hardSwaps += 1;
+        }
+      }
+    }
+    for (const group of takenBack) dispose(group);
+    for (const group of leaving) if (!keep.has(group) && !restored.has(group)) dispose(group);
     if (fadingIn.length === 0) return;
     // One dissolve over every incoming group: only their materials are swapped, level 0 shows none of them yet.
-    const meshes = fadingIn.flatMap((group) => group.meshes);
-    const dissolve = createDissolve({ traverse(visit) { for (const mesh of meshes) visit(mesh); } });
+    const incoming = fadingIn.flatMap((group) => group.meshes);
+    const dissolve = createDissolve({ traverse(visit) { for (const mesh of incoming) visit(mesh); } });
     dissolve.setLevel(0);
-    cohorts.add({ dissolve, entering: fadingIn, leaving: keep, startMs: clock() });
+    cohorts.add({ dissolve, entering: fadingIn, leaving: [...keep], startMs: clock() });
     fadesStarted += 1;
   }
 
@@ -322,6 +418,8 @@ export function createBuildBatching({
     finishAll,
     get fadesInFlight() { return cohorts.size; },
     get fadesStarted() { return fadesStarted; },
+    get hardSwapCount() { return hardSwaps; },
+    get waitingGroups() { return waitSince !== null; },
     releaseNow,
     counts,
     setEnabled(on) { enabled = on !== false; },
