@@ -103,6 +103,9 @@ describe('Builder-facing pending restoration (#2987)', () => {
     });
     expect(pending[0].snapshotId).toBeTruthy();
     expect(pending[0].removedAt).toBeTruthy();
+    // #4201: ghosts need the saved pose.
+    expect(pending[0].rotation).toEqual({ x: expect.any(Number), y: expect.any(Number), z: expect.any(Number) });
+    expect(pending[0].scale).toBeGreaterThan(0);
 
     // Another builder's view never includes it.
     expect(await listPending(stranger)).toEqual([]);
