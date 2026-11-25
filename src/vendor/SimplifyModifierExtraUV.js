@@ -168,7 +168,9 @@ class SimplifyModifier {
 		// next vertex of the same border while the border stays within a tolerance of where it was, and nothing
 		// else may move it. A model whose border is most of its vertices (the brick: 2,507 open edges) cannot
 		// get below the interior's own triangle count with the borders locked (2,638 of 5,320), and tears when
-		// they are free (#4114). options.slideBorders is the tolerance as a fraction of the model's diagonal.
+		// they are free (#4114). options.slideBorders is the tolerance as a length in this geometry's own units:
+		// no original border point may end up further than that from the border that replaces it, however many
+		// vertices were collapsed into it (see computeSlidingBorderCost).
 		if ( options.slideBorders > 0 && ! options.lockBorders ) yield* markSlidingBorderVertices( vertices, faces, options.slideBorders ); // SLICED
 
 		for ( let i = 0, il = vertices.length; i < il; i ++ ) {
@@ -494,8 +496,8 @@ function* markBorderVertices( vertices, faces ) {
 }
 
 // #4302: marks every vertex on an open edge (positions welded as in markBorderVertices) as a border vertex that
-// may slide along its border, with the deviation it may cause: `fraction` of the model's diagonal.
-function* markSlidingBorderVertices( vertices, faces, fraction ) {
+// may slide along its border, with the deviation it may cause: `tolerance`, a length in the geometry's units.
+function* markSlidingBorderVertices( vertices, faces, tolerance ) {
 
 	if ( vertices.length === 0 || faces.length === 0 ) return;
 
@@ -565,14 +567,13 @@ function* markSlidingBorderVertices( vertices, faces, fraction ) {
 
 	}
 
-	const tolerance = diagonal * fraction;
-
 	for ( let i = 0; i < vertices.length; i ++ ) {
 
 		if ( border.has( idOf( vertices[ i ] ) ) ) {
 
 			vertices[ i ].border = true;
 			vertices[ i ].slideTolerance = tolerance;
+			vertices[ i ].covers = new Map();
 
 		}
 
@@ -616,8 +617,29 @@ function distanceToSegment( p, a, b ) {
 
 }
 
-// #4302: the cheapest way for a sliding border vertex to move: onto a neighbour on its own border, while the
-// border (a chain through this vertex) stays within the tolerance. Nothing else may move it.
+// #4302: the original border points that lie between two vertices of a border, in the order they were
+// absorbed: every vertex that was collapsed into the stretch from a to b. Empty when nothing was.
+function coverBetween( a, b ) {
+
+	return ( a.covers && a.covers.get( b ) ) || [];
+
+}
+
+function setCoverBetween( a, b, points ) {
+
+	if ( ! a.covers ) a.covers = new Map();
+	if ( ! b.covers ) b.covers = new Map();
+	a.covers.set( b, points );
+	b.covers.set( a, points );
+
+}
+
+// #4302: the cheapest way for a sliding border vertex to move: onto a neighbour on its own border, while every
+// original border point it (and the vertices already collapsed into its two stretches) stood for stays within
+// the tolerance of the stretch that replaces them. The distance is measured against the points the border
+// started with, not against where its neighbours are now, so a gently curved border cannot be shortened one
+// vertex at a time into a different shape; and a closed border (a hole) cannot shrink below three vertices,
+// nor further than the tolerance allows. Nothing else may move it.
 function computeSlidingBorderCost( v ) {
 
 	const along = borderNeighbors( v );
@@ -632,11 +654,31 @@ function computeSlidingBorderCost( v ) {
 			const target = along[ i ];
 			const other = along[ 1 - i ];
 
-			if ( ! target.border ) continue;
+			if ( ! target.border || ! other.border ) continue;
 
-			const deviation = distanceToSegment( v.position, other.position, target.position );
+			// Collapsing would leave target and other joined twice (a loop of three that is already
+			// closed): never.
+			if ( borderNeighbors( other ).indexOf( target ) !== - 1 ) continue;
+
+			let deviation = distanceToSegment( v.position, other.position, target.position );
 
 			if ( deviation > v.slideTolerance ) continue;
+
+			let within = true;
+
+			for ( const stretch of [ coverBetween( v, other ), coverBetween( v, target ) ] ) {
+
+				for ( let k = 0; k < stretch.length && within; k ++ ) {
+
+					const d = distanceToSegment( stretch[ k ], other.position, target.position );
+					if ( d > deviation ) deviation = d;
+					if ( d > v.slideTolerance ) within = false;
+
+				}
+
+			}
+
+			if ( ! within ) continue;
 
 			const cost = deviation + 1e-3 * v.position.distanceTo( target.position );
 
@@ -653,6 +695,21 @@ function computeSlidingBorderCost( v ) {
 
 	v.collapseNeighbor = bestNeighbor || v.neighbors[ 0 ];
 	v.collapseCost = bestCost;
+
+}
+
+// #4302: called as a border vertex u collapses onto its border neighbour v: the border now runs from u's other
+// border neighbour straight to v, and it stands for everything u and its two stretches stood for.
+function absorbIntoBorder( u, v ) {
+
+	const along = borderNeighbors( u );
+
+	if ( along.length !== 2 || along.indexOf( v ) === - 1 ) return;
+
+	const w = along[ 0 ] === v ? along[ 1 ] : along[ 0 ];
+	const points = coverBetween( u, w ).concat( coverBetween( u, v ), [ u.position.clone() ] );
+	setCoverBetween( w, v, points );
+	u.covers = null;
 
 }
 
@@ -764,6 +821,9 @@ function collapse( vertices, faces, u, v ) {
 		return;
 
 	}
+
+	// #4302
+	if ( u.border && v.border ) absorbIntoBorder( u, v );
 
 	if ( v.uv ) {
 
@@ -947,6 +1007,7 @@ class Vertex {
 		this.locked = false; // #3528: shares its position with another vertex
 		this.border = false; // #4302: on an open edge and allowed to slide along it (options.slideBorders)
 		this.slideTolerance = 0;
+		this.covers = null; // #4302: original border points absorbed into each of its border stretches
 
 	}
 

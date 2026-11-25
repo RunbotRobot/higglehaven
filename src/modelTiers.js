@@ -72,13 +72,21 @@ export const MID_MIN_TRIANGLES_PER_MESH = 12;
 // A model that fails every rung keeps its own geometry for mid. The target ceiling grows with each rung.
 export const MID_FRACTION_LADDER = [MID_TRIANGLE_FRACTION, 0.25, 0.5];
 export const MID_TEXTURE_MAX_SIZE = 256;
-// #4302: when locking a mesh's open borders leaves its mid version far above its target (the brick: a
-// shell of 2,507 open edges, which stuck at half its triangles), its borders may slide along themselves
-// instead, within this much of the model's diagonal, smallest first. Whether the result may stand is the
-// fidelity check's call (src/tierFidelity.js), as for every mid version.
+// #4302: when locking a mesh's open borders is what keeps its mid version far above its target (the brick: a
+// shell of 2,507 open edges, which stuck at half its triangles), a second mid version is built in which the
+// borders slide along themselves instead. No original border point may end up further from the border that
+// replaces it than this fraction of the model's own diagonal (in the model's space, whatever the scale of
+// the mesh or of the node it hangs from), smallest first. That version is an extra candidate: it is used
+// only if it passes the same fidelity check as every mid version (src/tierFidelity.js); otherwise the locked
+// version stands, exactly as before.
 export const MID_SLIDE_BORDER_LADDER = [0.005, 0.01, 0.02];
 // A locked result within this multiple of its target is good enough: no sliding is tried.
 const MID_SLIDE_STUCK_FACTOR = 1.5;
+// It is the borders that keep it there when the open edges left in the locked result are at least this
+// fraction of its triangles.
+const MID_SLIDE_BORDER_SHARE = 0.25;
+// A mesh of more triangles than this is never retried (each retry is up to three more full passes).
+export const MID_SLIDE_MAX_TRIANGLES = 30000;
 // Directions the far fallback (the support hull) takes its extreme points in: the six axes, twelve
 // edges and eight corners of a box, so the hull has at most 26 points and about fifty triangles.
 const HULL_DIRECTIONS = (() => {
@@ -367,14 +375,13 @@ function* downsizeMaterial(material, maxSize, getPixels, cache, makeImage) {
 
 // #4302: simplifies `geometry` again with its open borders free to slide along themselves, smallest tolerance
 // first, stopping at the first that gets within MID_SLIDE_STUCK_FACTOR of the target; of all that were tried,
-// the smallest result wins. `locked` is the result the locked pass already made; it is returned (not
-// disposed) when sliding does no better, and disposed when something beats it.
-function* slideBordersToTarget(geometry, targetTriangles, locked, ladder) {
-  let best = locked;
-  for (const tolerance of ladder) {
+// the smallest result wins. `tolerances` are lengths in the geometry's own units.
+function* slideBordersToTarget(geometry, targetTriangles, tolerances) {
+  let best = null;
+  for (const tolerance of tolerances) {
     const candidate = yield* simplifyToTarget(geometry, targetTriangles, { lockBorders: false, slideBorders: tolerance });
-    if (countTriangles(candidate) < countTriangles(best)) {
-      if (best !== geometry) best.dispose();
+    if (!best || countTriangles(candidate) < countTriangles(best)) {
+      if (best && best !== geometry) best.dispose();
       best = candidate;
     } else if (candidate !== geometry) {
       candidate.dispose();
@@ -384,7 +391,22 @@ function* slideBordersToTarget(geometry, targetTriangles, locked, ladder) {
   return best;
 }
 
-function* buildMid(model, meshes, options, getPixels, rung = 0) {
+// #4302: the sliding tolerances for one mesh, as lengths in its geometry's own units: the fractions of the
+// model's diagonal (in the model's space, so a small part of a big model and a scaled node get the same
+// tolerance a person would see), divided by how much the mesh is scaled into that space.
+function slideTolerancesFor(root, mesh, ladder) {
+  root.updateWorldMatrix(false, true);
+  const size = new Box3().setFromObject(root).getSize(new Vector3());
+  const diagonal = size.length();
+  const scale = Math.cbrt(Math.abs(mesh.matrixWorld.determinant()));
+  if (!(diagonal > DEGENERATE_EXTENT) || !(scale > DEGENERATE_EXTENT)) return [];
+  return ladder.map((fraction) => (fraction * diagonal) / scale);
+}
+
+// slideStuck: null for the ordinary (locked) version, which also reports in `stuck` the meshes whose borders
+// are what keep them above their target; a Set of mesh indices for the sliding version, which re-does those
+// meshes with sliding borders and leaves the rest exactly as the locked version made them.
+function* buildMid(model, meshes, options, getPixels, rung = 0, slideStuck = null) {
   const makeImage = options.makeImage ?? canvasImageFromPixels;
   const total = meshes.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
   const fraction = MID_FRACTION_LADDER[rung] ?? MID_TRIANGLE_FRACTION;
@@ -395,6 +417,7 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
   const maxTextureSize = options.midTextureMaxSize ?? MID_TEXTURE_MAX_SIZE;
   const materialCache = new Map();
   let changed = false;
+  const stuck = new Set();
 
   for (let i = 0; i < cloneMeshes.length; i++) {
     const cloneMesh = cloneMeshes[i];
@@ -403,11 +426,16 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
     if (total > target) {
       const meshTarget = Math.max(MID_MIN_TRIANGLES_PER_MESH, Math.round((triangles * target) / total));
       if (triangles > meshTarget) {
-        let simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders: options.lockBorders ?? true });
-        // #4302: stuck far above the target with the borders locked: let them slide.
-        if (options.slideBorders !== false && (options.lockBorders ?? true) && countTriangles(simplified) > meshTarget * MID_SLIDE_STUCK_FACTOR
-          && (yield* boundaryEdgeCountSteps(geometry)) > 0) {
-          simplified = yield* slideBordersToTarget(geometry, meshTarget, simplified, options.slideBorderLadder ?? MID_SLIDE_BORDER_LADDER);
+        const lockBorders = options.lockBorders ?? true;
+        let simplified;
+        if (slideStuck && slideStuck.has(i)) {
+          simplified = yield* slideBordersToTarget(geometry, meshTarget, slideTolerancesFor(clone, cloneMesh, options.slideBorderLadder ?? MID_SLIDE_BORDER_LADDER));
+        } else {
+          simplified = yield* simplifyToTarget(geometry, meshTarget, { lockBorders });
+          // #4302: the borders are what keep it from the target: note it, for a sliding version to try.
+          if (!slideStuck && options.slideBorders !== false && lockBorders && triangles <= MID_SLIDE_MAX_TRIANGLES
+            && countTriangles(simplified) > meshTarget * MID_SLIDE_STUCK_FACTOR
+            && (yield* boundaryEdgeCountSteps(simplified)) >= countTriangles(simplified) * MID_SLIDE_BORDER_SHARE) stuck.add(i);
         }
         if (simplified !== geometry) {
           cloneMesh.geometry = simplified;
@@ -425,8 +453,8 @@ function* buildMid(model, meshes, options, getPixels, rung = 0) {
   }
 
   // Nothing to shrink: the full model is the mid model. No copy to hold.
-  if (!changed) return sharedModel(model);
-  return { object: clone, sharesFullModel: false };
+  if (!changed) return { ...sharedModel(model), stuck };
+  return { object: clone, sharesFullModel: false, stuck };
 }
 
 // ---- Fidelity (#4062) ----
@@ -894,15 +922,29 @@ export function* modelTierSteps(model, options = {}) {
   // that fails is retried gentler (MID_FRACTION_LADDER) and ends at the model's own geometry; a far version
   // that fails falls back to the model's outline, then to the mid version.
   const fullBatches = fidelityBatches(model, getPixels);
+  // options.tierCheck(fullBatches, object, tier, getPixels) -> boolean replaces the fidelity check (tests).
+  const check = options.tierCheck ?? tierIsFaithful;
   let mid = null;
+  const slide = { attempts: 0, used: false };
   for (let rung = 0; rung < MID_FRACTION_LADDER.length && !mid; rung++) {
     const candidate = yield* buildMid(model, meshes, options, getPixels, rung);
-    if (candidate.sharesFullModel || tierIsFaithful(fullBatches, candidate.object, 'mid', getPixels)) mid = candidate;
+    // #4302: the borders are what keep some mesh above its target: a second version slides them. It is an
+    // extra candidate and only wins if it passes the check; otherwise the locked one is judged as ever.
+    if (candidate.stuck && candidate.stuck.size > 0) {
+      slide.attempts++;
+      const sliding = yield* buildMid(model, meshes, options, getPixels, rung, candidate.stuck);
+      if (!sliding.sharesFullModel && check(fullBatches, sliding.object, 'mid', getPixels)) {
+        mid = sliding;
+        slide.used = true;
+        continue;
+      }
+    }
+    if (candidate.sharesFullModel || check(fullBatches, candidate.object, 'mid', getPixels)) mid = candidate;
   }
   if (!mid) mid = sharedModel(model);
   let far = yield* buildFar(model, meshes, getPixels, fullBatches);
   if (!far) far = mid.sharesFullModel ? sharedModel(model) : { object: mid.object.clone(true), sharesFullModel: false };
-  return { mid, far, stats: { full, mid: triangleCountOf(mid.object), far: triangleCountOf(far.object) } };
+  return { mid, far, stats: { full, mid: triangleCountOf(mid.object), far: triangleCountOf(far.object) }, slide };
 }
 
 // Runs the whole job at once.
