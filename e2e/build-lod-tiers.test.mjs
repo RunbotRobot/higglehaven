@@ -88,6 +88,9 @@ const reduced = await settle((c) => c.full <= 2 && c.mid + c.far >= COUNT - 2, '
 const afterDrop = await counts();
 console.log('after lowering the budget to two models:', JSON.stringify(afterDrop));
 check(reduced, 'most of the items are drawn from a reduced version once over the budget');
+// #4115: the change of version dissolved (a fade started) instead of swapping in one frame, and none is left running.
+check((await page.evaluate(() => window.__testBuildFadesStarted())) > 0, 'the change of version started a dissolve');
+await page.waitForFunction(() => window.__testBuildFadesInFlight() === 0, null, { timeout: 10000 });
 // (An item that stayed in full never needed its reduced versions, so it counts as without them.)
 check(afterDrop.full + afterDrop.mid + afterDrop.far + afterDrop.withoutVersions === COUNT, 'every item is still drawn: none is lost');
 await page.waitForTimeout(800);

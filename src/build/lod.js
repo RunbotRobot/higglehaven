@@ -20,7 +20,8 @@
 //     change version as one, from the set's size on screen, exactly as in Shop (src/shop/lodSets.js; #4115): without it each brick chose by its own
 //     distance from the camera, and a wall was cut by an edge between two versions that swept across it as
 //     the camera moved. Nothing about the grouping reaches the builder (no selection, no undo, no saved
-//     layout). There is no cross-fade yet: a flip is an instant swap.
+//     layout). A flip dissolves from the old version to the new one where the batches allow (src/build/batching.js, #4115); beyond
+//     its bounds, or under reduced motion, it is an instant swap.
 //   - The pass runs on a quarter-second tick inside the frame loop, and its work (attaching versions,
 //     flipping items) stops when its slice of a frame is spent (#3396); what it did not reach waits for
 //     the next tick, and the biggest on screen go first.

@@ -240,3 +240,101 @@ describe('Build batching', () => {
     expect(scene.children.filter((child) => child.isInstancedMesh)).toHaveLength(1);
   });
 });
+
+// #4115 (part 2): a change of version dissolves in Build as it does in Shop.
+describe('Build batching: a change of version dissolves (#4115)', () => {
+  function fadeSetup(count, options = {}) {
+    const scene = new THREE.Scene();
+    let now = 1000;
+    const levels = [];
+    let restored = 0;
+    const batching = createBuildBatching({
+      scene, isSelected: () => false, clock: () => now, reducedMotion: () => false,
+      createDissolve: () => ({ setLevel: (level) => levels.push(level), restore: () => { restored += 1; } }),
+      ...options,
+    });
+    const objects = Array.from({ length: count }, (_, index) => item(`f${index}`, index * 2, { withMid: true }));
+    objects.forEach((object) => scene.add(object));
+    return { scene, batching, objects, levels, tick: (ms) => { now += ms; batching.update(now); }, restoredCount: () => restored };
+  }
+  const flipToMid = (objects) => objects.forEach((object) => { object.userData.lodShown = 'mid'; });
+  const instanced = (scene) => scene.children.filter((child) => child.isInstancedMesh);
+
+  it('keeps the old version drawing while the new one dissolves in, then gives the old one back', () => {
+    const { scene, batching, objects, levels, tick, restoredCount } = fadeSetup(6);
+    batching.sync(objects);
+    expect(instanced(scene)).toHaveLength(1);
+    flipToMid(objects);
+    batching.sync(objects);
+    expect(batching.fadesInFlight).toBe(1);
+    expect(instanced(scene)).toHaveLength(2); // the full version and the mid version
+    expect(levels[0]).toBe(0);
+    tick(200);
+    expect(levels[levels.length - 1]).toBeCloseTo(0.5);
+    expect(batching.fadesInFlight).toBe(1);
+    tick(250);
+    expect(batching.fadesInFlight).toBe(0);
+    expect(restoredCount()).toBe(1);
+    expect(instanced(scene)).toHaveLength(1);
+    expect(batching.counts().items).toBe(6);
+  });
+
+  it('does not fade a group that only changed its members, not its version', () => {
+    const { scene, batching, objects } = fadeSetup(6);
+    batching.sync(objects);
+    objects[0].userData.lodHeld = true; // leaves the batch; the rest stay on the same version
+    batching.sync(objects);
+    expect(batching.fadesInFlight).toBe(0);
+    expect(instanced(scene)).toHaveLength(1);
+  });
+
+  it('swaps at once under reduced motion', () => {
+    const { scene, batching, objects } = fadeSetup(6, { reducedMotion: () => true });
+    batching.sync(objects);
+    flipToMid(objects);
+    batching.sync(objects);
+    expect(batching.fadesInFlight).toBe(0);
+    expect(instanced(scene)).toHaveLength(1);
+  });
+
+  it('swaps at once when both versions together would pass the triangle bound', () => {
+    const { scene, batching, objects } = fadeSetup(6, { maxTriangles: 10 });
+    batching.sync(objects);
+    flipToMid(objects);
+    batching.sync(objects);
+    expect(batching.fadesInFlight).toBe(0);
+    expect(instanced(scene)).toHaveLength(1);
+  });
+
+  it('swaps at once when no more fades may run', () => {
+    const { batching, objects } = fadeSetup(6, { maxCohorts: 0 });
+    batching.sync(objects);
+    flipToMid(objects);
+    batching.sync(objects);
+    expect(batching.fadesInFlight).toBe(0);
+  });
+
+  it('zeroes an item that is selected mid-fade in the old version too, so nothing is left under a drag', () => {
+    const { scene, batching, objects } = fadeSetup(6);
+    batching.sync(objects);
+    flipToMid(objects);
+    batching.sync(objects);
+    batching.releaseNow(objects[0]);
+    const out = new THREE.Matrix4();
+    for (const mesh of instanced(scene)) {
+      mesh.getMatrixAt(0, out);
+      expect(out.elements[0]).toBe(0); // zero scale: not drawn
+    }
+  });
+
+  it('finishAll settles a running fade', () => {
+    const { scene, batching, objects, restoredCount } = fadeSetup(6);
+    batching.sync(objects);
+    flipToMid(objects);
+    batching.sync(objects);
+    batching.finishAll();
+    expect(batching.fadesInFlight).toBe(0);
+    expect(restoredCount()).toBe(1);
+    expect(instanced(scene)).toHaveLength(1);
+  });
+});
