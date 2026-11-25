@@ -412,6 +412,35 @@ describe('every simpler version still reads as the model (#4062)', () => {
     expect(countTriangles(never)).toBe(countTriangles(plain));
   });
 
+  it('never uses a sliding mid that is not strictly lighter than the locked one (#4302)', () => {
+    const locked = buildModelTiersSync(openStrip(), { slideBorders: false });
+    // A ladder with nothing in it rebuilds nothing: what comes back is the original geometry, heavier than the
+    // locked result, and it would pass the fidelity check trivially.
+    const result = buildModelTiersSync(openStrip(), { slideBorderLadder: [] });
+    expect(result.slide.attempts).toBeGreaterThan(0);
+    expect(result.slide.used).toBe(false);
+    expect(result.stats.mid).toBe(locked.stats.mid);
+  });
+
+  it('a tiny closed rim of four vertices, smaller than the tolerance, keeps three at least (#4302)', () => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-5, -5); shape.lineTo(5, -5); shape.lineTo(5, 5); shape.lineTo(-5, 5); shape.lineTo(-5, -5);
+    const hole = new THREE.Path();
+    hole.moveTo(-0.01, -0.01); hole.lineTo(-0.01, 0.01); hole.lineTo(0.01, 0.01); hole.lineTo(0.01, -0.01); hole.lineTo(-0.01, -0.01);
+    shape.holes.push(hole);
+    const geometry = new THREE.ShapeGeometry(shape);
+    const slid = runToEnd(simplifyToTarget(geometry, 4, { lockBorders: false, slideBorders: 0.5 }));
+    const position = slid.attributes.position;
+    const rim = new Set();
+    for (let i = 0; i < position.count; i++) {
+      if (Math.hypot(position.getX(i), position.getY(i)) < 0.5) rim.add(`${position.getX(i).toFixed(4)},${position.getY(i).toFixed(4)}`);
+    }
+    expect(rim.size).toBeGreaterThanOrEqual(3);
+    // No open edge of nothing: every triangle of the result still has three distinct corners.
+    const index = slid.index.array;
+    for (let t = 0; t < index.length; t += 3) expect(new Set([index[t], index[t + 1], index[t + 2]]).size).toBe(3);
+  });
+
   it('does not attempt sliding on a closed model (#4302)', () => {
     const a = buildModelTiersSync(chair());
     const b = buildModelTiersSync(chair(), { slideBorders: false });

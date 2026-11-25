@@ -377,11 +377,11 @@ function* downsizeMaterial(material, maxSize, getPixels, cache, makeImage) {
 // first, stopping at the first that gets within MID_SLIDE_STUCK_FACTOR of the target; of all that were tried,
 // the smallest result wins. `tolerances` are lengths in the geometry's own units.
 function* slideBordersToTarget(geometry, targetTriangles, tolerances) {
-  let best = null;
+  let best = geometry;
   for (const tolerance of tolerances) {
     const candidate = yield* simplifyToTarget(geometry, targetTriangles, { lockBorders: false, slideBorders: tolerance });
-    if (!best || countTriangles(candidate) < countTriangles(best)) {
-      if (best && best !== geometry) best.dispose();
+    if (countTriangles(candidate) < countTriangles(best)) {
+      if (best !== geometry) best.dispose();
       best = candidate;
     } else if (candidate !== geometry) {
       candidate.dispose();
@@ -933,7 +933,9 @@ export function* modelTierSteps(model, options = {}) {
     if (candidate.stuck && candidate.stuck.size > 0) {
       slide.attempts++;
       const sliding = yield* buildMid(model, meshes, options, getPixels, rung, candidate.stuck);
-      if (!sliding.sharesFullModel && check(fullBatches, sliding.object, 'mid', getPixels)) {
+      // A sliding mid is rebuilt from the original geometry: it must be strictly lighter than the locked one,
+      // or it is not worth having (a heavier version passes the fidelity check trivially).
+      if (!sliding.sharesFullModel && triangleCountOf(sliding.object) < triangleCountOf(candidate.object) && check(fullBatches, sliding.object, 'mid', getPixels)) {
         mid = sliding;
         slide.used = true;
         continue;

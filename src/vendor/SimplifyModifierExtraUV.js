@@ -209,6 +209,25 @@ class SimplifyModifier {
 			// target rather than tear the mesh.
 			if ( nextVertex.collapseCost === Infinity ) break;
 
+			// #4302: a sliding border vertex's cost was worked out when it was last recomputed, and only the
+			// neighbours of a collapsed vertex are recomputed after one: the border it stands on may have
+			// changed since (a rim of four joined to a rim of two). Work it out again now; if it changed,
+			// choose again, without using up a collapse.
+			if ( nextVertex.border ) {
+
+				const cost = nextVertex.collapseCost;
+				const neighbor = nextVertex.collapseNeighbor;
+				computeSlidingBorderCost( nextVertex );
+
+				if ( nextVertex.collapseCost !== cost || nextVertex.collapseNeighbor !== neighbor ) {
+
+					z ++;
+					continue;
+
+				}
+
+			}
+
 			collapse( vertices, faces, nextVertex, nextVertex.collapseNeighbor );
 			yield; // SLICED
 
@@ -709,6 +728,10 @@ function absorbIntoBorder( u, v ) {
 	const w = along[ 0 ] === v ? along[ 1 ] : along[ 0 ];
 	const points = coverBetween( u, w ).concat( coverBetween( u, v ), [ u.position.clone() ] );
 	setCoverBetween( w, v, points );
+
+	// u is going away: forget it in its neighbours' maps, or each keeps the whole cover it ever held.
+	if ( w.covers ) w.covers.delete( u );
+	if ( v.covers ) v.covers.delete( u );
 	u.covers = null;
 
 }
