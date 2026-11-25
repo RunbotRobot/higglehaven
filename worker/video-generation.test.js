@@ -439,7 +439,10 @@ describe('Video-to-3D job creation (#1619)', () => {
     try {
       const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(status.body.status).toBe('failed');
-      expect(status.body.error).toMatch(/model was made, but we couldn't save it/);
+      // #4122: too large says so and does not invite a second paid run of the same result.
+      expect(status.body.error).toMatch(/model was made, but it came out too large for us to keep/);
+      expect(status.body.error).toMatch(/Your credit has been returned/);
+      expect(status.body.error).not.toMatch(/try again in a little while/i);
 
       const row = await env.DB.prepare('SELECT status, model_url, processed_at, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');

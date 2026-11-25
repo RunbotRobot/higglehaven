@@ -489,9 +489,12 @@ async function applyTripoTaskResult(db, env, jobId, task) {
         `).bind(jobId).first();
         if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
       }
-      await failVideoGenerationJob(db, jobId,
-        'The model was made, but we couldn\'t save it. Your credit has been returned. Please try again in a little while.',
-        { refundCredit: true, failureDetail });
+      // #4122: a result that came back too large comes back the same size on a second go, so "try again in a
+      // little while" would only invite a second paid run of the same thing. Say what happened and not to retry.
+      const message = failureDetail.reason === 'too_big'
+        ? 'The model was made, but it came out too large for us to keep. Your credit has been returned. We\'ve been told, so please wait before trying again.'
+        : 'The model was made, but we couldn\'t save it. Your credit has been returned. Please try again in a little while.';
+      await failVideoGenerationJob(db, jobId, message, { refundCredit: true, failureDetail });
       await raiseLostModelCard(db, jobId, failureDetail);
       return;
     }
