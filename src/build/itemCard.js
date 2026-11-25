@@ -102,8 +102,9 @@ export function hideItemCard() {
 
 // box: the selection's world-space THREE.Box3 (already computed this frame by the
 // selection boxes, so no extra pass over the members).
-export function updateItemCard(box) {
+export function updateItemCard(box, { holding = false } = {}) {
   if (!open || !box || box.isEmpty()) return;
+  card.hold(holding); // #4242: a ring being dragged: the card stays put and lets touches through
   box.getCenter(scratchCenter);
   box.getSize(scratchSize);
   // #4118: the three rings reach about 100 px from the item on a phone, and the owner: "The product

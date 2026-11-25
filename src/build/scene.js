@@ -78,7 +78,7 @@ import {
   fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles, updateBundle,
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
-import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
+import { refresh as refreshPendingRestorations, setPendingSlotsListener } from './pendingRestoration.js';
 import { planSelectionBoxes, writeBoxEdges, BOX_EDGE_VERTICES, BOX_EDGE_FLOATS, batchCapacity } from './selectionBoxes.js';
 import {
   hideItemCard, setItemCardCloseHandler, showItemCard, updateItemCard,
@@ -3840,13 +3840,77 @@ export function removeSoldOutMarkerMesh(markerId) {
 }
 
 export function clearSoldOutMarkerMeshes() {
+  clearRemovedGhostMeshes();
   for (const markerId of [...soldOutMarkerMeshes.keys()]) removeSoldOutMarkerMesh(markerId);
 }
+
+// #4201: items taken off the lándlet (a suspended or removed seller's
+// products) are drawn as the same grayed ghosts, where they stood, under the
+// same switch. A ghost is only ever a mesh in landletElevationGroup: never in
+// productMeshes, so it cannot be selected, moved, bundled or saved.
+const removedGhostMeshes = new Map(); // snapshotId -> THREE.Mesh
+let removedGhostSlots = [];
+
+function clearRemovedGhostMeshes() {
+  for (const mesh of removedGhostMeshes.values()) {
+    landletElevationGroup.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  removedGhostMeshes.clear();
+}
+
+function addRemovedGhostMesh(slot) {
+  if (removedGhostMeshes.has(slot.snapshotId) || slot.landletId !== currentLandletId) return;
+  const dims = findTemplate(slot.templateId)?.dimensions;
+  const scale = typeof slot.scale === 'number' && slot.scale > 0 ? slot.scale : 1;
+  const geometry = new THREE.BoxGeometry(
+    (dims?.width || 1) * scale, (dims?.depth || 1) * scale, (dims?.height || 1) * scale,
+  );
+  const material = new THREE.MeshBasicMaterial({
+    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(slot.position.x ?? 0, slot.position.y ?? 0, slot.position.z ?? 0.5);
+  if (slot.rotation) mesh.rotation.set(slot.rotation.x, slot.rotation.y, slot.rotation.z);
+  mesh.userData.removedSnapshotId = slot.snapshotId;
+  landletElevationGroup.add(mesh);
+  removedGhostMeshes.set(slot.snapshotId, mesh);
+}
+
+function applyRemovedGhostVisibility() {
+  clearRemovedGhostMeshes();
+  if (!showSoldOutMarkers) return;
+  for (const slot of removedGhostSlots) addRemovedGhostMesh(slot);
+}
+setPendingSlotsListener((slots) => {
+  removedGhostSlots = slots;
+  applyRemovedGhostVisibility();
+});
+// The ghost under the pointer (the raycaster is already aimed), unless a placed item is nearer.
+export function removedGhostUnderRay() {
+  if (removedGhostMeshes.size === 0) return null;
+  const ghostHit = raycaster.intersectObjects([...removedGhostMeshes.values()])[0];
+  if (!ghostHit) return null;
+  const productHit = raycaster.intersectObjects(productMeshes, true)[0];
+  if (productHit && productHit.distance < ghostHit.distance) return null;
+  return ghostHit.object.userData.removedSnapshotId ?? null;
+}
+// Where a ghost sits on screen, for the e2e that taps it.
+window.__testRemovedGhostScreenPos = (snapshotId) => {
+  const mesh = removedGhostMeshes.get(snapshotId);
+  if (!mesh) return null;
+  const point = mesh.getWorldPosition(new THREE.Vector3()).project(camera);
+  const rect = canvas.getBoundingClientRect();
+  return { x: rect.left + ((point.x + 1) / 2) * rect.width, y: rect.top + ((1 - point.y) / 2) * rect.height };
+};
+window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
 
 // Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called
 // whenever either changes (the toggle flips, or a fresh list just loaded).
 export function applySoldOutMarkerVisibility() {
   clearSoldOutMarkerMeshes();
+  applyRemovedGhostVisibility();
   if (!showSoldOutMarkers) return;
   for (const marker of soldOutMarkers) addSoldOutMarkerMesh(marker);
 }
@@ -5468,7 +5532,7 @@ export function buildModeFrameUpdate(now) {
   // only on selection change (#3324: one union box per bundle, the fill
   // reading the very same box so the two never drift apart).
   updateSelectionBoxes();
-  updateItemCard(selectionBounds);
+  updateItemCard(selectionBounds, { holding: translateControls.dragging || rotateControls.dragging || trimControls.dragging });
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its
@@ -6967,7 +7031,7 @@ async function renderSoldOutMarkersSection() {
   toggle.id = 'sold-out-marker-toggle';
   toggle.checked = showSoldOutMarkers;
   toggleRow.appendChild(toggle);
-  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out items used to be'));
+  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out or removed items used to be'));
   field.appendChild(toggleRow);
 
   const list = document.createElement('div');

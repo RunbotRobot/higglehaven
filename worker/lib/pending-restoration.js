@@ -55,6 +55,17 @@ export function pendingRestorationFromRow(row) {
       y: instance.y_m ?? null,
       z: instance.z_m ?? null,
     },
+    // #4201: what a ghost needs to stand where the item stood, read from the
+    // snapshot's own saved row. The model itself is found client-side from
+    // templateId (the catalog), and a ghost without one draws as an outline.
+    rotation: {
+      x: instance.rotation_x_rad ?? 0,
+      y: instance.rotation_y_rad ?? 0,
+      z: instance.rotation_z_rad ?? 0,
+    },
+    scale: instance.scale ?? 1,
+    crop: safeParse(instance.crop_json ?? 'null') ?? null,
+    label: instance.label ?? null,
     removedAt: row.removed_at,
     // #3095: the id the removed placement had, so a Build tab that was open
     // when the removal happened can drop exactly those meshes (and nothing

@@ -15,6 +15,7 @@ import { api, signupBuilder } from './test-helpers.js';
 // not just up to a 503.
 let createCallCount = 0;
 let taskCounter = 0;
+let lastMultiviewBody = null; // #4122: what the last create call asked the provider for
 let nextTaskStatus = 'success';
 const FAKE_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/model.glb';
 // #1673: a distinct, always-failing download URL for the "Tripo reports
@@ -84,6 +85,7 @@ beforeAll(async () => {
     }
     if (url === 'https://openapi.tripo3d.ai/v3/generation/multiview-to-model') {
       const body = JSON.parse(init.body);
+      lastMultiviewBody = body;
       if (!body.inputs || body.inputs.length < 2) {
         return new Response(JSON.stringify({ code: 1, message: 'at least 2 views required' }), { status: 400 });
       }
@@ -277,6 +279,17 @@ describe('Video-to-3D job creation (#1619)', () => {
     expect(created.status).toBe(201);
   });
 
+  it('asks the provider for a phone-sized model: a face cap and the standard texture, no compression (#4122)', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-request-fields');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(created.status).toBe(201);
+    expect(lastMultiviewBody.face_limit).toBe(50000);
+    expect(lastMultiviewBody.texture_quality).toBe('standard');
+    // a meshopt GLB cannot be read by the viewer's loader or the version generator yet
+    expect(lastMultiviewBody.compress).toBeUndefined();
+    expect(lastMultiviewBody.model).toBe('v3.0-20250812');
+  });
+
   it('kicks off a real job and the status endpoint reconciles it to complete', async () => {
     const builder = await signupBuilderWithCredits('video-gen-happy-path');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
@@ -426,7 +439,10 @@ describe('Video-to-3D job creation (#1619)', () => {
     try {
       const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(status.body.status).toBe('failed');
-      expect(status.body.error).toMatch(/model was made, but we couldn't save it/);
+      // #4122: too large says so and does not invite a second paid run of the same result.
+      expect(status.body.error).toMatch(/model was made, but it came out too large for us to keep/);
+      expect(status.body.error).toMatch(/Your credit has been returned/);
+      expect(status.body.error).not.toMatch(/try again in a little while/i);
 
       const row = await env.DB.prepare('SELECT status, model_url, processed_at, failure_detail FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');

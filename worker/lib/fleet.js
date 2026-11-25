@@ -24,6 +24,7 @@ import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { createSession, sessionCookieHeader, SESSION_TTL_MS } from './auth-routes.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { adminActionLogStatement } from './admin-log.js';
 import { agentNameFor, FLEET_NAME_PATTERN, isFleetLoginName } from './fleet-agents.js';
 export { FLEET_NAME_PATTERN };
 
@@ -162,6 +163,10 @@ export async function handleFleetLogin(request, env, db, url, keyKind) {
     await db.prepare('UPDATE builders SET label = ? WHERE user_id = ?').bind(username, user.user_id).run();
   }
   const token = await createSession(db, user.user_id);
+  // #4175: every sign-in by an account holding look-only admin access is written to the admin log.
+  if (user.is_admin_viewer === 1) {
+    await adminActionLogStatement(db, user.user_id, 'admin_viewer_sign_in', 'user', user.user_id, { username: user.username }).run();
+  }
   return json(
     { user: { userId: user.user_id, username: user.username, isFleet: true } },
     200,

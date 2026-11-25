@@ -60,7 +60,7 @@ import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { createTierCrossfades } from './tierCrossfade.js';
-import { createBatchCrossfades } from './batchCrossfade.js';
+import { createBatchCrossfades, BATCH_WAITING } from './batchCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
@@ -734,7 +734,12 @@ function updateInstanceLodTiers() {
       if (object.userData.batch) requestBatchTiers(entry, object.userData.batch);
       else requestInstanceTiers(entry, object);
     }
-    if (lodTiersStateOf(object) !== 'ready' || tier === object.userData.lodApplied) continue;
+    if (lodTiersStateOf(object) !== 'ready') continue;
+    if (tier === object.userData.lodApplied) {
+      // #4113: a placement that wanted a change and then wants what it has is no longer waiting for it.
+      if (object.userData.batchWaitSince !== undefined) batchCrossfades.clearWait(object);
+      continue;
+    }
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -746,13 +751,23 @@ function updateInstanceLodTiers() {
   for (const i of largestFirst(lodFlipScratch, lodItemsScratch)) {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
+    const appliedBefore = object.userData.lodApplied;
     object.userData.lodApplied = tier;
     // #3403: a batched placement changes version by moving between the batch's instanced sets.
     // #4062: the ones that change dissolve from the old version to the new (a few at a time).
     // #4113: no exception for what is beside the avatar any more: that was the one change a person saw most (the owner's
-    // wall went from flat to full in one frame at 10 m). The caps in batchCrossfade.js still swap what cannot fade.
-    if (object.userData.batch) batchCrossfades.move(object.userData.batch, object, tier);
-    else setInstanceLodState(object, tier, tierCrossfades);
+    // wall went from flat to full in one frame at 10 m). A placement the fade caps cannot take yet WAITS (it keeps its
+    // old version and is tried again next tick, biggest first, for a few seconds) instead of swapping in one frame: an
+    // 829-brick wall used to have about nine in ten of its bricks swap at once, a hard-edged wedge across the wall.
+    if (object.userData.batch) {
+      if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: true }) === BATCH_WAITING) {
+        object.userData.lodApplied = appliedBefore;
+        // A waiting placement is a comparison when nothing has changed, but a pass over thousands of them still
+        // spends the slice like any other flip, so the ones behind them are reached on a later tick.
+        if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
+        continue;
+      }
+    } else setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
@@ -779,6 +794,7 @@ export function batchCrossfadeStats() {
   return {
     inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount,
     transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
+    hardSwaps: batchCrossfades.hardSwapCount,
   };
 }
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
@@ -1828,6 +1844,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   for (const handle of handles) {
     handle.userData.lodTier = TIER_FULL;
     handle.userData.lodApplied = TIER_FULL;
+    batchCrossfades.clearWait(handle); // #4113: a rebuilt batch starts from its books, not from a placement's old wait
   }
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
@@ -1849,6 +1866,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
       handles.forEach((handle, index) => {
         handle.userData.lodTier = applied[index];
         handle.userData.lodApplied = applied[index];
+        batchCrossfades.clearWait(handle);
       });
     }
   }

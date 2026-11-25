@@ -1915,12 +1915,11 @@ export function updateShopMovementCore(now) {
   shopAvatarPosition.z =
     shopFlightAltitudeM + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
-  // #4225: rising narrows the dome the avatar stands in, and the pair slide (keepShopPairInside) only moves an
-  // avatar that is still inside its limit. At a low frame rate one frame's climb can carry the avatar past that
-  // limit at once, and it then rested outside the dome with the camera bounded alone (found on a slow CI
-  // runner, 8x CPU throttle locally). So a frame that rose brings the avatar back to its limit here, and the
-  // pair slide takes it from there exactly as it does for the small steps of a fast frame.
-  if (shopFlightState === 'flying' && (heightControl.rate() || keyboardRise(shopKeysDown))) {
+  // #4193 (owner rule from #3374): the avatar's own radial limit above only runs when there is horizontal input, but
+  // the dome narrows with height, so rising straight up beside the wall carried the avatar's body through it (seen
+  // on CI: a pair rising to the ceiling from 8.6 m out, its body 1 m outside). While flying with no horizontal
+  // input the avatar now slides inward just far enough at its new height, the way it does when it is steered.
+  if (shopFlightState === 'flying' && moveMagnitude === 0 && !shopGoToLastLocationPhase && !shopSpawnRotating) {
     clampShopRadius(shopAvatarPosition, shopAvatarLimitRadiusM(true));
   }
 

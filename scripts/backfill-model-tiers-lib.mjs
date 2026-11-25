@@ -328,9 +328,14 @@ export function buildReplaceStatements(modelUrl, oldTiers, { midUrl, farUrl }) {
 //   holeEdges(bytes)                          -> number of hole edges in a .glb
 //   fidelity(fullBytes, tierBytes, 'mid'|'far') -> true when the tier still reads as the model (#4062,
 //                                                 src/tierFidelity.js); optional, absent = not checked
+//   staleReasons(fullBytes, tierBytes, 'mid'|'far') -> sentences naming what the current generator would
+//                                                 make differently (#4111: material kind, colour); optional
+// redoAll (#4111): remake every stored version with the current generator, whatever it looks like now. The
+// "only if smaller than the model and passes the check" guards in storeGeneratedTiers still apply, so a
+// version the generator cannot improve on is not swapped for a worse one.
 //   replaceTiers(modelUrl, oldTiers, newUrls) -> number of rows swapped
 export async function runRedoCracked({
-  candidates, io, dryRun = false, limit = Infinity, maxTotalBytes = Infinity, log = () => {},
+  candidates, io, dryRun = false, redoAll = false, limit = Infinity, maxTotalBytes = Infinity, log = () => {},
 }) {
   const summary = {
     dryRun,
@@ -359,7 +364,7 @@ export async function runRedoCracked({
       continue;
     }
     attempted += 1;
-    if (dryRun) {
+    if (dryRun && !io.staleReasons) {
       summary.wouldProcess += 1;
       log(`would  check ${candidate.modelUrl}`);
       continue;
@@ -373,14 +378,27 @@ export async function runRedoCracked({
       for (const pair of candidate.tiers) {
         let worst = 0;
         let unfaithful = false;
+        const stale = [];
         for (const [name, url] of [['mid', pair.midUrl], ['far', pair.farUrl]]) {
           if (!url) continue;
           const tierBytes = await io.readModel(modelUrlToKey(url));
           worst = Math.max(worst, await io.holeEdges(tierBytes));
           // #4062: a tier that is whole but no longer the model (a far version that is a net) is redone too.
           if (io.fidelity && !(await io.fidelity(full, tierBytes, name))) unfaithful = true;
+          // #4111: a tier the current generator would not make (an unlit model's far drawn lit, a colour shift).
+          if (io.staleReasons) for (const reason of await io.staleReasons(full, tierBytes, name)) stale.push(`${name}: ${reason}`);
         }
-        if (worst > allowed || unfaithful) cracked.push({ pair, worst, unfaithful });
+        if (worst > allowed || unfaithful || stale.length > 0 || redoAll) cracked.push({ pair, worst, unfaithful, stale });
+      }
+      if (dryRun) {
+        summary.wouldProcess += 1;
+        if (cracked.length === 0) {
+          summary.sound += 1;
+          log(`would  leave ${candidate.modelUrl} (sound)`);
+        } else {
+          log(`would  redo ${candidate.modelUrl}: ${cracked.map((c) => [c.worst > allowed ? `${c.worst} hole edges (model ${fullHoles})` : null, c.unfaithful ? 'no longer reads as the model' : null, ...c.stale, redoAll && !(c.worst > allowed || c.unfaithful || c.stale.length) ? 'redo-all' : null].filter(Boolean).join('; ')).join(' | ')}`);
+        }
+        continue;
       }
       if (cracked.length === 0) {
         summary.sound += 1;
@@ -407,7 +425,7 @@ export async function runRedoCracked({
         summary.nothingToStore += 1;
         log(`cleared ${candidate.modelUrl} (nothing crack-free to store; the viewer builds its own)`);
       } else {
-        log(`redone ${candidate.modelUrl} mid=${urls.midUrl ?? '-'} far=${urls.farUrl ?? '-'} (was ${cracked.map((c) => `${c.worst} hole edges${c.unfaithful ? ', not the model' : ''}`).join('/')})`);
+        log(`redone ${candidate.modelUrl} mid=${urls.midUrl ?? '-'} far=${urls.farUrl ?? '-'} (was ${cracked.map((c) => `${c.worst} hole edges${c.unfaithful ? ', not the model' : ''}${c.stale.length ? `, ${c.stale.join(', ')}` : ''}`).join('/')})`);
       }
       summary.redone += 1;
       summary.rowsRecorded += rows;
@@ -421,12 +439,12 @@ export async function runRedoCracked({
 
 export function formatRedoSummary(summary) {
   const lines = [
-    summary.dryRun ? 'Dry run: nothing was downloaded, stored or recorded.' : 'Redo of cracked tiers finished.',
+    summary.dryRun ? 'Dry run: nothing was stored or recorded (models were only read).' : 'Redo of stored tiers finished.',
     `  models with stored tiers (distinct): ${summary.candidates}`,
     `  skipped, avatar (not placed items): ${summary.skippedAvatar}`,
   ];
   if (summary.dryRun) {
-    lines.push(`  would check: ${summary.wouldProcess}`);
+    lines.push(`  would check: ${summary.wouldProcess} (${summary.sound} sound, left alone)`);
   } else {
     lines.push(
       `  skipped, skinned: ${summary.skippedSkinned}`,
@@ -465,7 +483,7 @@ export function formatSummary(summary) {
 
 export function parseArgs(argv) {
   const options = {
-    mode: null, dryRun: false, redoCracked: false, limit: Infinity, maxTotalBytes: 200 * 1024 * 1024,
+    mode: null, dryRun: false, redoCracked: false, redoAll: false, limit: Infinity, maxTotalBytes: 200 * 1024 * 1024,
     database: DEFAULT_DATABASE, bucket: DEFAULT_BUCKET, persistTo: null,
   };
   const need = (flag, value) => {
@@ -482,6 +500,11 @@ export function parseArgs(argv) {
       options.dryRun = true;
     } else if (arg === '--redo-cracked') {
       options.redoCracked = true;
+    } else if (arg === '--redo-all') {
+      // #4111: every stored version is remade with the current generator (and still only swapped in when it is
+      // smaller than the model and passes the check). It reads the same stored tiers as --redo-cracked.
+      options.redoCracked = true;
+      options.redoAll = true;
     } else if (arg === '--limit' || arg === '--max-total-bytes') {
       const value = Number(need(arg, argv[i + 1]));
       i += 1;

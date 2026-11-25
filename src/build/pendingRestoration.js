@@ -22,6 +22,12 @@ const emptyEl = document.getElementById('pending-restoration-empty');
 // Same stale-fetch guard idiom as backupChainLoadToken in metadataModals.js.
 let loadToken = 0;
 
+// #4201: Build draws each removed item as a ghost where it stood, under the
+// same switch as the sold-out markers. scene.js registers here (this module
+// cannot import it back) and is told the slots every time they are rendered.
+let slotsListener = null;
+export function setPendingSlotsListener(fn) { slotsListener = fn; }
+
 function formatMeters(value) {
   return typeof value === 'number' ? value.toFixed(1) : '?';
 }
@@ -49,8 +55,9 @@ function renderSlots(slots) {
   // #4201: the head wears a note when something is newly removed (more than the builder has already looked at), and one tap
   // opens the list. It is not an introduction: it reports a change to the builder's own lándlet ("full information").
   latestCount = slots.length;
+  if (slotsListener) slotsListener(slots);
   if (shouldNoteRemoved(slots.length, readSeenCount())) {
-    setBudWord('removed-items', 'Removed items', { open: openModal, label: 'Items were removed from your lándlet. Open the list.' });
+    setBudWord('removed-items', 'Removed items', { open: () => openModal(), label: 'Items were removed from your lándlet. Open the list.' });
   } else {
     clearBudWord('removed-items');
   }
@@ -142,16 +149,23 @@ function writeSeenCount(count) {
   try { localStorage.setItem(SEEN_KEY, String(count)); } catch { /* the note may come back; nothing is lost */ }
 }
 
-function openModal() {
+function openModal(snapshotId) {
   writeSeenCount(latestCount);
   clearBudWord('removed-items');
   modalEl.classList.add('visible');
   openModalA11y(modalEl, closeModal);
-  refresh();
+  refresh().then(() => {
+    // #4201: a tap on a ghost opens the list at that item's own row.
+    if (typeof snapshotId !== 'string') return;
+    const row = [...listEl.children].find((el) => el.dataset.snapshotId === snapshotId);
+    row?.scrollIntoView({ block: 'center' });
+  });
 }
+// #4201: tapping a ghost in the world opens the list at its row (the row says why it is gone and has Clear).
+export function openRemovedItemsAt(snapshotId) { openModal(snapshotId); }
 function closeModal() {
   modalEl.classList.remove('visible');
   closeModalA11y(modalEl);
 }
-buttonEl.addEventListener('click', openModal);
+buttonEl.addEventListener('click', () => openModal());
 closeBtn.addEventListener('click', closeModal);

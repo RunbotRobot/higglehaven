@@ -1360,6 +1360,13 @@ is written to the admin log in the same batch (`admin_viewer_granted`, `admin_vi
 changes nothing writes nothing. `admin-user-detail` carries `adminViewer` and `adminViewerRefusal` so the
 dashboard draws the switch only where it can work.
 
+`GET /api/auth/admin-role` answers `{ role: 'admin' }` or `{ role: 'viewer' }` (`403` for anyone else). The
+dashboard page asks it once when it opens; for a viewer the page then says it is look-only, disables every
+form submit button, danger button and account action with the reason, and stops any non-GET request locally
+(the server refuses it too). Use by a viewer is logged: each ask here is an `admin_viewer_page_open` line, each
+fleet sign-in by an account holding the role is `admin_viewer_sign_in`. `/admin/dashboard` lets a viewer
+through; `/admin/control-room` and `/admin/action-log` and the Control Room API stay admin-only.
+
 ### `GET /api/auth/admin-delete-account-preview?userId=...` and `POST /api/auth/admin-delete-account` (#4077)
 
 Admin only (`401` signed out, `403` non-admin). The dashboard's Delete account: the preview returns
@@ -8822,8 +8829,10 @@ restored.
   session; never another builder's, never visible to shoppers). Returns
   `{ pendingRestorations: [...] }`, newest removal first, each
   `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
-  position: { x, y, z }, removedAt, removedInstanceId, sellerSuspended,
-  permanentAt }`. `removedInstanceId` is the placement's original id (#3095): a
+  position: { x, y, z }, rotation: { x, y, z }, scale, crop, label, removedAt,
+  removedInstanceId, sellerSuspended, permanentAt }`. `rotation`, `scale`, `crop`
+  and `label` are the saved pose (#4201), so Build can draw a ghost where the
+  item stood. `removedInstanceId` is the placement's original id (#3095): a
   Build tab that was open during the removal drops exactly those meshes when
   it regains focus, never an item the builder just placed. The
   template fields come from the live template while it exists and otherwise
@@ -11622,7 +11631,11 @@ Tripo's own file-upload endpoint to obtain a `file_token`, then a single
 `POST /v3/generation/multiview-to-model` call kicks off the real job pinned
 to Tripo's `v3.0-20250812` model version (pinned rather than "latest" so a
 provider-side default change can't silently alter output quality/cost out
-from under this integration). Response (`201`):
+from under this integration). The call also sends `face_limit: 50000` (the top
+of Tripo's own web/mobile range) and `texture_quality: "standard"`, so the
+result stays well under the 20 MB model cap (#4122: an uncapped result was
+30 MB); `compress` is not sent, because a meshopt GLB cannot be read by our
+loader yet. Response (`201`):
 
 ```json
 { "jobId": "job-<uuid>", "status": "processing" }

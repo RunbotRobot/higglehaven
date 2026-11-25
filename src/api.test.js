@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCard, createInstancesRemote, createVideoGenerationJob, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
-  fetchBundles, fetchCatalog, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, submitFeedbackBugReport,
+  fetchBundles, fetchCatalog, fetchCreditOrbStanding, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, submitFeedbackBugReport,
   uploadModelFile, upsertInstancesRemote,
 } from './api.js';
 
@@ -556,5 +556,49 @@ describe('a rate-limit 429 (#3275)', () => {
     const error = await fetchBundles().catch((err) => err);
     expect(error.message).toBe('Slow down.');
     expect(error.rateLimit).toBeUndefined();
+  });
+});
+
+// #4228: opening Shop asked for the orb standing once per greenbelt landlet in range, four identical requests at once.
+describe('fetchCreditOrbStanding (#4228)', () => {
+  const reply = { standing: { limit: 20, windowSeconds: 900, remaining: 7, retryAfterSeconds: 0 }, credits: 3 };
+  function mockStandingFetch() {
+    const resolvers = [];
+    const fetchMock = vi.fn(() => new Promise((resolve) => {
+      resolvers.push(() => resolve({ ok: true, json: () => Promise.resolve(reply) }));
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    return { fetchMock, answer: () => resolvers.shift()() };
+  }
+
+  it('asks once when four callers arrive together, and every one gets the answer', async () => {
+    const { fetchMock, answer } = mockStandingFetch();
+    const calls = [fetchCreditOrbStanding(), fetchCreditOrbStanding(), fetchCreditOrbStanding(), fetchCreditOrbStanding()];
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    answer();
+    const results = await Promise.all(calls);
+    expect(results).toHaveLength(4);
+    for (const result of results) expect(result).toEqual({ ...reply.standing, credits: 3 });
+  });
+
+  it('asks again once the first has settled: the standing changes with every collect, nothing is kept', async () => {
+    const { fetchMock, answer } = mockStandingFetch();
+    const first = fetchCreditOrbStanding();
+    answer();
+    await first;
+    const second = fetchCreditOrbStanding();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    answer();
+    await second;
+  });
+
+  it('asks again after a failure too, and a failure is null for everyone waiting on it', async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(reply) });
+    vi.stubGlobal('fetch', fetchMock);
+    const together = await Promise.all([fetchCreditOrbStanding(), fetchCreditOrbStanding()]);
+    expect(together).toEqual([null, null]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await fetchCreditOrbStanding()).toEqual({ ...reply.standing, credits: 3 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -58,4 +58,24 @@ for (const axis of ['z', 'x', 'y']) {
   check(Math.abs(after.x - before.x) < 0.02 && Math.abs(after.y - before.y) < 0.02, `a drag on the ${axis} ring does not move the item along the ground`);
 }
 
+// The card with More open is the tallest it gets: it must still keep clear of the rings round the item (it is
+// shortened and scrolls inside rather than lying over them), and what is under More stays reachable by scrolling.
+await page.click('#item-card-more-btn');
+await page.waitForTimeout(700);
+const grown = await page.evaluate(() => {
+  const anchor = window.__testItemCardAnchor();
+  const el = document.getElementById('item-card');
+  const card = el.getBoundingClientRect();
+  const nx = Math.max(card.left, Math.min(anchor.x, card.right));
+  const ny = Math.max(card.top, Math.min(anchor.y, card.bottom));
+  return {
+    clearance: Math.round(Math.hypot(anchor.x - nx, anchor.y - ny)), capped: el.dataset.capped,
+    scrollable: el.scrollHeight > el.clientHeight + 1, top: card.top, bottom: card.bottom,
+  };
+});
+console.log('card with More open:', JSON.stringify(grown));
+check(grown.clearance >= 100, `the card with More open keeps clear of the rings (${grown.clearance} px from the item)`);
+check(grown.top >= 50 && grown.bottom <= 844, `the card with More open stays on screen (${grown.top} to ${grown.bottom})`);
+check(grown.capped !== 'true' || grown.scrollable, 'a shortened card scrolls, so nothing under More is lost');
+
 await finish(browser, { pass: pass && errors.length === 0, label: '#4118: each of the three rotation rings is a real handle that changes its own angle and nothing else', errors });

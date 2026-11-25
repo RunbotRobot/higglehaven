@@ -8,7 +8,7 @@
 import { json, HttpError, htmlResponse } from './http.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
-import { currentUser, requireAdmin } from './auth.js';
+import { currentUser, requireAdmin, requireAdminOrViewer } from './auth.js';
 import { tellShopperWhatBecameOfCard } from './assistant-chat.js';
 
 // N31 (owner, Control Room, 2026-09-11): "I must insist that we move this
@@ -209,12 +209,37 @@ export async function handleAdminActionLogPage(request, env) {
 export async function handleAdminDashboardPage(request, env) {
   if (request.method !== 'GET') return json({ error: 'Not found' }, 404);
   try {
-    await requireAdmin(request, env.DB);
+    await requireAdminOrViewer(request, env.DB);
   } catch (error) {
     if (!(error instanceof HttpError)) throw error;
     return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Dashboard'), error.status);
   }
+  // #4175: a look-only admin is let in too. The page tells itself apart (GET /api/auth/admin-role, which is also
+  // where each open by a viewer is written to the admin log), because this route hands off to the static file.
   return env.ASSETS.fetch(new Request(new URL('/admin-dashboard.html', request.url), request));
+}
+
+// #4232: the three admin page handlers above hand off to the static file, which the assets binding answers
+// with a redirect to the file's own path (`/admin-dashboard`), and that path used to be served to anyone. The
+// static files of the admin pages (the pages, their scripts and styles) are now gated where they are served:
+// an unknown caller gets the same plain 404 any unknown path gets. The Control Room and Action Log files need
+// a full admin; the dashboard's files also let a look-only admin through. Returns null to let the request
+// go on to the static file, or the refusal.
+const ADMIN_STATIC_FILE = /^\/admin-(control-room|action-log|dashboard(?:-\d+)?|tables)(?:\.(?:html|js|css))?$/;
+export async function gateAdminStaticFile(request, env, url) {
+  const match = ADMIN_STATIC_FILE.exec(url.pathname);
+  if (!match) return null;
+  try {
+    if (match[1] === 'control-room' || match[1] === 'action-log') await requireAdmin(request, env.DB);
+    else await requireAdminOrViewer(request, env.DB);
+    return null;
+  } catch (error) {
+    if (!(error instanceof HttpError)) {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    }
+    return json({ error: 'Not found' }, 404);
+  }
 }
 
 export async function handleControlRoom(request, env, route, url) {

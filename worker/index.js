@@ -38,7 +38,7 @@ import {
   savedLayoutFromRow, savedLayoutInstanceFromRow,
 } from './lib/models.js';
 import {
-  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
+  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage, gateAdminStaticFile,
   handleControlRoom, handleAdminActionLogList,
 } from './lib/control-room.js';
 // #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
@@ -88,7 +88,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
-import { handleAdminSetViewer } from './lib/admin-viewer-grant.js';
+import { handleAdminSetViewer, handleAdminRole } from './lib/admin-viewer-grant.js';
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
@@ -443,6 +443,10 @@ async function routeRequest(request, env, ctx) {
       return json({ error: 'Internal server error', code: ERROR_CODES.INTERNAL_ERROR }, 500);
     });
   }
+
+  // #4232: the admin pages' own static files are served only to an admin (or a look-only admin for the dashboard).
+  const adminFileRefusal = await gateAdminStaticFile(request, env, url);
+  if (adminFileRefusal) return adminFileRefusal;
 
   // Uploaded/imported model files live in R2, not the static ASSETS
   // bundle (which only has whatever shipped with the build) — served
@@ -3229,6 +3233,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4175: which dashboard the caller has (admin or look-only), asked by the page when it opens.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-role') {
+    return handleAdminRole(request, db);
   }
   // #4175: the owner's switch for the look-only admin role (full admin only, logged).
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-set-viewer') {

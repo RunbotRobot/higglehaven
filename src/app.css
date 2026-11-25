@@ -6660,6 +6660,13 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-xs);
+        /* #4118: a card too tall to sit clear of the thing is shortened (worldCard.js writes the height) and scrolls inside. */
+        max-height: var(--card-max-height, none);
+      }
+      /* Scrolling clips the pointer drawn outside the card, so only a shortened card scrolls (its rings show what it is about). */
+      .world-card[data-capped='true'] {
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       .world-card[data-side='left'] {
         transform-origin: right center;
@@ -6669,6 +6676,12 @@
       }
       .world-card[data-side='below'] {
         transform-origin: center top;
+      }
+      /* #4242: while a ring or arrow on the selected thing is held the card stays where it is, fainter, and lets every touch
+         through to the thing, so it is never in the way of the handle being dragged. */
+      .world-card[data-held='true'] {
+        opacity: 0.4;
+        pointer-events: none;
       }
       .world-card[hidden] {
         display: none;
