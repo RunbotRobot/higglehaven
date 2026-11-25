@@ -1,6 +1,6 @@
 // #4113 item 5 (part of #3412): the owner walked to a brick wall and back and saw it pop. This holds the
 // rule that makes a wall change look the way they asked ("a behind-the-scenes efficiency strategy, not
-// something user-facing", #4111): walking 80 m to 5 m and back along a wall of 60 loose bricks (never
+// something user-facing", #4111): walking 80 m to 5 m and back along a wall of 200 loose bricks (never
 // bundled, so the system groups them itself, #4063), (1) every brick is on one version at every step (a set
 // never changes in part), (2) the versions only ever step one way on the way in (far, mid, full) and the
 // other way on the way out, so nothing flickers back, and (3) every change goes through a dissolve: the
@@ -31,9 +31,9 @@ const denseBuffer = Buffer.from(await new GLTFExporter().parseAsync(denseScene, 
 
 const LABEL = 'Wall Fade Walk Tester';
 const PRODUCT_COUNT = 1;
-const PER_PRODUCT = 60;
+const PER_PRODUCT = 200; // #4113: past what the fades can take at once (about 130 bricks of this sphere), under the full-detail budget (about 260)
 const WALL_LOCAL_Y = -10;
-const WALL_LENGTH_M = 8; // 60 bricks 0.14 m apart: touching or within the small gap that links a set
+const WALL_LENGTH_M = 6; // 200 bricks 0.03 m apart (overlapping: nearer than the gap that links a set)
 
 async function adminFetch(pathAndQuery, cookie, options = {}) {
   const response = await fetch(`${BASE_URL}/api${pathAndQuery}`, {
@@ -121,9 +121,13 @@ for (let i = 0; i < PRODUCT_COUNT * PER_PRODUCT; i++) {
     x: -WALL_LENGTH_M / 2 + (i * WALL_LENGTH_M) / (PRODUCT_COUNT * PER_PRODUCT - 1), y: WALL_LOCAL_Y,
   });
 }
-const created = await pageFetchJson('/api/instances/batch', json({ instances: memberInstances }));
+// The endpoint takes up to 100 placements a request.
+let created = { status: 200 };
+for (let from = 0; from < memberInstances.length && created.status < 300; from += 100) {
+  created = await pageFetchJson('/api/instances/batch', json({ instances: memberInstances.slice(from, from + 100) }));
+}
 const grouped = { status: 200 }; // never bundled: the point of this test
-console.log('seeded the 60-member loose wall (should be 2xx):', created.status);
+console.log('seeded the 200-member loose wall (should be 2xx):', created.status);
 
 const wallWorldX = landlet.center.x;
 const wallWorldY = landlet.center.y + WALL_LOCAL_Y;
@@ -174,8 +178,15 @@ async function walk(distances, direction) {
   let previous = null;
   for (const distanceM of distances) {
     await standAt(distanceM);
-    await page.waitForTimeout(350); // a dissolve runs a few hundred ms; let it finish so steps do not stack
-    const now = await bands();
+    // #4113: a wall past the fade caps changes in a sweep of a few seconds (bricks wait their turn to dissolve);
+    // wait until every brick is on one version and no fade is running, so steps do not stack.
+    let now = await bands();
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await page.waitForTimeout(250);
+      now = await bands();
+      const running = await page.evaluate(() => window.__testShopBatchCrossfades().inFlight);
+      if (new Set(now).size === 1 && running === 0) break;
+    }
     const readout = await page.evaluate(() => window.__testShopSetTiers());
     rows.push({ direction, distanceM, tiers: [...new Set(now)], readout: JSON.stringify(readout) });
     previous = now;
@@ -205,5 +216,8 @@ console.log('versions only step one way each direction (should be true):', monot
 // changes >= 2 below: the walk must actually cross a version boundary each way, or the test says nothing.
 console.log('version changes over the walk, fades started (fades should be at least the changes):', changes, fades);
 
-const pass = !!landlet && created.status < 300 && loaded && uniform && monotone && changes >= 2 && fades >= changes && errors.length === 0;
+const hardSwaps = await page.evaluate(() => window.__testShopBatchCrossfades().hardSwaps);
+console.log('bricks that swapped in one frame because the fade caps were full (should be 0):', hardSwaps);
+
+const pass = !!landlet && created.status < 300 && loaded && uniform && monotone && changes >= 2 && fades >= changes && hardSwaps === 0 && errors.length === 0;
 await finish(browser, { pass, label: '#4113: a wall walked to and from changes version as one set, one way, through a dissolve', errors });
