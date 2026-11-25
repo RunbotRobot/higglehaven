@@ -23,6 +23,8 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   // #3372: the Build client stops a move at the top and bottom level, so this
   // only shows for stale level data or a second tab; the items are put back.
   out_of_level_range: "That's beyond the top or bottom level of this lándlet.",
+  // #4198: Build stops a move at the lándlet's outline, so this only shows for stale lándlet data or a second tab.
+  outside_landlet_outline: "That's past the edge of this lándlet.",
   // #3948: refused before any card is charged, so each says so and what to do next.
   sold_out: 'That sold out before you could buy it. You were not charged.',
   not_for_sale: "That product isn't for sale right now. You were not charged. Try another product.",

@@ -4571,6 +4571,7 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
         + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(halfWidth, halfDepth)).toFixed(2)} `
         + `given its current size/scale)`,
         400,
+        { code: ERROR_CODES.OUTSIDE_LANDLET_OUTLINE },
       );
     }
     if (template) {
@@ -4586,6 +4587,7 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
         throw new HttpError(
           `Instance at (${instance.x}, ${instance.y}) extends outside lándlet "${instance.landletId}"'s outline`,
           400,
+          { code: ERROR_CODES.OUTSIDE_LANDLET_OUTLINE },
         );
       }
     }

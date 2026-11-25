@@ -2087,7 +2087,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     // this means stale level data or another tab. Put the items back where
     // they are saved and say so, rather than leaving them somewhere that
     // "may not survive a reload".
-    if (err.code === 'out_of_level_range') {
+    if (err.code === 'out_of_level_range' || err.code === 'outside_landlet_outline') {
       const putBack = await revertSceneToServer();
       tellBuilder("Couldn't move those items", putBack
         ? `${err.message} They have been put back where they were.`
@@ -3859,6 +3859,14 @@ window.__testSoldOutMarkerMeshIds = () => [...soldOutMarkerMeshes.keys()];
 // Reconciles every visible bit of "what's selected" UI (highlight already
 // applied by the caller — this only handles text/panels/gizmo) with the
 // current selectedMeshes set. Called after any change to that set.
+const OUTSIDE_NOTICE = 'Part of this is off your lándlet. Move it back to keep editing it.';
+let outsideNoticeShown = false;
+function meshIsOffOutline(mesh) {
+  const outline = getBuildOutline();
+  if (!outline) return false;
+  const { width, depth } = meshDimensions(mesh);
+  return !itemLegalAt(outline, { width, depth, rotationZ: mesh.rotation.z }, mesh.position.x, mesh.position.y, mesh.position.z, footprintScaleAtHeight);
+}
 export function updateSelectionUI() {
   // #3328: edit mode ends as soon as nothing from the bundle is selected.
   if (editingGroupId && ![...selectedMeshes].some((mesh) => mesh.userData.groupId === editingGroupId)) {
@@ -3882,6 +3890,16 @@ export function updateSelectionUI() {
     return;
   }
   const count = selectedMeshes.size;
+  // #4198: something saved off the lándlet's outline (before the outline was enforced) keeps loading and can be
+  // selected; say so, and that moving it back is what lets it be edited. Cleared once nothing selected is off.
+  const offOutline = [...selectedMeshes].some(meshIsOffOutline);
+  if (offOutline) {
+    outsideNoticeShown = true;
+    showSelectionActionStatus(OUTSIDE_NOTICE);
+  } else if (outsideNoticeShown) {
+    outsideNoticeShown = false;
+    if (selectionActionStatusTextEl.textContent === OUTSIDE_NOTICE) showSelectionActionStatus('');
+  }
   if (count === 0) {
     showSelectionActionStatus('');
     setProductInfo('');
