@@ -3825,11 +3825,13 @@ function addSoldOutMarkerMesh(marker) {
   mesh.position.set(marker.x, marker.y, marker.z || (dims?.height || 1) / 2);
   tagGhost(mesh, 'markerId', marker.markerId);
   mesh.userData.ghostKind = 'outline';
+  mesh.userData.ghostHeight = dims?.height || 1;
   landletElevationGroup.add(mesh);
   soldOutMarkerMeshes.set(marker.markerId, mesh);
+  if (!template) addGhostName(mesh, marker.templateName, mesh.userData.ghostHeight);
   upgradeGhost(soldOutMarkerMeshes, marker.markerId, 'markerId', template, {
     x: marker.x, y: marker.y, z: marker.z || (dims?.height || 1) / 2, rotation: null, scale: 1, crop: null, label: null,
-  }, ghostGeneration);
+  }, ghostGeneration, marker.templateName);
 }
 
 export function removeSoldOutMarkerMesh(markerId) {
@@ -3868,6 +3870,37 @@ function ghostOutline(width, depth, height) {
   return group;
 }
 
+// The outline's name (#4201 item 4): when the model cannot be drawn the builder still sees what used to stand
+// here. A small camera-facing label at the top of the outline, drawn on a canvas.
+function addGhostName(outline, name, height) {
+  if (!name || outline.userData.ghostNamed || typeof document === 'undefined') return;
+  const canvas2d = document.createElement('canvas');
+  canvas2d.width = 512;
+  canvas2d.height = 96;
+  const ctx = canvas2d.getContext('2d');
+  if (!ctx) return;
+  ctx.fillStyle = 'rgba(250, 240, 199, 0.88)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(4, 4, 504, 88, 24); else ctx.rect(4, 4, 504, 88);
+  ctx.fill();
+  ctx.fillStyle = '#2b2b2b';
+  ctx.font = '600 40px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const text = name.length > 26 ? `${name.slice(0, 25)}…` : name;
+  ctx.fillText(text, 256, 50, 488);
+  const texture = new THREE.CanvasTexture(canvas2d);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  sprite.scale.set(1.6, 0.3, 1);
+  sprite.position.set(0, 0, height / 2 + 0.3);
+  sprite.userData.ghostMaterial = true;
+  sprite.userData.ghostOwnsTexture = true;
+  // A tap on the name is a tap on the ghost.
+  for (const key of ['removedSnapshotId', 'markerId']) if (outline.userData[key] !== undefined) sprite.userData[key] = outline.userData[key];
+  outline.add(sprite);
+  outline.userData.ghostNamed = true;
+}
+
 // Makes a built model read as "not live": every material is its own copy (the model cache shares them),
 // pulled toward grey and see-through, never writing depth so it cannot hide what is behind it.
 function ghostify(object) {
@@ -3899,6 +3932,7 @@ function disposeGhost(object) {
   landletElevationGroup.remove(object);
   object.traverse((child) => {
     if (child.userData.ghostOwnsGeometry) child.geometry?.dispose?.();
+    if (child.userData.ghostOwnsTexture) child.material?.map?.dispose?.();
     if (child.userData.ghostMaterial) for (const material of [].concat(child.material || [])) material.dispose?.();
   });
 }
@@ -3921,11 +3955,16 @@ async function buildGhostModel(template, placement) {
 }
 
 // Swaps a ghost's outline for the item's model once it has loaded, unless the ghosts were rebuilt meanwhile.
-function upgradeGhost(map, key, tagKey, template, placement, generation) {
+function upgradeGhost(map, key, tagKey, template, placement, generation, name = null) {
   buildGhostModel(template, placement).then((model) => {
     const outline = map.get(key);
-    if (!model || generation !== ghostGeneration || !outline) {
+    if (generation !== ghostGeneration || !outline) {
       if (model) disposeGhost(model);
+      return;
+    }
+    if (!model) {
+      // No model to show for it: the outline carries its name, so the builder still sees what it was.
+      addGhostName(outline, name, outline.userData.ghostHeight ?? 1);
       return;
     }
     model.position.copy(outline.position);
@@ -3956,12 +3995,14 @@ function addRemovedGhostMesh(slot) {
   if (slot.rotation) mesh.rotation.set(slot.rotation.x, slot.rotation.y, slot.rotation.z);
   tagGhost(mesh, 'removedSnapshotId', slot.snapshotId);
   mesh.userData.ghostKind = 'outline';
+  mesh.userData.ghostHeight = (dims?.height || 1) * scale;
   landletElevationGroup.add(mesh);
   removedGhostMeshes.set(slot.snapshotId, mesh);
   const template = slot.template ?? findTemplate(slot.templateId);
+  if (!template) addGhostName(mesh, slot.templateName, mesh.userData.ghostHeight); // nothing to wait for: its name now
   upgradeGhost(removedGhostMeshes, slot.snapshotId, 'removedSnapshotId', template, {
     x: slot.position.x, y: slot.position.y, z: slot.position.z, rotation: slot.rotation, scale: slot.scale, crop: slot.crop, label: slot.label,
-  }, ghostGeneration);
+  }, ghostGeneration, slot.templateName);
 }
 
 function applyRemovedGhostVisibility() {
@@ -3992,6 +4033,9 @@ window.__testRemovedGhostScreenPos = (snapshotId) => {
 };
 window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
 // 'model' once a ghost is the product's own model, 'outline' while it loads or when it cannot (e2e).
+// e2e: feeds the ghosts a slot as if the server had listed it (for a slot whose template is gone).
+window.__testSetRemovedGhostSlots = (slots) => { removedGhostSlots = slots; applyRemovedGhostVisibility(); };
+window.__testGhostNames = () => [...removedGhostMeshes.values()].map((m) => Boolean(m.userData.ghostNamed));
 window.__testGhostKinds = () => ({
   removed: [...removedGhostMeshes.values()].map((m) => m.userData.ghostKind),
   soldOut: [...soldOutMarkerMeshes.values()].map((m) => m.userData.ghostKind),
