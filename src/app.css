@@ -892,6 +892,16 @@
         white-space: nowrap;
         animation: bud-unfold var(--motion-open-leaf) var(--ease-bloom) both;
       }
+      /* #4199: a keyboard user sees which part of the flower has focus: an ink ring with a pale halo, drawn only for
+         keyboard focus (never after a tap), on the head, the petals, the row of icons and the leaves. */
+      body[data-bud="on"] #account-menu-toggle:focus-visible,
+      body[data-bud="on"] #account-menu-panel button:focus-visible,
+      body[data-bud="on"] #bud-row button:focus-visible,
+      body[data-bud="on"] .bud-petal:focus-visible {
+        outline: 3px solid var(--ink);
+        outline-offset: 2px;
+        box-shadow: 0 0 0 6px rgb(var(--panel-rgb) / 0.95);
+      }
       /* #4038: the row grows out of the head with the petals, left to right (src/ui/bud.js sets --row-i and the
          distance each item travels, --row-pull), and folds back into it, the last item first. */
       body[data-bud="on"] #bud-row button {

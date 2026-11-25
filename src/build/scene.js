@@ -5610,10 +5610,10 @@ window.addEventListener('keydown', (event) => {
 // selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
 let lastItemKeyAt = 0;
 let itemKeyAnnounceFlip = false;
-function turnSelectedItem(degrees) {
+function turnSelectedItem(degrees, axis = 'z') {
   if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
   const [mesh] = selectedMeshes;
-  const next = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(degrees)).multiply(mesh.quaternion);
+  const next = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0), THREE.MathUtils.degToRad(degrees)).multiply(mesh.quaternion);
   runSyntheticDrag(rotateControls, mesh, () => mesh.quaternion.copy(next));
   refreshCardNumbers();
 }
@@ -5628,6 +5628,7 @@ window.addEventListener('keydown', (event) => {
   const [item] = selectedMeshes;
   const was = { position: item.position.clone(), quaternion: item.quaternion.clone() };
   if (action.type === 'nudge') nudgeSelectedItem(action.direction);
+  else if (action.type === 'tilt') turnSelectedItem(action.degrees, action.axis);
   else turnSelectedItem(action.degrees);
   // A press that did something says so for a screen reader; one that did nothing already said why.
   const did = action.type === 'nudge' ? item.position.distanceTo(was.position) > 1e-4 : item.quaternion.angleTo(was.quaternion) > 1e-4;

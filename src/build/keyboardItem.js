@@ -15,6 +15,11 @@ const NUDGES = {
   PageUp: 'up', PageDown: 'down',
 };
 
+const TILTS = {
+  KeyZ: { axis: 'x', degrees: ITEM_TURN_DEGREES }, KeyX: { axis: 'x', degrees: -ITEM_TURN_DEGREES },
+  KeyC: { axis: 'y', degrees: ITEM_TURN_DEGREES }, KeyV: { axis: 'y', degrees: -ITEM_TURN_DEGREES },
+};
+
 // -> { type: 'nudge', direction } | { type: 'turn', degrees } | null. Only with Shift (and no Ctrl, Cmd or
 // Alt), only for a single selected item, never while someone is typing or answering a dialog.
 export function buildItemKeyAction(event, { singleSelected = false } = {}) {
@@ -24,6 +29,9 @@ export function buildItemKeyAction(event, { singleSelected = false } = {}) {
   // turn the view.
   if (event.code === 'KeyQ') return { type: 'turn', degrees: ITEM_TURN_DEGREES };
   if (event.code === 'KeyE') return { type: 'turn', degrees: -ITEM_TURN_DEGREES };
+  // #4118: the red and green rings from the keyboard: Z and X tip it about the red ring's axis, C and V about
+  // the green one's, a step each way (the blue ring is Q and E above).
+  if (TILTS[event.code]) return { type: 'tilt', ...TILTS[event.code] };
   return null;
 }
 
@@ -38,6 +46,7 @@ export function isItemKey(event, singleSelected) {
 const WHERE = { left: 'to the left', right: 'to the right', forward: 'forward', back: 'back' };
 export function itemKeyAnnouncement(action, units) {
   if (action.type === 'turn') return `Turned ${Math.abs(action.degrees)} degrees ${action.degrees > 0 ? 'left' : 'right'}.`;
+  if (action.type === 'tilt') return `Tilted ${Math.abs(action.degrees)} degrees about the ${action.axis === 'x' ? 'red' : 'green'} ring.`;
   const amount = units === 'ft' ? '3 inches' : '10 centimetres';
   if (action.direction === 'up') return `Lifted ${amount}.`;
   if (action.direction === 'down') return `Lowered ${amount}.`;
