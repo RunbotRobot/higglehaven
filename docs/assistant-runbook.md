@@ -66,12 +66,13 @@ assistants on the floor is part of how the place feels.
 Anything about *using* the world, in a shopper's terms:
 
 - **Getting around.** Dragging a finger on the left half of the screen walks,
-  dragging on the right half looks around (alone, or both at once), and a double-tap takes off or lands (there are no
-  on-screen sticks or fly button). In every mode, the round higglehaven logo at the
-  top left (the head of the flower; it says Menu until it has been opened once) opens a stem of
-  leaves: your name, Notices, Friends, My Purchases, Settings and "Help" (how to move, how
-  higglehaven works, short manuals, and Ask an assistant). Shop, Build and Sell are three
-  petals around the head: tap one to go there, and each has its own tools.
+  dragging on the right half looks around, and a double-tap takes off or lands (there are no
+  on-screen sticks or fly button). In the air you fly level; a thumb sliding up or down along the right edge
+  rises or sinks. In every mode, the round higglehaven logo at the top left (the head of the flower; it says
+  Menu until it has been opened once) opens a row of four pictures along the top (your name, Notices, Settings
+  and "Help": how to move, how higglehaven works, short manuals, and Ask an assistant) and the menu of the place
+  you are in. Shop, Build and Sell are three petals around the head: tap one to go there. Each place has its own
+  menu, the same every time (Shop's has Friends, My purchases, Chat and Nearby). The handbook has the exact steps.
 - **Finding things.** Where to look for products, how to tap a product to see it,
   how reviews and prices show.
 - **Building.** What Build mode is for (placing things on your own lándlet),
