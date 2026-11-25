@@ -734,7 +734,12 @@ function updateInstanceLodTiers() {
       if (object.userData.batch) requestBatchTiers(entry, object.userData.batch);
       else requestInstanceTiers(entry, object);
     }
-    if (lodTiersStateOf(object) !== 'ready' || tier === object.userData.lodApplied) continue;
+    if (lodTiersStateOf(object) !== 'ready') continue;
+    if (tier === object.userData.lodApplied) {
+      // #4113: a placement that wanted a change and then wants what it has is no longer waiting for it.
+      if (object.userData.batchWaitSince !== undefined) batchCrossfades.clearWait(object);
+      continue;
+    }
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -757,6 +762,9 @@ function updateInstanceLodTiers() {
     if (object.userData.batch) {
       if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: true }) === BATCH_WAITING) {
         object.userData.lodApplied = appliedBefore;
+        // A waiting placement is a comparison when nothing has changed, but a pass over thousands of them still
+        // spends the slice like any other flip, so the ones behind them are reached on a later tick.
+        if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
         continue;
       }
     } else setInstanceLodState(object, tier, tierCrossfades);
@@ -1836,6 +1844,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   for (const handle of handles) {
     handle.userData.lodTier = TIER_FULL;
     handle.userData.lodApplied = TIER_FULL;
+    batchCrossfades.clearWait(handle); // #4113: a rebuilt batch starts from its books, not from a placement's old wait
   }
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
@@ -1857,6 +1866,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
       handles.forEach((handle, index) => {
         handle.userData.lodTier = applied[index];
         handle.userData.lodApplied = applied[index];
+        batchCrossfades.clearWait(handle);
       });
     }
   }

@@ -463,4 +463,89 @@ describe('a placement the caps cannot take yet waits instead of swapping in one 
     expect(fades.trianglesInFlight).toBeLessThanOrEqual(1_200_000);
     expect(batchTierCounts(batch).full).toBe(count);
   });
+
+  it('answers a retry in O(1) while nothing has given room back, even for thousands of waiting placements', () => {
+    const { batch, handles } = makeBatch(5000);
+    const { fades, state } = makeFades({ maxTriangles: 300 });
+    expect(fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_TIER_MID);
+    for (let i = 1; i < handles.length; i++) expect(fades.move(batch, handles[i], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING);
+    expect(fades.waitSkipCount).toBe(0); // the first look at each placement is a real one
+    state.now += 16; // the next frame gives the one cohort start back: one real look each
+    fades.update();
+    for (let i = 1; i < handles.length; i++) fades.move(batch, handles[i], BATCH_TIER_MID, { canWait: true });
+    state.now += 16; // and the frame after: the fade runs, nothing has ended, nothing is new
+    fades.update();
+    for (let i = 1; i < handles.length; i++) fades.move(batch, handles[i], BATCH_TIER_MID, { canWait: true });
+    expect(fades.waitSkipCount).toBe(handles.length - 1); // every retry was a comparison, none a look at the caps
+    state.now += BATCH_CROSSFADE_MS;
+    fades.update(); // the fade ends: room is back, so the next look is a real one again
+    const before = fades.waitSkipCount;
+    expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_TIER_MID);
+    expect(fades.waitSkipCount).toBe(before);
+  });
+
+  it('forgets a wait when the placement wants what it has again, so a later wait starts a fresh clock', () => {
+    const { batch, handles } = makeBatch(4);
+    const { fades, state } = makeFades({ maxTriangles: 300 });
+    fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true });
+    expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING);
+    expect(handles[1].userData.batchWaitSince).toBe(1000);
+    state.now += 100;
+    expect(fades.move(batch, handles[1], BATCH_TIER_FULL, { canWait: true })).toBe(BATCH_TIER_FULL); // it wants what it has
+    expect(handles[1].userData.batchWaitSince).toBeUndefined();
+    state.now += 100;
+    expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING);
+    expect(handles[1].userData.batchWaitSince).toBe(1200); // a new wait, not the old one carried over
+    fades.clearWait(handles[1]); // what the caller does when it sees the wanted version equal the applied one
+    expect(handles[1].userData.batchWaitSince).toBeUndefined();
+  });
+
+  it('starts a new clock when the placement now wants a different version', () => {
+    const { batch, handles } = makeBatch(4);
+    const { fades, state } = makeFades({ maxTriangles: 300 });
+    fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true });
+    fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true });
+    expect(handles[1].userData.batchWaitSince).toBe(1000);
+    state.now += 200;
+    fades.move(batch, handles[1], BATCH_TIER_FAR, { canWait: true }); // wants far now: a different target
+    expect(handles[1].userData.batchWaitTo).toBe(BATCH_TIER_FAR);
+    expect(handles[1].userData.batchWaitSince).toBe(1200);
+  });
+
+  it('fades at once, without waiting, when nothing is running and the caps have room', () => {
+    const { batch, handles } = makeBatch(4);
+    const { fades } = makeFades();
+    expect(fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_TIER_MID);
+    expect(handles[0].userData.batchFade).toBeDefined();
+    expect(fades.waitSkipCount).toBe(0);
+    expect(fades.hardSwapCount).toBe(0);
+  });
+
+  it('does not swap the tail of a very long sweep at once: the wait runs only while nothing is admitted', () => {
+    // 3,000 bricks mid -> full is a sweep of about twelve seconds, three times the wait limit.
+    const count = 3000;
+    const handles = Array.from({ length: count }, (_, i) => handleAt(i));
+    const big = (segments) => ({ geometry: new THREE.BoxGeometry(1, 1, 1, segments, segments, segments), material: new THREE.MeshStandardMaterial(), matrix: new THREE.Matrix4() });
+    const fullParts = [big(20)];
+    const batch = buildInstancedBatch(fullParts, handles);
+    batch.root = new THREE.Group();
+    new THREE.Group().add(batch.root);
+    for (const mesh of batch.meshes) batch.root.add(mesh);
+    initBatchTiers(batch, fullParts);
+    addBatchTier(batch, BATCH_TIER_MID, [big(10)]);
+    addBatchTier(batch, BATCH_TIER_FAR, [big(1)]);
+    const { fades, state } = makeFades();
+    for (const h of handles) fades.move(batch, h, BATCH_TIER_MID, { instant: true });
+    const pending = new Set(handles);
+    let frames = 0;
+    while (pending.size && frames < 3000) {
+      for (const h of [...pending]) if (fades.move(batch, h, BATCH_TIER_FULL, { canWait: true }) !== BATCH_WAITING) pending.delete(h);
+      frames++;
+      state.now += 16;
+      fades.update();
+    }
+    expect(pending.size).toBe(0);
+    expect(frames * 16).toBeGreaterThan(BATCH_CROSSFADE_MAX_WAIT_MS); // longer than any one wait limit...
+    expect(fades.hardSwapCount).toBe(0); // ...and still no brick swapped at once
+  });
 });
