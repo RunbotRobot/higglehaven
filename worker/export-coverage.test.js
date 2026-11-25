@@ -41,6 +41,7 @@ const NOT_EXPORTED = {
   assistant_contacts: 'who they spoke to and when; derivable from the exported conversations',
   owned_avatar_purchases: 'idempotency plumbing; every field is on owned_avatars (#1985)',
   owned_animation_purchases: 'idempotency plumbing; every field is on owned_animations (#1985)',
+  products: 'the shared product row; a seller\'s own listings are exported as commerce.listings (catalog_templates)',
   closed_sellers: 'record of a closed seller account kept by the platform',
   builder_label_backfill_3142: 'a one-off migration table',
   // Moves with a person for a few seconds or minutes only.
@@ -58,8 +59,6 @@ const KNOWN_GAPS = {
   suspended_seller_instance_snapshots: 'a builder\'s own placed content, saved while suspended',
   nearby_chat_messages: 'what the person said in nearby chat (short-lived)',
   user_content_edit_history: 'earlier versions of the person\'s own reviews and sign posts',
-  credit_orbs: 'orbs the person collected (video-to-3D credit grants)',
-  products: 'the seller\'s own product listings',
 };
 
 // The text of one top-level async function in worker/index.js.
@@ -70,11 +69,20 @@ function functionText(name) {
   return indexSource.slice(start, next < 0 ? undefined : next);
 }
 
+// A table that the export only JOINs to describe something else (catalog_templates
+// describes what a person OWNS) must still be read by its own key to count.
+const MUST_BE_READ_BY_OWN_KEY = {
+  catalog_templates: /FROM catalog_templates\s+WHERE seller_id = \?/,
+};
+
 function exportedTables() {
   const text = ['handleExportData', 'exportCommerceData', 'exportSocialSection', 'exportCommunicationData']
     .map(functionText).join('\n');
   const found = new Set();
   for (const match of text.matchAll(/(?:FROM|JOIN)\s+([a-z_0-9]+)/g)) found.add(match[1]);
+  for (const [table, ownRead] of Object.entries(MUST_BE_READ_BY_OWN_KEY)) {
+    if (!ownRead.test(text)) found.delete(table);
+  }
   return found;
 }
 

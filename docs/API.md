@@ -746,6 +746,11 @@ earnings held back: `amountCents`, `releaseAt`, `releasedAt`, `revokedAt`),
 `commerce.auctionBidsPlaced` (bids the builder placed) are exported for builders,
 without internal resolution fields.
 
+`commerce.listings` is a seller's own listings (what they put up for sale: name,
+category, dimensions, `priceCents`, `stockQuantity`, `delistedAt`, model and image links;
+not embeddings or moderation fields), and `commerce.creditOrbsCollected` the orbs a builder
+collected. `ownedAvatars`/`ownedAnimations` stay what the person owns.
+
 **#4142:** a top-level `communication` section, present for every account
 (builder or not), holds what keys on the account itself: `assistantConversations`
 (each with the assistant's name, `status`, `endedBy`, `startedAt`, `endedAt` and

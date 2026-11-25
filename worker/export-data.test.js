@@ -11,7 +11,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker from './index.js';
 import {
-  api, extractSessionCookie, signup, signupBuilder, withSession,
+  api, extractSessionCookie, signup, signupBuilder, signupSeller, withSession,
 } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -150,6 +150,8 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       commissionHolds: [],
       auctionsRun: [],
       auctionBidsPlaced: [],
+      creditOrbsCollected: [],
+      listings: [],
       tax1099Forms: [],
     });
   });
@@ -169,6 +171,8 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       commissionHolds: [],
       auctionsRun: [],
       auctionBidsPlaced: [],
+      creditOrbsCollected: [],
+      listings: [],
       tax1099Forms: [],
     });
   });
@@ -727,5 +731,42 @@ describe('GET /auth/export-data -- commission holds and auctions (#4142)', () =>
     expect(commissionHolds.map((h) => [h.holdId, h.amountCents])).toEqual([['hold-mine', 250]]);
     expect(auctionsRun.map((a) => a.auctionId)).toEqual(['auction-mine']);
     expect(auctionBidsPlaced.map((b) => [b.bidId, b.amountCents])).toEqual([['bid-mine', 700]]);
+  });
+});
+
+// #4142: a seller's own listings, and the orbs a builder collected.
+describe('GET /auth/export-data -- listings and collected orbs (#4142)', () => {
+  it('lists the seller\'s own listings (not what they own) and the orbs they collected', async () => {
+    const seller = await signupSeller('export-listing-seller');
+    const other = await signupSeller('export-listing-other');
+    // Listings are written straight into the tables (the upload route has its own
+    // tests); what matters here is which seller_id each row carries.
+    const mineId = `export-listing-mine-${crypto.randomUUID()}`;
+    const theirsId = `export-listing-theirs-${crypto.randomUUID()}`;
+    for (const [templateId, name, sellerId] of [[mineId, 'My export listing', seller.sellerId], [theirsId, 'Their export listing', other.sellerId]]) {
+      await env.DB.prepare(`INSERT INTO products (product_id, name, color, width_m, depth_m, height_m) VALUES (?, ?, '#abcdef', 1, 1, 1)`)
+        .bind(templateId, name).run();
+      await env.DB.prepare(`
+        INSERT INTO catalog_templates (template_id, name, color, width_m, depth_m, height_m, price_cents, seller_id, product_id, stock_quantity)
+        VALUES (?, ?, '#abcdef', 1, 1, 1, 750, ?, ?, 3)
+      `).bind(templateId, name, sellerId, templateId).run();
+    }
+    const builderOf = async (s) => (await env.DB.prepare(
+      'SELECT builder_id FROM builders WHERE user_id = (SELECT user_id FROM sellers WHERE seller_id = ?)',
+    ).bind(s.sellerId).first())?.builder_id;
+    const mineBuilder = await builderOf(seller);
+    const theirBuilder = await builderOf(other);
+    expect(mineBuilder).toBeTruthy();
+    expect(theirBuilder).toBeTruthy();
+    await env.DB.prepare(`
+      INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, collected_at, collected_by_builder_id)
+      VALUES ('export-orb-mine', 'greenbelt', 1, 1, '2026-01-04T00:00:00.000Z', ?), ('export-orb-theirs', 'greenbelt', 1, 1, '2026-01-04T00:00:00.000Z', ?)
+    `).bind(mineBuilder, theirBuilder).run();
+    const result = await api('/auth/export-data', seller.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.commerce.listings.map((l) => l.name)).toEqual(['My export listing']);
+    expect(result.body.commerce.listings[0]).toMatchObject({ priceCents: 750, stockQuantity: 3 });
+    expect(JSON.stringify(result.body)).not.toContain('Their export listing');
+    expect(result.body.commerce.creditOrbsCollected.map((o) => o.orbId)).toEqual(['export-orb-mine']);
   });
 });
