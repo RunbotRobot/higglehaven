@@ -105,7 +105,8 @@ export function createWorldCard(cardEl) {
       lastAnchor = anchor;
 
       if (sizeDirty) measure();
-      const place = placeProductCard({ anchor, card: measuredSize, viewport });
+      // #4118: the side it had is passed back in, so a thing on the middle of the screen does not flip the card.
+      const place = placeProductCard({ anchor, card: measuredSize, viewport, previousSide: lastPlacement?.side ?? null });
       const left = Math.round(place.left * 2) / 2;
       const top = Math.round(place.top * 2) / 2;
       const pointerY = Math.round(place.pointerY);

@@ -8,7 +8,6 @@
 // seen by the walk/look recogniser) and reads rate() each frame. Pure maths and state, no DOM, so it is
 // unit-tested (flightHeight.test.js).
 
-import { HEIGHT_WORDS, KEY_HEIGHT_WORDS } from '../ui/gestureWords.js';
 
 // The right-edge strip, in CSS pixels. 36 px is roughly the width of a thumb pad: wide enough to land on
 // without looking, narrow enough that the look half of the screen keeps all but a sliver. Cost, accepted
@@ -21,18 +20,6 @@ export const HEIGHT_FULL_PX = 70;
 // Full rise or sink is this share of the flight speed (sin 50 degrees: the steepest the old pitch-climb
 // path gave, kept so the strength a person felt before does not change).
 export const FLIGHT_CLIMB_FRACTION = Math.sin((50 * Math.PI) / 180);
-
-// The one sentence taught the first time someone flies (the gesture cannot be seen).
-export const HEIGHT_HINT = HEIGHT_WORDS;
-export const KEY_HEIGHT_HINT = KEY_HEIGHT_WORDS;
-
-// The hint for the device in front of the person: a computer (a fine pointer and no touch) reads the
-// keys, everything else the edge slide (the same test as src/ui/loadingTips.js's tipText, #3832).
-export function heightHint(win = typeof window === 'undefined' ? null : window) {
-  const media = win && typeof win.matchMedia === 'function' ? win.matchMedia.bind(win) : null;
-  const computer = Boolean(media && media('(pointer: fine)').matches && !media('(pointer: coarse)').matches);
-  return computer ? KEY_HEIGHT_HINT : HEIGHT_HINT;
-}
 
 const clampUnit = (value) => Math.max(-1, Math.min(1, value));
 

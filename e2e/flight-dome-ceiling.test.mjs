@@ -92,8 +92,12 @@ const cameraClearanceM = debug.domeApexWorldZ - debug.cameraZ;
 console.log(`avatar clearance below the dome's real apex (should be a small positive number, not negative or huge): ${avatarClearanceM}`);
 console.log(`camera clearance below the dome's real apex (should be a small positive number, not negative or huge): ${cameraClearanceM}`);
 
+// #4193: the ceiling is the avatar-and-camera pair's. Looking steeply down the camera is above the avatar, so
+// the avatar levels off lower: at most the dome margin (5 m) plus the follow distance (4.2 m) plus the anchor
+// height (about 1.4 m) under the apex. The check is still "small, not tens of metres".
+const MAX_AVATAR_CLEARANCE_M = 12;
 const pass =
-  avatarClearanceM > 0 && avatarClearanceM < 10 &&
+  avatarClearanceM > 0 && avatarClearanceM < MAX_AVATAR_CLEARANCE_M &&
   cameraClearanceM > 0 && cameraClearanceM < 10 &&
   errors.length === 0;
 await finish(browser, {

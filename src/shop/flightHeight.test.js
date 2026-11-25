@@ -1,8 +1,8 @@
 // #4105: the edge slide that changes height while flying (src/shop/flightHeight.js), as a pure recogniser.
 import { describe, it, expect } from 'vitest';
 import {
-  createHeightControl, slideRate, ramp, EDGE_STRIP_PX, HEIGHT_DEADZONE_PX, HEIGHT_FULL_PX, HEIGHT_HINT,
-  FLIGHT_CLIMB_FRACTION, heightHint, KEY_HEIGHT_HINT,
+  createHeightControl, slideRate, ramp, EDGE_STRIP_PX, HEIGHT_DEADZONE_PX, HEIGHT_FULL_PX,
+  FLIGHT_CLIMB_FRACTION,
 } from './flightHeight.js';
 
 const W = 390;
@@ -58,20 +58,5 @@ describe('edge slide', () => {
     c.cancel();
     expect(c.rate()).toBe(0);
     expect(c.claims(1)).toBe(false);
-  });
-  it('says the gesture in plain words', () => {
-    expect(HEIGHT_HINT).toMatch(/right edge/);
-    expect(HEIGHT_HINT).not.toMatch(/#\d|height=|option/i);
-  });
-});
-
-describe('heightHint', () => {
-  const win = (fine, coarse) => ({ matchMedia: (query) => ({ matches: query.includes('fine') ? fine : coarse }) });
-  it('a computer reads the keys; touch and anything unknown read the edge slide', () => {
-    expect(heightHint(win(true, false))).toBe(KEY_HEIGHT_HINT);
-    expect(heightHint(win(false, true))).toBe(HEIGHT_HINT);
-    expect(heightHint(win(true, true))).toBe(HEIGHT_HINT);
-    expect(heightHint(null)).toBe(HEIGHT_HINT);
-    expect(KEY_HEIGHT_HINT).toMatch(/Page Up/);
   });
 });
