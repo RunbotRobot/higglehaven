@@ -85,6 +85,7 @@ await leaf.locator('input[aria-label="Birth day"]').fill('9');
 await leaf.locator('input[aria-label="Birth month"]').fill('12');
 await leaf.locator('input[aria-label="Birth year"]').fill('1980');
 await leaf.locator('label', { hasText: 'SSN' }).locator('input').fill('1234');
+await leaf.locator('label', { hasText: 'Phone number' }).locator('input').fill('2025550100'); // required by the server, and now asked for before Next (#4339)
 await leaf.locator('button', { hasText: 'Next' }).click();
 await leaf.locator('label', { hasText: 'Street address' }).locator('input').fill('1 Compiler Lane');
 await leaf.locator('label', { hasText: 'City' }).locator('input').fill('Arlington');
