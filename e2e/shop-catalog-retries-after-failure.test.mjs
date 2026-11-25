@@ -78,7 +78,7 @@ let failed = 0;
 await page.route('**/api/catalog?*', (route) => {
   if (route.request().method() !== 'GET') return route.continue();
   catalogRequests += 1;
-  if (failed < 1) { failed += 1; return route.abort('failed'); }
+  if (failed < Number(process.env.CATALOG_FAILS ?? 1)) { failed += 1; return route.abort('failed'); }
   return route.continue();
 });
 
@@ -98,7 +98,7 @@ for (let i = 0; i < 60 && drawn < ITEMS; i += 1) {
 }
 console.log('placements drawn after the catalog was asked for again (should be', ITEMS + '):', drawn, '| catalog requests:', catalogRequests);
 
-const pass = failed === 1 && early === 0 && drawn === ITEMS && catalogRequests >= 2;
+const pass = failed === Number(process.env.CATALOG_FAILS ?? 1) && early === 0 && drawn === ITEMS && catalogRequests >= 2;
 await finish(browser, {
   pass: pass && errors.filter((e) => !/Failed to load resource|net::ERR_FAILED/.test(e)).length === 0,
   label: '#4295: a catalog request that fails once is asked for again, and the placed products appear without moving',
