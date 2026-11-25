@@ -73,10 +73,9 @@ export function validateGlb(bytes) {
   }
 }
 
-// 20MB is a generous ceiling above typical real-world model sizes (most
-// uploads should land well under 2MB), not a target: it exists to reject
-// an accidentally-huge raw photogrammetry export before it ever reaches R2.
-export const MAX_MODEL_BYTES = 20 * 1024 * 1024;
+// #4345: now defined in shared/model-limits.js, so the Add a product step reads the same number.
+import { MAX_MODEL_BYTES } from '../../shared/model-limits.js';
+export { MAX_MODEL_BYTES };
 
 // R2's free tier is 10GB of storage per month. This is our OWN
 // application-level backstop well under that — checked live against R2's

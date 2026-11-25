@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { inlineConfirm } from '../ui/inlineConfirm.js';
+import { MAX_MODEL_BYTES, modelTooLargeMessage, isUploadableModelName } from '../../shared/model-limits.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
 import { createAndUploadModelTiers, rescaleAndUploadModelTiers } from './modelTierUpload.js';
 import { describeAvatarClips, describeNoAnimationsForAvatar, defaultClipPicks, pickClipRole, clipRolesFromPicks } from '../avatarClipNames.js';
@@ -764,6 +765,12 @@ async function handleUploadFileStep() {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
     return;
   }
+  // #4345: refused here, before anything is converted or uploaded. The size is checked later, once the browser has
+  // reduced the model (a large file can come out well under the limit).
+  if (!isUploadableModelName(file.name)) {
+    setUploadStatus('Only .glb and .fbx files can be uploaded. Choose one of those.', true);
+    return;
+  }
   if (!(await confirmDuplicateProductName(name))) return;
 
   const myFlowToken = ++uploadFlowToken;
@@ -830,6 +837,10 @@ async function handleUploadFileStep() {
       setUploadStatus('Couldn\'t auto-reduce the model — uploading as-is…');
     }
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
+    if (uploadable.size > MAX_MODEL_BYTES) {
+      setUploadStatus(modelTooLargeMessage(formatBytes(uploadable.size), formatBytes(MAX_MODEL_BYTES)), true);
+      return;
+    }
     const { modelUrl, sizeBytes } = await uploadModelFile(uploadable);
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
 
