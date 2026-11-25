@@ -12,8 +12,9 @@ const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: $
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
 await page.waitForSelector('body.shop-ready', { timeout: 15000 });
-// The first flight says the gesture in plain words (the spawn is already a flight).
-check(await page.waitForFunction(() => /right edge|Page Up/.test(document.getElementById('shop-status').textContent), null, { timeout: 8000 }).then(() => true, () => false), 'the first flight says the gesture in plain words');
+// Nothing explains itself unasked (#4179): the first flight says nothing about height.
+await page.waitForTimeout(1500);
+check(!/right edge|Page Up/.test(await page.evaluate(() => document.getElementById('shop-status').textContent)), 'the first flight does not explain how to change height');
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 15000 });
 // Land the spawn flight, then take off, so the start is the ordinary hover.
 await page.evaluate(() => window.__testToggleShopFlight());
