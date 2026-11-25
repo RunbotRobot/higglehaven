@@ -3814,28 +3814,27 @@ export function setSoldOutMarkers(value) {
 
 function addSoldOutMarkerMesh(marker) {
   if (soldOutMarkerMeshes.has(marker.markerId)) return;
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshBasicMaterial({
-    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  // marker.x/y/z is the sold-out item's own last-recorded, pre-elevation
-  // position (same convention every live instance's own x/y/z already
-  // uses) -- #2871: lives in landletElevationGroup so this ghost marker
-  // rises/sinks with the real ground the same way a still-live instance
-  // at that same spot would.
-  mesh.position.set(marker.x, marker.y, marker.z || 0.5);
-  mesh.userData.markerId = marker.markerId;
+  // #4201: the marker is the sold-out item itself as a ghost (its model, translucent), with an outline of the
+  // template's size while the model loads. marker.x/y/z is the item's own last-recorded, pre-elevation position
+  // (same convention every live instance's x/y/z uses) -- #2871: it lives in landletElevationGroup so it
+  // rises/sinks with the real ground the same way a still-live instance at that spot would.
+  const template = findTemplate(marker.templateId);
+  const dims = template?.dimensions;
+  const mesh = ghostOutline(dims?.width || 1, dims?.depth || 1, dims?.height || 1);
+  mesh.position.set(marker.x, marker.y, marker.z || (dims?.height || 1) / 2);
+  tagGhost(mesh, 'markerId', marker.markerId);
+  mesh.userData.ghostKind = 'outline';
   landletElevationGroup.add(mesh);
   soldOutMarkerMeshes.set(marker.markerId, mesh);
+  upgradeGhost(soldOutMarkerMeshes, marker.markerId, 'markerId', template, {
+    x: marker.x, y: marker.y, z: marker.z || (dims?.height || 1) / 2, rotation: null, scale: 1, crop: null, label: null,
+  }, ghostGeneration);
 }
 
 export function removeSoldOutMarkerMesh(markerId) {
   const mesh = soldOutMarkerMeshes.get(markerId);
   if (!mesh) return;
-  landletElevationGroup.remove(mesh);
-  mesh.geometry.dispose();
-  mesh.material.dispose();
+  disposeGhost(mesh);
   soldOutMarkerMeshes.delete(markerId);
 }
 
@@ -3848,34 +3847,120 @@ export function clearSoldOutMarkerMeshes() {
 // products) are drawn as the same grayed ghosts, where they stood, under the
 // same switch. A ghost is only ever a mesh in landletElevationGroup: never in
 // productMeshes, so it cannot be selected, moved, bundled or saved.
-const removedGhostMeshes = new Map(); // snapshotId -> THREE.Mesh
+// A ghost is the item itself (#4201, "Everything built is always shown as itself"): the product's own model, a
+// little translucent and desaturated so it cannot be taken for a live item. The outline stands in while the model
+// loads and for good when it cannot (the product's file or template is gone).
+const GHOST_OPACITY = 0.4;
+const GHOST_DESATURATE = 0.4;
+let ghostGeneration = 0; // bumped on every rebuild, so a model that arrives late for an old build is dropped
+
+function ghostOutline(width, depth, height) {
+  const group = new THREE.Group();
+  const box = new THREE.BoxGeometry(width, depth, height);
+  const lines = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({
+    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.7, depthWrite: false,
+  }));
+  // An invisible solid so a tap lands on the ghost (a line is a hair to hit).
+  const hit = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ visible: false }));
+  for (const part of [lines, hit]) { part.userData.ghostOwnsGeometry = true; part.userData.ghostMaterial = true; }
+  group.add(lines, hit);
+  return group;
+}
+
+// Makes a built model read as "not live": every material is its own copy (the model cache shares them),
+// pulled toward grey and see-through, never writing depth so it cannot hide what is behind it.
+function ghostify(object) {
+  const grey = new THREE.Color(0x888888);
+  object.traverse((child) => {
+    if (!child.material) return;
+    const swap = (material) => {
+      const copy = material.clone();
+      if (copy.color) copy.color.lerp(grey, GHOST_DESATURATE);
+      copy.transparent = true;
+      copy.opacity = GHOST_OPACITY;
+      copy.depthWrite = false;
+      return copy;
+    };
+    child.material = Array.isArray(child.material) ? child.material.map(swap) : swap(child.material);
+    child.userData.ghostMaterial = true;
+  });
+  return object;
+}
+
+function tagGhost(object, key, value) {
+  object.userData[key] = value;
+  object.traverse((child) => { child.userData[key] = value; });
+}
+
+// Frees only what a ghost made itself: its outline's geometry and every material copy. A model's geometry and
+// textures belong to the cache that loaded it and are shared with live items.
+function disposeGhost(object) {
+  landletElevationGroup.remove(object);
+  object.traverse((child) => {
+    if (child.userData.ghostOwnsGeometry) child.geometry?.dispose?.();
+    if (child.userData.ghostMaterial) for (const material of [].concat(child.material || [])) material.dispose?.();
+  });
+}
+
+// Builds the item's own model for `placement` ({ x, y, z, rotation, scale, crop, label }) from `template`, or
+// null when there is none or it will not load.
+async function buildGhostModel(template, placement) {
+  if (!template) return null;
+  try {
+    const object = await createMeshForInstance({
+      templateId: template.templateId,
+      x: placement.x, y: placement.y, z: placement.z,
+      rotationX: placement.rotation?.x ?? 0, rotationY: placement.rotation?.y ?? 0, rotationZ: placement.rotation?.z ?? 0,
+      scale: placement.scale, crop: placement.crop, label: placement.label,
+    }, template);
+    return object ? ghostify(object) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Swaps a ghost's outline for the item's model once it has loaded, unless the ghosts were rebuilt meanwhile.
+function upgradeGhost(map, key, tagKey, template, placement, generation) {
+  buildGhostModel(template, placement).then((model) => {
+    const outline = map.get(key);
+    if (!model || generation !== ghostGeneration || !outline) {
+      if (model) disposeGhost(model);
+      return;
+    }
+    model.position.copy(outline.position);
+    model.rotation.copy(outline.rotation);
+    tagGhost(model, tagKey, key);
+    model.userData.ghostKind = 'model';
+    landletElevationGroup.add(model);
+    disposeGhost(outline);
+    map.set(key, model);
+  });
+}
+
+const removedGhostMeshes = new Map(); // snapshotId -> THREE.Object3D
 let removedGhostSlots = [];
 
 function clearRemovedGhostMeshes() {
-  for (const mesh of removedGhostMeshes.values()) {
-    landletElevationGroup.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  }
+  ghostGeneration += 1;
+  for (const mesh of removedGhostMeshes.values()) disposeGhost(mesh);
   removedGhostMeshes.clear();
 }
 
 function addRemovedGhostMesh(slot) {
   if (removedGhostMeshes.has(slot.snapshotId) || slot.landletId !== currentLandletId) return;
-  const dims = findTemplate(slot.templateId)?.dimensions;
+  const dims = slot.template?.dimensions ?? findTemplate(slot.templateId)?.dimensions;
   const scale = typeof slot.scale === 'number' && slot.scale > 0 ? slot.scale : 1;
-  const geometry = new THREE.BoxGeometry(
-    (dims?.width || 1) * scale, (dims?.depth || 1) * scale, (dims?.height || 1) * scale,
-  );
-  const material = new THREE.MeshBasicMaterial({
-    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
+  const mesh = ghostOutline((dims?.width || 1) * scale, (dims?.depth || 1) * scale, (dims?.height || 1) * scale);
   mesh.position.set(slot.position.x ?? 0, slot.position.y ?? 0, slot.position.z ?? 0.5);
   if (slot.rotation) mesh.rotation.set(slot.rotation.x, slot.rotation.y, slot.rotation.z);
-  mesh.userData.removedSnapshotId = slot.snapshotId;
+  tagGhost(mesh, 'removedSnapshotId', slot.snapshotId);
+  mesh.userData.ghostKind = 'outline';
   landletElevationGroup.add(mesh);
   removedGhostMeshes.set(slot.snapshotId, mesh);
+  const template = slot.template ?? findTemplate(slot.templateId);
+  upgradeGhost(removedGhostMeshes, slot.snapshotId, 'removedSnapshotId', template, {
+    x: slot.position.x, y: slot.position.y, z: slot.position.z, rotation: slot.rotation, scale: slot.scale, crop: slot.crop, label: slot.label,
+  }, ghostGeneration);
 }
 
 function applyRemovedGhostVisibility() {
@@ -3890,7 +3975,7 @@ setPendingSlotsListener((slots) => {
 // The ghost under the pointer (the raycaster is already aimed), unless a placed item is nearer.
 export function removedGhostUnderRay() {
   if (removedGhostMeshes.size === 0) return null;
-  const ghostHit = raycaster.intersectObjects([...removedGhostMeshes.values()])[0];
+  const ghostHit = raycaster.intersectObjects([...removedGhostMeshes.values()], true)[0];
   if (!ghostHit) return null;
   const productHit = raycaster.intersectObjects(productMeshes, true)[0];
   if (productHit && productHit.distance < ghostHit.distance) return null;
@@ -3905,6 +3990,11 @@ window.__testRemovedGhostScreenPos = (snapshotId) => {
   return { x: rect.left + ((point.x + 1) / 2) * rect.width, y: rect.top + ((1 - point.y) / 2) * rect.height };
 };
 window.__testRemovedGhostIds = () => [...removedGhostMeshes.keys()];
+// 'model' once a ghost is the product's own model, 'outline' while it loads or when it cannot (e2e).
+window.__testGhostKinds = () => ({
+  removed: [...removedGhostMeshes.values()].map((m) => m.userData.ghostKind),
+  soldOut: [...soldOutMarkerMeshes.values()].map((m) => m.userData.ghostKind),
+});
 
 // Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called
 // whenever either changes (the toggle flips, or a fresh list just loaded).

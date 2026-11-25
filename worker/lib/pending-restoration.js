@@ -66,6 +66,17 @@ export function pendingRestorationFromRow(row) {
     scale: instance.scale ?? 1,
     crop: safeParse(instance.crop_json ?? 'null') ?? null,
     label: instance.label ?? null,
+    // #4201: what the client needs to draw the item itself as a ghost (the removed product's own model), read
+    // from the live template row while it exists. The builder's catalog hides a removed product, so the client
+    // cannot find it there; null once the template is gone, and the ghost is then an outline.
+    template: row.live_template_model_url || row.live_template_width_m != null ? {
+      templateId: row.template_id,
+      name: row.live_template_name ?? row.template_name ?? null,
+      color: row.live_template_color ?? null,
+      dimensions: { width: row.live_template_width_m, depth: row.live_template_depth_m, height: row.live_template_height_m },
+      modelUrl: row.live_template_model_url ?? null,
+      metadata: safeParse(row.live_template_metadata_json ?? '{}'),
+    } : null,
     removedAt: row.removed_at,
     // #3095: the id the removed placement had, so a Build tab that was open
     // when the removal happened can drop exactly those meshes (and nothing
@@ -91,6 +102,8 @@ export async function handlePendingRestoration(request, db, route) {
       SELECT s.snapshot_id, s.landlet_id, s.template_id, s.instance_json, s.removed_at,
              s.template_name, s.template_category, s.template_image_url, s.permanent_at,
              t.name AS live_template_name, t.category AS live_template_category, t.image_url AS live_template_image_url,
+             t.color AS live_template_color, t.width_m AS live_template_width_m, t.depth_m AS live_template_depth_m,
+             t.height_m AS live_template_height_m, t.model_url AS live_template_model_url, t.metadata_json AS live_template_metadata_json,
              EXISTS (
                SELECT 1 FROM account_suspensions a
                WHERE a.user_id = sel.user_id AND a.lifted_at IS NULL AND a.escalated_at IS NULL

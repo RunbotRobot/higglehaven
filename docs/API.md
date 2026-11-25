@@ -8829,10 +8829,14 @@ restored.
   session; never another builder's, never visible to shoppers). Returns
   `{ pendingRestorations: [...] }`, newest removal first, each
   `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
-  position: { x, y, z }, rotation: { x, y, z }, scale, crop, label, removedAt,
+  position: { x, y, z }, rotation: { x, y, z }, scale, crop, label, template, removedAt,
   removedInstanceId, sellerSuspended, permanentAt }`. `rotation`, `scale`, `crop`
   and `label` are the saved pose (#4201), so Build can draw a ghost where the
-  item stood. `removedInstanceId` is the placement's original id (#3095): a
+  item stood. `template` is `{ templateId, name, color, dimensions, modelUrl,
+  metadata }` from the live template row (the builder's catalog hides a removed
+  product, so the client cannot look it up), or `null` once the template is
+  gone; Build draws the item's own model translucent from it, an outline when
+  it is `null`. `removedInstanceId` is the placement's original id (#3095): a
   Build tab that was open during the removal drops exactly those meshes when
   it regains focus, never an item the builder just placed. The
   template fields come from the live template while it exists and otherwise
