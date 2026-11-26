@@ -5476,6 +5476,36 @@ function projectMeshToScreen(mesh) {
   };
 }
 
+// #4489: selecting by tap. A tap has to land on an item to select it, and a small or far-off item is a few pixels wide on
+// a phone, which a finger cannot hit (found live: a tap 3 px off a brick selected nothing). When a tap hits no item, the
+// nearest SMALL item (its whole size on screen under 22 px) whose middle is within 22 px of the tap is the one tapped,
+// the same 44 px a finger needs for a handle. Larger items, and a tap that does hit something, are unchanged.
+const SMALL_TAP_PX = 22;
+const smallTapCentre = new THREE.Vector3();
+export function smallItemNearTap(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pxPerMetreAt = (distance) => rect.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * distance);
+  let best = null;
+  let bestDistance = SMALL_TAP_PX;
+  for (const mesh of productMeshes) {
+    if (!mesh.visible) continue;
+    smallTapCentre.copy(mesh.position);
+    landletElevationGroup.localToWorld(smallTapCentre);
+    const distance = camera.position.distanceTo(smallTapCentre);
+    smallTapCentre.project(camera);
+    if (smallTapCentre.z < -1 || smallTapCentre.z > 1) continue;
+    const x = rect.left + (smallTapCentre.x * 0.5 + 0.5) * rect.width;
+    const y = rect.top + (-smallTapCentre.y * 0.5 + 0.5) * rect.height;
+    const away = Math.hypot(clientX - x, clientY - y);
+    if (away >= bestDistance) continue;
+    const { width, depth, height } = meshDimensions(mesh);
+    if (0.5 * Math.hypot(width, depth, height) * pxPerMetreAt(distance) >= SMALL_TAP_PX) continue; // not small
+    best = mesh;
+    bestDistance = away;
+  }
+  return best;
+}
+
 function addEverythingInBrushAtClientPos(x, y) {
   const radiusSq = multiselectBrushRadiusPx * multiselectBrushRadiusPx;
   for (const mesh of productMeshes) {

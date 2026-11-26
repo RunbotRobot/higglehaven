@@ -339,7 +339,7 @@ import {
   productMeshes, selectedMeshes, multiSelectMode, pendingPlacement,
   enterPlacementMode, handlePlacementClick, handleMeasureClick,
   measureMode, measureMarkerWasDragged, setMeasureMarkerWasDragged,
-  findRootProduct, toggleInSelection, selectOnly,
+  findRootProduct, toggleInSelection, selectOnly, smallItemNearTap,
   raycaster, ndcFromEvent, pointerDownPos, CLICK_DRAG_THRESHOLD_PX, consumeAxisTapClick,
   persistLayout, setProductInfo, relativeItemsForMeshes, updateSelectionUI,
   lowStockFilterMaxQty, lowStockFilterMaxDays,
@@ -944,13 +944,15 @@ renderer.domElement.addEventListener('click', (event) => {
   // meshes (see loadModelInstance) rather than directly on the top-level
   // Object3D pushed into productMeshes.
   const hits = raycaster.intersectObjects(productMeshes, true);
-  const hitRoot = hits.length > 0 ? findRootProduct(hits[0].object) : null;
+  let hitRoot = hits.length > 0 ? findRootProduct(hits[0].object) : null;
   // #4201: a tap on a removed item's ghost opens the Removed items list at its row.
   const ghostId = removedGhostUnderRay();
   if (ghostId) {
     openRemovedItemsAt(ghostId);
     return;
   }
+  // #4489: a tap that hits nothing still selects a small item right beside it (a finger is wider than a far-off brick).
+  if (!hitRoot) hitRoot = smallItemNearTap(event.clientX, event.clientY);
   if (multiSelectMode) {
     if (hitRoot) toggleInSelection(hitRoot);
   } else {
