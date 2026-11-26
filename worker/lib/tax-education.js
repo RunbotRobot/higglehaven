@@ -5,7 +5,8 @@
 // requireAdmin-gated, same bar as the rest of public/admin-dashboard.html.
 import { json, HttpError } from './http.js';
 import { readJson, stringValue, labelValue } from './validation.js';
-import { requireAdmin, requireCurrentUser } from './auth.js';
+import { requireAdmin, requireAdminOrViewer, requireCurrentUser } from './auth.js';
+import { isViewer } from './admin-viewer-mask.js';
 import { getUserTaxJurisdiction } from './seller-payouts-tax.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -51,7 +52,7 @@ function stateCodeValue(value, field) {
   return code;
 }
 
-function taxEducationContentFromRow(row) {
+function taxEducationContentFromRow(row, admin = null) {
   return {
     id: row.content_id,
     countryCode: row.country_code,
@@ -60,7 +61,7 @@ function taxEducationContentFromRow(row) {
     body: row.body,
     reviewed: row.reviewed_at != null,
     reviewedAt: row.reviewed_at,
-    reviewedBy: row.reviewed_by,
+    reviewedBy: isViewer(admin) ? null : row.reviewed_by, // #4382: a look-only admin is not shown which account reviewed it
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -123,7 +124,7 @@ async function handleTaxEducationMine(request, env, db) {
 }
 
 async function handleTaxEducationList(request, db, url) {
-  await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4382: authored text, no personal data; a look-only admin may read it without the reviewer's id
   const countryCode = url.searchParams.get('countryCode');
   const conditions = [];
   const bindings = [];
@@ -135,14 +136,14 @@ async function handleTaxEducationList(request, db, url) {
   const { results } = await db.prepare(
     `SELECT * FROM tax_education_content ${where} ORDER BY updated_at DESC LIMIT 500`,
   ).bind(...bindings).all();
-  return json({ entries: results.map(taxEducationContentFromRow) });
+  return json({ entries: results.map((row) => taxEducationContentFromRow(row, admin)) });
 }
 
 async function handleTaxEducationGet(request, db, contentId) {
-  await requireAdmin(request, db);
+  const admin = await requireAdminOrViewer(request, db); // #4382: same as the list above
   const row = await db.prepare('SELECT * FROM tax_education_content WHERE content_id = ?').bind(contentId).first();
   if (!row) return json({ error: 'Entry not found' }, 404);
-  return json({ entry: taxEducationContentFromRow(row) });
+  return json({ entry: taxEducationContentFromRow(row, admin) });
 }
 
 async function handleTaxEducationCreate(request, db) {

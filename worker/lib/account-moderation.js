@@ -160,7 +160,7 @@ export async function handleRevokeAdmin(request, db) {
 // the full userFromRow (trustTier, cardFunding, taxFormType, ...) every
 // other admin viewing this roster has no reason to see about a peer.
 export async function handleListAdmins(request, db) {
-  await requireAdmin(request, db);
+  const viewer = await requireAdminOrViewer(request, db); // #4382: names and roles only; a look-only admin reads it with emails masked
   // #1561: created_at is the account's signup date, not when is_admin was
   // set -- admin_action_log already records the exact grant moment (#814/
   // #1074's own accountability-trail reasoning), so read that back instead
@@ -196,7 +196,7 @@ export async function handleListAdmins(request, db) {
   `).all();
   return json({
     admins: results.map((row) => ({
-      userId: row.user_id, email: row.email, username: row.username,
+      userId: row.user_id, email: emailFor(viewer, row.email), username: row.username,
       createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
   });
