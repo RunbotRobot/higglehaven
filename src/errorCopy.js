@@ -43,6 +43,10 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   verify_link_invalid: "That link has expired or was already used. If you've already confirmed your email, just log in. Otherwise log in and choose Resend verification email.",
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
   // #4458: raised while finishing a purchase, when the card may already have been charged, so it says to look before paying again.
+  // #4478: the card check at sign-up. Nothing was charged (a card check never charges), and the ID route is always offered.
+  card_check_mismatch: "That card check didn't work. You were not charged. Try again, or verify with an ID instead.",
+  card_check_incomplete: "Your card wasn't confirmed. You were not charged. Try again, or verify with an ID instead.",
+  account_not_found: 'This account is no longer available. Log out and sign in again.',
   // #4477: the ID-check provider refused or failed a request; its own wording is logged, never shown.
   verification_unavailable: "We couldn't reach the ID check just now. Try again in a moment.",
   payments_unavailable: "We can't confirm your payment right now. If your card was charged, the order will appear in My purchases. Check there before paying again.",
