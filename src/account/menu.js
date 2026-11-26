@@ -16,7 +16,7 @@ import { isSentByMe } from './dmSide.js';
 import { currentAuthUser } from './auth.js';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
 import { openWordmarkPicker } from '../ui/wordmarkPicker.js';
-import { wordmarkChoiceAvailable } from '../ui/wordmark.js';
+import { wordmarkChoiceAvailable, renderWordmark } from '../ui/wordmark.js';
 import { setBudWord, clearBudWord } from '../ui/bud.js';
 import { formatArea } from '../settings.js';
 // formatHiggles/START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY stay owned by
@@ -1289,7 +1289,12 @@ async function renderMyLands() {
     const openLink = document.createElement('button');
     openLink.type = 'button';
     openLink.className = 'my-lands-open-link';
-    openLink.textContent = landlet.name;
+    // #3784: the name in the lettering and colours its builder chose, through the one renderer (#3782); a
+    // lándlet with no choice, or while only the default is on offer, reads exactly as before.
+    const openName = document.createElement('span');
+    openName.className = 'bud-place-name';
+    renderWordmark(openName, { name: landlet.name, styleId: landlet.wordmarkStyle, colourId: landlet.wordmarkColors });
+    openLink.appendChild(openName);
     openLink.addEventListener('click', () => {
       sessionStorage.setItem(BUILD_TARGET_LANDLET_ID_KEY, landlet.landletId);
       sessionStorage.setItem(START_MODE_KEY, 'build');
@@ -1321,7 +1326,7 @@ async function renderMyLands() {
         // own friendly message via requestJson's rejection.
         const updated = await renameLandlet(landlet.landletId, next);
         landlet.name = updated.name;
-        openLink.textContent = landlet.name;
+        renderWordmark(openName, { name: landlet.name, styleId: landlet.wordmarkStyle, colourId: landlet.wordmarkColors });
       } catch (err) {
         myLandsStatusEl.textContent = err.message || 'Couldn\'t rename this lándlet.';
         myLandsStatusEl.classList.add('error');
