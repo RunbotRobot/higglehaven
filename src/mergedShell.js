@@ -2,7 +2,9 @@
 // differ only by their placement; this puts them in one position-only shell and drops every face that meets
 // another member's face exactly, because nobody can see a face that is pressed against another. No DOM and no
 // scene: runs in the browser, node and the test runtime, and is not wired into drawing yet (later slices:
-// colour and shading, the outline check, the set signature cache, the per-frame build budget).
+// the outline check, the set signature cache, the per-frame build budget). Slice 2 (colour and shading): the
+// shell also carries, for every kept triangle, the geometry's own normals, texture coordinates and vertex colours
+// (when it has them), so the merged version can be drawn with the member's own material and shading.
 //
 // A "face" is one triangle, or two coplanar triangles that share an edge and together make a four-cornered
 // piece (a box side is cut along one diagonal on one side and the other diagonal on the opposite side, so
@@ -12,7 +14,7 @@
 // Correctness first: a face is dropped only when its exact partner is found, so a shell that cannot find a
 // partner (a gap, a half-shifted neighbour, a rotated one, an ambiguous patch of many coplanar triangles) keeps
 // the face. The result is never missing a face a person could see; it may keep more than the ideal.
-import { Vector3 } from 'three';
+import { Vector3, Matrix3 } from 'three';
 
 // One grid cell is a ten-thousandth of a unit; corners closer than that count as the same corner.
 const QUANTUM = 1e-4;
@@ -30,6 +32,13 @@ export function mergeMemberShell(geometry, matrices) {
   const triangleCount = Math.floor(count / 3);
   const inputTriangles = triangleCount * matrices.length;
   const positions = new Float32Array(inputTriangles * 9);
+  // Slice 2: the other per-vertex attributes the geometry has, written beside the positions in the same order.
+  const carried = ['normal', 'uv', 'color'].filter((name) => geometry.attributes[name]).map((name) => {
+    const attribute = geometry.attributes[name];
+    return { name, attribute, size: attribute.itemSize, data: new Float32Array(inputTriangles * 3 * attribute.itemSize) };
+  });
+  const normalMatrix = new Matrix3();
+  const normal = new Vector3();
   const dropped = new Uint8Array(inputTriangles);
   const a = new Vector3(), b = new Vector3(), c = new Vector3(), e1 = new Vector3(), e2 = new Vector3();
   // faces seen so far: sorted corner key -> [{ dirKey, oppositeKey, slots }]
@@ -37,6 +46,7 @@ export function mergeMemberShell(geometry, matrices) {
   let slot = 0;
   for (const matrix of matrices) {
     const flips = matrix.determinant() < 0;
+    normalMatrix.getNormalMatrix(matrix);
     const first = slot;
     const info = [];
     for (let t = 0; t < triangleCount; t++, slot++) {
@@ -50,6 +60,19 @@ export function mergeMemberShell(geometry, matrices) {
       const [p1, p2, p3] = flips ? [a, c, b] : [a, b, c];
       const base = slot * 9;
       p1.toArray(positions, base); p2.toArray(positions, base + 3); p3.toArray(positions, base + 6);
+      // The attributes follow the same corner order as the positions (a flipped member swaps its last two).
+      const corners = flips ? [ia, ic, ib] : [ia, ib, ic];
+      for (const entry of carried) {
+        for (let k = 0; k < 3; k++) {
+          const at = (slot * 3 + k) * entry.size;
+          if (entry.name === 'normal') {
+            normal.fromBufferAttribute(entry.attribute, corners[k]).applyMatrix3(normalMatrix).normalize();
+            normal.toArray(entry.data, at);
+          } else {
+            for (let c2 = 0; c2 < entry.size; c2++) entry.data[at + c2] = entry.attribute.getComponent(corners[k], c2);
+          }
+        }
+      }
       e1.subVectors(p2, p1); e2.subVectors(p3, p1);
       const n = new Vector3().crossVectors(e1, e2);
       const len = n.length();
@@ -95,15 +118,22 @@ export function mergeMemberShell(geometry, matrices) {
   }
   let kept = 0;
   const out = new Float32Array(inputTriangles * 9);
+  for (const entry of carried) entry.out = new Float32Array(inputTriangles * 3 * entry.size);
   for (let s = 0; s < inputTriangles; s++) {
     if (dropped[s]) continue;
     out.set(positions.subarray(s * 9, s * 9 + 9), kept * 9);
+    for (const entry of carried) {
+      const width = 3 * entry.size;
+      entry.out.set(entry.data.subarray(s * width, s * width + width), kept * width);
+    }
     kept++;
   }
-  return {
+  const result = {
     positions: out.slice(0, kept * 9),
     inputTriangles,
     triangles: kept,
     droppedTriangles: inputTriangles - kept,
   };
+  for (const entry of carried) result[`${entry.name}s`] = entry.out.slice(0, kept * 3 * entry.size);
+  return result; // normals, uvs and colors are present only when the geometry has them
 }
