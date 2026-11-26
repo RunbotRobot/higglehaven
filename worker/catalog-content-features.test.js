@@ -1003,7 +1003,7 @@ describe('Product-image thumbnail (#327)', () => {
     expect(wrongSeller.response.status).toBe(403);
   });
 
-  it('rejects a thumbnail for a template with no owning seller', async () => {
+  it('rejects a seller thumbnail for a template with no owning seller (an admin may, #4437)', async () => {
     const created = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -1021,7 +1021,7 @@ describe('Product-image thumbnail (#327)', () => {
       body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
     }));
     expect(rejected.response.status).toBe(403);
-    expect(rejected.body.error).toMatch(/no owning seller/);
+    expect(rejected.body.error).toMatch(/Admin access required/);
   });
 
   it('returns 404 for a nonexistent template', async () => {
