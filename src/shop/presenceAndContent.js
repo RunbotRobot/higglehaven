@@ -87,7 +87,7 @@ import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
 import { createCreditOrbFades } from './creditOrbArrival.js';
 import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
-import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
+import { createShopAvatar, makeAfkBadgeSprite, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
@@ -277,6 +277,7 @@ let shopLastPresenceReportAt = 0;
 let shopLastReportedPosition = null; // { x, y, z }, whatever was last actually sent
 let shopLastReportedHeading = null;
 let shopLastReportedLandletId; // undefined until the first report ever goes out — see reportOwnPresenceIfNeeded
+let shopLastReportedAfk; // #4390: same undefined-until-first-report shape
 let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as shopLastReportedLandletId above
 // #1100: the other-avatars poll loop's own throttle state and live set —
 // see pollNearbyPresenceIfNeeded/updateOtherShopAvatars. builderId -> {
@@ -1148,6 +1149,9 @@ export function reportOwnPresenceIfNeeded(now) {
   const turned = shopLastReportedHeading === null
     || Math.abs(shortestAngleDelta(shopLastReportedHeading, heading)) >= SHOP_PRESENCE_HEADING_THRESHOLD_RAD;
   const flyingChanged = shopLastReportedFlying === undefined || flying !== shopLastReportedFlying;
+  // #4390: a person standing still sends nothing else, so stepping away (or coming back) is itself a reason to report.
+  const afk = isShopAvatarAfk();
+  const afkChanged = shopLastReportedAfk === undefined || afk !== shopLastReportedAfk;
   // shopLandlets is only populated once enterShopMode's own fetchAllLandlets
   // resolves, which races against this function's very first eligible
   // tick -- a player standing perfectly still (the common case right after
@@ -1160,13 +1164,14 @@ export function reportOwnPresenceIfNeeded(now) {
   // once the real landlet resolves, even with zero movement in between.
   const landletChanged = shopLastReportedLandletId === undefined || landletId !== shopLastReportedLandletId;
   const heartbeatDue = sinceLastReport >= SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS;
-  if (!moved && !turned && !landletChanged && !flyingChanged && !heartbeatDue) return;
+  if (!moved && !turned && !landletChanged && !flyingChanged && !afkChanged && !heartbeatDue) return;
   shopLastPresenceReportAt = now;
   shopLastReportedPosition = { x, y, z };
   shopLastReportedHeading = heading;
   shopLastReportedLandletId = landletId;
   shopLastReportedFlying = flying;
-  reportPresence({ x, y, z, heading, landletId, flying }).catch(() => {});
+  shopLastReportedAfk = afk;
+  reportPresence({ x, y, z, heading, landletId, flying, afk }).catch(() => {});
 }
 
 // Shared by the report-throttle turn-check above and the other-avatars
@@ -1246,11 +1251,18 @@ export async function pollNearbyPresenceIfNeeded(now) {
       const defaultAvatar = waitsForModel ? null : createShopAvatar();
       const body = defaultAvatar ? defaultAvatar.group : new THREE.Group();
       group.add(body);
+      // #4390: the same small "afk" mark the person sees on their own avatar, above the head, shown while their presence says they have stepped away.
+      const afkMark = makeAfkBadgeSprite();
+      afkMark.position.set(0, 0, 2.1);
+      afkMark.material.opacity = 0;
+      group.add(afkMark);
       group.position.set(avatar.x, avatar.y, avatar.z);
       scene.add(group);
       entry = {
         group,
         body,
+        afkMark,
+        afk: false,
         // #4067: the fog that stands in for a body still loading; null once it is in place.
         modelWait: waitsForModel
           ? beginOtherAvatarWait({ createFog: createArrivalFog, parent: scene, getPosition: () => group.position, nowMs: performance.now(), reducedMotion: otherAvatarReducedMotion() })
@@ -1294,6 +1306,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.toY = avatar.y;
     entry.toZ = avatar.z;
     entry.toHeading = avatar.heading ?? entry.fromHeading;
+    entry.afk = avatar.afk === true; // #4390
     entry.receivedAt = now;
     entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
     entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
@@ -1663,6 +1676,7 @@ function despawnOtherShopAvatars() {
 function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+    afk: Boolean(entry.afk), // added for #4390 -- e2e needs to see that another person's away state arrived
     userId: entry.userId ?? null, // added for #3447 -- e2e taps an assistant by its account, as it cannot aim at a pixel
     assistantName: entry.assistantName ?? null, // added for #3445 -- e2e needs to see that a fleet avatar carries its name tag and shirt, and an ordinary one does not
     hasAssistantShirt: Boolean(entry.assistantShirt), // added for #3445, same reason
@@ -1707,6 +1721,8 @@ export function updateOtherShopAvatars(now) {
       THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
     );
     entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
+    // #4390: ease the mark in and out the way the person's own badge does.
+    if (entry.afkMark) entry.afkMark.material.opacity += ((entry.afk ? 1 : 0) - entry.afkMark.material.opacity) * 0.15;
     // #3449: an assistant on shift is placed by the server and never reports a
     // position of its own, so it wanders a little around that spot on the
     // client (assistantIdle.js: seeded from its name and the clock, nothing to

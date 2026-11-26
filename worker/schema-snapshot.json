@@ -141,6 +141,7 @@
       "winning_bid_id": "TEXT|0||0"
     },
     "avatar_presence": {
+      "afk": "INTEGER|1|0|0",
       "flying": "INTEGER|1|0|0",
       "heading": "REAL|0||0",
       "landlet_id": "TEXT|0||0",

@@ -6455,6 +6455,7 @@ returned by `GET /api/presence`.
   "z": -4.25,
   "heading": 1.57,
   "flying": false,
+  "afk": false,
   "updatedAt": "2026-10-01T00:00:00.000Z"
 }
 ```
@@ -6561,8 +6562,12 @@ Request body:
 - `flying` is optional (#2043), defaults to `false` when omitted — anything
   other than the literal `true` is treated as not-flying, so an older
   client that never sends this field simply keeps reporting as grounded.
+- `afk` is optional (#4390), defaults to `false`, same literal-`true` rule: whether the
+  person has stepped away (their own avatar's AFK badge). It rides every nearby row so the
+  other avatar can wear the same small mark; where someone is looking is not carried. The
+  client reports a change of it at once (a person standing still sends nothing else).
 
-Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying",
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying", "afk",
 "updatedAt" } }` — the row as stored, after the upsert.
 
 Rate-limited server-side (`presence-report:<builderId>`, 600 per the

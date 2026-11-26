@@ -381,6 +381,8 @@ export async function handlePresence(request, db, route, url) {
     // to false so an older client (or a report with no flight state to
     // report) never accidentally marks someone permanently flying.
     const flying = input.flying === true;
+    // #4390: whether the person has stepped away (their own avatar's AFK badge, shown to others).
+    const afk = input.afk === true;
     let landletId = null;
     if (input.landletId !== undefined && input.landletId !== null) {
       landletId = stringValue(input.landletId, 'landletId');
@@ -397,14 +399,14 @@ export async function handlePresence(request, db, route, url) {
     // account vanished); the follow-up below only runs on that rare path and
     // raises the same "Lándlet not found" error requireLandlet always did.
     const { results: written } = await db.prepare(`
-      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
-      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, afk, updated_at)
+      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE ?2 IS NULL OR EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ?2)
       ON CONFLICT(user_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-        heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
+        heading = excluded.heading, flying = excluded.flying, afk = excluded.afk, updated_at = excluded.updated_at
       RETURNING *
-    `).bind(sessionBuilder.user_id, landletId, x, y, z, heading, flying ? 1 : 0).all();
+    `).bind(sessionBuilder.user_id, landletId, x, y, z, heading, flying ? 1 : 0, afk ? 1 : 0).all();
     const row = written[0];
     if (!row && landletId !== null) await requireLandlet(db, landletId);
     // #2492: not found here means a concurrent account deletion (which now
@@ -423,6 +425,7 @@ export async function handlePresence(request, db, route, url) {
         z: row.z,
         heading: row.heading,
         flying: Boolean(row.flying),
+        afk: Boolean(row.afk), // #4390
         updatedAt: row.updated_at,
       },
     });
@@ -1294,6 +1297,7 @@ function avatarPresenceFromRow(row) {
     z: row.z,
     heading: row.heading,
     flying: Boolean(row.flying),
+    afk: Boolean(row.afk), // #4390
     updatedAt: row.updated_at,
     // #3445: an assistant account is shown as a named assistant. Derived here
     // from users.is_fleet plus the username being one of the assistants' agent
