@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createCheckoutPayState, runPayAttempt, describePayFailure, PAY_STAGES, CHARGED_RETRY_MESSAGE, CONNECTION_LOST_MESSAGE,
+  canLeaveAfterCharge, FINALIZE_FAILURES_BEFORE_CLOSE, CHARGED_CLOSED_MESSAGE,
   isAlreadySucceededConfirmError,
 } from './checkoutPayAttempt.js';
 
@@ -143,5 +144,46 @@ describe('describePayFailure copy (#3948)', () => {
   it('keeps the provider text for a failure it has no copy for', async () => {
     const { state, failure } = await failureFor({ code: 'some_new_code', message: 'Something specific.' });
     expect(describePayFailure(state, failure)).toBe('Something specific.');
+  });
+});
+
+describe('after the card is charged (#4457)', () => {
+  async function chargedState(finalize) {
+    const state = createCheckoutPayState();
+    await runPayAttempt(state, { confirm: async () => ({}), finalize }).catch(() => {});
+    return state;
+  }
+
+  it('every message after the charge says the order will appear in My purchases', () => {
+    expect(CHARGED_RETRY_MESSAGE).toMatch(/My purchases/);
+    expect(CHARGED_CLOSED_MESSAGE).toMatch(/My purchases/);
+  });
+
+  it('a rate limit says how much and until when, and still says the card is not charged again', async () => {
+    const limited = Object.assign(new Error("You've reached the limit for this (10 every 15 minutes). Try again in about 7 minutes."), {
+      rateLimit: { limit: 10, windowSeconds: 900, retryAfterSeconds: 420 },
+    });
+    const state = await chargedState(async () => { throw limited; });
+    const text = describePayFailure(state, limited);
+    expect(text).toMatch(/payment went through/);
+    expect(text).toMatch(/10 every 15 minutes/);
+    expect(text).toMatch(/about 7 minutes/);
+    expect(text).toMatch(/My purchases/);
+    expect(text).toMatch(/won't be charged again/);
+  });
+
+  it('Cancel stays locked until a few tries have failed, and never before the charge', async () => {
+    const state = createCheckoutPayState();
+    expect(canLeaveAfterCharge(state)).toBe(false);
+    for (let i = 0; i < FINALIZE_FAILURES_BEFORE_CLOSE; i++) {
+      expect(canLeaveAfterCharge(state)).toBe(false);
+      await runPayAttempt(state, { confirm: async () => ({}), finalize: async () => { throw new Error('503'); } }).catch(() => {});
+    }
+    expect(state.finalizeFailures).toBe(FINALIZE_FAILURES_BEFORE_CLOSE);
+    expect(canLeaveAfterCharge(state)).toBe(true);
+    // A card that was only declined is never "charged", whatever the count.
+    const declined = createCheckoutPayState();
+    declined.finalizeFailures = 9;
+    expect(canLeaveAfterCharge(declined)).toBe(false);
   });
 });

@@ -11,7 +11,7 @@
 // step it is on.
 
 export function createCheckoutPayState() {
-  return { paymentConfirmed: false };
+  return { paymentConfirmed: false, finalizeFailures: 0 };
 }
 
 // Stripe's answer to confirming a PaymentIntent that already succeeded (for
@@ -50,13 +50,29 @@ export async function runPayAttempt(state, { confirm, finalize, onStage = () => 
     state.paymentConfirmed = true;
   }
   onStage('recording');
-  return finalize();
+  try {
+    return await finalize();
+  } catch (error) {
+    // #4457: counted so the sheet can offer a way out after a few failed tries (see canLeaveAfterCharge).
+    state.finalizeFailures += 1;
+    throw error;
+  }
 }
+
+// #4457: after this many failed tries at recording a paid order the buyer may close the sheet. The order is
+// still recorded (the payment provider tells us about every charge), so nothing is lost by leaving; before
+// this, Cancel stays locked so a charged buyer is never told "Checkout cancelled." for a paid purchase.
+export const FINALIZE_FAILURES_BEFORE_CLOSE = 3;
+export function canLeaveAfterCharge(state) {
+  return state.paymentConfirmed && state.finalizeFailures >= FINALIZE_FAILURES_BEFORE_CLOSE;
+}
+// What the buyer reads in the notice when they close the sheet after a paid purchase that could not be recorded here.
+export const CHARGED_CLOSED_MESSAGE = "Your payment went through, but we couldn't record the order from here. It will appear in My purchases once it's confirmed. Your card won't be charged again.";
 
 // What the buyer reads when an attempt fails. Once the card has been charged
 // the message must say so plainly (never leave them believing the purchase
 // failed) and must not echo raw provider or server text.
-export const CHARGED_RETRY_MESSAGE = 'Your payment went through, but we couldn\'t finish your purchase yet. Tap "Finish purchase" to try again -- your card won\'t be charged again.';
+export const CHARGED_RETRY_MESSAGE = 'Your payment went through, but we couldn\'t finish your purchase yet. Tap "Finish purchase" to try again -- your card won\'t be charged again. Your order will appear in My purchases once it is recorded.';
 
 // #3948: before the card is charged, a failure says what happened in plain words, whether
 // anything was charged, and what to do next, instead of the provider's text alone.
@@ -74,7 +90,14 @@ const CARD_PROBLEM_COPY = Object.freeze({
 export const CONNECTION_LOST_MESSAGE = "We couldn't confirm your payment because the connection dropped. Check My purchases before trying again: if the order isn't there, you weren't charged.";
 
 export function describePayFailure(state, error) {
-  if (state.paymentConfirmed) return CHARGED_RETRY_MESSAGE;
+  if (state.paymentConfirmed) {
+    // #4457: a rate limit on recording the order (shared by everyone on one network) says how much and until when,
+    // in the words apiError already built from the server's numbers (#3258), and no retry is urged before then.
+    if (error?.rateLimit && typeof error.message === 'string' && error.message) {
+      return `Your payment went through, but we've hit a limit on recording orders. ${error.message} Your order will appear in My purchases, and your card won't be charged again.`;
+    }
+    return CHARGED_RETRY_MESSAGE;
+  }
   if (error?.stripeType === 'api_connection_error') return CONNECTION_LOST_MESSAGE;
   const copy = error?.stripeCode && Object.hasOwn(CARD_PROBLEM_COPY, error.stripeCode) && CARD_PROBLEM_COPY[error.stripeCode];
   return copy || error?.message || 'Payment failed.';
