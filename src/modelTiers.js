@@ -497,7 +497,7 @@ function litColorOf(mesh, getPixels) {
   // A texture whose pixels cannot be read gives no colour to compare, not a wrong one.
   if (map && !pixels) return null;
   if (pixels) {
-    const mean = meanTextureColor(map, pixels);
+    const mean = textureMeanOverSurface(mesh.geometry, map, pixels);
     base.r *= mean.r; base.g *= mean.g; base.b *= mean.b;
   }
   const { diffuseScale, emissive } = shadingOf(material);
@@ -680,6 +680,45 @@ function meanTextureColor(texture, pixels) {
   return sum.setRGB(sum.r / n, sum.g / n, sum.b / n);
 }
 
+// #4111 (the owner's recording of the brick wall): the mean colour of the texture over the part of it the
+// SURFACE shows, weighted by each triangle's own area, so a texture atlas or a large flat face counts as much
+// as it covers and no more. This is what a far version of a textured mesh is coloured with. Sampled at four
+// points of each triangle (its middle and three points near its corners), with every Nth triangle taken when
+// a mesh has more than TEXTURE_AREA_MEAN_MAX_TRIANGLES. A mesh with no UVs falls back to the whole-texture mean.
+const TEXTURE_AREA_MEAN_MAX_TRIANGLES = 20000;
+const TEXTURE_AREA_SAMPLE_POINTS = [[1 / 3, 1 / 3], [0.8, 0.1], [0.1, 0.8], [0.1, 0.1]];
+export function textureMeanOverSurface(geometry, texture, pixels) {
+  const uv = geometry.attributes.uv;
+  const position = geometry.attributes.position;
+  if (!uv || !position) return meanTextureColor(texture, pixels);
+  const index = geometry.index;
+  const count = index ? index.count : position.count;
+  const triangles = Math.floor(count / 3);
+  const stride = Math.max(1, Math.ceil(triangles / TEXTURE_AREA_MEAN_MAX_TRIANGLES));
+  const pa = new Vector3(), pb = new Vector3(), pc = new Vector3();
+  const tmp = new Color();
+  let total = 0, r = 0, g = 0, b = 0;
+  for (let t = 0; t < triangles; t += stride) {
+    const ia = index ? index.getX(t * 3) : t * 3, ib = index ? index.getX(t * 3 + 1) : t * 3 + 1, ic = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    pa.fromBufferAttribute(position, ia); pb.fromBufferAttribute(position, ib); pc.fromBufferAttribute(position, ic);
+    const area = pb.sub(pa).cross(pc.sub(pa)).length() * 0.5;
+    if (!(area > 0)) continue;
+    let tr = 0, tg = 0, tb = 0;
+    for (const [wb, wc] of TEXTURE_AREA_SAMPLE_POINTS) {
+      const wa = 1 - wb - wc;
+      const u = wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic);
+      const v = wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic);
+      sampleTexture(texture, pixels, u, v, tmp);
+      tr += tmp.r; tg += tmp.g; tb += tmp.b;
+    }
+    const n = TEXTURE_AREA_SAMPLE_POINTS.length;
+    total += area;
+    r += area * tr / n; g += area * tg / n; b += area * tb / n;
+  }
+  if (!(total > 0)) return meanTextureColor(texture, pixels);
+  return new Color(r / total, g / total, b / total);
+}
+
 function wrapCoordinate(value, wrap) {
   if (wrap === ClampToEdgeWrapping) return clamp(value, 0, 1);
   return value - Math.floor(value);
@@ -713,7 +752,7 @@ function shadingOf(material) {
 
 // A copy of the geometry carrying only position (and index) plus a baked
 // linear-colour attribute: material colour x texture x existing vertex colour.
-function bakeColoredGeometry(mesh, getPixels) {
+function bakeColoredGeometry(mesh, getPixels, { flat = false } = {}) {
   const source = mesh.geometry;
   const position = source.attributes.position;
   const count = position.count;
@@ -726,8 +765,12 @@ function bakeColoredGeometry(mesh, getPixels) {
   const uv = source.attributes.uv;
   const map = material && material.map ? material.map : null;
   const pixels = map ? getPixels(map) : null;
-  const sampled = !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
-  const mean = pixels && !sampled ? meanTextureColor(map, pixels) : null;
+  // #4111: a far version keeps about twenty vertices, and the GPU blends between them: a colour taken at each
+  // vertex's own texel is whatever few texels sat under those corners (the brick's pale rim), and the blend
+  // between a light and a dark corner is a gradient the model does not have. When the version is a heavy
+  // reduction (`flat`), each mesh takes the mean of its texture over the surface it shows instead.
+  const sampled = !flat && !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
+  const mean = pixels && !sampled ? (flat ? textureMeanOverSurface(source, map, pixels) : meanTextureColor(map, pixels)) : null;
   const { diffuseScale, emissive } = shadingOf(material);
 
   const positions = new Float32Array(count * 3);
@@ -822,8 +865,11 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   // Everything in the root's own space, with colour baked in.
   const parts = [];
   const fullBox = new Box3();
+  // #4111: known before baking, from the meshes themselves: is this a heavy reduction (see bakeColoredGeometry)?
+  const sourceTriangles = visible.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
+  const flat = sourceTriangles > FAR_MAX_TRIANGLES;
   for (const mesh of visible) {
-    const baked = bakeColoredGeometry(mesh, getPixels);
+    const baked = bakeColoredGeometry(mesh, getPixels, { flat });
     baked.applyMatrix4(new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld));
     baked.computeBoundingBox();
     fullBox.union(baked.boundingBox);

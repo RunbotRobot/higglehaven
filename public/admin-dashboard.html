@@ -261,6 +261,24 @@
     </div>
     <div id="productFlagsTableWrap"></div>
 
+    <h3>Approved flags: refund buyers</h3>
+    <p class="sub">Approving a flag refunds no one. For an approved listing that still has orders, Refund buyers shows the count and total first, then repays every buyer (99% of each order) and tells them why. It is written to the admin log.</p>
+    <p class="err" id="refundBuyersErr" hidden></p>
+    <div id="refundBuyersTableWrap"></div>
+
+    <!-- #4376: Refund buyers is confirmed in its own in-app dialog, never a browser dialog. -->
+    <dialog id="refundBuyersDialog" class="confirm-dialog" aria-labelledby="refundBuyersTitle">
+      <form method="dialog" id="refundBuyersForm">
+        <h3 id="refundBuyersTitle">Refund buyers</h3>
+        <div id="refundBuyersBody"></div>
+        <p class="err" id="refundBuyersDialogErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="refundBuyersCancel">Cancel</button>
+          <button type="submit" class="danger" id="refundBuyersConfirm">Refund buyers</button>
+        </div>
+      </form>
+    </dialog>
+
     <h2>Self-dealing flags</h2>
     <p class="sub">A buyer and the purchase's host-builder share the same on-file email (<a href="https://github.com/RunbotRobot/higglehaven/issues/2019" target="_blank" rel="noopener">#2019</a>). A soft signal, not an accusation — reviewing just acknowledges it, with an optional note; it never affects the purchase itself.</p>
     <p class="err" id="selfDealingFlagsErr" hidden></p>

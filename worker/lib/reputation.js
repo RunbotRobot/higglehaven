@@ -843,6 +843,23 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
 
 export async function handleProductFlagsList(request, db, url) {
   await requireAdmin(request, db);
+  // #4376: ?status=approved lists the approved flags whose listing still has orders Refund buyers can refund, so the admin
+  // page can offer Refund buyers on each (worker/lib/counterfeit-refunds.js). A listing drops off once none is left.
+  if (url.searchParams.get('status') === 'approved') {
+    const { results } = await db.prepare(`
+      SELECT pf.template_id AS templateId, ct.name AS templateName, ct.seller_id AS sellerId,
+             COUNT(*) AS flagCount, MAX(pf.resolved_at) AS resolvedAt,
+             (SELECT COUNT(*) FROM purchases p WHERE p.template_id = pf.template_id AND p.refunded_at IS NULL AND p.total_cents > 0 AND p.paid_out_at IS NULL AND COALESCE(p.refunded_amount_cents, 0) = 0) AS openOrders
+      FROM product_flags pf
+      JOIN catalog_templates ct ON ct.template_id = pf.template_id
+      WHERE pf.status = 'approved'
+      GROUP BY pf.template_id
+      HAVING openOrders > 0
+      ORDER BY resolvedAt DESC
+      LIMIT 100
+    `).all();
+    return json({ listings: results, totalCount: results.length });
+  }
   // One row per *listing* with pending flags, not one per flag -- an admin
   // resolves a listing's whole pending set in one action (see
   // handleProductFlags' own POST .../resolve above), so the queue should

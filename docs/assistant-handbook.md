@@ -763,8 +763,9 @@ go. It stops at the edge of how far you can go and never turns upside down.
 - You want to place it exactly: tap "More" on the card beside the item. "Nudge" has "Left", "Right",
   "Forward" and "Back", which slide it a small step along the item's own direction (a tenth of a metre,
   or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
-  or lower it, with its height shown beside the word "Nudge". If a press does nothing, a line says why:
-  the edge of the lándlet, the floor, or something in the way.
+  or lower it, with its height shown beside the word "Nudge". At the edge of the lándlet a press (or a drag)
+  simply stops: the item rests against the edge and no line appears, because the edge can be seen. If any other
+  press does nothing, a line says why: the floor, or something in the way.
 - A note says "Part of this is off your lándlet. Move it back to keep editing it.": the item reaches past the
   edge of the lándlet. Drag it back inside. A save can also say "That's past the edge of this lándlet."
 

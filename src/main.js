@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { movementWorld } from './shop/movementWorld.js'; // #4391 (test hook)
 import { batchTierCounts, batchHiddenCount } from './shop/batchTiers.js';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
 import { markStartup } from './ui/startupMarks.js';
@@ -1411,6 +1412,35 @@ window.__testShopInstanceTier = (instanceId) => {
     if (object) return object.userData.batchTier ?? null;
   }
   return null;
+};
+// #4391: e2e-only. Where one placed item stands during a change of the live version: its object's uuid (kept while it
+// is untouched), whether it is still among the lándlet's interactive objects, whether it is still drawn in the
+// lándlet's group (an item that is leaving is drawn but no longer interactive), and how many are fading out.
+window.__testShopVersionState = (instanceId) => {
+  let copies = 0; // how many objects of the lándlet's group carry this id (a double draw would show here)
+  let found = null;
+  for (const entry of shopLandlets.values()) {
+    const inObjects = entry.objects.filter((o) => o.userData.instanceId === instanceId);
+    const inGroup = entry.group.children.filter((child) => child.userData?.instanceId === instanceId);
+    copies += inGroup.length;
+    if (!found && (inObjects.length || inGroup.length)) {
+      const drawn = inGroup[0] ?? inObjects[0];
+      let dissolving = false;
+      drawn.traverse((child) => {
+        const materials = [child.material].flat().filter(Boolean);
+        if (materials.some((material) => String(material.customProgramCacheKey?.() ?? '').includes('arrival-dissolve'))) dissolving = true;
+      });
+      found = {
+        uuid: drawn.uuid, inObjects: inObjects.length > 0, inGroup: inGroup.length > 0,
+        departing: (entry.departureRuns ?? []).reduce((sum, run) => sum + run.count(), 0), dissolving,
+        // where it stands in the lándlet's own frame, and whether it is an obstacle to a walking shopper yet
+        x: drawn.position.x, y: drawn.position.y, solid: !drawn.userData.pendingSolid,
+        // is it an obstacle to a walking shopper right now (the real collision walk, not a flag)
+        obstacle: (() => { let visited = false; movementWorld().forEachObstacle((mesh) => { if (mesh.userData.instanceId === instanceId) visited = true; return false; }); return visited; })(),
+      };
+    }
+  }
+  return found ? { ...found, copies } : { uuid: null, inObjects: false, inGroup: false, departing: 0, dissolving: false, copies, x: null, y: null, solid: false, obstacle: false };
 };
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;

@@ -202,15 +202,12 @@ function itemCentreZRange() {
 // once per hit, not once per frame.
 let levelLimitHit = null;
 let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
-// #4198: set when a move was stopped at the lándlet's outline; said once per hit like the level limits.
+// #4198: set when a move was stopped at the lándlet's outline. #4409 (owner): it says nothing, because the edge is on
+// screen and the item resting against it is the answer; a note is for a limit a person cannot see (the levels, the
+// size of a bundle, an item cap, a server refusal).
 let outlineLimitHit = false;
 function announceLevelLimit() {
-  const outlineHit = outlineLimitHit;
   outlineLimitHit = false;
-  if (outlineHit && !levelLimitHit) {
-    levelLimitAnnounced = true;
-    showSelectionActionStatus("That's the edge of this lándlet.");
-  }
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
@@ -1011,9 +1008,8 @@ rotateControls.addEventListener('objectChange', () => {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
     if (!bundleRotateLimitShown) {
       bundleRotateLimitShown = true;
-      showSelectionActionStatus(bundleRotateOutlineHit
-        ? "That's the edge of this lándlet."
-        : 'This bundle is too big to turn any further here.');
+      // #4409: a turn stopped by the lándlet's outline says nothing (the edge is on screen); the size limit is not visible.
+      if (!bundleRotateOutlineHit) showSelectionActionStatus('This bundle is too big to turn any further here.');
     }
   }
 });
@@ -1103,6 +1099,13 @@ window.__testRotateRingPoints = () => {
     out[picker.name.toLowerCase()] = points;
   }
   return out;
+};
+// e2e (#4413): where the rings are centred and where the selection's own centre is, so a test can see them stay together
+// when the selection moves.
+window.__testRotateRingCentre = () => {
+  const centre = bundlePivot([...selectedMeshes].map((mesh) => mesh.position));
+  const object = rotateControls.object;
+  return object ? { ring: { x: object.position.x, y: object.position.y, z: object.position.z }, selection: { x: centre.x, y: centre.y, z: centre.z } } : null;
 };
 window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
@@ -3066,13 +3069,14 @@ export function nudgeSelectedItem(direction) {
   levelLimitAnnounced = false;
   runSyntheticDrag(translateControls, mesh, () => mesh.position.add(wanted));
   if (mesh.position.distanceTo(before) < step * 0.5 && !levelLimitAnnounced) {
-    // A press that does nothing must not do it silently, and says why: the lándlet's edge, the floor, or
-    // something solid in the way. (The level limits say their own piece, in announceLevelLimit.)
+    // A press that does nothing must not do it silently, and says why: the floor, or something solid in the way
+    // (the lándlet's edge needs no sentence, #4409). (The level limits say their own piece, in announceLevelLimit.)
     const target = before.clone().add(wanted);
     const clamped = clampToLandlet(mesh, target.x, target.y, target.z);
     levelLimitHit = null;
     const { height } = meshDimensions(mesh);
-    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) showSelectionActionStatus("That's the edge of this lándlet.");
+    // #4409: at the lándlet's edge it says nothing: the edge is on screen and the item resting at it is the answer.
+    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) { /* the edge: nothing to say */ }
     else if (direction === 'down' && heightAboveFloor(before.z, height, levelFloorZ(currentLevelIndex)) === 0) showSelectionActionStatus("It's already on the floor.");
     else showSelectionActionStatus('Something is in the way.');
   }
@@ -5857,6 +5861,13 @@ export function buildModeFrameUpdate(now) {
     },
     ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
+  // #4413: a bundle's rings hang on a pivot (groupRotatePivot) that was placed at the bundle's centre when it was
+  // selected; a single item's rings hang on the item itself, so they follow it. When the bundle moves by a body drag,
+  // an undo or redo, a nudge or a paste, the pivot is put back on its centre here, every frame, except while a ring
+  // is held (then the pivot is the thing being turned and the turn moves the bundle round it).
+  if (rotateControls.object === groupRotatePivot && !rotateControls.dragging && selectedMeshes.size > 0) {
+    groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+  }
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   applyBuildKeyboardCamera(now);
