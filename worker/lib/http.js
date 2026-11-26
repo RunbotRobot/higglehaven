@@ -52,6 +52,8 @@ export const ERROR_CODES = Object.freeze({
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
   PRICE_CHANGED: 'price_changed', // #4456
+  RESET_LINK_INVALID: 'reset_link_invalid', // #4474
+  VERIFY_LINK_INVALID: 'verify_link_invalid', // #4475
 });
 
 export class HttpError extends Error {

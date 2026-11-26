@@ -692,6 +692,11 @@ authForms.reset.addEventListener('submit', async (event) => {
     showAuthView('login');
     setAuthStatus('Password reset! You can log in with your new password now.', 'success');
   } catch (err) {
+    if (err.code === 'reset_link_invalid') {
+      // #4474: a link that no longer works leads straight to asking for a new one, not to a form that cannot.
+      pendingResetToken = null;
+      showAuthView('forgot');
+    }
     setAuthStatus(err.message || 'Couldn\'t reset the password.', 'error');
   }
 });
