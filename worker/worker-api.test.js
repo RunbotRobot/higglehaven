@@ -2623,7 +2623,7 @@ describe('Worker API', () => {
       body: '{',
     }));
     expect(malformedJson.response.status).toBe(400);
-    expect(malformedJson.body).toEqual({ error: 'Request body is not valid JSON' });
+    expect(malformedJson.body).toEqual({ error: 'Request body is not valid JSON', code: 'unreadable_request' });
 
     const duplicateTemplate = await api('/catalog', {
       method: 'POST',

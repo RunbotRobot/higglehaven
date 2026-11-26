@@ -6932,7 +6932,10 @@ reviews and calendar events already keep.
 Three independent ways in, either sufficient on its own:
 
 - **An admin**, outright — checked first (`#781`), regardless of who posted
-  it or who owns the hosting landlet. Rate-limited per admin (same
+  it or who owns the hosting landlet, except for a note the admin wrote
+  themselves: that is the author's own delete below (no body; #4442). The
+  same holds for calendar events, product reviews and seller feedback.
+  (An admin who is not the note's author is moderating it.) Rate-limited per admin (same
   `SIGN_POST_DELETE_RATE_LIMIT_MAX` bucket as the other two paths) and
   logged via `admin_action_log` (`action_type: 'delete_sign_post_override'`),
   the same shape as the product-review (`#1712`) admin override.
