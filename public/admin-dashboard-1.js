@@ -168,7 +168,7 @@
   }
 
   async function revokeAdmin(email) {
-    if (!confirm('Revoke admin access for ' + email + '?')) return;
+    if (!(await window.adminConfirm({ title: 'Revoke admin access', message: 'Revoke admin access for ' + email + '?', confirmLabel: 'Revoke admin access' }))) return;
     clearError();
     try {
       await apiFetch('/api/auth/revoke-admin', { method: 'POST', body: JSON.stringify({ email }) });

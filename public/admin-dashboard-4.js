@@ -49,7 +49,7 @@
   }
 
   async function resolveProductFlag(templateId, action, statusEl) {
-    if (action === 'approve' && !confirm('Approve flag(s) against ' + templateId + '? This permanently removes the listing from sale and adds a strike to the seller.')) return;
+    if (action === 'approve' && !(await window.adminConfirm({ title: 'Approve flag', message: 'Approve flag(s) against ' + templateId + '? This permanently removes the listing from sale and adds a strike to the seller.', confirmLabel: 'Approve and remove listing' }))) return;
     statusEl.textContent = 'Working…';
     statusEl.classList.remove('error');
     try {

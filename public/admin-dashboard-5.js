@@ -379,7 +379,7 @@
       if (note) payload.note = note;
       // Permanent by design (the table rejects any later change), so make
       // the admin confirm before it is written.
-      if (!window.confirm('Record this report? It is permanent and cannot be edited or deleted.')) return;
+      if (!(await window.adminConfirm({ title: 'Record report', message: 'Record this report? It is permanent and cannot be edited or deleted.', confirmLabel: 'Record report' }))) return;
       const submitBtn = ncmecForm.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
       try {

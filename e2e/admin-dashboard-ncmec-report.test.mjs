@@ -59,11 +59,13 @@ const { suspensionId, userId } = suspended.body.suspension;
 const page = await browser.newPage();
 page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+// #4522: the confirmation is the page's own dialog; a native dialog is a failure.
 let dialogMode = 'accept';
 const dialogMessages = [];
+let nativeDialogs = 0;
 page.on('dialog', async (dialog) => {
-  dialogMessages.push(dialog.message());
-  if (dialogMode === 'accept') await dialog.accept(); else await dialog.dismiss();
+  nativeDialogs += 1;
+  await dialog.dismiss();
 });
 await page.context().addCookies([{ name: 'hh_session', value: adminToken, url: BASE_URL }]);
 
@@ -101,6 +103,9 @@ dialogMode = 'dismiss';
 await page.fill('#ncmecReportForm input[name="note"]', 'e2e note');
 await page.fill('#ncmecReportForm input[name="contentRefs"]', 'sign_posts:e2e-post-1');
 await page.click('#ncmecReportForm button[type="submit"]');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+dialogMessages.push(await page.locator('dialog.admin-confirm-dialog p').textContent());
+await page.click('dialog.admin-confirm-dialog .admin-confirm-cancel');
 await page.waitForTimeout(500);
 const afterDismiss = await api(`/ncmec-reports?reportedUserId=${encodeURIComponent(userId)}`, adminCookie);
 console.log('reports after declining the confirmation (should be 0):', afterDismiss.body?.reports?.length);
@@ -108,6 +113,9 @@ console.log('reports after declining the confirmation (should be 0):', afterDism
 // --- Accepting records it; the UI result matches an independent API read ---
 dialogMode = 'accept';
 await page.click('#ncmecReportForm button[type="submit"]');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+dialogMessages.push(await page.locator('dialog.admin-confirm-dialog p').textContent());
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForSelector('#ncmecReportOk:not([hidden])', { timeout: 10000 });
 const okText = await page.textContent('#ncmecReportOk');
 const afterCreate = await api(`/ncmec-reports?reportedUserId=${encodeURIComponent(userId)}`, adminCookie);
@@ -132,6 +140,8 @@ const listText = await page.textContent('#ncmecReportsWrap');
 // --- Reporting the same decision again surfaces the real 409 ---
 await page.click('.use-for-ncmec-btn');
 await page.click('#ncmecReportForm button[type="submit"]');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForSelector('#ncmecReportErr:not([hidden])', { timeout: 10000 });
 const dupErrText = await page.textContent('#ncmecReportErr');
 const afterDup = await api(`/ncmec-reports?reportedUserId=${encodeURIComponent(userId)}`, adminCookie);
@@ -146,6 +156,7 @@ const pass =
   filledSuspensionId === suspensionId &&
   removalFieldsVisible && suspensionFieldsHiddenOnRemoval && suspensionFieldsVisible && removalFieldsHiddenAgain &&
   afterDismiss.body?.reports?.length === 0 &&
+  nativeDialogs === 0 &&
   dialogMessages.length >= 2 && /permanent/i.test(dialogMessages[0]) &&
   /report recorded/i.test(okText) &&
   reallyCreated &&
