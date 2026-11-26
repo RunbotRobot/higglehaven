@@ -2308,6 +2308,13 @@ applied event's `created` time is stored in `stripe_event_created_at` and an
 `account.updated` older than it is ignored (a `200` no-op). An event with no
 numeric `created` is applied unconditionally, as before.
 
+Payout notice (#4499): when this event (or a v2 thin event's re-read, or the
+payout panel's refresh) moves an account that was stored as `complete` to any
+other status, the owning builder gets one in-app notice ("Stripe needs more
+information before it can pay you out. Open Payouts to finish."). A repeat of
+the same event finds the status already moved and says nothing; no Stripe
+requirement names appear in it.
+
 **#3237** (`POST /api/auth/stripe-webhook-v2`): our connected accounts are
 Accounts v2. Stripe delivers a v2 account's v1 `account.updated` only to an
 endpoint registered for *Connected accounts*, while this app's endpoint is
