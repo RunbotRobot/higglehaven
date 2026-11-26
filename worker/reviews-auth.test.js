@@ -2842,7 +2842,7 @@ describe('Authentication', () => {
 
     const blocked = await api(`/builders/${builderId}`, session({
       method: 'PATCH',
-      body: JSON.stringify({ label: 'Should be blocked' }),
+      body: JSON.stringify({ label: 'ShouldBeBlocked' }),
     }));
     expect(blocked.response.status).toBe(403);
     expect(blocked.body.verificationRequired).toBe(true);
@@ -2852,7 +2852,7 @@ describe('Authentication', () => {
 
     const allowed = await api(`/builders/${builderId}`, session({
       method: 'PATCH',
-      body: JSON.stringify({ label: 'Now allowed' }),
+      body: JSON.stringify({ label: 'NowAllowed' }),
     }));
     expect(allowed.response.status).toBe(200);
   });
@@ -3423,12 +3423,12 @@ describe('Authentication', () => {
 
   it('signup automatically provisions a linked builder profile', async () => {
     const email = `auth-builder-${crypto.randomUUID()}@example.com`;
-    const signedUp = await signup(email, 'a fine long password', { username: 'Ada Builder' });
+    const signedUp = await signup(email, 'a fine long password', { username: 'AdaBuilder' });
     const sessionToken = extractSessionCookie(signedUp.response);
 
     const myBuilder = await api('/builders/me', withSession(sessionToken));
     expect(myBuilder.response.status).toBe(200);
-    expect(myBuilder.body.builder.label).toBe('Ada Builder');
+    expect(myBuilder.body.builder.label).toBe('AdaBuilder');
     expect(myBuilder.body.builder.builderId).toMatch(/^builder-/);
 
     // Idempotent — the same profile every time, not a new one per call.
@@ -3460,12 +3460,12 @@ describe('Authentication', () => {
 
   it('lazily provisions a linked seller profile on first access, not at signup', async () => {
     const email = `auth-seller-${crypto.randomUUID()}@example.com`;
-    const signedUp = await signup(email, 'a fine long password', { username: 'Ada Seller' });
+    const signedUp = await signup(email, 'a fine long password', { username: 'AdaSeller' });
     const sessionToken = extractSessionCookie(signedUp.response);
 
     const mySeller = await api('/sellers/me', withSession(sessionToken));
     expect(mySeller.response.status).toBe(200);
-    expect(mySeller.body.seller.label).toBe('Ada Seller');
+    expect(mySeller.body.seller.label).toBe('AdaSeller');
     expect(mySeller.body.seller.sellerId).toMatch(/^seller-/);
 
     const mySellerAgain = await api('/sellers/me', withSession(sessionToken));
