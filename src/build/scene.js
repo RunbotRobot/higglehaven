@@ -3159,6 +3159,14 @@ export function nudgeSelectedItem(direction) {
 // arrow's own, read from the arrow nearest the press, so it is right from any camera angle and for a bundle.
 const AXIS_TAP_MAX_TRAVEL_PX = 8;
 let axisPress = null;
+let axisTapAt = 0;
+// The 'click' that follows a tap on an arrow would read as a tap on empty ground and deselect the item (src/main.js
+// asks); true once for the click that follows the lift of an arrow tap.
+export function consumeAxisTapClick() {
+  const was = performance.now() - axisTapAt < 500;
+  axisTapAt = 0;
+  return was;
+}
 function arrowDirection(axisName, clientX, clientY) {
   const object = translateControls.object;
   if (!object) return null;
@@ -3192,7 +3200,10 @@ renderer.domElement.addEventListener('pointerup', (event) => {
   if (!press?.armed || !translateControls.dragging || translateControls.object !== press.object) return;
   if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > AXIS_TAP_MAX_TRAVEL_PX) return;
   const direction = arrowDirection(press.axis, press.x, press.y);
-  // A tap: give back the little the finger dragged before it lifted, so the drag that ends now changes nothing...
+  axisTapAt = performance.now(); // the click that follows this lift is the arrow's, not a tap on the ground (src/main.js)
+  // A tap: the press already pushed the undo step of a drag; the nudge makes its own, so that one is dropped...
+  if (dragBeforeSnapshot && undoStack.at(-1) === dragBeforeSnapshot) { undoStack.pop(); updateUndoRedoButtons(); }
+  // ...and the little the finger dragged before it lifted is given back, so the drag that ends now changes nothing.
   press.object.position.copy(press.start);
   translateControls.dispatchEvent({ type: 'objectChange' });
   // ...and, once that drag has ended, take the one step.
