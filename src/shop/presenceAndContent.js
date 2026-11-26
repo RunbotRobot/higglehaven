@@ -90,7 +90,10 @@ import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
 import { createShopAvatar, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
-import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
+import {
+  createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE,
+  createOtherIdleMotion, stepOtherIdleMotion, otherIdleActive, idleSeedFor,
+} from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
   normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor, otherAvatarBodyAction, isTemporarilyFailed,
@@ -1310,7 +1313,8 @@ export async function pollNearbyPresenceIfNeeded(now) {
         bodySwapFog: null, // #4109: the fog hiding a change of avatar, while there is one
         // #3777: the built-in walk this body wears (see otherAvatarMotion.js);
         // replaced whenever the visible body is, by installOtherAvatarBody.
-        motion: defaultOtherAvatarMotion(defaultAvatar),
+        idleSeedKey: avatar.builderId, // #4509: keeps two people's away fidgets from running in step
+        motion: defaultOtherAvatarMotion(defaultAvatar, avatar.builderId),
         bodyTemplateId: null, // the template the visible body was built from; null = default body
         bodyRequestedTemplateId: null, // latest template asked for (incl. one still loading)
         bodySwapToken: 0,
@@ -1486,7 +1490,7 @@ function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
   entry.group.add(body);
   entry.body = body;
   entry.bodyTemplateId = templateId;
-  entry.motion = templateId === null ? defaultOtherAvatarMotion(defaultAvatar) : customOtherAvatarMotion(body);
+  entry.motion = templateId === null ? defaultOtherAvatarMotion(defaultAvatar, entry.idleSeedKey) : customOtherAvatarMotion(body);
 }
 
 // #3777: what another person's avatar does with its body on your screen,
@@ -1494,9 +1498,10 @@ function placeOtherAvatarBody(entry, body, templateId, defaultAvatar = null) {
 // way your own does; a custom body with no clips of its own (the rigid case:
 // it used to glide) wears the same small whole-body motion your own does. A
 // custom body that does get clips plays those instead (see stepOtherAvatarMotion).
-function defaultOtherAvatarMotion(defaultAvatar) {
+function defaultOtherAvatarMotion(defaultAvatar, seedKey) {
   if (!defaultAvatar) return null;
-  return { kind: 'limbs', limbs: defaultAvatar, state: createOtherLimbMotion() };
+  // #4509: and the same standing fidget your own default body does once you step away.
+  return { kind: 'limbs', limbs: defaultAvatar, state: createOtherLimbMotion(), idle: createOtherIdleMotion(idleSeedFor(seedKey)) };
 }
 
 function customOtherAvatarMotion(body) {
@@ -1532,6 +1537,18 @@ function stepOtherAvatarMotion(entry, dt, state) {
     avatar.legPivotR.rotation.x = limbs.legR;
     avatar.armPivotL.rotation.x = limbs.armL;
     avatar.armPivotR.rotation.x = limbs.armR;
+    // #4509: a person who has stepped away shows it through the avatar (#4441: no label): the same
+    // weight shift, arm sway and head glance your own default body does when idle. Skipped, with
+    // nothing allocated, for everyone who is standing or walking normally.
+    const idle = motion.idle;
+    const away = entry.afk === true && !walking;
+    if (otherIdleActive(idle, away)) {
+      stepOtherIdleMotion(idle, dt, away);
+      avatar.group.rotation.z = idle.yawRad;
+      avatar.armPivotL.rotation.x += idle.armRad;
+      avatar.armPivotR.rotation.x -= idle.armRad;
+      avatar.headPivot.rotation.z = idle.headOutRad;
+    }
   } else {
     const pose = stepBuiltinMotion(motion.state, dt, walking ? 'walk' : 'idle', walking ? OTHER_AVATAR_WALK_MAGNITUDE : 0, motion.scaleM);
     motion.target.position.z = motion.baseZ + pose.bobM;
@@ -1744,7 +1761,11 @@ window.__testShopOtherAvatarPoses = () => [...shopOtherAvatars.values()].map((en
   spotX: entry.toX, spotY: entry.toY,
   // added for #3777 -- the pose this avatar is drawn in this frame, to check that others walk instead of gliding
   motion: !entry.motion ? null : entry.motion.kind === 'limbs'
-    ? { kind: 'limbs', legL: entry.motion.limbs.legPivotL.rotation.x, armL: entry.motion.limbs.armPivotL.rotation.x }
+    ? {
+      kind: 'limbs', legL: entry.motion.limbs.legPivotL.rotation.x, armL: entry.motion.limbs.armPivotL.rotation.x,
+      // added for #4509 -- the away fidget as actually drawn this frame (not once a poll): how far in it is, and the weight shift and head glance written onto the body
+      awayBlend: entry.motion.idle.blend, bodyYawRad: entry.motion.limbs.group.rotation.z, headRad: entry.motion.limbs.headPivot.rotation.z,
+    }
     : { kind: 'rigid', bobM: entry.motion.target.position.z - entry.motion.baseZ, leanRad: entry.motion.target.rotation.x, swayRad: entry.motion.target.rotation.y, applied: entry.motion.applied },
 }));
 
