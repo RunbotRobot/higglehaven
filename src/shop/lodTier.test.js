@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   apparentSizePx, nextTier, nextSetTier, versionOverdue, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
-  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES, isTierUpgrade, createFlipGate, orderViolations,
+  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES, isTierUpgrade, orderViolations,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -263,43 +263,23 @@ describe('largestFirst, ties by direction and distance', () => {
     expect(largestFirst([0, 1, 2, 3], items)).toEqual([2, 1, 3, 0]);
   });
 
-  it('keeps the original order of equal sizes when a distance is missing', () => {
-    const items = [{ px: 50, dist: 9, upgrade: true }, { px: 50, upgrade: true }, { px: 50, dist: 2, upgrade: true }];
-    expect(largestFirst([0, 1, 2], items)).toEqual([0, 1, 2]);
+  it('puts an unknown distance last, in a consistent order (upgrades and downgrades alike)', () => {
+    const ups = [{ px: 50, dist: 9, upgrade: true }, { px: 50, upgrade: true }, { px: 50, dist: 2, upgrade: true }];
+    expect(largestFirst([0, 1, 2], ups)).toEqual([2, 0, 1]);
+    const downs = [{ px: 50, dist: 2, upgrade: false }, { px: 50, upgrade: false }, { px: 50, dist: 9, upgrade: false }];
+    expect(largestFirst([0, 1, 2], downs)).toEqual([2, 0, 1]);
+    expect(largestFirst([1, 0, 2], ups)).toEqual([2, 0, 1]); // the same whatever order they arrive in
   });
 });
 
-// #4113: head-of-line blocking among the flips of one tick.
-describe('isTierUpgrade and createFlipGate', () => {
+// #4113: which changes are upgrades.
+describe('isTierUpgrade', () => {
   it('an upgrade is a better version than the one drawn', () => {
     expect(isTierUpgrade(TIER_FAR, TIER_MID)).toBe(true);
     expect(isTierUpgrade(TIER_FAR, TIER_FULL)).toBe(true);
     expect(isTierUpgrade(TIER_MID, TIER_FULL)).toBe(true);
     expect(isTierUpgrade(TIER_FULL, TIER_MID)).toBe(false);
     expect(isTierUpgrade(TIER_MID, TIER_MID)).toBe(false);
-  });
-
-  it('holds the changes in a direction behind one that had to wait, and no others', () => {
-    const gate = createFlipGate();
-    expect(gate.allows(true, false)).toBe(true);
-    expect(gate.allows(false, false)).toBe(true);
-    gate.waited(true);
-    expect(gate.blocked).toBe(true);
-    expect(gate.allows(true, false)).toBe(false); // a cheaper upgrade behind it must not take its room
-    expect(gate.allows(false, false)).toBe(true); // a downgrade is a different queue
-    expect(gate.allows(true, true)).toBe(true); // a version already well past its size is not held
-    gate.waited(false);
-    expect(gate.allows(false, false)).toBe(false); // a nearer downgrade must not go before the farther one waiting
-  });
-
-  it('a new gate (a new tick) starts open', () => {
-    const gate = createFlipGate();
-    gate.waited(true);
-    gate.waited(false);
-    const next = createFlipGate();
-    expect(next.blocked).toBe(false);
-    expect(next.allows(true, false)).toBe(true);
-    expect(next.allows(false, false)).toBe(true);
   });
 });
 

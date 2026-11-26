@@ -297,9 +297,9 @@ export function setApparentPx(set, fovDeg, viewportHeightPx) {
 // `indices` are positions in `items` ({ px }); returns them, largest first, with
 // ties (every member of a set shares the set's size) are ordered by what the change is. #4113: a wall improves from the
 // front and degrades from the back, so among equal sizes an UPGRADE (`upgrade`: a better version than the one drawn)
-// goes before a downgrade, the NEARER upgrade first and the FARTHER downgrade first (`dist`, when both have it); the rest
-// keep their original order (the sort is stable). Without that a wall of loose bricks changed in the order they were
-// placed, so a brick a metre away could wait behind one ten metres away. Sorts in place.
+// goes before a downgrade, the NEARER upgrade first and the FARTHER downgrade first (`dist`; a missing one goes last in
+// its group); the rest keep their original order (the sort is stable). Without that a wall of loose bricks changed in the
+// order they were placed, so a brick a metre away could wait behind one ten metres away. Sorts in place.
 export function largestFirst(indices, items) {
   return indices.sort((a, b) => {
     const bySize = items[b].px - items[a].px;
@@ -307,41 +307,24 @@ export function largestFirst(indices, items) {
     const ua = items[a].upgrade === true;
     const ub = items[b].upgrade === true;
     if (ua !== ub) return ua ? -1 : 1;
-    const da = items[a].dist;
-    const db = items[b].dist;
-    if (!Number.isFinite(da) || !Number.isFinite(db)) return 0;
-    return ua ? da - db : db - da;
+    // A total order: an unknown distance is the farthest for an upgrade (last) and the nearest for a downgrade (last).
+    const missing = ua ? Infinity : -Infinity;
+    const da = Number.isFinite(items[a].dist) ? items[a].dist : missing;
+    const db = Number.isFinite(items[b].dist) ? items[b].dist : missing;
+    if (da === db) return 0;
+    return (da < db) === ua ? -1 : 1;
   });
 }
 
-// #4113 (the walk, e2e/shop-wall-walk-continuous.test.mjs): going in, the nearest bricks of a wall waited on the far
-// version while the ones behind them already had mid. The fade caps (batchCrossfade.js) are shared, the cheap far-to-mid
-// changes of the back of the wall fitted in the room a far-to-full change of the front was waiting for, and kept fitting
-// there: head-of-line blocking. So within one tick's flips, once a placement has had to wait for room, no placement
-// behind it that changes in the SAME direction (better, or worse) is admitted that tick: the room goes to the front of
-// the wall first (nearest upgrade, farthest downgrade, see largestFirst), and a wall never has its near bricks on a worse
-// version than the ones behind them because the far ones had cheaper changes. The cost is the leftover smaller than one
-// placement for the length of a fade. A version that is overdue (already well past its size, versionOverdue) is not held.
+// #4113: whether a change is an upgrade (a better version than the one drawn): the order flips are served in, see largestFirst.
+// A gate that also HELD the upgrades behind a placement waiting for room (so the cheap far-to-mid changes of the back of a wall
+// could not take the room a far-to-full change at the front was waiting for) was built and measured against this order alone
+// (PR #4452): it made the order exact but starved the mid bricks behind the full ones until they passed 1.5x their size limit,
+// and then all of them changed in one frame (500 to 535 bricks, 2 runs of 5, against none in 8 without it): a pop, which is worse.
+// So the order is the rule and nothing holds a placement back.
 const TIER_RANK_ORDER = { [TIER_FAR]: 0, [TIER_MID]: 1, [TIER_FULL]: 2 };
 export function isTierUpgrade(currentTier, wantedTier) {
   return (TIER_RANK_ORDER[wantedTier] ?? 2) > (TIER_RANK_ORDER[currentTier] ?? 2);
-}
-export function createFlipGate() {
-  const blocked = { up: false, down: false };
-  const key = (upgrade) => (upgrade ? 'up' : 'down');
-  return {
-    // May a placement with this change be admitted now?
-    allows(upgrade, overdue) {
-      return overdue === true || !blocked[key(upgrade)];
-    },
-    // A placement was made to wait for room.
-    waited(upgrade) {
-      blocked[key(upgrade)] = true;
-    },
-    get blocked() {
-      return blocked.up || blocked.down;
-    },
-  };
 }
 
 // #4113 (e2e measure): how many of `bricks` ({ d: distance from the avatar, rank: 0 far, 1 mid, 2 full }) show a worse
