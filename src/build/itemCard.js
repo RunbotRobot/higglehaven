@@ -12,6 +12,7 @@ const moreBtn = document.getElementById('item-card-more-btn');
 const moreEl = document.getElementById('item-card-more');
 const closeBtn = document.getElementById('item-card-close-btn');
 const card = createWorldCard(cardEl);
+const ABOVE_EXTRA_CLEARANCE_PX = 60; // #4410: the up arrow reaches about 165 px above the middle (tip included), the others about 135
 const RING_CLEARANCE_PX = 122; // #4410: the movement arrows (drawn a little larger than the rings) reach about 110 px
 // #3691: the Selecting brush's size slider. It lives in #tool-controls (and the Tools leaf lends it
 // out); while Selecting is on and the card shows the selection, it is hosted here, beside what is
@@ -110,7 +111,7 @@ export function updateItemCard(box, { holding = false } = {}) {
   // #4118: the three rings reach about 100 px from the item on a phone, and the owner: "The product
   // information popup blocks us from accessing the rotation handle easily." The card keeps that much
   // clear space round the item, so it opens beyond the rings, not on them.
-  card.place(scratchCenter, 0.5 * Math.max(scratchSize.x, scratchSize.y, scratchSize.z, 0.05), RING_CLEARANCE_PX);
+  card.place(scratchCenter, 0.5 * Math.max(scratchSize.x, scratchSize.y, scratchSize.z, 0.05), RING_CLEARANCE_PX, ABOVE_EXTRA_CLEARANCE_PX);
 }
 
 window.__testItemCardAnchor = () => card.anchor();
