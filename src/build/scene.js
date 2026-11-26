@@ -3164,9 +3164,42 @@ function endBodyDrag() {
 // on the item's own body is the item's: for that one press the red and green rings cannot be picked
 // (TransformControls reads the pickers' visibility on the press; the next frame sets them again). The blue
 // ring, the easy one, and a press on any ring where it stands clear of the item are unchanged.
+// #4410 (the owner: "trying to rotate using the rotation handles often accidentally selects the item to move
+// freely instead"): that held for the whole silhouette, so a finger aimed at a tilt ring where it passes over the
+// item grabbed the body. A handle wins over the body: only the item's middle (a core of a quarter of its size
+// on screen, where both tilt rings cross edge-on and a drag from the middle is the item's) gives the press to
+// the body. Anywhere else on the item the rings stay pickable, and a press that is not on a ring is still the
+// body's, as before.
+const ITEM_CORE_FRACTION = 0.25;
+const ITEM_CORE_MIN_PX = 16;
+const coreBox = new THREE.Box3();
+const coreCorner = new THREE.Vector3();
+function itemScreenCore(mesh) {
+  const centre = projectMeshToScreen(mesh);
+  if (!centre) return null;
+  coreBox.setFromObject(mesh);
+  const rect = renderer.domElement.getBoundingClientRect();
+  let radius = 0;
+  for (let i = 0; i < 8; i++) {
+    coreCorner.set(i & 1 ? coreBox.max.x : coreBox.min.x, i & 2 ? coreBox.max.y : coreBox.min.y, i & 4 ? coreBox.max.z : coreBox.min.z).project(camera);
+    const x = rect.left + (coreCorner.x * 0.5 + 0.5) * rect.width;
+    const y = rect.top + (-coreCorner.y * 0.5 + 0.5) * rect.height;
+    radius = Math.max(radius, Math.hypot(x - centre.x, y - centre.y));
+  }
+  return { x: centre.x, y: centre.y, radius, core: Math.max(ITEM_CORE_MIN_PX, radius * ITEM_CORE_FRACTION) };
+}
+function pressIsInItemCore(event) {
+  if (selectedMeshes.size !== 1) return true; // several items: as before, a press on them is theirs
+  const [mesh] = selectedMeshes;
+  const core = itemScreenCore(mesh);
+  return !core || Math.hypot(event.clientX - core.x, event.clientY - core.y) <= core.core;
+}
+window.__testItemScreenCore = () => (selectedMeshes.size === 1 ? itemScreenCore([...selectedMeshes][0]) : null); // e2e (#4410)
+window.__testSelectedItemHitAt = (x, y) => !!selectedItemHitAt({ clientX: x, clientY: y }); // e2e (#4410): is this point on the selected item's body
 window.addEventListener('pointerdown', (event) => {
   if (!event.isPrimary || event.button > 0 || !rotateControls.object) return;
   if (!selectedItemHitAt(event)) return;
+  if (!pressIsInItemCore(event)) return; // away from the middle a ring under the finger is the ring's
   for (const picker of rotateControls._gizmo.picker.rotate.children) {
     if (picker.name === 'X' || picker.name === 'Y') picker.visible = false;
   }
