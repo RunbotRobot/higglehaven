@@ -65,6 +65,22 @@ async function purchase(instanceId, buyer) {
   return api(`/instances/${instanceId}/purchase`, buyer.session({ method: 'POST' }));
 }
 
+// #4462: the server now refuses a second purchase of something already owned, but the state this file's
+// refund tests need (two purchases backing one ownership) is still reachable by a race between two
+// buyers' checkouts, so it is made here the way that race would: by writing the second purchase directly.
+async function purchaseRaced(instanceId, buyer) {
+  const instance = await env.DB.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+  const template = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
+  const landlet = await env.DB.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
+  const amounts = {
+    quantity: 1, buyerLabel: null, unitPriceCents: template.price_cents, totalCents: template.price_cents,
+    commissionCents: 0, builderShareCents: template.price_cents, platformShareCents: 0,
+  };
+  await grantAdminTo(buyer);
+  const response = await writePurchaseRow(env, instance, template, landlet, amounts, null, false, buyer.builderId);
+  return { response, body: await response.clone().json() };
+}
+
 async function ownedAnimationRows(builderId, templateId) {
   return (await env.DB.prepare(
     'SELECT * FROM owned_animations WHERE builder_id = ? AND template_id = ?',
@@ -114,7 +130,7 @@ describe('Animation ownership (#1163)', () => {
     await placeInstance('animation-ownership-repeat-instance-2', 'animation-ownership-repeat-landlet', 'animation-ownership-repeat-template', seller);
 
     expect((await purchase('animation-ownership-repeat-instance-1', seller)).response.status).toBe(201);
-    expect((await purchase('animation-ownership-repeat-instance-2', seller)).response.status).toBe(201);
+    expect((await purchaseRaced('animation-ownership-repeat-instance-2', seller)).response.status).toBe(201);
 
     expect(await ownedAnimationRows(seller.builderId, 'animation-ownership-repeat-template')).toHaveLength(1);
   });
@@ -258,7 +274,7 @@ describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () =>
 
     const firstPurchase = await purchase('animation-refund-multi-instance-1', buyer);
     expect(firstPurchase.response.status).toBe(201);
-    const secondPurchase = await purchase('animation-refund-multi-instance-2', buyer);
+    const secondPurchase = await purchaseRaced('animation-refund-multi-instance-2', buyer);
     expect(secondPurchase.response.status).toBe(201);
 
     const refunded = await api(`/purchases/${firstPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));

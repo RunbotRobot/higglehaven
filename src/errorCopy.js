@@ -28,6 +28,8 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   outside_landlet_outline: "That's past the edge of this lándlet.",
   // #3948: refused before any card is charged, so each says so and what to do next.
   sold_out: 'That sold out before you could buy it. You were not charged.',
+  seller_not_ready: "That product can't be bought yet: its seller is still getting set up to take payments. You were not charged.",
+  already_owned: 'You already own this, so it was not bought again. You were not charged.',
   not_for_sale: "That product isn't for sale right now. You were not charged. Try another product.",
   // #4289: finalising a purchase before the card payment succeeded; the wording says whether the card was charged.
   payment_incomplete: "Your payment didn't go through. You were not charged. Try again, or use another card.",

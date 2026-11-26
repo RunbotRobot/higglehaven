@@ -147,6 +147,15 @@ async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = 
   if (template.stock_quantity === 0) {
     throw new HttpError('This product is sold out', 400, { code: ERROR_CODES.SOLD_OUT });
   }
+  // #4462: an avatar or an animation stays with its buyer for good, so a second purchase is never wanted.
+  // Only the card hid Buy before; a stale card or a second tab could still buy again. Refused here, for
+  // the quote and the purchase alike, before any charge. Physical goods can be bought again.
+  const ownershipTable = template.category === 'avatar' ? 'owned_avatars' : template.category === 'animation' ? 'owned_animations' : null;
+  if (ownershipTable && await db.prepare(
+    `SELECT 1 AS owned FROM ${ownershipTable} WHERE template_id = ? AND builder_id = (SELECT builder_id FROM builders WHERE user_id = ?)`,
+  ).bind(template.template_id, user.user_id).first()) {
+    throw new HttpError('You already own this product', 409, { code: ERROR_CODES.ALREADY_OWNED });
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     // #4289: the player copy for not_for_sale; the sentence here is for logs.
@@ -238,7 +247,8 @@ async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = 
   // required an unauthenticated real shopper reaching this exact path,
   // which is no longer possible.
   if (!user.is_admin) {
-    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
+    // #4462: player copy lives in src/errorCopy.js; the sentence here is for logs.
+    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403, { code: ERROR_CODES.SELLER_NOT_READY });
   }
   return { instance, template, landlet, seller, paysWithCard: false };
 }
