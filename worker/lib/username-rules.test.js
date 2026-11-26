@@ -27,10 +27,10 @@ describe('normalizeUsername', () => {
     expect(normalizeUsername('Ada 🌿', { allowSpaces: true })).toBe('Ada 🌿');
   });
   it('requires a name and caps it at 40 characters, counting characters not code units', () => {
-    expect(refused('   ')).toBe('username is required');
-    expect(refused(undefined)).toBe('username is required');
+    expect(refused('   ')).toBe('Enter a name.');
+    expect(refused(undefined)).toBe('Enter a name.');
     expect(normalizeUsername('a'.repeat(40))).toBe('a'.repeat(40));
-    expect(refused('a'.repeat(41))).toBe('username must be at most 40 characters');
+    expect(refused('a'.repeat(41))).toBe('A name can be at most 40 characters.');
     expect(normalizeUsername('🌿'.repeat(40))).toBe('🌿'.repeat(40));
   });
 });

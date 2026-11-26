@@ -6,6 +6,9 @@ import { HttpError } from './http.js';
 import { ASSISTANT_AGENT_NAMES } from './fleet-agents.js';
 
 export const USERNAME_MAX_LENGTH = 40;
+// #4476: plain words for a person, like the two below.
+export const USERNAME_REQUIRED_MESSAGE = 'Enter a name.';
+export const USERNAME_LONG_MESSAGE = `A name can be at most ${USERNAME_MAX_LENGTH} characters.`;
 export const USERNAME_CHARACTER_MESSAGE = 'That name contains a character we cannot show. Try letters and numbers.';
 // #4407 (owner, 2026-11-26): a name with spaces reads as a string of chosen text anyone could have, not a unique
 // username, so a username has none. Every other showable character stays allowed.
@@ -23,17 +26,17 @@ const UNSHOWABLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 // `allowSpaces` is only for a server on this machine (wrangler dev), where the test suites and local looks sign up
 // under labels with spaces; the real site never passes it.
 export function normalizeUsername(value, { allowSpaces = false } = {}) {
-  if (typeof value !== 'string' || value.trim() === '') throw new HttpError('username is required', 400);
+  if (typeof value !== 'string' || value.trim() === '') throw new HttpError(USERNAME_REQUIRED_MESSAGE, 400);
   if (LONE_SURROGATE.test(value)) throw new HttpError(USERNAME_CHARACTER_MESSAGE, 400);
   // \t, \n and friends are Cc, which would be refused below; a person pasting a tab is as unshowable as one pasting a
   // newline, so they are refused rather than silently turned into a space. Only the Zs family becomes a space.
   const spaced = value.normalize('NFC').replace(/\p{Zs}/gu, ' ');
   if (UNSHOWABLE.test(spaced)) throw new HttpError(USERNAME_CHARACTER_MESSAGE, 400);
   const name = spaced.replace(/ {2,}/g, ' ').trim();
-  if (name === '') throw new HttpError('username is required', 400);
+  if (name === '') throw new HttpError(USERNAME_REQUIRED_MESSAGE, 400);
   if (!allowSpaces && name.includes(' ')) throw new HttpError(USERNAME_SPACES_MESSAGE, 400);
   if ([...name].length > USERNAME_MAX_LENGTH) {
-    throw new HttpError(`username must be at most ${USERNAME_MAX_LENGTH} characters`, 400);
+    throw new HttpError(USERNAME_LONG_MESSAGE, 400);
   }
   return name;
 }

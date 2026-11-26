@@ -112,16 +112,23 @@ function canonicalizeEmail(value) {
 // than a fully RFC-5322-correct pattern.
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// #4476: what a person reads when sign-up or a password form refuses what they typed: what to do, not how the
+// server phrased its check. (The routes below shown these verbatim.)
+export const EMAIL_MESSAGE = 'Enter an email address like name@example.com.';
+export const PASSWORD_REQUIRED_MESSAGE = 'Enter a password.';
+export const PASSWORD_SHORT_MESSAGE = 'Use at least 8 characters for your password.';
+export const PASSWORD_LONG_MESSAGE = 'Use 200 characters or fewer for your password.';
+
 function emailValue(value) {
   const email = normalizeEmail(value);
-  if (!EMAIL_PATTERN.test(email)) throw new HttpError('email is not a valid email address', 400);
+  if (!EMAIL_PATTERN.test(email)) throw new HttpError(EMAIL_MESSAGE, 400);
   return email;
 }
 
 function passwordValue(value) {
-  if (typeof value !== 'string') throw new HttpError('password is required', 400);
-  if (value.length < 8) throw new HttpError('password must be at least 8 characters', 400);
-  if (value.length > 200) throw new HttpError('password must be at most 200 characters', 400);
+  if (typeof value !== 'string') throw new HttpError(PASSWORD_REQUIRED_MESSAGE, 400);
+  if (value.length < 8) throw new HttpError(PASSWORD_SHORT_MESSAGE, 400);
+  if (value.length > 200) throw new HttpError(PASSWORD_LONG_MESSAGE, 400);
   return value;
 }
 
@@ -356,11 +363,13 @@ export async function handleChangePassword(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
   const input = await readJson(request);
+  // #4476: the new password is checked before the current one is (a password check is the slow step), so a new
+  // password that is too short is reported at once, not after the check of the old one.
+  const newPassword = passwordValue(input.newPassword);
   const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
   if (!(await verifyPassword(currentPassword, user.password_hash))) {
     throw new HttpError('Incorrect password', 401);
   }
-  const newPassword = passwordValue(input.newPassword);
   const passwordHash = await hashPassword(newPassword);
   const cookies = parseCookies(request.headers.get('cookie'));
   const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
