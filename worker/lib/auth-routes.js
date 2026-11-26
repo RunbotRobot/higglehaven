@@ -54,7 +54,7 @@ import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
 import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
 import { isReservedUsername } from './fleet-agents.js';
-import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalRequest } from './username-rules.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalDevServer } from './username-rules.js';
 import { ensureUsernameSkeletons } from './username-store.js';
 import { verifyEmailMessage, passwordResetMessage } from './email-layout.js'; // #3877
 import {
@@ -126,8 +126,8 @@ function passwordValue(value) {
 }
 
 // #4136: one set of rules for every route that sets a username (worker/lib/username-rules.js).
-function usernameValue(value) {
-  return normalizeUsername(value);
+function usernameValue(value, env) {
+  return normalizeUsername(value, { allowSpaces: isLocalDevServer(env) });
 }
 
 export async function createSession(db, userId) {
@@ -173,12 +173,12 @@ export async function handleSignup(request, env, db, url) {
   const input = await readJson(request);
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
-  const username = usernameValue(input.username);
+  const username = usernameValue(input.username, env);
   const usernameSkeletonValue = usernameSkeleton(username);
   // #3445: the assistants' agent names belong to the fleet; nobody else can
   // sign up as one. #4136: nor can they be matched by a look-alike, and the
   // plainly misleading names (admin, support, ...) are reserved the same way.
-  if (isReservedUsername(username) || isReservedSkeleton(usernameSkeletonValue, { allowSessionNames: isLocalRequest(request) })) {
+  if (isReservedUsername(username) || isReservedSkeleton(usernameSkeletonValue, { allowSessionNames: isLocalDevServer(env) })) {
     throw new HttpError('Username is already taken', 409);
   }
   await ensureUsernameSkeletons(db);

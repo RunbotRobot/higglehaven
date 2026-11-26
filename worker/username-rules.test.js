@@ -2,7 +2,7 @@
 // that assistant. Both are reserved for anyone signing up or renaming on the real site; names that merely contain
 // the word later stay free.
 import { describe, expect, it } from 'vitest';
-import { isReservedSkeleton, isLocalRequest, usernameSkeleton } from './lib/username-rules.js';
+import { isReservedSkeleton, isLocalDevServer, usernameSkeleton } from './lib/username-rules.js';
 
 const reserved = (name, options) => isReservedSkeleton(usernameSkeleton(name), options);
 
@@ -24,9 +24,11 @@ describe('names that read as the team (#4383)', () => {
     expect(reserved('higglehaven-support', { allowSessionNames: true })).toBe(true);
     expect(reserved('higglehaven10')).toBe(true);
   });
-  it('knows a local request from the real site', () => {
-    expect(isLocalRequest({ url: 'http://127.0.0.1:8787/api/auth/signup' })).toBe(true);
-    expect(isLocalRequest({ url: 'http://localhost:8787/x' })).toBe(true);
-    expect(isLocalRequest({ url: 'https://higglehaven.example/api/auth/signup' })).toBe(false);
+  it('knows a local dev server from the real site, by its own base URL', () => {
+    expect(isLocalDevServer({ APP_BASE_URL: 'http://127.0.0.1:8787' })).toBe(true);
+    expect(isLocalDevServer({ APP_BASE_URL: 'http://localhost:8787' })).toBe(true);
+    expect(isLocalDevServer({ APP_BASE_URL: 'https://higglehaven.example' })).toBe(false);
+    expect(isLocalDevServer({})).toBe(false);
+    expect(isLocalDevServer(undefined)).toBe(false);
   });
 });
