@@ -361,7 +361,6 @@ In Sell > My products a product's detail lines (size, price, digital good, retur
 | `--ease-fold` | ease-in | the curve for folding back: it gathers speed as it goes |
 | `--motion-reduced` | 0.15s | the plain fade that replaces growing and folding under `prefers-reduced-motion` (nothing grows, nothing drifts) |
 | `--motion-open-petals` | 0.2s | the petals and the top row forming out of the head (0 to 0.2 s; the petals 0.03 s apart) |
-| `--step-open-row` | 0.03s | the top row growing out of the head with the petals, each item 0.03 s after the one to its left (folding: the last first); each item travels from the head's centre line to its place |
 | `--motion-open-stem` / `--delay-open-stem` | 0.25s / 0.1s | the stem drawing down from the head (0.1 to 0.35 s), overlapping the petals |
 | `--motion-open-leaf` / `--delay-open-leaves` / `--step-open-leaf` | 0.2s / 0.22s / 0.02s | the leaves unfurling from the stem, top to bottom, each 0.02 s after the one above (done by 0.5 s) |
 | `--motion-fold-leaf` | 0.12s | on folding, a leaf going into the stem, then the stem drawing up into the head (each 0.12 s), then the petals and the row (`--motion-fold`); about 0.5 s in all |

@@ -198,5 +198,4 @@
   --delay-open-leaves: 0.22s;
   --step-open-leaf: 0.02s;
   --motion-fold-leaf: 0.12s;
-  --step-open-row: 0.03s; /* the top row's items, left to right (and right to left on folding), like the petals */
 }
