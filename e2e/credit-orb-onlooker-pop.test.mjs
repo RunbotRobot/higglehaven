@@ -44,19 +44,20 @@ await page.route(`**/api/credit-orbs?landletId=${LANDLET_ID}`, async (route) => 
   });
 });
 
-let sawPop = false;
-const deadline = Date.now() + 15000;
+const deadline = Date.now() + 30000;
 while (Date.now() < deadline) {
-  if (await page.evaluate(() => window.__testActiveCreditOrbPopEffectCount() > 0)) sawPop = true;
   const ids = await page.evaluate(() => window.__testActiveCreditOrbIds());
   if (!ids.includes(popped) && !ids.includes(removed)) break;
   await page.waitForTimeout(100);
 }
+// The pop effect lives under half a second, so on a slow shard a sampler can miss it (#4427): count the pops spawned.
+const popsSpawned = await page.evaluate(() => window.__testCreditOrbPopsSpawned());
+const sawPop = popsSpawned === 1; // the collected orb only; the one gone for another reason dissolves, it does not pop
 const ids = await page.evaluate(() => window.__testActiveCreditOrbIds());
 check(!ids.includes(popped), 'the orb another person collected is gone');
 check(!ids.includes(removed), 'an orb absent from the list for another reason is gone');
 check(ids.includes(staying), 'an orb still in the list stays');
-check(sawPop, 'the collected orb popped with the same effect the collector sees');
+check(sawPop, `the collected orb popped with the same effect the collector sees, once (pops spawned: ${popsSpawned})`);
 check(await page.evaluate(() => document.getElementById('bud-note')?.textContent.trim() ?? '') !== 'Orb collected', 'no collector text (balance, note) is shown to the onlooker');
 
 await finish(browser, { pass, label: 'Orb onlooker: an orb another person collects pops the same for me; one gone for another reason dissolves', errors });
