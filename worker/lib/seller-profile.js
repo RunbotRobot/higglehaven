@@ -103,7 +103,24 @@ async function handleSellers(request, env, db, route, url) {
       if (ids.length === 0) return json({ sellers: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
       const results = await selectRowsByIdsChunked(db, 'sellers', 'seller_id', ids);
-      return json({ sellers: results.map(sellerFromRow) });
+      // #4375: how well each seller is rated, so a shopper's product card can say so. One summary per
+      // seller (never the feedback text, which GET /api/sellers/:id/feedback serves), in chunks that stay
+      // under D1's bound-parameter limit like the lookup above.
+      const ratings = new Map();
+      for (let i = 0; i < ids.length; i += 90) {
+        const chunk = ids.slice(i, i + 90);
+        const { results: rows } = await db.prepare(
+          `SELECT seller_id, AVG(rating) AS average, COUNT(*) AS count FROM seller_feedback WHERE seller_id IN (${chunk.map(() => '?').join(', ')}) GROUP BY seller_id`,
+        ).bind(...chunk).all();
+        for (const row of rows) ratings.set(row.seller_id, row);
+      }
+      return json({
+        sellers: results.map((row) => ({
+          ...sellerFromRow(row),
+          ratingAverage: ratings.get(row.seller_id)?.average ?? null,
+          ratingCount: ratings.get(row.seller_id)?.count ?? 0,
+        })),
+      });
     }
 
     // Exact (case-insensitive) label lookup, same as GET /api/builders's

@@ -1808,6 +1808,19 @@ export async function fetchSellerLabels(sellerIds) {
   return Object.fromEntries(sellers.map((seller) => [seller.sellerId, seller.label]));
 }
 
+// #4375: label plus how well the seller is rated, for the product card's seller line.
+// { [sellerId]: { label, ratingAverage, ratingCount } }
+export async function fetchSellerSummaries(sellerIds) {
+  const ids = [...new Set(sellerIds.filter(Boolean))];
+  if (ids.length === 0) return {};
+  const { sellers } = await requestJson(`/sellers?ids=${ids.map(encodeURIComponent).join(',')}`);
+  return Object.fromEntries(sellers.map((seller) => [seller.sellerId, {
+    label: seller.label,
+    ratingAverage: seller.ratingAverage ?? null,
+    ratingCount: seller.ratingCount ?? 0,
+  }]));
+}
+
 export async function fetchSellerFeedback(sellerId) {
   return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
 }

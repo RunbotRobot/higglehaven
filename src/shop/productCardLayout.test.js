@@ -290,6 +290,16 @@ describe('productCardState, a product the shopper already owns (#3681)', () => {
   });
 });
 
+describe('sellerLine rating (#4375)', () => {
+  it('adds the average and count once the seller has ratings', () => {
+    expect(sellerLine('Maple Workshop', { ratingAverage: 4.75, ratingCount: 12 })).toBe('Sold by Maple Workshop · 4.8 ★ (12)');
+  });
+  it('says nothing about ratings for a seller with none', () => {
+    expect(sellerLine('Maple Workshop', { ratingAverage: null, ratingCount: 0 })).toBe('Sold by Maple Workshop');
+    expect(sellerLine('Maple Workshop', { ratingCount: 3 })).toBe('Sold by Maple Workshop');
+  });
+});
+
 describe('sellerLine (#3680)', () => {
   it('says who sells the product, by the seller\'s storefront name', () => {
     expect(sellerLine('Maple Workshop')).toBe('Sold by Maple Workshop');
