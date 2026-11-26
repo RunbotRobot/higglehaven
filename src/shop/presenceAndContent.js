@@ -63,8 +63,9 @@ import { createTierCrossfades } from './tierCrossfade.js';
 import { createBatchCrossfades, BATCH_WAITING } from './batchCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
-import { buildInstancedBatch } from './instancedBatches.js';
-import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
+import { allocateInstancedBatch, fillInstancedBatch } from './instancedBatches.js';
+import { createSliceBudget } from './sliceBudget.js';
+import { beginBatchTiers, stepBatchTiers, addBatchTier, beginPartition, stepPartition, endPartition, resolveBatchTier } from './batchTiers.js';
 import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, orderViolations, isTierUpgrade, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
@@ -2030,6 +2031,10 @@ function initialBatchTiers(entry, handles, fullTriangles) {
   return budgetedTiers(items, undefined, undefined, fullTriangleCap);
 }
 
+// #4483: how many placements the batch build handles between two looks at the clock (about a millisecond of work
+// at 1x CPU, a few at a phone's), and the slice it may use per frame before it hands the frame back.
+const BATCH_BUILD_CHUNK = 64;
+
 async function buildAndAttachBatch(entry, members, myToken, group, run, solidAfter = null) {
   const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
   if (myToken !== entry.loadToken) { // superseded while queued
@@ -2054,36 +2059,81 @@ async function buildAndAttachBatch(entry, members, myToken, group, run, solidAft
     settleAll();
     return;
   }
-  const handles = members.map((instance) => createPlacementHandle(instance, template));
+  // #4483: from here the build is in slices. A batch of thousands used to be built in one call (about 25 ms at
+  // 3,000 placements here, over 100 ms at a phone's CPU: tens of times the 4 ms a frame gives world content), so the
+  // synchronous stretches below work in chunks and give the frame back once their slice is spent. Nothing of the
+  // batch is in the scene until the last step, so a batch that is only partly built is never seen; one whose
+  // load was superseded meanwhile is dropped (the checks after each hand-back).
+  const slices = createSliceBudget();
+  const timings = { placements: members.length, handlesMs: 0, initialTiersMs: 0, meshesMs: 0, tiersMs: 0, registerMs: 0, syncMs: 0 };
+  let tierSources = null;
+  const abandon = () => { // superseded while it was being built: nothing was attached
+    for (const tierSource of Object.values(tierSources ?? {})) if (tierSource) disposeObject3D(tierSource.container);
+    disposeObject3D(source.container);
+    window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    settleAll();
+  };
+  // Runs `step(from, to)` over [0, count) in chunks, handing the frame back whenever the slice is spent. Returns false
+  // when the load was superseded during a hand-back (the caller abandons the build).
+  const inChunks = async (count, step) => {
+    for (let from = 0; from < count; from += BATCH_BUILD_CHUNK) {
+      const t0 = performance.now();
+      step(from, Math.min(from + BATCH_BUILD_CHUNK, count));
+      timings.syncMs += performance.now() - t0;
+      if (await slices.yieldIfSpent() && myToken !== entry.loadToken) return false;
+    }
+    return true;
+  };
+  const handles = [];
+  const handlesT0 = performance.now();
+  if (!(await inChunks(members.length, (from, to) => {
+    for (let index = from; index < to; index++) handles.push(createPlacementHandle(members[index], template));
+  }))) {
+    abandon();
+    return;
+  }
+  timings.handlesMs = performance.now() - handlesT0;
   // #3403: a batch arrives drawn from the versions its first decision calls for (size on screen, the
   // protected radius around the avatar), not at full detail for its first frames and then converted:
   // a wall of a thousand bricks seen from afar was one draw of millions of triangles until its
   // reduced versions loaded. The versions are fetched before anything is added to the scene.
+  const initialTiersT0 = performance.now();
   const initialTiers = initialBatchTiers(entry, handles, source.parts.reduce((sum, part) => sum + trianglesOfGeometry(part.geometry), 0));
-  let tierSources = null;
+  timings.initialTiersMs = performance.now() - initialTiersT0;
+  timings.syncMs += timings.initialTiersMs;
   if (initialTiers.some((tier) => tier !== TIER_FULL)) {
     tierSources = await loadBatchTierSources(template).catch(() => null);
+    slices.restart(); // the wait for the download is not work
     if (myToken !== entry.loadToken) { // superseded while the versions loaded
-      for (const tierSource of Object.values(tierSources ?? {})) if (tierSource) disposeObject3D(tierSource.container);
-      disposeObject3D(source.container);
-      window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
-      settleAll();
+      abandon();
       return;
     }
   }
-  for (const handle of handles) entry.group.add(handle);
-  const batch = buildInstancedBatch(source.parts, handles);
+  const meshesT0 = performance.now();
+  const batch = allocateInstancedBatch(source.parts, handles);
   batch.container = source.container;
   batch.arrivalRun = run ?? null; // #4062: read by the batch cross-fades
-  initBatchTiers(batch, source.parts);
-  for (const handle of handles) {
-    handle.userData.lodTier = TIER_FULL;
-    handle.userData.lodApplied = TIER_FULL;
-    batchCrossfades.clearWait(handle); // #4113: a rebuilt batch starts from its books, not from a placement's old wait
+  beginBatchTiers(batch, source.parts);
+  // The full set's matrices, and every placement's starting books, in chunks (the stage times below are wall time,
+  // hand-backs included; `syncMs` is the work).
+  if (!(await inChunks(handles.length, (from, to) => {
+    fillInstancedBatch(batch, source.parts, from, to);
+    stepBatchTiers(batch, from, to);
+    for (let index = from; index < to; index++) {
+      const handle = handles[index];
+      handle.userData.lodTier = TIER_FULL;
+      handle.userData.lodApplied = TIER_FULL;
+      batchCrossfades.clearWait(handle); // #4113: a rebuilt batch starts from its books, not from a placement's old wait
+    }
+  }))) {
+    abandon();
+    return;
   }
+  timings.meshesMs = performance.now() - meshesT0;
   // One root for the batch's instanced meshes: the arrival dissolve (#3407)
   // swaps the materials of everything under the root it is given, and unload
   // removes the root.
+  const tiersT0 = performance.now();
   batch.root = new THREE.Group();
   for (const mesh of batch.meshes) batch.root.add(mesh);
   if (tierSources) {
@@ -2097,7 +2147,12 @@ async function buildAndAttachBatch(entry, members, myToken, group, run, solidAft
     }
     batch.tiersState = added ? 'ready' : 'none';
     if (added) {
-      const applied = partitionBatch(batch, initialTiers);
+      const applied = beginPartition(batch, initialTiers);
+      if (!(await inChunks(handles.length, (from, to) => stepPartition(batch, applied, from, to)))) {
+        abandon();
+        return;
+      }
+      endPartition(batch);
       handles.forEach((handle, index) => {
         handle.userData.lodTier = applied[index];
         handle.userData.lodApplied = applied[index];
@@ -2105,13 +2160,28 @@ async function buildAndAttachBatch(entry, members, myToken, group, run, solidAft
       });
     }
   }
+  timings.tiersMs = performance.now() - tiersT0;
+  // The last step is one call and attaches everything at once: the batch, its placements, their reviews. Its
+  // per-placement geometry maths (where the top of each placement stands) is done in chunks first, since that is
+  // the part that grows with the batch.
+  const registerT0 = performance.now();
+  let topZ = -Infinity;
+  if (!(await inChunks(handles.length, (from, to) => {
+    for (let index = from; index < to; index++) {
+      const handle = handles[index];
+      topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
+    }
+  }))) {
+    abandon();
+    return;
+  }
+  const attachT0 = performance.now();
+  for (const handle of handles) entry.group.add(handle);
   entry.group.add(batch.root);
   entry.batches.push(batch);
-  let topZ = -Infinity;
   for (const handle of handles) {
     entry.objects.push(handle);
     markPendingSolid(handle, solidAfter);
-    topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
     registerShopReview(handle, entry);
   }
   growShopDomeToHeight(topZ);
@@ -2120,6 +2190,17 @@ async function buildAndAttachBatch(entry, members, myToken, group, run, solidAft
   // never hold their clusters' fog.
   run?.itemReady(members[0].instanceId, batch.root);
   for (const instance of members.slice(1)) run?.itemSettled(instance.instanceId);
+  timings.attachMs = performance.now() - attachT0;
+  timings.registerMs = performance.now() - registerT0;
+  timings.syncMs += timings.attachMs;
+  timings.slices = slices.stats().slices;
+  timings.longestSliceMs = slices.stats().longestSliceMs;
+  // added for #4483 -- is a batch of thousands built in one frame? The stretches of this build, in ms, so the
+  // cost is a number: window.__shopBatchBuildTimings. `syncMs` is the synchronous work in total, `longestSliceMs`
+  // the most of it done in any one frame (the figure the frame budget is about).
+  const recorded = (window.__shopBatchBuildTimings ??= []);
+  recorded.push(timings);
+  if (recorded.length > 20) recorded.shift(); // a long session builds many batches: keep the last few
 }
 
 // How soon an item should be built: the bigger it will look on screen, the

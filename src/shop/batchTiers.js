@@ -31,15 +31,29 @@ const moved = new THREE.Matrix4();
 // (handleForInstanceHit), kept in step with the instance slots. `fullParts` are the parts the
 // full meshes were built from (their matrices are needed to move a placement back into it).
 export function initBatchTiers(batch, fullParts) {
+  beginBatchTiers(batch, fullParts);
+  stepBatchTiers(batch, 0, batch.handles.length);
+}
+
+// #4483: initBatchTiers in pieces (a batch of thousands is not one long task). beginBatchTiers makes the books;
+// stepBatchTiers stamps the placements [from, to) with their batch, set and slot -- call it over consecutive ranges
+// until `to` reaches the batch's size.
+export function beginBatchTiers(batch, fullParts) {
   const live = batch.handles.slice();
   batch.tiers = { [BATCH_TIER_FULL]: { name: BATCH_TIER_FULL, meshes: batch.meshes, live, parts: fullParts } };
   for (const mesh of batch.meshes) mesh.userData.instanceHandles = live;
-  live.forEach((handle, slot) => {
+  batch.tiersState = undefined; // undefined: not asked for yet; 'loading'; 'ready'; 'none'
+}
+
+export function stepBatchTiers(batch, from, to) {
+  const live = batch.tiers[BATCH_TIER_FULL].live;
+  const end = Math.min(to, live.length);
+  for (let slot = from; slot < end; slot++) {
+    const handle = live[slot];
     handle.userData.batch = batch;
     handle.userData.batchTier = BATCH_TIER_FULL;
     handle.userData.batchSlot = slot;
-  });
-  batch.tiersState = undefined; // undefined: not asked for yet; 'loading'; 'ready'; 'none'
+  }
 }
 
 // Adds the set for one reduced version: an InstancedMesh per drawable part with room for every
@@ -132,12 +146,29 @@ export function moveBatchHandle(batch, handle, wanted) {
 // asked for the i-th placement (batch.handles order); each goes through the same fallback as
 // moveBatchHandle. Returns the tier each placement ended in.
 export function partitionBatch(batch, wanted) {
+  const resolved = beginPartition(batch, wanted);
+  stepPartition(batch, resolved, 0, batch.handles.length);
+  endPartition(batch);
+  return resolved;
+}
+
+// #4483: partitionBatch in pieces (a batch of thousands is not one long task). beginPartition decides every
+// placement's set and empties the sets; stepPartition writes the placements [from, to) -- call it over
+// consecutive ranges, in order, until `to` reaches the batch's size; endPartition publishes the counts.
+// Nothing of the batch is in the scene while it is partitioned this way (it is built before it is attached).
+export function beginPartition(batch, wanted) {
   const resolved = batch.handles.map((handle, index) => (handle.userData.batchTier === BATCH_TIER_HIDDEN
     ? BATCH_TIER_HIDDEN : resolveBatchTier(batch, wanted[index] ?? BATCH_TIER_FULL)));
   for (const tier of Object.values(batch.tiers)) tier.live.length = 0; // the full set's array is the one its meshes read: keep it
-  batch.handles.forEach((handle, index) => {
+  return resolved;
+}
+
+export function stepPartition(batch, resolved, from, to) {
+  const end = Math.min(to, batch.handles.length);
+  for (let index = from; index < end; index++) {
+    const handle = batch.handles[index];
     const name = resolved[index];
-    if (name === BATCH_TIER_HIDDEN) return;
+    if (name === BATCH_TIER_HIDDEN) continue;
     const tier = batch.tiers[name];
     handle.updateMatrix();
     const slot = tier.live.length;
@@ -150,9 +181,11 @@ export function partitionBatch(batch, wanted) {
     tier.live.push(handle);
     handle.userData.batchTier = name;
     handle.userData.batchSlot = slot;
-  });
+  }
+}
+
+export function endPartition(batch) {
   for (const tier of Object.values(batch.tiers)) markChanged(tier);
-  return resolved;
 }
 
 // Takes a placement out of the drawn sets (#4365). Its slot goes to the last live placement of the set it was

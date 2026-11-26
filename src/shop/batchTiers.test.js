@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { buildInstancedBatch } from './instancedBatches.js';
 import {
   initBatchTiers, addBatchTier, moveBatchHandle, resolveBatchTier, batchTierCounts, disposeBatchTiers, partitionBatch,
+  beginBatchTiers, stepBatchTiers, beginPartition, stepPartition, endPartition,
   BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR,
 } from './batchTiers.js';
 
@@ -183,5 +184,45 @@ describe('batch tiers', () => {
     expect(resolved.every((name) => name === BATCH_TIER_FULL)).toBe(true);
     expect(batchTierCounts(batch)).toEqual({ full: 5, mid: 0, far: 0 });
     expectConsistent(batch, handles);
+  });
+});
+
+describe('the books built in pieces (#4483)', () => {
+  it('beginBatchTiers + stepBatchTiers over ranges equal initBatchTiers', () => {
+    const handles = Array.from({ length: 130 }, (_, i) => handleAt(i));
+    const fullParts = [part()];
+    const batch = buildInstancedBatch(fullParts, handles);
+    beginBatchTiers(batch, fullParts);
+    for (let from = 0; from < handles.length; from += 50) stepBatchTiers(batch, from, from + 50);
+    expect(batch.tiers[BATCH_TIER_FULL].live).toEqual(handles);
+    handles.forEach((handle, slot) => {
+      expect(handle.userData.batch).toBe(batch);
+      expect(handle.userData.batchTier).toBe(BATCH_TIER_FULL);
+      expect(handle.userData.batchSlot).toBe(slot);
+    });
+    expect(batch.tiersState).toBeUndefined();
+  });
+
+  it('beginPartition + stepPartition over ranges + endPartition equal partitionBatch', () => {
+    const wanted = Array.from({ length: 140 }, (_, i) => [BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR][i % 3]);
+    const whole = makeBatch(140);
+    const wholeResolved = partitionBatch(whole.batch, wanted);
+    const pieces = makeBatch(140);
+    const resolved = beginPartition(pieces.batch, wanted);
+    for (let from = 0; from < 140; from += 32) stepPartition(pieces.batch, resolved, from, from + 32);
+    endPartition(pieces.batch);
+    expect(resolved).toEqual(wholeResolved);
+    expect(batchTierCounts(pieces.batch)).toEqual(batchTierCounts(whole.batch));
+    for (const name of [BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR]) {
+      pieces.batch.tiers[name].meshes.forEach((mesh, partIndex) => {
+        const other = whole.batch.tiers[name].meshes[partIndex];
+        expect(mesh.count).toBe(other.count);
+        expect(Array.from(mesh.instanceMatrix.array)).toEqual(Array.from(other.instanceMatrix.array));
+      });
+    }
+    pieces.handles.forEach((handle, index) => {
+      expect(handle.userData.batchTier).toBe(whole.handles[index].userData.batchTier);
+      expect(handle.userData.batchSlot).toBe(whole.handles[index].userData.batchSlot);
+    });
   });
 });
