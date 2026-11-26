@@ -114,6 +114,22 @@ export async function requireAdmin(request, db) {
   return user;
 }
 
+// #4287: some creation routes are open on purpose for the test fixtures (a seller-less catalog product, a bare builder
+// or seller row with a chosen id) and have no real client. On a deployed Worker they need an admin session; the open path
+// stays only on a local or test Worker, read from what that Worker already has: the vitest config adds the
+// TEST_MIGRATIONS binding, and a local wrangler dev has an APP_BASE_URL of http://127.0.0.1 or http://localhost.
+// Production sets an https APP_BASE_URL and has no TEST_MIGRATIONS, and an unset APP_BASE_URL counts as deployed
+// (it fails closed).
+export function isLocalOrTestWorker(env) {
+  if (env?.TEST_MIGRATIONS) return true;
+  const base = typeof env?.APP_BASE_URL === 'string' ? env.APP_BASE_URL : '';
+  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(base);
+}
+export async function requireAdminUnlessLocalWorker(request, db, env) {
+  if (isLocalOrTestWorker(env)) return;
+  await requireAdmin(request, db);
+}
+
 // #4175: the look-only admin role (users.is_admin_viewer, migrations/0237). A viewer is NOT an admin: every
 // check that reads is_admin refuses one, so a new admin route is closed to a viewer unless its author opts
 // it in here, on purpose, by calling this instead of requireAdmin. Even then a viewer only gets GET and
