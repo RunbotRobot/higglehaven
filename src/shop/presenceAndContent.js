@@ -296,6 +296,9 @@ let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as
 // comment on why that fixed assumption produces a visible freeze/catch-up
 // snap under an uneven poll cadence) }.
 export const shopOtherAvatars = new Map();
+// #4508: how long a departure may take before the poll removes the avatar itself (the fog takes 1.5 s; a hidden tab
+// draws no frames, so nothing else would finish it).
+const OTHER_AVATAR_DEPART_STALL_MS = 3000;
 
 // #3447: the assistant, if any, whose drawn avatar a raycast hit belongs to.
 // Walks up from the hit mesh to the avatar's group; only assistants answer a tap.
@@ -318,7 +321,7 @@ export function assistantGroups() {
 // #3555: the other shoppers' avatars (an assistant answers a tap with its chat,
 // above), as raycast targets for "tap a person to offer friendship".
 export function otherPersonGroups() {
-  return [...shopOtherAvatars.values()].filter((entry) => !entry.assistantName).map((entry) => entry.group);
+  return [...shopOtherAvatars.values()].filter((entry) => !entry.assistantName && entry.transitionKind !== 'depart').map((entry) => entry.group);
 }
 
 // #3555: the person, if any, whose drawn avatar a raycast hit belongs to. The
@@ -326,7 +329,7 @@ export function otherPersonGroups() {
 // until labels have loaded, in which case the caller words the offer without it.
 export function personFromHit(hit) {
   for (const [builderId, entry] of shopOtherAvatars) {
-    if (entry.assistantName) continue;
+    if (entry.assistantName || entry.transitionKind === 'depart') continue; // #4508: someone leaving is not there to tap
     for (let node = hit.object; node; node = node.parent) {
       if (node === entry.group) return personForBuilderId(builderId);
     }
@@ -1363,7 +1366,10 @@ export async function pollNearbyPresenceIfNeeded(now) {
       entry.transition?.cancel();
       entry.transition = null;
       entry.transitionKind = null;
-    } else if (isNewEntry && entry.assistantName) {
+    } else if (isNewEntry && (entry.assistantName || !entry.modelWait)) {
+      // #4508: everyone arrives through fog, not only assistants ("things arrive in the world through fog",
+      // "one event looks the same to everyone"). Someone wearing a model still loading already stands in the
+      // fog of its wait (#4067), so no second fog is laid over it.
       startAssistantTransition(entry, 'arrive', performance.now()); // the frame clock, not the poll's `now`, which is stale by the fetch's latency
     }
     entry.userId = avatar.userId ?? null; // #3447: the account to ask when a shopper taps an assistant
@@ -1379,17 +1385,20 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // nudge, which never gets a second chance once that frame has passed.
   for (const [builderId, entry] of shopOtherAvatars) {
     if (seenBuilderIds.has(builderId)) continue;
-    if (entry.transitionKind === 'depart') continue; // already leaving; updateOtherShopAvatars removes it
-    entry.missedPolls = (entry.missedPolls ?? 0) + 1;
-    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
-    if (entry.assistantName) {
-      // #3449: an assistant whose heartbeat lapsed goes back into the fog, not out
-      // with a pop. The frame loop removes it once the fog has cleared.
-      startAssistantTransition(entry, 'depart', performance.now());
+    if (entry.transitionKind === 'depart') {
+      // Already leaving; updateOtherShopAvatars removes it. A frame loop that is not running (a hidden tab)
+      // cannot finish the fog, so one that has been leaving for longer than it takes goes at once.
+      if (performance.now() - (entry.transitionStartedAtMs ?? 0) > OTHER_AVATAR_DEPART_STALL_MS) {
+        releaseOtherAvatarEntry(entry);
+        shopOtherAvatars.delete(builderId);
+      }
       continue;
     }
-    releaseOtherAvatarEntry(entry);
-    shopOtherAvatars.delete(builderId);
+    entry.missedPolls = (entry.missedPolls ?? 0) + 1;
+    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
+    // #3449, #4508: anyone whose report lapsed goes back into the fog, not out with a pop (an assistant
+    // since #3449, everyone else since #4508). The frame loop removes them once the fog has cleared.
+    startAssistantTransition(entry, 'depart', performance.now());
   }
   reconcileOtherAvatarBodies(now);
   reconcileOtherAvatarAnimations(now); // #3230: also covers an animation equipped/changed with the body unchanged
@@ -1683,6 +1692,7 @@ function startAssistantTransition(entry, kind, now) {
     ? (age) => assistantDepartureLevels(age, { reducedMotion })
     : (age) => assistantArrivalLevels(age, { reducedMotion });
   entry.transitionKind = kind;
+  entry.transitionStartedAtMs = now;
   entry.transition = createAssistantTransition({
     entry, parent: scene, levels, startedAtMs: now,
     effects: { createFog: createArrivalFog, createDissolve: createArrivalDissolve },
@@ -1745,6 +1755,8 @@ function refreshOtherShopAvatarsDiagnostic() {
     playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
     swappingBody: Boolean(entry.bodySwapFog), // added for #4109 -- e2e needs to see that someone changing avatar is fog first, with the old body still standing until the new one goes in
     waitingForModel: Boolean(entry.modelWait), // added for #4067 -- e2e needs to see that someone wearing a model still loading is fog, never the default body, and that the fog is gone once the body is in
+    arriving: entry.transitionKind === 'arrive', // added for #4508 -- e2e needs to see that a person who comes into view comes through fog
+    departing: entry.transitionKind === 'depart', // added for #4508 -- someone whose report lapsed leaves through fog and stays listed until it clears; e2e counts that as gone
     motionKind: entry.motion ? entry.motion.kind : null, // added for #3777 -- 'limbs' (default body swings), 'rigid' (clip-less custom body wears the built-in motion) or null; e2e checks others no longer glide
   }));
 }
