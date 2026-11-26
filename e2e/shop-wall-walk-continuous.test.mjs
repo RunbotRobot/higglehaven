@@ -241,19 +241,28 @@ const violFramesOut = outRows.filter((r) => r.viol > 0).length;
 const worstViolIn = Math.max(0, ...inRows.map((r) => r.viol));
 const worstViolOut = Math.max(0, ...outRows.map((r) => r.viol));
 const violSumIn = inRows.reduce((sum, r) => sum + r.viol, 0);
-// A band lasts; a brick on the wrong version for a frame at a hysteresis edge does not. The longest run of consecutive frames.
-function longestRun(rows) {
-  let best = 0;
-  let run = 0;
-  for (const r of rows) {
-    run = r.viol > 0 ? run + 1 : 0;
-    best = Math.max(best, run);
+// A band lasts; a brick on the wrong version for a frame at a hysteresis edge does not. What counts is how LONG (real
+// milliseconds: a frame is 60 ms on a fast machine and 160 ms on a slow one, and a fade is 400 ms either way), as the
+// longest run of consecutive frames with any and as the total over the leg. A frame counts for the time until the next.
+function violationTimes(rows) {
+  let longestMs = 0;
+  let totalMs = 0;
+  let runMs = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const frameMs = i + 1 < rows.length ? rows[i + 1].t - rows[i].t : 0;
+    if (rows[i].viol > 0) {
+      runMs += frameMs;
+      totalMs += frameMs;
+    } else {
+      runMs = 0;
+    }
+    longestMs = Math.max(longestMs, runMs);
   }
-  return best;
+  return { longestMs: Math.round(longestMs), totalMs: Math.round(totalMs) };
 }
-const runIn = longestRun(inRows);
-const runOut = longestRun(outRows);
-console.log(`order (bricks on a worse version than one farther away): in: ${violFramesIn} of ${inRows.length} frames (longest run ${runIn}), worst ${worstViolIn}, sum ${violSumIn}; out: ${violFramesOut} of ${outRows.length} frames (longest run ${runOut}), worst ${worstViolOut}`);
+const timesIn = violationTimes(inRows);
+const timesOut = violationTimes(outRows);
+console.log(`order (bricks on a worse version than one farther away): in: ${violFramesIn} of ${inRows.length} frames (longest run ${timesIn.longestMs} ms, ${timesIn.totalMs} ms in all), worst ${worstViolIn}, sum ${violSumIn}; out: ${violFramesOut} of ${outRows.length} frames (longest run ${timesOut.longestMs} ms, ${timesOut.totalMs} ms in all), worst ${worstViolOut}`);
 
 // Overdue: a set on far while each brick is past the size where far reads as a colour (LOD_SET_FAR_EXIT_PX 14, 1.5x).
 let overdueFrames = 0;
@@ -274,11 +283,11 @@ for (let i = 0; i < walkRows.length; i++) {
 
 // #4113: bounds on this wall (800 bricks of 0.1 m, software GL). The goal is no visible band; these pin its shape.
 // Order: a wall improves from the front, so no brick shows a worse version than one farther away. A hysteresis edge or a
-// fade waiting for room can leave some for a few frames, so what counts is how many frames have any and how long a run of
-// them lasts: a band that lasts is what a person sees. The order the flips are served in (nearest upgrade first) is what
-// keeps both short; the unordered rule had about twice as many frames and runs (see the PR).
-const MAX_ORDER_FRAMES = 6;
-const MAX_ORDER_RUN_FRAMES = 6;
+// fade waiting for room can leave some for a short while; what counts is for how long, in real time (a fade is 400 ms),
+// as one run and as the total of a leg. The order the flips are served in (nearest upgrade first) keeps both short; the
+// unordered rule left the wall out of order for 1.3 to 1.8 s going in and 1.3 to 3.6 s going out; the ordered one 0 to 1.7 s going in and none going out (see the PR).
+const MAX_ORDER_RUN_MS = 3000;
+const MAX_ORDER_TOTAL_MS = 3000;
 // Hard swaps (a brick that changed in one frame because the fade caps were full, or because it was well past its size
 // limit, #4398) are mostly a software-GL artefact of this walk: at a few frames a second a fade spans two or three frames
 // of walking: 0 of 800 in 8 of 8 runs of the final rule, 133 in one of 3 of the rule before it, and 500 to 535 (one group of
@@ -288,6 +297,6 @@ const MAX_HARD_SWAPS = Number(process.env.WALK_MAX_HARD_SWAPS ?? 200);
 // sweep and not a band), slowed by software-GL frames and the fade caps, so the bound is generous.
 const MAX_SWEEP_M = Number(process.env.WALK_MAX_SWEEP_M ?? 12);
 const pass = !!landlet && created.status < 300 && loaded && walkRows.length > 30 && total(walkRows[walkRows.length - 1]) >= PER_PRODUCT * PRODUCT_COUNT
-  && sweepInM >= 0 && sweepInM <= MAX_SWEEP_M && sweepOutM >= 0 && sweepOutM <= MAX_SWEEP_M && hardIn <= MAX_HARD_SWAPS && hardOut <= MAX_HARD_SWAPS && violFramesIn <= MAX_ORDER_FRAMES && violFramesOut <= MAX_ORDER_FRAMES && runIn <= MAX_ORDER_RUN_FRAMES && runOut <= MAX_ORDER_RUN_FRAMES
+  && sweepInM >= 0 && sweepInM <= MAX_SWEEP_M && sweepOutM >= 0 && sweepOutM <= MAX_SWEEP_M && hardIn <= MAX_HARD_SWAPS && hardOut <= MAX_HARD_SWAPS && timesIn.longestMs <= MAX_ORDER_RUN_MS && timesOut.longestMs <= MAX_ORDER_RUN_MS && timesIn.totalMs <= MAX_ORDER_TOTAL_MS && timesOut.totalMs <= MAX_ORDER_TOTAL_MS
   && overdueFrames === 0 && errors.length === 0;
 await finish(browser, { pass, label: '#4113: a wall walked at running speed from 60 m to 2 m and back changes version without a hard swap, a long split, or far past its size', errors });
