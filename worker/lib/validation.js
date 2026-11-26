@@ -5,16 +5,17 @@
 // that every handle* response passes through, same shared-reach shape as
 // json/HttpError in worker/lib/http.js). Extracted verbatim, zero behavior
 // change.
-import { HttpError } from './http.js';
+import { HttpError, ERROR_CODES } from './http.js';
 
 export async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) {
-    throw new HttpError('Expected application/json request body', 415);
+    // #4442: a code, so a person who meets this (a client that sent no body) reads a sentence, not the developer one.
+    throw new HttpError('Expected application/json request body', 415, { code: ERROR_CODES.UNREADABLE_REQUEST });
   }
   try {
     return await request.json();
   } catch {
-    throw new HttpError('Request body is not valid JSON', 400);
+    throw new HttpError('Request body is not valid JSON', 400, { code: ERROR_CODES.UNREADABLE_REQUEST });
   }
 }
 

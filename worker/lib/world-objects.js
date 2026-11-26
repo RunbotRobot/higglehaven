@@ -1258,8 +1258,10 @@ export async function handleSignPosts(request, db, route) {
     // currentUser lookup" shape as #1712's product-review admin override,
     // since an admin isn't necessarily the post's author or the landlet owner.
     const requester = await currentUser(request, db);
+    // #4442: an admin who wrote the note is its author first: their own delete is the author's own (no body, no
+    // category), not a moderation of someone else's. It was reaching this branch and answering 415 for the missing body.
     const admin = await adminInGoodStanding(db, requester);
-    if (admin) {
+    if (admin && !(existing.user_id !== null && existing.user_id === admin.user_id)) {
       await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
       // #2388: required on every moderation delete now -- see
       // worker/lib/content-moderation.js for why this is validated before
@@ -1553,8 +1555,9 @@ export async function handleCalendarEvents(request, db, route) {
     // #781: an admin can remove any calendar event outright, same reasoning
     // and shape as the sign-posts admin override above.
     const requester = await currentUser(request, db);
+    // #4442: same as the sign post above: an admin deleting their own event deletes as its author.
     const admin = await adminInGoodStanding(db, requester);
-    if (admin) {
+    if (admin && !(existing.user_id !== null && existing.user_id === admin.user_id)) {
       await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
       // #2388: same requirement as handleSignPosts' own admin-override
       // branch above -- see worker/lib/content-moderation.js.

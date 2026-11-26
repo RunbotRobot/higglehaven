@@ -332,7 +332,8 @@ export async function handleProductReviews(request, db, route) {
     // all. A pre-#1975 review with no user_id (user_id IS NULL) can never
     // match here, so it falls through to the existing paths exactly as it
     // always has.
-    if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
+    // #4442: an admin who wrote it deletes it as its author, as for sign posts.
+    if (requester && existing.user_id !== null && existing.user_id === requester.user_id) {
       await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
       const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
         .bind(reviewId, requester.user_id).run();
@@ -1097,7 +1098,8 @@ export async function handleSellerFeedbackDelete(request, env, purchaseId) {
   if (!existing) return json({ error: 'Feedback not found' }, 404);
   const requester = await currentUser(request, db);
   const admin = await adminInGoodStanding(db, requester);
-  if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
+  // #4442: same as a review: an admin who is the buyer deletes it as its author.
+  if (requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
     const deletedByAuthor = await db.prepare(`
       DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
