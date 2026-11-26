@@ -1204,7 +1204,9 @@ export async function pollNearbyPresenceIfNeeded(now) {
   if (now - shopLastPresencePollAt < SHOP_PRESENCE_POLL_INTERVAL_MS) return;
   shopLastPresencePollAt = now;
   const landletId = shopCurrentLandletEntry?.record.landletId;
-  if (!landletId) {
+  // #4387: off a claimed lándlet there is nobody to show, but orbs (which live on greenbelt ones) are told of through
+  // this same answer, so while one is loaded the poll still runs, at its usual pace. With none, nothing is asked.
+  if (!landletId && shopCreditOrbs.length === 0) {
     despawnOtherShopAvatars();
     return;
   }
@@ -1216,8 +1218,9 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // file already uses (friendsLoadToken, dmLoadToken, etc.).
   const myPresencePollToken = ++presencePollToken;
   let avatars;
+  let collectedOrbs;
   try {
-    avatars = await fetchNearbyPresence();
+    ({ avatars, collectedOrbs } = await fetchNearbyPresence());
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
@@ -1228,6 +1231,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // applied (a livelock; seen as the flaky background-tab despawn e2e).
   if (myPresencePollToken < presenceAppliedToken) return;
   presenceAppliedToken = myPresencePollToken;
+  for (const orbId of collectedOrbs) popCreditOrbCollectedByOther(orbId); // #4387
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
@@ -2144,7 +2148,12 @@ const CREDIT_ORB_RETURN_SCALE_IN_S = 0.25;
 const CREDIT_ORB_POP_END_SCALE = 2.5;
 const creditOrbPopEffects = [];
 
+// e2e only (#4387): how many pops have been spawned in all. The effect lives under half a second and a slow
+// frame can remove it before a sampler looks, so a test reads this instead of catching it playing.
+let creditOrbPopsSpawned = 0;
+window.__testCreditOrbPopsSpawned = () => creditOrbPopsSpawned;
 function spawnCreditOrbPopEffect(orb) {
+  creditOrbPopsSpawned += 1;
   const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
   mesh.material.transparent = true;
   mesh.position.copy(orb.mesh.position);
@@ -2381,6 +2390,18 @@ function markCreditOrbCollectFailedToReachServer() {
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
     sayCreditOrbOffline();
   }
+}
+
+// #4387 (owner: one event in the world looks the same to everyone who sees it): an orb that another person
+// collected pops for me too, where it floats, with the one pop effect the collector sees. No toast or credit word:
+// those belong to the person who collected it. Fog stays for coming into and going out of range. With reduced
+// motion the orb is simply gone. An orb I am collecting myself is left to that path.
+function popCreditOrbCollectedByOther(orbId) {
+  const orb = shopCreditOrbs.find((candidate) => candidate.orbId === orbId && !candidate.collecting);
+  if (!orb) return;
+  creditOrbFades.finish(orb);
+  if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
+  removeCreditOrb(orb);
 }
 
 function removeCreditOrb(orb) {

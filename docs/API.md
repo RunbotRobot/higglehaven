@@ -6542,6 +6542,16 @@ seller_feedback. Without it, a landlet with many concurrent visitors would
 return every one of them in one response, and the client spawns a real
 avatar mesh group per entry on every poll tick.
 
+**`collectedOrbs` (#4387)**: the response also carries `"collectedOrbs": [orbId, ...]`, the credit orbs that
+*someone else* collected in the last 30 seconds within 100 m of where the caller last reported standing (at most
+20, newest first), so an onlooker can show the same pop the collector sees. Ids only: never who collected. The
+caller's own collects are left out (they popped it themselves), and so is everything older, farther or collected by
+no one. Orbs live only on greenbelt landlets, where a person's presence names no landlet, so this is answered by
+position and also when `avatars` is empty (the early `{ "avatars": [] }` answer reads `"collectedOrbs": []`
+for a caller with no fresh row of their own, whose position is older than 30 seconds). It rides in the same trip
+window as the other reads, adding no D1 round trip of its own when a landlet is named, and one when none is.
+The client asks while an orb is loaded even off a claimed landlet, at its usual one-second pace.
+
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
 Requires a session. Unlike `GET /api/presence` above, this returns the
