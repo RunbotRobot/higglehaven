@@ -9676,6 +9676,7 @@ POST /api/product-flags/:templateId/refund-buyers   { expectedCount, expectedRef
   the admin confirmed); otherwise `409` and nothing moves. Each refund is the existing refund path (same Stripe
   idempotency key, commission clawback and buyer notice, which says why), so pressing again never refunds anyone twice.
   A call does at most 8 orders and returns what is left in `refundBuyers`; the page presses again until it is 0.
+- `GET /api/product-flags?status=approved` (full admin) lists approved flags whose listing still has orders this action can refund (`templateId`, `templateName`, `sellerId`, `flagCount`, `resolvedAt`, `openOrders`); a listing leaves it once none is left.
 - One `counterfeit_refund_buyers` row per call in the admin action log.
 
 ### Self-dealing flags (#2019, sub-issue of #1212)
