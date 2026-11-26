@@ -93,6 +93,8 @@ touches one ends by sending the assistant to the runbook's hand-off.
 **If something goes wrong:**
 - The email does not arrive: ask them to look in their spam folder, and to check they typed the address they signed up with.
 - A wrong email or password: the app says so; try again or use "Forgot password?".
+- After several wrong passwords the app says "Too many wrong passwords. You can try again in about N minutes, or use Forgot password." Read the time back: it is how long the lock lasts, and "Forgot password?" is the way in meanwhile.
+- The reset link says "That reset link has expired or was already used. Reset links last an hour and work once. Request a new one below.": the screen has already moved to "Send reset link", so they type their email there for a new link. A link from an email that says to confirm the address does the same when old: "If you've already confirmed your email, just log in. Otherwise log in and choose Resend verification email."
 - They cannot get in after resetting, or the app says something about their account's standing: do not guess, use the runbook's hand-off.
 
 ```controls any
@@ -417,6 +419,14 @@ shows under "My purchases".
   It is shown once, and the tick to confirm they are at least 18 only appears if they never
   gave it when signing up. They tap "Continue" once they have. If it will not complete, use the runbook's hand-off. The
   person can also tap "Log out instead".
+- The sheet says "Your session ended, so nothing was bought. You were not charged. Sign in again to buy this.": they were
+  signed out; they sign in again from the menu and tap "Buy" again. "Verify your age and add a card before buying. You
+  were not charged." means the adult check above is not finished.
+- "You already own this, so it was not bought again. You were not charged.": avatars and animations can only be bought
+  once; it is in their purchases already.
+- "Your payment went through, but we couldn't finish your purchase yet. Tap "Finish purchase" to try again -- your card
+  won't be charged again.": tap "Finish purchase". If it says the order will appear in My purchases once it is
+  confirmed, it will; the card is not charged again.
 - The payment fails, the person is charged twice, or they want a refund: that is
   money. Say plainly that you cannot do it yourself, say you are sending it to the
   team, and use the runbook's hand-off.
