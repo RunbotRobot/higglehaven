@@ -62,10 +62,11 @@ async function ensureRoomToWander() {
 await ensureRoomToWander();
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
-// CPU_THROTTLE=4 is the phone profile's CPU (scripts/live-site-lib.mjs PHONE_PROFILE): script time scales, GPU time does not.
-if (Number(process.env.CPU_THROTTLE ?? 1) > 1) {
+// CPU_THROTTLE (default 4) is the phone profile's CPU (scripts/live-site-lib.mjs PHONE_PROFILE): script time scales, GPU time does not.
+const CPU_THROTTLE = Number(process.env.CPU_THROTTLE ?? 4); // default: the phone profile's CPU, where the unsliced build cost over 100 ms
+if (CPU_THROTTLE > 1) {
   const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU_THROTTLE) });
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
 }
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
@@ -164,7 +165,7 @@ const state = await page.evaluate(() => ({ loaded: window.__testShopLoadedInstan
 console.log('state after the wait:', JSON.stringify(state));
 const frame = await page.evaluate(() => ({ gap: window.__frameMonitor.longestFrameGapMs(), tasks: window.__frameMonitor.longTasks() }));
 const t = timings[0] ?? null;
-console.log('batch build timings:', JSON.stringify(timings.map((x) => ({ ...x, handlesMs: +x.handlesMs.toFixed(1), meshesMs: +x.meshesMs.toFixed(1), tiersMs: +x.tiersMs.toFixed(1), registerMs: +x.registerMs.toFixed(1), syncMs: +x.syncMs.toFixed(1), longestSliceMs: +x.longestSliceMs.toFixed(1) }))));
+console.log('batch build timings:', JSON.stringify(timings.map((x) => ({ placements: x.placements, slices: x.slices, syncMs: +x.syncMs.toFixed(1), longestSliceMs: +x.longestSliceMs.toFixed(1) }))));
 console.log(`frame monitor while it loaded: longest frame gap ${Math.round(frame.gap)} ms; long tasks ${frame.tasks.count} (longest ${Math.round(frame.tasks.longestMs)} ms)`);
 
 if (process.env.BATCH_REPORT_FILE) {
@@ -174,12 +175,18 @@ if (process.env.BATCH_REPORT_FILE) {
 let pass = true;
 const check = (ok, message) => { console.log(`${ok ? 'PASS' : 'FAIL'}: ${message}`); if (!ok) pass = false; };
 check(t !== null && t.placements === PER_PRODUCT, `the ${PER_PRODUCT}-placement wall was built as one batch`);
-// The figure the frame budget is about: the most synchronous batch-build work done in any one frame (the build is
-// done in slices of about 3 ms; the one stretch that is not chunked, choosing each placement's first version, sets
-// the floor). The bound is generous (a loaded CI runner); one call for the whole batch is several times over it.
-const MAX_SLICE_MS = Number(process.env.E2E_MAX_BATCH_SLICE_MS || 60);
-check(t !== null && t.longestSliceMs < MAX_SLICE_MS, `no frame does more than ${MAX_SLICE_MS} ms of the batch build (${t ? Math.round(t.longestSliceMs) : 'n/a'} ms in the longest slice of ${t ? t.slices : 'n/a'}; ${t ? Math.round(t.syncMs) : 'n/a'} ms in total)`);
-check(t !== null && t.slices > 1, 'the build was spread over several frames');
+// The figure the frame budget is about: the most batch-build work done in any one slice (a slice is its own unit of the
+// world work queue, about 3 ms of work in chunks of 64 placements; a stage that is one call, such as the final attach,
+// sets the floor). At 4x CPU the build used to be ONE unit of about 110 ms (3,000 placements): the bound is well under
+// that, and above what a loaded runner measures (about 15 to 20 ms).
+const MAX_SLICE_MS = Number(process.env.E2E_MAX_BATCH_SLICE_MS || (CPU_THROTTLE >= 4 ? 40 : 15));
+check(t !== null && t.longestSliceMs < MAX_SLICE_MS, `no slice of the batch build does ${MAX_SLICE_MS} ms or more (${t ? Math.round(t.longestSliceMs) : 'n/a'} ms in the longest of ${t ? t.slices : 'n/a'}; ${t ? Math.round(t.syncMs) : 'n/a'} ms in total)`);
+const stages = t?.stages ?? {};
+const stageLine = Object.entries(stages).map(([name, v]) => `${name} ${v.totalMs.toFixed(1)} (longest ${v.longestMs.toFixed(1)})`).join(', ');
+console.log(`stages, ms total (longest unbroken stretch): ${stageLine}`);
+const worstStage = Object.entries(stages).reduce((worst, [name, v]) => (v.longestMs > worst.ms ? { name, ms: v.longestMs } : worst), { name: 'none', ms: 0 });
+check(t !== null && worstStage.ms < MAX_SLICE_MS, `every stage's longest stretch is under ${MAX_SLICE_MS} ms (worst: ${worstStage.name} ${worstStage.ms.toFixed(1)} ms)`);
+check(t !== null && t.slices >= 3 && t.syncMs > 2 * t.longestSliceMs, `the build was spread over several slices (${t ? t.slices : 'n/a'} slices; the whole is more than twice the longest slice)`);
 check(frame.tasks.longestMs < 1500, `no single task of 1500 ms or more while the batch loaded (longest ${Math.round(frame.tasks.longestMs)} ms)`);
 
 await finish(browser, { pass: pass && errors.length === 0, label: '#4483: a loose wall of identical placements builds into one batch without a long stall', errors });

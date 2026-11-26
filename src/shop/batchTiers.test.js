@@ -6,7 +6,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import {
   initBatchTiers, addBatchTier, moveBatchHandle, resolveBatchTier, batchTierCounts, disposeBatchTiers, partitionBatch,
   beginBatchTiers, stepBatchTiers, beginPartition, stepPartition, endPartition,
-  BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR,
+  BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR, BATCH_TIER_HIDDEN,
 } from './batchTiers.js';
 
 function handleAt(i) {
@@ -206,8 +206,13 @@ describe('the books built in pieces (#4483)', () => {
   it('beginPartition + stepPartition over ranges + endPartition equal partitionBatch', () => {
     const wanted = Array.from({ length: 140 }, (_, i) => [BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR][i % 3]);
     const whole = makeBatch(140);
-    const wholeResolved = partitionBatch(whole.batch, wanted);
     const pieces = makeBatch(140);
+    // every seventh placement is left out of every set (enclosed, #4365): the piecewise form must skip it as the whole one does
+    for (let i = 0; i < 140; i += 7) {
+      whole.handles[i].userData.batchTier = BATCH_TIER_HIDDEN;
+      pieces.handles[i].userData.batchTier = BATCH_TIER_HIDDEN;
+    }
+    const wholeResolved = partitionBatch(whole.batch, wanted);
     const resolved = beginPartition(pieces.batch, wanted);
     for (let from = 0; from < 140; from += 32) stepPartition(pieces.batch, resolved, from, from + 32);
     endPartition(pieces.batch);

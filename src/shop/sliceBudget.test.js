@@ -1,74 +1,68 @@
 import { describe, expect, it } from 'vitest';
-import { createSliceBudget } from './sliceBudget.js';
+import { startSlice, DEFAULT_SLICE_MS } from './sliceBudget.js';
+import { createFrameBudgetQueue } from '../world/frameBudgetQueue.js';
 
-function clockedBudget(sliceMs = 3) {
-  let clock = 0;
-  const frames = [];
-  const budget = createSliceBudget({
-    sliceMs,
-    now: () => clock,
-    nextFrame: () => new Promise((resolve) => { frames.push(resolve); }),
-  });
-  return { budget, advance: (ms) => { clock += ms; }, frames, now: () => clock };
-}
-
-describe('createSliceBudget (#4483)', () => {
-  it('lets work continue while the slice has time left', async () => {
-    const { budget, advance, frames } = clockedBudget();
-    advance(1);
-    expect(await budget.yieldIfSpent()).toBe(false);
-    advance(1.5);
-    expect(await budget.yieldIfSpent()).toBe(false);
-    expect(frames.length).toBe(0);
+describe('startSlice (#4483)', () => {
+  it('is over once the slice has used its milliseconds', () => {
+    let clock = 0;
+    const slice = startSlice({ now: () => clock });
+    expect(slice.allowedMs).toBe(DEFAULT_SLICE_MS);
+    expect(slice.over()).toBe(false);
+    clock = 2.9;
+    expect(slice.over()).toBe(false);
+    clock = 3;
+    expect(slice.over()).toBe(true);
+    expect(slice.elapsedMs()).toBe(3);
   });
 
-  it('waits for the next frame once the slice is spent, then starts a fresh slice', async () => {
-    const { budget, advance, frames } = clockedBudget();
-    advance(3);
-    const waiting = budget.yieldIfSpent();
-    expect(frames.length).toBe(1);
-    let settled = false;
-    waiting.then(() => { settled = true; });
-    await Promise.resolve();
-    expect(settled).toBe(false); // still waiting for the frame
-    advance(16); // the frame comes
-    frames[0]();
-    expect(await waiting).toBe(true);
-    // the new slice starts at the frame, not at the old start
-    advance(1);
-    expect(await budget.yieldIfSpent()).toBe(false);
+  it('never takes more than what is left of the tick, and is over at once when nothing is left', () => {
+    let clock = 0;
+    expect(startSlice({ remainingMs: 1.5, now: () => clock }).allowedMs).toBe(1.5);
+    expect(startSlice({ remainingMs: 10, now: () => clock }).allowedMs).toBe(DEFAULT_SLICE_MS);
+    const spent = startSlice({ remainingMs: 0, now: () => clock });
+    expect(spent.over()).toBe(true); // a caller does one chunk first, then asks
+  });
+});
+
+describe('a job in slices on the world work queue (#4483)', () => {
+  // A job of 60 ms of work (1 ms chunks) and four small units queued behind it, the job's slices re-queued with the
+  // same priority: the small units run between its slices rather than after the whole job.
+  it('lets other units run between the slices of a long job', async () => {
+    let clock = 0;
+    const frames = [];
+    const queue = createFrameBudgetQueue({ budgetMs: 4, now: () => clock, schedule: (callback) => frames.push(callback) });
+    const order = [];
+    let done = 0;
+    const jobUnit = () => {
+      order.push('job');
+      const slice = startSlice({ remainingMs: queue.tickRemainingMs(), now: () => clock });
+      do { clock += 1; done += 1; } while (done < 60 && !slice.over());
+      if (done < 60) queue.enqueue(jobUnit, { priority: 0 });
+    };
+    queue.enqueue(jobUnit, { priority: 0 });
+    for (let i = 0; i < 4; i++) queue.enqueue(() => { order.push(`small${i}`); clock += 0.1; }, { priority: 0 });
+    let guard = 0;
+    while (frames.length && guard++ < 200) { clock += 16; await frames.shift()(); }
+    expect(done).toBe(60);
+    const firstJob = order.indexOf('job');
+    const lastJob = order.lastIndexOf('job');
+    const smalls = order.filter((entry) => entry.startsWith('small')).length;
+    expect(smalls).toBe(4);
+    // every small unit ran before the job's last slice
+    for (let i = 0; i < 4; i++) expect(order.indexOf(`small${i}`)).toBeLessThan(lastJob);
+    expect(firstJob).toBe(0);
   });
 
-  it('a whole run is a number of frames about the work divided by the slice, never one long stretch', async () => {
-    const { budget, advance, frames } = clockedBudget(3);
-    let yields = 0;
-    let longestStretch = 0;
-    let stretch = 0;
-    for (let chunk = 0; chunk < 100; chunk++) {
-      advance(1); // each chunk costs 1 ms
-      stretch += 1;
-      const pending = budget.yieldIfSpent();
-      if (frames.length > yields) {
-        yields += 1;
-        longestStretch = Math.max(longestStretch, stretch);
-        stretch = 0;
-        advance(16);
-        frames[frames.length - 1]();
-      }
-      await pending;
-    }
-    expect(yields).toBeGreaterThanOrEqual(30); // 100 ms of work in 3 ms slices
-    expect(longestStretch).toBeLessThanOrEqual(3);
-    expect(budget.stats().slices).toBeGreaterThanOrEqual(30);
-  });
-
-  it('restart() makes the time spent waiting for a download not count against the slice', async () => {
-    const { budget, advance, frames } = clockedBudget(3);
-    advance(500); // a download
-    budget.restart();
-    advance(1);
-    expect(await budget.yieldIfSpent()).toBe(false);
-    expect(frames.length).toBe(0);
-    expect(budget.stats().longestSliceMs).toBeLessThan(3);
+  it('tickRemainingMs is the whole budget between ticks and shrinks inside one', async () => {
+    let clock = 0;
+    const frames = [];
+    const queue = createFrameBudgetQueue({ budgetMs: 4, now: () => clock, schedule: (callback) => frames.push(callback) });
+    expect(queue.tickRemainingMs()).toBe(4);
+    const seen = [];
+    queue.enqueue(() => { clock += 1; seen.push(queue.tickRemainingMs()); });
+    queue.enqueue(() => { clock += 2.5; seen.push(queue.tickRemainingMs()); });
+    await frames.shift()();
+    expect(seen).toEqual([3, 0.5]);
+    expect(queue.tickRemainingMs()).toBe(4);
   });
 });
