@@ -219,5 +219,6 @@
   "0234_video_generation_failure_detail.sql": "a8693bab5430638600cad87dba60feb3e5788bc3c3f37f6fc99fefd1a3a22c02",
   "0235_users_username_skeleton.sql": "c3bc5ef7cbb560b3bdb5016cbddff800166d90d9684226cce501f383f81ccf94",
   "0236_direct_message_reports.sql": "ef0ec8f6269556fbddd58f14a7225a5f773f2622558a9d7f6e9d45d38790db6c",
-  "0237_users_is_admin_viewer.sql": "1985da85b35569d2f35c725cacbb1189884669be79b7998aeb755c6f1e464c28"
+  "0237_users_is_admin_viewer.sql": "1985da85b35569d2f35c725cacbb1189884669be79b7998aeb755c6f1e464c28",
+  "0238_avatar_presence_afk.sql": "81e847f2e4a30faafd6326f12967b5f64aa0faee9638ab45f3519b02e9c15480"
 }
