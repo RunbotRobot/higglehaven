@@ -1634,7 +1634,7 @@ most likely to come up again.
   menu in build mode. Make it a small always-visible (or grayed out, if
   nothing to undo) icon in the upper-right ... a single row of
   always-visible build tools, sized and arranged for compactness." On the
-  edge: "We don't need a \"That's the edge of this lándlet\" note ... It
+  edge: "We don't need a 'That's the edge of this lándlet' note ... It
   should be obvious that that's the reason." And on the top bar: smaller,
   no outline each, "a single background", pushed to the upper right. So:
   selecting an item or a bundle shows three rings and three two-way axes
@@ -1651,6 +1651,26 @@ most likely to come up again.
   happens": the stop stays, and the sentence is kept for limits that
   cannot be seen (a level limit, a cap, a server refusal); the edge of
   the lándlet is on screen and needs none.
+
+- **An open menu is a flower in bloom; and a person's state is shown by
+  the avatar itself, never by a label hung on it.** (2026-11-26, #4440,
+  #4441.) On the head: "It feels weird that clicking the bud opens petals,
+  while the bud stays closed. We need opening the menu to open the bud as
+  well so that the opened menu shows a normal bloomed flower. This may
+  mean the gg can't be visible while the menu is open." So the head is a
+  bud only while folded; opening blooms the head itself, folding closes
+  it, and the logo may give way while it is open. This amends "The
+  interface is one bud": the closed bud carries the brand, the open flower
+  is the menu. Because it is a change of look, it is built as two or three
+  variants behind address switches for the owner to try, like the height
+  gestures. On idle people: "Let's get rid of the 'afk' note that pops up
+  when a shopper has been idle. We already have an idle animation slot for
+  that scenario." A session had just extended that badge to other people's
+  avatars (#4399). So what a person is doing (idle, away, sitting, talking)
+  is read from how their avatar behaves; text over an avatar is kept for
+  what cannot be shown (a name when asked for, words they say). Before
+  adding a label to something in the world, look for the animation, pose
+  or effect that says it.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
