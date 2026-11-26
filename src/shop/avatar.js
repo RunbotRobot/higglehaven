@@ -68,6 +68,7 @@ import {
 // flightMovement.js's own header comment already documents for this
 // module and that one.
 import { disposeObject3D, reportRendererMemoryDiagnostic } from './mode.js';
+import { markSharedModelResources } from '../sharedModelResources.js';
 
 // The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
 // non-gendered avatar assigned instantly at registration"). No character
@@ -79,13 +80,39 @@ import { disposeObject3D, reportRendererMemoryDiagnostic } from './mode.js';
 // rotate the pivot about local X — swinging the limb through the
 // forward/back-and-up/down sagittal plane exactly like a real hip/shoulder
 // joint — rather than needing a skeleton for one swinging joint per limb.
+// #4510: every default body used to build its own nine geometries, so a crowd of 200 held 780 on the GPU and each arrival
+// uploaded nine buffers. The shapes are the same for everyone, so they are built once and shared; each mesh is marked as
+// sharing its geometry, so releasing one body never frees what the others still draw (disposeOwnedMeshResources). The
+// materials stay per body: the "Go to last location" fade changes the own avatar's materials, and that must not fade
+// anyone else. Draw calls are not changed by this (one per mesh); that would need the parts merged or instanced.
+let sharedBodyGeometries = null;
+function defaultBodyGeometries() {
+  if (!sharedBodyGeometries) {
+    sharedBodyGeometries = {
+      leg: new THREE.CylinderGeometry(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, 8),
+      arm: new THREE.CylinderGeometry(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, 8),
+      torso: new THREE.CapsuleGeometry(SHOP_AVATAR_TORSO_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M, 4, 8),
+      head: new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12),
+      eye: new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.12, 8, 6),
+      hair: new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8),
+    };
+  }
+  return sharedBodyGeometries;
+}
+function sharedMesh(geometry, material) {
+  const mesh = new THREE.Mesh(geometry, material);
+  markSharedModelResources(mesh);
+  return mesh;
+}
+
 export function createShopAvatar() {
+  const geometries = defaultBodyGeometries();
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x5b8dc9 });
   const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe8c9a0 });
 
-  function limb(radius, length, material) {
+  function limb(geometry, length, material) {
     const pivot = new THREE.Group();
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 8), material);
+    const mesh = sharedMesh(geometry, material);
     mesh.rotation.x = Math.PI / 2; // stand the cylinder's local-Y axis up along world Z
     mesh.position.z = -length / 2; // hang it below the pivot rather than centered on it
     pivot.add(mesh);
@@ -94,26 +121,23 @@ export function createShopAvatar() {
 
   const group = new THREE.Group();
 
-  const legPivotL = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
+  const legPivotL = limb(geometries.leg, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
   legPivotL.position.set(-SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
   group.add(legPivotL);
-  const legPivotR = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
+  const legPivotR = limb(geometries.leg, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
   legPivotR.position.set(SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
   group.add(legPivotR);
 
-  const torso = new THREE.Mesh(
-    new THREE.CapsuleGeometry(SHOP_AVATAR_TORSO_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M, 4, 8),
-    bodyMaterial,
-  );
+  const torso = sharedMesh(geometries.torso, bodyMaterial);
   torso.rotation.x = Math.PI / 2;
   torso.position.z = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M / 2 + SHOP_AVATAR_TORSO_RADIUS_M;
   group.add(torso);
 
   const shoulderZ = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 0.6;
-  const armPivotL = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
+  const armPivotL = limb(geometries.arm, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
   armPivotL.position.set(-SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
   group.add(armPivotL);
-  const armPivotR = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
+  const armPivotR = limb(geometries.arm, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
   armPivotR.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
   group.add(armPivotR);
 
@@ -124,7 +148,7 @@ export function createShopAvatar() {
   const headPivot = new THREE.Group();
   headPivot.position.z =
     SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
+  const head = sharedMesh(geometries.head, headMaterial);
   headPivot.add(head);
 
   // Face + hair (owner Control Room feedback: "give him a face and hair so
@@ -139,12 +163,11 @@ export function createShopAvatar() {
   // avatar's existing "primitives only" style rather than needing any new
   // geometry.
   const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
-  const eyeRadius = SHOP_AVATAR_HEAD_RADIUS_M * 0.12;
   const eyeY = SHOP_AVATAR_HEAD_RADIUS_M * 0.85;
   const eyeZ = SHOP_AVATAR_HEAD_RADIUS_M * 0.1;
   const eyeSpacingX = SHOP_AVATAR_HEAD_RADIUS_M * 0.4;
   for (const sign of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 8, 6), eyeMaterial);
+    const eye = sharedMesh(geometries.eye, eyeMaterial);
     eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
     head.add(eye);
   }
@@ -160,7 +183,7 @@ export function createShopAvatar() {
   // (z max ~1.03R vs the head's 1R) for a bit of volume instead of a
   // shrink-wrapped skullcap.
   const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
+  const hair = sharedMesh(geometries.hair, hairMaterial);
   hair.scale.set(1, 0.95, 0.75);
   hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.05, SHOP_AVATAR_HEAD_RADIUS_M * 0.32);
   head.add(hair);
@@ -849,3 +872,23 @@ window.__testShopAvatarHasTransparentMaterial = () => {
 export function getShopAfkBlend() {
   return shopAfkBlend;
 }
+
+// #4510: e2e-only (same convention as the other window.__test* hooks): two default bodies draw the same geometries, and
+// releasing one frees none of them.
+window.__testDefaultBodiesShareGeometry = () => {
+  const geometriesOf = (body) => {
+    const found = [];
+    body.group.traverse((object) => { if (object.isMesh) found.push(object.geometry); });
+    return found;
+  };
+  const first = createShopAvatar();
+  const second = createShopAvatar();
+  const a = geometriesOf(first);
+  const b = geometriesOf(second);
+  let disposed = 0;
+  for (const geometry of b) geometry.addEventListener('dispose', () => { disposed += 1; });
+  disposeObject3D(first.group);
+  const result = { meshes: a.length, sameGeometry: a.every((geometry, i) => geometry === b[i]), disposedByRelease: disposed };
+  disposeObject3D(second.group);
+  return result;
+};
