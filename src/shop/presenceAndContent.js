@@ -87,7 +87,7 @@ import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
 import { createCreditOrbFades } from './creditOrbArrival.js';
 import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
-import { createShopAvatar, makeAfkBadgeSprite, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
+import { createShopAvatar, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
@@ -1273,17 +1273,11 @@ export async function pollNearbyPresenceIfNeeded(now) {
       const defaultAvatar = waitsForModel ? null : createShopAvatar();
       const body = defaultAvatar ? defaultAvatar.group : new THREE.Group();
       group.add(body);
-      // #4390: the same small "afk" mark the person sees on their own avatar, above the head, shown while their presence says they have stepped away.
-      const afkMark = makeAfkBadgeSprite();
-      afkMark.position.set(0, 0, 2.1);
-      afkMark.material.opacity = 0;
-      group.add(afkMark);
       group.position.set(avatar.x, avatar.y, avatar.z);
       scene.add(group);
       entry = {
         group,
         body,
-        afkMark,
         afk: false,
         // #4067: the fog that stands in for a body still loading; null once it is in place.
         modelWait: waitsForModel
@@ -1525,8 +1519,8 @@ function stepOtherAvatarMotion(entry, dt, state) {
 
 // A cloned custom model with its feet at local z=0, matching the default
 // body's contract (createCustomShopAvatar does the same measurement for the
-// shopper's own avatar). No animation or AFK badge for other players: the
-// presence row carries neither.
+// shopper's own avatar). No animation for other players: the
+// presence row carries none (#4441: nor an AFK label).
 async function loadOtherAvatarCustomBody(modelUrl) {
   // #3230: skeletonSafe, so each avatar's own AnimationMixer drives only its
   // own bones even when several nearby players wear the same model.
@@ -1743,8 +1737,6 @@ export function updateOtherShopAvatars(now) {
       THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
     );
     entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
-    // #4390: ease the mark in and out the way the person's own badge does.
-    if (entry.afkMark) entry.afkMark.material.opacity += ((entry.afk ? 1 : 0) - entry.afkMark.material.opacity) * 0.15;
     // #3449: an assistant on shift is placed by the server and never reports a
     // position of its own, so it wanders a little around that spot on the
     // client (assistantIdle.js: seeded from its name and the clock, nothing to

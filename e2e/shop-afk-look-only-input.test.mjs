@@ -1,4 +1,4 @@
-// Regression test for #1586: the AFK label (afkSprite, src/main.js's
+// Regression test for #1586: the AFK state (was a label until #4441 removed it; src/main.js's
 // updateShopAvatarIdle) used to time out only off the move joystick
 // (shopMoveX/shopMoveY) -- a shopper who was only panning the camera via
 // the look joystick (shopLookX/shopLookY) still got timed out to AFK after
