@@ -845,9 +845,13 @@ export async function handleLandlets(request, db, route, url) {
     if (status !== null && !['greenbelt', 'claimed', 'generating'].includes(status)) {
       throw new HttpError('status must be greenbelt, claimed, or generating', 400);
     }
+    // #3873: `ownerBuilderId=me` is the signed-in builder's own id, read from the session (the same gate every
+    // builder-owned call uses), so Build can ask for its lándlet without waiting for GET /api/builders/me first.
     const ownerBuilderId = ownerBuilderIdParam === null
       ? null
-      : stringValue(ownerBuilderIdParam, 'ownerBuilderId');
+      : ownerBuilderIdParam === 'me'
+        ? (await requireSessionBuilder(request, db)).builder_id
+        : stringValue(ownerBuilderIdParam, 'ownerBuilderId');
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = [];

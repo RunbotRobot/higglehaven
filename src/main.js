@@ -346,7 +346,7 @@ import {
   showSoldOutMarkers, setShowSoldOutMarkers, soldOutMarkers, setSoldOutMarkers,
   applySoldOutMarkerVisibility, removeSoldOutMarkerMesh, clearSoldOutMarkerMeshes,
   activeLowStockTemplateIds, setActiveLowStockTemplateIds,
-  applyLandletShape, resolveLandletId, renderLevelControls, addInstanceToScene,
+  applyLandletShape, resolveLandletId, startEarlyOwnedLandletLookup, renderLevelControls, addInstanceToScene,
   setCurrentLandletAreaM2, setCurrentLandletLevels, setCurrentLevelIndex,
   buildModeFrameUpdate,
   controls, rotateControls, translateControls,
@@ -2397,6 +2397,7 @@ async function bootstrap() {
   // rather than after overlaps that round trip with this one instead of
   // paying for both in serial.
   const catalogPromise = fetchCatalog();
+  startEarlyOwnedLandletLookup(); // #3873: "my lándlet" is asked while the builder id is still on its way
   setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
     // Declined to log in (closed #auth-modal without signing in/up) —

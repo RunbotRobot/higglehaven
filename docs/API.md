@@ -4389,7 +4389,10 @@ growing world does not require an unbounded D1 read.
 Optional query parameters:
 
 - `status`: filters by exact status (`greenbelt`, `claimed`, or `generating`).
-- `ownerBuilderId`: filters by placeholder builder owner ID.
+- `ownerBuilderId`: filters by placeholder builder owner ID. The value `me` means the signed-in builder's own
+  id, read from the session (`401` without a session, `403` with `verificationRequired` before age
+  attestation and card or ID verification, like every builder-owned call), so a client can ask for its own
+  lándlets without first reading `GET /api/builders/me` (#3873).
 - `limit`: page size from 1 to 100; defaults to 100.
 - `cursor`: opaque `nextCursor` value from the preceding page.
 
