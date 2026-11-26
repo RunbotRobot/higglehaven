@@ -12041,6 +12041,14 @@ Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
 
+**#4387**: when scoped with `?landletId=`, the response also carries
+`collectedOrbIds`: the ids of that landlet's orbs collected within the last 15
+seconds, by anyone (never who). A client that holds an orb missing from `orbs`
+pops it if its id is listed (the pop the collector saw, so one event looks the
+same to everyone who sees it) and dissolves it otherwise (the landlet was
+claimed, the orb was removed). The Shop asks again every 4 seconds while a
+landlet's orbs are loaded and the tab is visible.
+
 ### `GET /api/credit-orbs/standing`
 
 #3441. Session-gated, read-only: where the signed-in builder stands against
