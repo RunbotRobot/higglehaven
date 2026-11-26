@@ -3199,6 +3199,9 @@ renderer.domElement.addEventListener('pointerup', (event) => {
   axisPress = null;
   if (!press?.armed || !translateControls.dragging || translateControls.object !== press.object) return;
   if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > AXIS_TAP_MAX_TRAVEL_PX) return;
+  // While a bundle's members are being edited a tap on one of them selects it, even where an arrow's tip lies over it:
+  // the members are the target there, so the click goes through as it always has.
+  if (editingGroupId) return;
   const direction = arrowDirection(press.axis, press.x, press.y);
   axisTapAt = performance.now(); // the click that follows this lift is the arrow's, not a tap on the ground (src/main.js)
   // A tap: the press already pushed the undo step of a drag; the nudge makes its own, so that one is dropped...
