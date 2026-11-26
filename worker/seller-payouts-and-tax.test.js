@@ -205,6 +205,8 @@ describe('Seller payouts (#454)', () => {
 
     const notices = await api('/notifications', builder.session());
     expect(notices.body.notifications.some((n) => n.message.includes('has shipped!'))).toBe(true);
+    // #4498: the shipped notice opens My purchases.
+    expect(notices.body.notifications.find((n) => n.message.includes('has shipped!')).kind).toBe('purchases');
   });
 
   // #925: the sequential re-ship test above only proves a repeat call
