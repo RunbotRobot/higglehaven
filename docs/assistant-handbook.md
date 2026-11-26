@@ -159,7 +159,8 @@ touches one ends by sending the assistant to the runbook's hand-off.
 1. Tap the round logo at the top left to open the menu, then tap "Notices" or "My lándlets".
 2. A person with nothing to read in "Notices" sees "Nothing new. Updates about your products, your lándlet and your account will show up here."
 3. A person who has not claimed a lándlet sees, in "My lándlets", "You don't own a lándlet yet. Claim one in Build mode to start building." (The steps for claiming are in "How do I get my own lándlet?".)
-4. "My lándlets" also shows a small bar for how much ground they hold: a line such as "You hold 400 m² of the 900 m² you may hold." and the words "The cap grows as your products earn higgles." Read out the numbers on their own screen, because the cap changes.
+4. A notice about a friend request, a friend who accepted, a new message, an assistant's reply, or an order that shipped or was refunded opens what it is about when they tap it: Friends, the assistant window or My purchases. It is marked read as well. Other notices are only marked read when tapped, and notices from before this was added do the same.
+5. "My lándlets" also shows a small bar for how much ground they hold: a line such as "You hold 400 m² of the 900 m² you may hold." and the words "The cap grows as your products earn higgles." Read out the numbers on their own screen, because the cap changes.
 
 **You will see:** one plain sentence saying what will appear there. An empty list is not a fault.
 
@@ -427,6 +428,7 @@ shows under "My purchases".
 - "Your payment went through, but we couldn't finish your purchase yet. Tap "Finish purchase" to try again -- your card
   won't be charged again.": tap "Finish purchase". If it says the order will appear in My purchases once it is
   confirmed, it will; the card is not charged again.
+- A notice titled "The price changed" says "The price is now $X. You were not charged. Review it and buy again if you still want it.": the seller changed the price after the checkout sheet opened. Nothing was bought and nothing was charged; the card now shows the new price, and they tap "Buy" again if they still want it.
 - The payment fails, the person is charged twice, or they want a refund: that is
   money. Say plainly that you cannot do it yourself, say you are sending it to the
   team, and use the runbook's hand-off.
