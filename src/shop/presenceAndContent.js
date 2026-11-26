@@ -67,7 +67,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
 import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, orderViolations, isTierUpgrade, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -811,6 +811,8 @@ function updateInstanceLodTiers() {
       if (object.userData.batchWaitSince !== undefined) batchCrossfades.clearWait(object);
       continue;
     }
+    // #4113: the order below (nearest upgrade first, farthest downgrade first, see largestFirst). A batched placement lands on the version its batch resolves the wanted one to.
+    lodItemsScratch[i].upgrade = isTierUpgrade(object.userData.lodApplied, object.userData.batch ? resolveBatchTier(object.userData.batch, tier) : tier);
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -870,6 +872,27 @@ export function batchCrossfadeStats() {
     transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
     hardSwaps: batchCrossfades.hardSwapCount,
   };
+}
+// #4113 (e2e): how many drawn batched placements show a worse version than some placement farther from the avatar.
+export function batchOrderViolations() {
+  const bricks = [];
+  const rankOf = { far: 0, mid: 1, full: 2 };
+  for (const entry of shopLandlets.values()) {
+    for (const batch of entry.batches) {
+      for (const handle of batch.handles) {
+        const rank = rankOf[handle.userData.batchTier];
+        if (rank === undefined) continue;
+        bricks.push({
+          rank,
+          d: horizontalDistanceM(
+            entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
+            shopAvatarPosition.x, shopAvatarPosition.y,
+          ),
+        });
+      }
+    }
+  }
+  return orderViolations(bricks);
 }
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
