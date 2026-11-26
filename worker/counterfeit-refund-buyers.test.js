@@ -121,6 +121,24 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     expect(second.body.refundBuyers.refundCount).toBe(0);
   });
 
+  it('lists approved flags with orders still to refund, and drops a listing once none is left', async () => {
+    const seller = await signupSeller('cfr-seller-f');
+    await makeListing('cfr-f', seller);
+    await makeListing('cfr-f-none', seller);
+    await buy('cfr-f', 1, { totalCents: 1000 });
+    await buy('cfr-f', 2, { totalCents: 400, paidOut: true });
+    await approveFlag('cfr-f');
+    await approveFlag('cfr-f-none');
+    const listed = await api('/product-flags?status=approved', admin.session());
+    const row = listed.body.listings.find((l) => l.templateId === 'cfr-f');
+    expect(row).toMatchObject({ templateName: 'Fake cfr-f', flagCount: 1, openOrders: 1 });
+    expect(listed.body.listings.find((l) => l.templateId === 'cfr-f-none')).toBeUndefined();
+    expect((await api('/product-flags?status=approved', viewer.session())).response.status).toBe(403);
+    await post('cfr-f', { expectedCount: 1, expectedRefundCents: 990 });
+    const after = await api('/product-flags?status=approved', admin.session());
+    expect(after.body.listings.find((l) => l.templateId === 'cfr-f')).toBeUndefined();
+  });
+
   it('a card buyer is told the 99% that actually goes back when the caller says so', async () => {
     const buyer = await signupBuilder('cfr-buyer-e');
     await clawBackPurchaseCommission(env.DB, {
