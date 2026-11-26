@@ -221,5 +221,6 @@
   "0236_direct_message_reports.sql": "ef0ec8f6269556fbddd58f14a7225a5f773f2622558a9d7f6e9d45d38790db6c",
   "0237_users_is_admin_viewer.sql": "1985da85b35569d2f35c725cacbb1189884669be79b7998aeb755c6f1e464c28",
   "0238_avatar_presence_afk.sql": "81e847f2e4a30faafd6326f12967b5f64aa0faee9638ab45f3519b02e9c15480",
-  "0239_didit_end_reason.sql": "9e8c66954c0a5e15d4ef6226ae55a0a0d6e09ef53ac21e47185f5ec962c255f0"
+  "0239_didit_end_reason.sql": "9e8c66954c0a5e15d4ef6226ae55a0a0d6e09ef53ac21e47185f5ec962c255f0",
+  "0240_notifications_kind.sql": "ebbe24eb46604dad20211cbee2693b033509f2b6713cd5d205b44d2b9da012a3"
 }
