@@ -9657,6 +9657,27 @@ requirements, the duplicate-flagger `409`, the auto-hide threshold firing
 approve/reject outcomes (including the strike-count increment and the
 un-hide on reject), and the admin-only list endpoint.
 
+### Refund buyers on an approved counterfeit flag (#4376)
+
+Approving a flag hides the listing and strikes the seller and refunds no one (owner decision, 2026-11-26, option A).
+Refunding the people who already bought it is a separate admin action.
+
+```
+GET  /api/product-flags/:templateId/refund-buyers   -> { refundBuyers: { templateId, productName, refundCount, refundCents, orderTotalCents, notRefundableCount, notRefundableCents } }
+POST /api/product-flags/:templateId/refund-buyers   { expectedCount, expectedRefundCents } -> { refunded, refundedCents, failed, firstError, refundBuyers }
+```
+
+- `409` until a flag on the listing is approved. GET takes a full admin or a look-only admin; POST a full admin only.
+- `refundCount` and `refundCents` are the orders not yet refunded and not yet paid out, and what goes back to the buyers
+  (99% of each order, `REFUND_PAYOUT_RATE`). `notRefundable*` counts the orders this action leaves alone: the seller was
+  already paid out (a reversal would pull money that backs other sales), or the order was partly refunded already. They
+  are listed so nobody is told they were refunded when they were not; covering them from platform funds is not decided.
+- POST refunds only if `expectedCount` and `expectedRefundCents` still match what a GET would say (the count and total
+  the admin confirmed); otherwise `409` and nothing moves. Each refund is the existing refund path (same Stripe
+  idempotency key, commission clawback and buyer notice, which says why), so pressing again never refunds anyone twice.
+  A call does at most 8 orders and returns what is left in `refundBuyers`; the page presses again until it is 0.
+- One `counterfeit_refund_buyers` row per call in the admin action log.
+
 ### Self-dealing flags (#2019, sub-issue of #1212)
 
 A lighter, non-fingerprinting self-dealing signal: every real purchase
