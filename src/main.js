@@ -1380,6 +1380,19 @@ window.__testShopDrawStats = (options) => {
 };
 // #4062: e2e-only. Whether a batch version change has dissolved (a fade is running) and how many have.
 window.__testShopBatchCrossfades = () => batchCrossfadeStats();
+// #4113: e2e-only. The books' count of batched placements on each version right now, summed over every loaded
+// landlet, without rendering a frame (window.__testShopDrawStats renders one), so a test can read it every frame
+// while the avatar walks.
+window.__testShopBatchTierCounts = () => {
+  const counts = { full: 0, mid: 0, far: 0 };
+  for (const entry of shopLandlets.values()) {
+    for (const batch of entry.batches) {
+      const batchCounts = batchTierCounts(batch);
+      for (const name of Object.keys(counts)) counts[name] += batchCounts[name];
+    }
+  }
+  return counts;
+};
 // #3404: e2e-only. Where a loaded placement is on screen (client pixels) and
 // whether it is in front of the camera, so a test can tap exactly on it; and
 // which placement the last tap resolved to.
