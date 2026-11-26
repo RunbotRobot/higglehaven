@@ -1,6 +1,6 @@
 // #4414 (the owner: "Let's move the nudge to the arrow on the movement axes. When you tap the arrow, it does the nudge
 // in that direction"): a tap on the arrow at either end of a movement axis moves the selection one step that way, for
-// one item and for a bundle, from two camera angles; a drag from the same arrow is still the axis move; one Undo takes
+// one item, from two camera angles (the bundle is e2e/bundle-axis-arrow-tap-nudge); a drag from the same arrow is still the axis move; one Undo takes
 // a tap back; and the card carries no Nudge pad. 390x844.
 import { launchPage, chooseIdentity, claimLandlet, finish, budClick } from './helpers.mjs';
 
@@ -98,27 +98,4 @@ await page.waitForTimeout(500);
   check(!r2.missing && Math.abs(along(r2.moves[0], r2.arrow.direction) - STEP) < 0.015, `from another camera angle a tap still moves one step along that arrow (${JSON.stringify(r2.moves?.[0])})`);
 }
 
-// ---- a bundle -----------------------------------------------------------------------------------------------------------
-await page.mouse.click(60, 650);
-await page.waitForTimeout(300);
-await placeTreeAt(260, 330);
-await page.mouse.click(60, 650);
-await page.waitForTimeout(300);
-const screenPositions = await page.evaluate(() => window.__testProductScreenPositions());
-await page.click('#toggle-multiselect');
-await page.waitForTimeout(200);
-for (const p of screenPositions) { await page.mouse.click(p.x, p.y); await page.waitForTimeout(150); }
-await page.waitForTimeout(300);
-await page.click('#group-item');
-await page.waitForTimeout(800);
-await page.click('#toggle-multiselect');
-await page.waitForTimeout(500);
-check((await arrows()).length === 6, 'a bundle wears the three axes with an arrow at each end');
-for (const [axis, sign] of [['X', 1], ['Y', -1], ['Z', 1]]) {
-  const rb = await tap(axis, sign);
-  if (rb.missing) { check(false, `the bundle has the ${sign > 0 ? '+' : '-'}${axis} arrow`); continue; }
-  const ok = rb.moves.every((m) => Math.abs(along(m, rb.arrow.direction) - STEP) < 0.015 && sideways(m, rb.arrow.direction) < 0.015);
-  check(ok, `a tap on the bundle's ${sign > 0 ? '+' : '-'}${axis} arrow moves every member one step together (${JSON.stringify(rb.moves)})`);
-}
-
-await finish(browser, { pass: pass && errors.length === 0, label: '#4414: a tap on an axis arrow nudges one step, for an item and a bundle', errors });
+await finish(browser, { pass: pass && errors.length === 0, label: '#4414: a tap on an axis arrow nudges one step; one Undo takes it back; a drag is still the axis move', errors });
