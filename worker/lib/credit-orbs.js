@@ -104,6 +104,9 @@ export function orbSpawnPoint(polygonJson, random = Math.random) {
   return { x: (random() * 2 - 1) * halfSpan, y: (random() * 2 - 1) * halfSpan };
 }
 
+// #4387: how long a collected orb's id is still listed, so a client that missed a refresh or two still pops it.
+const COLLECTED_ORB_REPORT_WINDOW_MS = 15_000;
+
 function creditOrbFromRow(row) {
   return {
     orbId: row.orb_id,
@@ -158,7 +161,18 @@ export async function handleCreditOrbs(request, db, route, url) {
       WHERE ${conditions.join(' AND ')}
       ORDER BY spawned_at
     `).bind(...bindings).all();
-    return json({ orbs: results.map(creditOrbFromRow) });
+    const body = { orbs: results.map(creditOrbFromRow) };
+    if (landletId !== null) {
+      // #4387: which of this lándlet's orbs were collected a moment ago (by anyone; never who), so a person
+      // who can see one shows the same pop the collector saw instead of a fog dissolve. An orb that is gone for
+      // any other reason (the lándlet was claimed, it was removed) is simply absent from `orbs`.
+      const since = new Date(Date.now() - COLLECTED_ORB_REPORT_WINDOW_MS).toISOString();
+      const { results: collected } = await db.prepare(
+        'SELECT orb_id FROM credit_orbs WHERE landlet_id = ? AND collected_at >= ?',
+      ).bind(landletId, since).all();
+      body.collectedOrbIds = collected.map((row) => row.orb_id);
+    }
+    return json(body);
   }
   // GET /api/credit-orbs/standing (#3441) -- where the signed-in builder
   // stands against the collect limit (remaining, and when the next slot

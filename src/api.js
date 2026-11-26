@@ -2307,6 +2307,13 @@ export async function fetchCreditOrbs(landletId) {
   return orbs;
 }
 
+// #4387: the same list with the ids collected in the last few seconds, so an orb another person collected pops
+// for an onlooker too (docs/API.md "Credit orbs").
+export async function fetchCreditOrbsWithCollected(landletId) {
+  const { orbs, collectedOrbIds } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
+  return { orbs, collectedOrbIds: collectedOrbIds ?? [] };
+}
+
 // #3441: where the signed-in person stands against the orb collect limit
 // ({ limit, windowSeconds, remaining, retryAfterSeconds }), so an orb over the
 // limit can be left alone before it is touched. Resolves to null when there is

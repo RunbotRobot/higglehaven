@@ -75,7 +75,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbsWithCollected, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
 import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
 import { noteOrbLoadFailed, orbLoadDue } from './orbLoadRetry.js';
@@ -401,6 +401,10 @@ export function updateShopProximity() {
         loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
       } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
         unloadCreditOrbsForLandlet(entry);
+      } else if (entry.orbsLoaded && !document.hidden && performance.now() >= (entry.orbsRefreshAt ?? 0)) {
+        // #4387: an orb someone else collects while I am here is told to me, so I see the same pop.
+        entry.orbsRefreshAt = performance.now() + CREDIT_ORB_REFRESH_INTERVAL_MS;
+        refreshCreditOrbsForLandlet(entry, entry.orbLoadToken);
       }
     }
   }
@@ -2087,6 +2091,36 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     const loadedOrb = { mesh, group: entry.group, orbId: orb.orbId, collecting: false };
     shopCreditOrbs.push(loadedOrb);
     creditOrbFades.arrive(loadedOrb); // #4174: resolves out of fog instead of popping in
+  }
+}
+
+// #4387 ("One event in the world looks the same to everyone who sees it"): how often a landlet whose orbs are
+// loaded asks again which of them are gone. One small unauthenticated read each time; no tighter than the
+// person-to-person presence poll's own cadence would justify, so an onlooker's pop can trail the collector's by
+// up to this long (stated on the issue), and nothing is polled faster to close that gap.
+const CREDIT_ORB_REFRESH_INTERVAL_MS = 4000;
+
+async function refreshCreditOrbsForLandlet(entry, myToken) {
+  let reply;
+  try {
+    reply = await fetchCreditOrbsWithCollected(entry.record.landletId);
+  } catch {
+    return; // best effort: asked again after the next interval
+  }
+  if (myToken !== entry.orbLoadToken) return; // the landlet was unloaded or reloaded meanwhile
+  const stillThere = new Set(reply.orbs.map((orb) => orb.orbId));
+  const collected = new Set(reply.collectedOrbIds);
+  for (const orb of [...shopCreditOrbs]) {
+    if (orb.group !== entry.group || orb.collecting || stillThere.has(orb.orbId)) continue; // mine, or still standing
+    if (collected.has(orb.orbId)) {
+      // Someone collected it: the pop the collector saw, at the orb's place; no balance text (that is theirs).
+      if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
+      removeCreditOrb(orb);
+    } else {
+      // Gone for another reason (the lándlet was claimed, it was removed): it leaves the way an orb leaving range does.
+      shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
+      creditOrbFades.depart(orb, () => { orb.group.remove(orb.mesh); disposeObject3D(orb.mesh); });
+    }
   }
 }
 
