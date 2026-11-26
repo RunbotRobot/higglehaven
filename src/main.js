@@ -1412,6 +1412,31 @@ window.__testShopInstanceTier = (instanceId) => {
   }
   return null;
 };
+// #4391: e2e-only. Where one placed item stands during a change of the live version: its object's uuid (kept while it
+// is untouched), whether it is still among the lándlet's interactive objects, whether it is still drawn in the
+// lándlet's group (an item that is leaving is drawn but no longer interactive), and how many are fading out.
+window.__testShopVersionState = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const inObjects = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    const inGroup = entry.group.children.find((child) => child.userData?.instanceId === instanceId);
+    if (inObjects || inGroup) {
+      const drawn = inGroup ?? inObjects;
+      return {
+        uuid: drawn.uuid, inObjects: !!inObjects, inGroup: !!inGroup, departing: entry.departureRun?.count() ?? 0,
+        // true while the dither dissolve is on the item (its materials are the dissolving clones)
+        dissolving: (() => {
+          let found = false;
+          drawn.traverse((child) => {
+            const materials = [child.material].flat().filter(Boolean);
+            if (materials.some((material) => String(material.customProgramCacheKey?.() ?? '').includes('arrival-dissolve'))) found = true;
+          });
+          return found;
+        })(),
+      };
+    }
+  }
+  return { uuid: null, inObjects: false, inGroup: false, departing: 0, dissolving: false };
+};
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;
   for (const entry of shopLandlets.values()) count += entry.objects.length;

@@ -272,6 +272,14 @@ export function unloadShopLandletInstances(entry) {
     entry.arrivalRun.dispose();
     entry.arrivalRun = null;
   }
+  // #4391: the arrivals and departures of a change of version are released the same way. Whatever was still
+  // fading out leaves now, and what the diff showed (and the version it was) is forgotten with the load.
+  for (const run of entry.versionRuns ?? []) run.dispose();
+  entry.versionRuns = [];
+  entry.departureRun?.dispose();
+  entry.departureRun = null;
+  entry.shownInstances = null;
+  entry.shownVersionId = undefined;
   for (const object of entry.objects) {
     entry.group.remove(object);
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
@@ -348,6 +356,28 @@ export function unloadShopLandletInstances(entry) {
     if (burst.group !== entry.group) continue;
     disposeConfettiBurst(burst);
     confettiBursts.splice(confettiBursts.indexOf(burst), 1);
+  }
+}
+
+// #4391: takes one placed item out of everything a shopper can interact with (its review sprites, and the product
+// card, hints and highlight if they were on it) while it is still drawn, so a change of version can let it fade out
+// instead of removing it in one frame. Its picture is the caller's to remove and dispose afterwards. Signs and
+// calendars are not handled here: the caller does not let them leave this way.
+export function unregisterShopObject(entry, object) {
+  for (const review of [...shopReviews]) {
+    if (review.group !== entry.group || review.mesh !== object) continue;
+    disposeReviewSprites(review);
+    shopReviews.splice(shopReviews.indexOf(review), 1);
+    if (shopTappedProduct === review) {
+      setShopTappedProduct(null);
+      setShopReviewHintsVisible(false);
+      setShopReviewHintsProduct(null);
+      closeProductCard();
+    }
+    if (shopHighlightedProduct === review) {
+      removeSelectionOutline(review.mesh);
+      setShopHighlightedProduct(null);
+    }
   }
 }
 

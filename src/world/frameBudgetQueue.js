@@ -188,6 +188,8 @@ export function createFrameBudgetQueue({
     dropGroup,
     drain,
     pending: () => live,
+    // #4391: whether a group still has work waiting (an item not yet built).
+    hasPending: (group) => (byGroup.get(group)?.size ?? 0) > 0,
     stats: () => ({ ticks, unitsRun, longestTickMs, pending: live }),
   };
 }

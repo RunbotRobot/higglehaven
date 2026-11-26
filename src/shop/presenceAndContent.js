@@ -108,7 +108,9 @@ import {
 // own enterShopMode in turn imports shopLandlets/pickShopSpawnLocation/etc.
 // from this module, same mutually-dependent shape flightMovement.js's own
 // header comment already documents for shop/avatar.js and itself.
-import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
+import { disposeObject3D, unloadShopLandletInstances, unregisterShopObject, buildShopGroundMesh } from './mode.js';
+import { diffVersionInstances, instanceIdOf, planVersionChange } from './versionDiff.js'; // #4391
+import { createDepartureRun } from './departureRun.js'; // #4391
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
 import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
@@ -1053,6 +1055,12 @@ export function refreshShopLandletRecordsNow() {
         // PATCH endpoint) with no extra per-child work.
         entry.group.position.set(freshRecord.center.x, freshRecord.center.y, freshRecord.elevationM ?? 0);
         entry.record = freshRecord;
+        // #4391: the builder switched which version is live while this shopper has the lándlet loaded: what is
+        // drawn follows it, in the same breath as the other fields above (the first line of a load already reads
+        // the live version, so a lándlet that is not loaded needs nothing).
+        if (entry.loaded && entry.shownVersionId !== undefined && (freshRecord.activeVersionId ?? null) !== entry.shownVersionId) {
+          applyShopVersionChange(entry).catch((error) => console.warn("version change failed", error));
+        }
         if (entry === shopCurrentLandletEntry) currentEntryChanged = true;
       }
       // updateShopLandletInfo only re-renders on an actual landlet
@@ -1787,6 +1795,9 @@ async function loadShopLandletInstances(entry, myToken) {
     if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
     return;
   }
+  // #4391: what this load draws, so a later change of the live version can be told apart from it (versionDiff.js).
+  entry.shownVersionId = entry.record.activeVersionId ?? null;
+  entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
   // #4295: a load that was put away while its requests were in flight (an unload, then a newer load) must not go
   // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
   // stale, so nothing would be drawn at all.
@@ -1829,6 +1840,107 @@ async function loadShopLandletInstances(entry, myToken) {
       group,
       priority: instanceLoadPriority(entry, instance),
     });
+  }
+}
+
+// #4391 (leaf 1 of the version-change transition, docs/SPEC.md section 3): the live version of a lándlet a shopper
+// has loaded changed. What is in both versions, unchanged, is not touched at all; what is only in the old one fades
+// out where it stands (departureRun.js); what is only in the new one arrives through the same fog as any first load
+// (a second arrival run over just those, built by the same functions). Instances keep their id from the draft into
+// every version, so they are matched by id (versionDiff.js). Not everything can go this way, and then the lándlet
+// loads again plainly (unload now; the next proximity tick reads the live version and arrives through fog, as a
+// first visit does): a load or arrival still in progress, a diff too big to fade piece by piece, and anything that
+// touches a drawn-together batch (its meshes and enclosure books are one thing), a sign or a calendar.
+const VERSION_DIFF_MAX_CHANGES = 300;
+const DISPOSE_QUEUE_PRIORITY = 1e9; // behind any load, as in mode.js
+const VERSION_CHANGE_COUNTERS = { diffed: 0, plainReload: 0, leaving: 0, arriving: 0, unchanged: 0 };
+window.__shopVersionChange = VERSION_CHANGE_COUNTERS; // e2e and console only
+
+async function applyShopVersionChange(entry) {
+  if (entry.versionChangeInFlight) return;
+  entry.versionChangeInFlight = true;
+  try {
+    const token = entry.loadToken;
+    let landletRecord;
+    let instances;
+    try {
+      landletRecord = await fetchLandlet(entry.record.landletId);
+      const versionId = landletRecord.activeVersionId ?? null;
+      if (versionId === entry.shownVersionId) return;
+      instances = versionId
+        ? (await fetchLandletVersion(entry.record.landletId, versionId)).instances
+        : await fetchInstances(entry.record.landletId);
+    } catch {
+      return; // nothing changed here: the next record refresh asks again
+    }
+    // The load this was compared with is gone (an unload, or a reload that already reads the live version).
+    if (token !== entry.loadToken || !entry.loaded || !entry.shownInstances) return;
+    // A load or arrival still under way has not drawn everything it will: wait for the next refresh, which
+    // compares against the then-settled picture.
+    if (entry.loadGroup && worldWorkQueue.hasPending(entry.loadGroup)) return;
+    if (entry.arrivalRun && !entry.arrivalRun.settled()) return;
+    if (entry.versionRuns?.some((run) => !run.settled())) return;
+    const newVersionId = landletRecord.activeVersionId ?? null;
+    const diff = diffVersionInstances(entry.shownInstances, instances);
+    const byId = new Map();
+    for (const object of entry.objects) byId.set(object.userData.instanceId, object);
+    const plan = planVersionChange(diff, byId, VERSION_DIFF_MAX_CHANGES);
+    if (plan.plain) {
+      VERSION_CHANGE_COUNTERS.plainReload += 1;
+      unloadShopLandletInstances(entry); // the next proximity tick loads the live version, arriving through fog
+      return;
+    }
+    const { leaving, arriving } = plan;
+    VERSION_CHANGE_COUNTERS.diffed += 1;
+    VERSION_CHANGE_COUNTERS.leaving += leaving.length;
+    VERSION_CHANGE_COUNTERS.arriving += arriving.length;
+    VERSION_CHANGE_COUNTERS.unchanged += diff.unchanged;
+    entry.shownVersionId = newVersionId;
+    entry.record.activeVersionId = newVersionId;
+    entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
+    // Leaving: out of everything a shopper can touch now (collision, sit and lean search, reviews, the tap), still
+    // drawn while it fades; then removed and released a few at a time inside the frame budget.
+    if (leaving.length) {
+      const gone = new Set(leaving);
+      entry.objects = entry.objects.filter((object) => !gone.has(object));
+      entry.departureRun ??= createDepartureRun();
+      for (const object of leaving) {
+        unregisterShopObject(entry, object);
+        entry.departureRun.add(object, (done) => {
+          entry.group.remove(done);
+          worldWorkQueue.enqueue(() => disposeObject3D(done), { priority: DISPOSE_QUEUE_PRIORITY });
+        });
+      }
+    }
+    // The sets worked out for this load name the objects that just left, and a swap can keep the count: forget them.
+    entry.lodSets = null;
+    entry.lodSetsObjectCount = -1;
+    // Arriving: a run over just these, so each cluster gets its fog and resolves out of it like a first visit.
+    if (arriving.length) {
+      const run = createArrivalRun({
+        parent: entry.group,
+        instances: arriving,
+        templateFor: findTemplate,
+        anchor: shopArrivalAnchor(entry),
+      });
+      (entry.versionRuns ??= []).push(run);
+      const group = entry.loadGroup ?? (entry.loadGroup = {});
+      const { batches, singles } = groupPlacements(arriving, findTemplate);
+      for (const members of batches.values()) {
+        worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, token, group, run), {
+          group,
+          priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
+        });
+      }
+      for (const instance of singles) {
+        worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, token, run), {
+          group,
+          priority: instanceLoadPriority(entry, instance),
+        });
+      }
+    }
+  } finally {
+    entry.versionChangeInFlight = false;
   }
 }
 
@@ -2022,7 +2134,15 @@ function shopArrivalAnchor(entry) {
 // still arriving; a landlet at rest has none). Called once per frame from
 // updateShopWorldServices.
 export function updateShopArrivals() {
-  for (const entry of shopLandlets.values()) entry.arrivalRun?.update();
+  for (const entry of shopLandlets.values()) {
+    entry.arrivalRun?.update();
+    // #4391: the arrivals and departures of a change of version.
+    if (entry.versionRuns?.length) {
+      for (const run of entry.versionRuns) run.update();
+      entry.versionRuns = entry.versionRuns.filter((run) => !run.settled());
+    }
+    entry.departureRun?.update();
+  }
   // #3479: far models dissolving in (a no-op when none are).
   shopFarView?.tick();
   tierCrossfades.update(); // #3494
