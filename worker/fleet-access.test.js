@@ -394,7 +394,7 @@ describe('Fleet assistants: agent names', () => {
     });
   });
 
-  it('signup cannot claim an agent name, in any case, but session names stay open (local mode needs them)', async () => {
+  it('signup cannot claim an agent name, in any case, and a session name is refused on the real site (#4383)', async () => {
     await withMapping({ higglehaven9: 'Reserved Agent' }, async () => {
       for (const username of ['Reserved Agent', 'reserved agent', ' Reserved Agent ']) {
         const result = await api('/auth/signup', {
@@ -404,12 +404,15 @@ describe('Fleet assistants: agent names', () => {
         });
         expect(result.response.status, username).toBe(409);
       }
+      // #4383: on the real site a session name is refused too (a person named higglehaven17 reads as the team and
+      // would block that session's own account); a local server (wrangler dev) still allows it, tested on the
+      // rule itself in username-rules.test.js.
       const sessionName = await api('/auth/signup', {
         method: 'POST',
         headers: ip(),
         body: JSON.stringify({ email: `${crypto.randomUUID()}@example.test`, password: 'correct horse battery', username: 'higglehaven2', ageAttested: true }),
       });
-      expect(sessionName.response.status).toBe(201);
+      expect(sessionName.response.status).toBe(409);
     });
   });
 
