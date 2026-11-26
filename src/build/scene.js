@@ -3187,6 +3187,27 @@ function selectedItemHitAt(event) {
   return raycaster.intersectObjects([...selectedMeshes], true)[0] ?? null;
 }
 
+// #4410 (the owner: moving "is difficult to use"): a drag has to start ON the selected item, and a small or far-off item
+// is a few pixels wide on a phone, which a finger cannot hit. A press within 22 px of the middle of a SMALL selected
+// item (one whose whole size on screen is under 22 px) counts as on it, the same 44 px a finger needs for a handle;
+// a press that lands on another item, or anywhere near a larger one, is unchanged. A tap that does not move is still a
+// tap (the drag starts only past the tap threshold), so this never selects or deselects anything by itself.
+const SMALL_ITEM_GRAB_PX = 22;
+function nearSmallItemHit(event) {
+  if (selectedMeshes.size !== 1) return null;
+  const [mesh] = selectedMeshes;
+  const core = itemScreenCore(mesh);
+  if (!core || core.radius >= SMALL_ITEM_GRAB_PX || Math.hypot(event.clientX - core.x, event.clientY - core.y) > SMALL_ITEM_GRAB_PX) return null;
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const other = raycaster.intersectObjects(productMeshes, true)[0];
+  if (other) {
+    let owner = other.object;
+    while (owner && !productMeshes.includes(owner)) owner = owner.parent;
+    if (owner && !selectedMeshes.has(owner)) return null; // a press on another item is that item's
+  }
+  return { point: mesh.getWorldPosition(new THREE.Vector3()) };
+}
+
 function beginBodyDrag() {
   if (selectedMeshes.size === 0 || sceneMutationBusy) return false;
   let target;
@@ -3311,7 +3332,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   // TransformControls' own pointerdown (registered earlier) has already set .dragging when the ring or a
   // trim handle was grabbed, so a press on those never starts this.
   if (translateControls.dragging || rotateControls.dragging || trimControls.dragging) return;
-  const hit = selectedItemHitAt(event);
+  const hit = selectedItemHitAt(event) ?? nearSmallItemHit(event);
   if (!hit) return;
   bodyDragPlane.setFromNormalAndCoplanarPoint(UP_Z, hit.point);
   bodyDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startHit: hit.point.clone(), started: false, target: null, startPos: null };
