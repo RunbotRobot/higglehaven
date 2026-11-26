@@ -742,7 +742,7 @@ async function pollDiditVerificationStatus(setStatusFn = setAuthStatus, onApprov
   const tick = async () => {
     diditPollTimer = null;
     try {
-      const { status } = await fetchDiditVerificationStatus();
+      const { status, reason } = await fetchDiditVerificationStatus();
       if (status === 'approved') {
         await refreshCurrentUser();
         setStatusFn('Government-ID verification approved!', 'success');
@@ -750,7 +750,10 @@ async function pollDiditVerificationStatus(setStatusFn = setAuthStatus, onApprov
         return;
       }
       if (status === 'declined') {
-        setStatusFn('Government-ID verification was declined — you can try again.', 'error');
+        // #4477: closing the tab or running out of time is not being turned down.
+        setStatusFn(reason === 'unfinished'
+          ? "The ID check wasn't finished or timed out. Start it again when you're ready."
+          : "The ID check wasn't approved. You can try again, use a card instead, or contact support.", 'error');
         return;
       }
     } catch (err) {

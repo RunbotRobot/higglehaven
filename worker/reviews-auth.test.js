@@ -3015,7 +3015,7 @@ describe('Authentication', () => {
     `).bind(`sess-${crypto.randomUUID()}`, builder.email).run();
     const declined = await api('/auth/didit-verification-status', builder.session());
     expect(declined.response.status).toBe(200);
-    expect(declined.body).toEqual({ status: 'declined' });
+    expect(declined.body).toEqual({ status: 'declined', reason: 'not_approved' });
   });
 
   it('reports "pending" for a still-pending session when Didit is unconfigured, rather than attempting a reconciliation call', async () => {
