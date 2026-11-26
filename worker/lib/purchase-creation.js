@@ -563,7 +563,9 @@ export async function handlePurchaseFinalize(request, env) {
   await checkRateLimit(db, `purchase-finalize:${clientIp(request)}`, PURCHASE_FINALIZE_RATE_LIMIT_MAX);
 
   if (!stripeConfigured(env)) {
-    throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
+    // #4458: this is the finalize step, so a card may already have been charged; the buyer's copy (src/errorCopy.js)
+    // says neither "not charged" nor "try again later", and points at My purchases.
+    throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.PAYMENTS_UNAVAILABLE });
   }
   // #4459: if the payment cannot be looked up, the card may or may not have been charged; the buyer is told to check
   // My purchases (the payment webhook records a charge that succeeded) instead of reading the provider's sentence.

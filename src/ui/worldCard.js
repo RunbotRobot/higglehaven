@@ -101,7 +101,9 @@ export function createWorldCard(cardEl) {
     // largest dimension in metres.
     // minRadiusPx (optional): a clear space to keep round the thing, for a card whose thing wears
     // handles that reach past its own size (Build's rings, #4118): the card sits beyond it.
-    place(worldPosition, halfSize, minRadiusPx = 0) {
+    // aboveExtraPx (optional, #4410): more clear space when the card sits ABOVE the thing (Build's up arrow reaches
+    // farther up than the down arrow does down, in perspective).
+    place(worldPosition, halfSize, minRadiusPx = 0, aboveExtraPx = 0) {
       // #4242: while a ring or arrow is held the card stays exactly where it is (and out of the way, see
       // [data-held] in app.css); it does not move under the finger.
       if (held) return;
@@ -121,7 +123,7 @@ export function createWorldCard(cardEl) {
         const rightX = (scratchRight.x * 0.5 + 0.5) * viewport.width;
         const rawRadius = Math.max(Math.abs(rightX - x), minRadiusPx);
         // #4242: a thing that covers most of the screen's width has no clear place beside it; the card docks.
-        anchor = { x, y, radius: clampAnchorRadius(rawRadius), behind: false, fills: rawRadius >= viewport.width * fillsViewShare };
+        anchor = { x, y, radius: clampAnchorRadius(rawRadius), aboveExtra: aboveExtraPx, behind: false, fills: rawRadius >= viewport.width * fillsViewShare };
       }
       lastAnchor = anchor;
 

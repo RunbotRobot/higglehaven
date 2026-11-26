@@ -1,8 +1,8 @@
 // #4162 (leaf 4 of #4158): nudge and turn the selected item from the keyboard in Build. Plain keys move
 // the camera (src/build/keyboardCamera.js), so Shift means "the item": Shift with the arrows slides it
-// (the same Nudge pad steps as the card: left, right, forward, back, in the item's own axes), Shift with
-// Page Up and Page Down lifts and lowers it, Shift with Q and E turns it. A key is a press of the same
-// step a tap on the card makes, through the same pipeline, so the limits and their messages are the
+// (the same steps as a tap on an arrow of the movement axes: left, right, forward, back, in the item's own axes), Shift with
+// Page Up and Page Down lifts and lowers it, Shift with Q and E turns it. A key is a tap of the same
+// step an arrow makes, through the same pipeline, so the limits and their messages are the
 // card's. Pure, so it is unit-tested (keyboardItem.test.js); src/build/scene.js runs the action.
 import { isTypingOrInDialog } from '../shop/keyboardInput.js';
 

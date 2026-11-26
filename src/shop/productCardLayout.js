@@ -124,12 +124,15 @@ export function placeProductCard({
   } else {
     // Neither side has room (a product in the middle of a narrow screen): above
     // or below it, whichever has more room, centred on it.
+    // #4410: a thing whose handles reach farther up than down (Build's up arrow, seen in perspective) asks for
+    // more clear space above it (anchor.aboveExtra); the card then sits farther up, or goes below.
+    const aboveClear = radius + Math.max(0, anchor.aboveExtra ?? 0);
     const belowTop = y + radius + gap;
-    const aboveTop = y - radius - gap - card.height;
+    const aboveTop = y - aboveClear - gap - card.height;
     const fitsBelow = belowTop <= maxTop;
     const fitsAbove = aboveTop >= minTop;
     const roomBelow = viewport.height - margin - (y + radius + gap);
-    const roomAbove = y - radius - gap - minTop;
+    const roomAbove = y - aboveClear - gap - minTop;
     if (fitsBelow || fitsAbove) {
       side = fitsBelow && (!fitsAbove || roomBelow >= roomAbove) ? 'below' : 'above';
       top = side === 'below' ? belowTop : aboveTop;
@@ -143,7 +146,7 @@ export function placeProductCard({
       side = keepBelow || (!keepAbove && roomBelow >= roomAbove) ? 'below' : 'above';
       maxHeight = Math.floor(side === 'below' ? roomBelow : roomAbove);
       shown = { width: card.width, height: maxHeight };
-      top = side === 'below' ? y + radius + gap : y - radius - gap - maxHeight;
+      top = side === 'below' ? y + radius + gap : y - aboveClear - gap - maxHeight;
       left = clamp(x - card.width / 2, margin, maxLeft);
     } else {
       // Nothing fits (a very large product on a small screen): keep the card on

@@ -1307,6 +1307,8 @@ describe('Simulated purchases', () => {
         body: JSON.stringify({ paymentIntentId: 'pi_does_not_exist' }),
       });
       expect(notConfigured.response.status).toBe(503);
+      // #4458: the finalize step may follow a real charge, so it has its own code (its copy tells the buyer to check My purchases).
+      expect(notConfigured.body.code).toBe('payments_unavailable');
     });
 
     // #4459: a provider error while looking the payment up is not shown as the provider's sentence, and says the card
