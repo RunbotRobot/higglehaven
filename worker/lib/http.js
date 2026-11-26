@@ -47,6 +47,8 @@ export const ERROR_CODES = Object.freeze({
   ALREADY_OWNED: 'already_owned', // #4462
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
+  PAYMENT_NOT_STARTED: 'payment_not_started', // #4459
+  PAYMENT_UNCONFIRMED: 'payment_unconfirmed', // #4459
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
   PRICE_CHANGED: 'price_changed', // #4456
