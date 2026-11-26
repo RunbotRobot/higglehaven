@@ -25,24 +25,42 @@ import { DEFAULT_WORDMARK_ID, WORDMARK_STYLE_IDS, WORDMARK_COLOR_IDS } from '../
 // src/app.css.
 const FACE_DIR = '/design-directions/wordmark-fonts/';
 export const WORDMARK_FACES = {
-  round: { family: 'WM Round', file: 'fredoka-latin-600-normal.woff2', weight: '600' },
-  airy: { family: 'WM Airy', file: 'quicksand-latin-700-normal.woff2', weight: '700' },
-  serif: { family: 'WM Serif', file: 'fraunces-latin-700-normal.woff2', weight: '700' },
-  slab: { family: 'WM Slab', file: 'zilla-slab-latin-600-normal.woff2', weight: '600' },
-  script: { family: 'WM Script', file: 'pacifico-latin-400-normal.woff2', weight: '400' },
-  stencil: { family: 'WM Stencil', file: 'stardos-stencil-latin-700-normal.woff2', weight: '700' },
-  hand: { family: 'WM Hand-drawn', file: 'patrick-hand-latin-400-normal.woff2', weight: '400' },
+  round: { family: 'WM Round', label: 'Round', file: 'fredoka-latin-600-normal.woff2', weight: '600' },
+  airy: { family: 'WM Airy', label: 'Airy', file: 'quicksand-latin-700-normal.woff2', weight: '700' },
+  serif: { family: 'WM Serif', label: 'Serif', file: 'fraunces-latin-700-normal.woff2', weight: '700' },
+  slab: { family: 'WM Slab', label: 'Slab', file: 'zilla-slab-latin-600-normal.woff2', weight: '600' },
+  script: { family: 'WM Script', label: 'Script', file: 'pacifico-latin-400-normal.woff2', weight: '400' },
+  stencil: { family: 'WM Stencil', label: 'Stencil', file: 'stardos-stencil-latin-700-normal.woff2', weight: '700' },
+  hand: { family: 'WM Hand-drawn', label: 'Hand-drawn', file: 'patrick-hand-latin-400-normal.woff2', weight: '400' },
 };
 
 // The colour pairs from the same page: the name's ink, and the accent under it.
 export const WORDMARK_COLOUR_PAIRS = {
-  meadow: { ink: '#2f6a14', accent: '#6ca42e' },
-  ink: { ink: '#16240a', accent: '#6ca42e' },
-  berry: { ink: '#8a2450', accent: '#e2694f' },
-  sky: { ink: '#17608f', accent: '#4a9bd1' },
-  clay: { ink: '#7d4310', accent: '#e0a030' },
-  bark: { ink: '#4a3520', accent: '#f6d65c' },
+  meadow: { label: 'Meadow', ink: '#2f6a14', accent: '#6ca42e' },
+  ink: { label: 'Ink', ink: '#16240a', accent: '#6ca42e' },
+  berry: { label: 'Berry', ink: '#8a2450', accent: '#e2694f' },
+  sky: { label: 'Sky', ink: '#17608f', accent: '#4a9bd1' },
+  clay: { label: 'Clay', ink: '#7d4310', accent: '#e0a030' },
+  bark: { label: 'Bark', ink: '#4a3520', accent: '#f6d65c' },
 };
+
+// The choices a builder is offered, for the picker (#3783): the default first, then every id the shared list
+// offers that the renderer can draw, each with the word the picker shows.
+export function wordmarkOptions(offered = {}) {
+  const styles = offered.styles ?? WORDMARK_STYLE_IDS;
+  const colours = offered.colours ?? WORDMARK_COLOR_IDS;
+  return {
+    styles: [{ id: DEFAULT_WORDMARK_ID, label: 'Default' }, ...styles.filter((id) => id !== DEFAULT_WORDMARK_ID && WORDMARK_FACES[id]).map((id) => ({ id, label: WORDMARK_FACES[id].label }))],
+    colours: [{ id: DEFAULT_WORDMARK_ID, label: 'Default' }, ...colours.filter((id) => id !== DEFAULT_WORDMARK_ID && WORDMARK_COLOUR_PAIRS[id]).map((id) => ({ id, label: WORDMARK_COLOUR_PAIRS[id].label }))],
+  };
+}
+
+// Whether there is anything to choose: a control is not drawn for a person it can only refuse, so with only
+// the default on offer the picker has no way in.
+export function wordmarkChoiceAvailable(offered = {}) {
+  const { styles, colours } = wordmarkOptions(offered);
+  return styles.length > 1 || colours.length > 1;
+}
 
 // What a stored choice draws: the id itself when the shared list offers it and the renderer knows it,
 // the default otherwise. `offered` is the shared list by default; a test passes its own.

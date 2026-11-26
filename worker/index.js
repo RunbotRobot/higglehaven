@@ -1,5 +1,5 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
-import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './lib/username-rules.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalRequest } from './lib/username-rules.js';
 import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
@@ -1519,7 +1519,7 @@ async function handleBuilders(request, env, db, route, url) {
     // labelValue first: its 100-character bound runs before anything is normalised.
     const label = normalizeUsername(labelValue(input.label, 'label'));
     const labelSkeleton = usernameSkeleton(label);
-    if (isReservedSkeleton(labelSkeleton)) {
+    if (isReservedSkeleton(labelSkeleton, { allowSessionNames: isLocalRequest(request) })) {
       throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
     }
     await ensureUsernameSkeletons(db);
