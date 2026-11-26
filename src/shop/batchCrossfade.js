@@ -65,6 +65,11 @@ const JOIN_UNTIL_LEVEL = 0.2;
 // A placement swaps at once only when no placement at all has been admitted to a fade for this long, which
 // cannot happen while a fade runs (they end in 0.4 s) and is the safety net if it ever does.
 export const BATCH_CROSSFADE_MAX_WAIT_MS = 4000;
+// A wait runs out only after this many frames as well as the time above: a stall (a busy runner, a hitch of a
+// few seconds, a phone that paused the page) is one frame however long it lasted, and it must not swap
+// every waiting placement in one frame the moment it ends. At 60 fps the time is the limit; the frames only
+// matter where the page is drawing slower than about eight frames a second.
+export const BATCH_CROSSFADE_MIN_WAIT_FRAMES = 30;
 // What move() answers for a placement that is waiting (nothing changed; call again on a later tick).
 export const BATCH_WAITING = 'waiting';
 const REDUCED_MOTION_RECHECK_MS = 1000;
@@ -145,6 +150,8 @@ export function createBatchCrossfades({
   // waiting placements costs a comparison each while nothing has changed.
   let roomEpoch = 0;
   let lastAdmitMs = -Infinity; // when a placement was last admitted to a fade
+  let frames = 0; // update() calls so far (#4113: a wait is measured in frames too, see BATCH_CROSSFADE_MIN_WAIT_FRAMES)
+  let lastAdmitFrame = -Infinity;
   let startsSpent = false;
   let startsLeft = maxStartsPerFrame;
 
@@ -158,7 +165,15 @@ export function createBatchCrossfades({
     return reduced;
   }
 
+  // Still inside its wait: the time has not run out, or fewer than the minimum frames have been drawn since it
+  // began waiting (or since a placement was last admitted).
+  function stillWaiting(handle, nowMs) {
+    if (nowMs - Math.max(handle.userData.batchWaitSince, lastAdmitMs) < BATCH_CROSSFADE_MAX_WAIT_MS) return true;
+    return frames - Math.max(handle.userData.batchWaitFrame ?? -Infinity, lastAdmitFrame) < BATCH_CROSSFADE_MIN_WAIT_FRAMES;
+  }
+
   function clearWait(handle) {
+    handle.userData.batchWaitFrame = undefined;
     handle.userData.batchWaitSince = undefined;
     handle.userData.batchWaitTo = undefined;
     handle.userData.batchWaitEpoch = undefined;
@@ -173,10 +188,11 @@ export function createBatchCrossfades({
       // it only runs while nothing is being admitted.
       if (handle.userData.batchWaitTo !== toName || handle.userData.batchWaitSince === undefined) {
         handle.userData.batchWaitSince = nowMs;
+        handle.userData.batchWaitFrame = frames;
         handle.userData.batchWaitTo = toName;
       }
       handle.userData.batchWaitEpoch = roomEpoch;
-      if (nowMs - Math.max(handle.userData.batchWaitSince, lastAdmitMs) < BATCH_CROSSFADE_MAX_WAIT_MS) return BATCH_WAITING;
+      if (stillWaiting(handle, nowMs)) return BATCH_WAITING;
     }
     clearWait(handle);
     hardSwaps++;
@@ -324,7 +340,7 @@ export function createBatchCrossfades({
       }
       // Still waiting and nothing has given room back since it last looked: nothing to decide.
       if (canWait && handle.userData.batchWaitEpoch === roomEpoch && handle.userData.batchWaitTo === toName
-        && handle.userData.batchWaitSince !== undefined && clock() - Math.max(handle.userData.batchWaitSince, lastAdmitMs) < BATCH_CROSSFADE_MAX_WAIT_MS) {
+        && handle.userData.batchWaitSince !== undefined && stillWaiting(handle, clock())) {
         waitSkips++;
         return BATCH_WAITING;
       }
@@ -363,6 +379,7 @@ export function createBatchCrossfades({
       }
       clearWait(handle);
       lastAdmitMs = nowMs;
+      lastAdmitFrame = frames;
 
       // The outgoing version keeps this placement: its matrices as drawn now, before the books move.
       const n = cohort.members.length;
@@ -399,6 +416,7 @@ export function createBatchCrossfades({
       for (const cohort of [...cohorts]) if (cohort.batch === batch) settle(cohort);
     },
     update() {
+      frames++;
       startsLeft = maxStartsPerFrame;
       if (startsSpent) { // a new frame gives the one cohort start back: waiting placements may look again
         startsSpent = false;
