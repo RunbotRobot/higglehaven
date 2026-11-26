@@ -50,7 +50,9 @@ export default defineConfig(async () => {
       // shared D1 instance eventually crashed CI outright with "Maximum
       // call stack size exceeded" rather than just timing out, once total
       // suite size crossed some threshold. It's now split into several
-      // files by domain (worker-api/land/profiles/commerce/reviews-auth,
+      // files by domain (worker-api/land/profiles/commerce/reviews/auth -- reviews-auth
+      // was itself split in two by #4520 once its 126 tests had grown to ~650 s with every request
+      // slowing as the file went on --
       // sharing worker/test-helpers.js) so each gets its own fresh
       // instance and the accumulation resets at every file boundary —
       // but the raised timeout stays as a global default rather than a

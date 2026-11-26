@@ -17,7 +17,7 @@ import { buildTax1099CreateBody } from './lib/seller-payouts-tax.js';
 // transmission and only lets the winner actually call the vendor. Since
 // this suite can't reach a real TaxBandits sandbox, the vendor's own
 // OAuth token endpoint and Create endpoint are mocked via a temporary
-// globalThis.fetch override (same idiom worker/reviews-auth.test.js's own
+// globalThis.fetch override (same idiom worker/auth.test.js's own
 // "still returns a session when the verification email's fetch rejects
 // outright" test already uses for a different external vendor).
 let adminSession;

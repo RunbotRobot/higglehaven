@@ -5,7 +5,7 @@ import { api, signupAdmin, signupBuilder, signupSeller } from './test-helpers.js
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
 // why the suite is split by file), same reasoning as
 // worker/didit-verification.test.js: setting env.STRIPE_WEBHOOK_SECRET
-// here can't leak into worker/reviews-auth.test.js, which relies on it
+// here can't leak into worker/auth.test.js, which relies on it
 // staying unset to exercise the 503-unconfigured path for this same
 // endpoint. STRIPE_SECRET_KEY is deliberately left unset even in this
 // file — nothing here needs a real outbound call to Stripe, only the

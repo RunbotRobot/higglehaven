@@ -15,7 +15,7 @@
 // own author self-edit/delete addition to that same in-world hint — this
 // exercises its underlying PATCH call directly instead (further author/
 // cross-account/history-table coverage lives in
-// worker/reviews-auth.test.js's own "Author self-edit/delete (#1975)"
+// worker/reviews.test.js's own "Author self-edit/delete (#1975)"
 // describe block).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
