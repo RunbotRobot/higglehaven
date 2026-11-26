@@ -51,6 +51,7 @@
 //   slow:<rate>                           run the page's CSS animations at that fraction of their
 //                                         speed (slow:0.1 = ten times slower) so a burst catches an
 //                                         unfold or a bloom; slow:1 puts them back
+//   others                                the other people this page has drawn: afk, animState, playing clip (#4509)
 //   idle                                  wait until the network and frames settle
 //   wait:<ms>                             wait
 //   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
@@ -794,6 +795,8 @@ async function runStepAction(step, index) {
       return measureCover();
     case 'mem': // #4484: what the page holds right now (GPU geometries and textures, JS heap, models cached)
       return page.evaluate(() => ({ ...(window.__shopMemoryNow?.() ?? null) }));
+    case 'others': // #4509: the other people this page has drawn: where, whether away (afk), and the clip each plays
+      return page.evaluate(() => (window.__shopOtherAvatars ?? []).map((o) => ({ builderId: o.builderId, x: o.x, y: o.y, afk: o.afk, animState: o.animState, playingClip: o.playingClip, bodyTemplateId: o.bodyTemplateId })));
     case 'marks':
       // #3873: where the time went in this document's life (after a mode switch, the reload that
       // switch caused): the app's own start-up marks and the slowest requests, all in ms since
@@ -911,7 +914,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
