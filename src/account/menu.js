@@ -156,6 +156,23 @@ function updateNotificationActions() {
   notificationsActionsEl.hidden = rows === 0 || (unread === 0 && rows - unread === 0);
 }
 
+// #4498: where a tap on a notice goes, by its `kind` (set where the notice is made). A notice with no kind,
+// or one this build does not know, opens nothing beyond being marked read, as before.
+const NOTICE_DESTINATIONS = {
+  friends: () => friendsBtn.click(),
+  // A new message is read from the friend's thread, which lives in the Friends panel.
+  messages: () => friendsBtn.click(),
+  assistant: () => { import('../shop/assistantChat.js').then((m) => m.openAssistantQuestions()).catch((err) => console.warn('Could not open the assistant:', err)); },
+};
+
+function openNoticeDestination(kind) {
+  const open = NOTICE_DESTINATIONS[kind];
+  if (!open) return false;
+  closeNotificationsModal();
+  open();
+  return true;
+}
+
 function appendNotificationRow(notification) {
   const row = document.createElement('div');
   row.className = 'notification-row';
@@ -200,6 +217,7 @@ function appendNotificationRow(notification) {
   // Tapping any notice marks just that one read — simpler than a
   // separate per-row dismiss button, and "Mark all read" still exists
   // for clearing the whole list at once.
+  const hasDestination = Boolean(NOTICE_DESTINATIONS[notification.kind]);
   if (!notification.readAt) {
     const markReadOnClick = async () => {
       try {
@@ -212,6 +230,8 @@ function appendNotificationRow(notification) {
         row.removeAttribute('aria-label');
         updateNotificationActions();
         refreshNotificationsBadge();
+        // #4498: and then the notice is a door to what it is about.
+        openNoticeDestination(notification.kind);
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
@@ -226,9 +246,20 @@ function appendNotificationRow(notification) {
     };
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
-    row.setAttribute('aria-label', `Mark notification as read: ${notification.message}`);
+    row.setAttribute('aria-label', `${hasDestination ? 'Open' : 'Mark notification as read'}: ${notification.message}`);
     row.addEventListener('click', markReadOnClick);
     row.addEventListener('keydown', markReadOnKeydown);
+  } else if (hasDestination) {
+    // An already-read notice still opens what it is about.
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-label', `Open: ${notification.message}`);
+    row.addEventListener('click', () => openNoticeDestination(notification.kind));
+    row.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openNoticeDestination(notification.kind);
+    });
   }
   notificationsListEl.appendChild(row);
   updateNotificationActions();

@@ -300,6 +300,7 @@ export function unloadShopLandletInstances(entry) {
   entry.leavingObjects = new Set();
   entry.shownInstances = null;
   entry.shownVersionId = undefined;
+  entry.batchBuildCounter = null; // #4483: the builds of the load that ended are dropped or abandon themselves; their count goes with them
   for (const object of entry.objects) {
     entry.group.remove(object);
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });

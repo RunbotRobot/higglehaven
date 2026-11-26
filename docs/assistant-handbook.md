@@ -1078,6 +1078,7 @@ your "My products" list).
 - Turning a video into a model is not switched on: the window opens on the file way, has no
   "Make a model from a video" button, and says "Turning a video into a model is not switched on
   yet." Tell the person it is not available yet and that uploading a model file still works.
+- You tapped "Generate model" and the window says "Turning a video into a model isn't available right now. Your free generation was not used, and your video is still here to try again.": the service that makes the model is down for the moment. Nothing was used up and the video is still chosen, so they can tap the button again later.
 - The window shows an error after "Add product" that is not one of those: ask the
   person to read it out, and offer to pass it to the team.
 - You already have a product with that name: the app asks you to confirm before it
@@ -1106,7 +1107,7 @@ your "My products" list).
 price and stock. The original maker's listing is not changed.
 
 **If something goes wrong:**
-- "Stock must be a whole number of 0 or more, or left blank." Type digits only, or
+- "Stock must be a whole number from 0 to 1,000,000, or left blank." Type digits only, or
   clear the box.
 - The price is refused: it must be a number, 0 or more.
 
@@ -1141,7 +1142,7 @@ price and stock. The original maker's listing is not changed.
 - "You already have another product named ... Rename anyway?" You can keep the
   name or choose another.
 - A price above the limit is refused with a message naming the limit.
-- "Stock must be a whole number of 0 or more, or left blank for no limit." Type digits
+- "Stock must be a whole number from 0 to 1,000,000, or left blank for no limit." Type digits
   only, or clear the box.
 - Something changed does not show up: close "My products" and open it again with
   the round logo at the top left, the Sell petal, then "My products"; if it is still wrong, ask

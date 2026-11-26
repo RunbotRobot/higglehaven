@@ -4,10 +4,12 @@
 // and admin actions). Extracted verbatim, zero behavior change.
 import { errorMessages } from './validation.js';
 
-export function notificationStatement(db, builderId, message, templateId = null) {
+// #4498: `kind` is where a tap on the notice goes in the client ('friends', 'messages', 'assistant'); null
+// for a notice with nothing to open.
+export function notificationStatement(db, builderId, message, templateId = null, kind = null) {
   return db.prepare(
-    'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
-  ).bind(`notification-${crypto.randomUUID()}`, builderId, message, templateId);
+    'INSERT INTO notifications (notification_id, builder_id, message, template_id, kind) VALUES (?, ?, ?, ?, ?)',
+  ).bind(`notification-${crypto.randomUUID()}`, builderId, message, templateId, kind);
 }
 
 // #1122: notifications.builder_id is NOT NULL REFERENCES builders ON DELETE
@@ -33,9 +35,9 @@ function isForeignKeyConstraintError(err) {
 // can exercise the swallow-vs-rethrow decision directly, the same way
 // refundIdempotencyKey and auctionSettlementEventId are exported for their
 // own tests in worker/index.js.
-export async function fireNotification(db, builderId, message, templateId = null) {
+export async function fireNotification(db, builderId, message, templateId = null, kind = null) {
   try {
-    await notificationStatement(db, builderId, message, templateId).run();
+    await notificationStatement(db, builderId, message, templateId, kind).run();
   } catch (err) {
     if (!isForeignKeyConstraintError(err)) throw err;
   }
@@ -45,7 +47,7 @@ export async function fireNotification(db, builderId, message, templateId = null
 // still run and caught independently, so one recipient's self-delete race
 // never affects another's notification.
 export async function fireNotifications(db, notifications) {
-  for (const { builderId, message, templateId } of notifications) {
-    await fireNotification(db, builderId, message, templateId);
+  for (const { builderId, message, templateId, kind } of notifications) {
+    await fireNotification(db, builderId, message, templateId, kind ?? null);
   }
 }

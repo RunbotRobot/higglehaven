@@ -205,6 +205,7 @@ export function notificationFromRow(row) {
     builderId: row.builder_id,
     message: row.message,
     templateId: row.template_id,
+    kind: row.kind ?? null, // #4498: where a tap on the notice goes; null opens nothing
     createdAt: row.created_at,
     readAt: row.read_at,
   };
@@ -919,7 +920,7 @@ async function handleFriendVoiceChannels(request, db, route) {
     // comment gives for every other fireNotification call site (a
     // best-effort FYI, never allowed to roll back the real mutation).
     if (activatedByThisJoin) {
-      await fireNotification(db, ownerBuilderId, `${sessionBuilder.label} is waiting in your voice channel.`);
+      await fireNotification(db, ownerBuilderId, `${sessionBuilder.label} is waiting in your voice channel.`, null, 'friends');
     }
     return json({ ok: true }, 201);
   }
@@ -1446,7 +1447,7 @@ export async function handleFriendships(request, db, route, url) {
     // batched atomically with it).
     if (!recipientBlockedRequester) {
       await fireNotification(db, recipientBuilderId,
-        `${sessionBuilder.label} sent you a friend request.`);
+        `${sessionBuilder.label} sent you a friend request.`, null, 'friends');
     }
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     // #2469: a concurrent DELETE (the recipient declining the request we
@@ -1495,7 +1496,7 @@ export async function handleFriendships(request, db, route, url) {
       const requesterBuilderId = await builderIdForUser(db, existing.requester_user_id);
       if (requesterBuilderId) {
         await fireNotification(db, requesterBuilderId,
-          `${sessionBuilder.label} accepted your friend request.`);
+          `${sessionBuilder.label} accepted your friend request.`, null, 'friends');
       }
     }
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
@@ -1928,7 +1929,7 @@ export async function handleDirectMessages(request, db, route, url) {
     // Same "no passive way to find out" gap #319 already fixed for friend
     // requests — best-effort, after the write it's about, not batched
     // atomically with it.
-    await fireNotification(db, recipientBuilderId, `${sessionBuilder.label} sent you a message.`);
+    await fireNotification(db, recipientBuilderId, `${sessionBuilder.label} sent you a message.`, null, 'messages');
     const row = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(messageId).first();
     return json({ message: directMessageFromRow(row, await builderIdsForUsers(db, [senderUserId, recipientUserId])) }, 201);
   }

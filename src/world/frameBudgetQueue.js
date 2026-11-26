@@ -45,6 +45,7 @@ export function createFrameBudgetQueue({
   let ticks = 0;
   let unitsRun = 0;
   let longestTickMs = 0;
+  let tickStart = null; // when the running tick began (null between ticks)
 
   const before = (a, b) => a.priority < b.priority || (a.priority === b.priority && a.seq < b.seq);
 
@@ -110,6 +111,7 @@ export function createFrameBudgetQueue({
     ticking = true;
     ticks += 1;
     const start = now();
+    tickStart = start;
     try {
       while (heap.length) {
         const entry = pop();
@@ -119,6 +121,7 @@ export function createFrameBudgetQueue({
       }
     } finally {
       ticking = false;
+      tickStart = null;
       const spent = now() - start;
       if (spent > longestTickMs) longestTickMs = spent;
     }
@@ -188,6 +191,9 @@ export function createFrameBudgetQueue({
     dropGroup,
     drain,
     pending: () => live,
+    // #4483: what is left of the running tick's budget (the whole budget between ticks). A unit that does its work in
+    // slices of its own sizes the first one by this, so it does not take a second budget after others used the first.
+    tickRemainingMs: () => (tickStart === null ? budgetMs : Math.max(0, budgetMs - (now() - tickStart))),
     // #4391: whether a group still has work waiting (an item not yet built).
     hasPending: (group) => (byGroup.get(group)?.size ?? 0) > 0,
     stats: () => ({ ticks, unitsRun, longestTickMs, pending: live }),

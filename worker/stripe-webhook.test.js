@@ -749,3 +749,41 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(response.status).toBe(200);
   });
 });
+
+// #4499 (No silent loss): a payout that stops is money waiting.
+describe('Stripe account.updated tells a seller when payouts stop (#4499)', () => {
+  async function notices(builderId) {
+    const { results } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ? ORDER BY rowid').bind(builderId).all();
+    return results.map((r) => r.message);
+  }
+  const STOPPED = { requirements: { currently_due: ['individual.verification.document'] } };
+
+  it('sends one notice when complete becomes requirements_due, and none for the same event twice', async () => {
+    const seller = await signupSeller('stripe-payout-stops');
+    const me = await api('/builders/me', seller.session());
+    const builderId = me.body.builder.builderId;
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_stops', stripe_onboarding_status = 'complete' WHERE seller_id = ?").bind(seller.sellerId).run();
+
+    const first = await postStripeWebhook({ ...accountUpdatedEvent('acct_stops', STOPPED), created: 1000 });
+    expect(first.status).toBe(200);
+    const afterFirst = await notices(builderId);
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0]).toBe('Stripe needs more information before it can pay you out. Open Payouts to finish.');
+
+    await postStripeWebhook({ ...accountUpdatedEvent('acct_stops', STOPPED), created: 1001 });
+    expect(await notices(builderId)).toHaveLength(1);
+  });
+
+  it('says nothing when the account was not complete before, or stays complete', async () => {
+    const seller = await signupSeller('stripe-payout-quiet');
+    const me = await api('/builders/me', seller.session());
+    const builderId = me.body.builder.builderId;
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_quiet' WHERE seller_id = ?").bind(seller.sellerId).run();
+    await postStripeWebhook(accountUpdatedEvent('acct_quiet', STOPPED));
+    expect(await notices(builderId)).toHaveLength(0);
+
+    await env.DB.prepare("UPDATE sellers SET stripe_onboarding_status = 'complete' WHERE seller_id = ?").bind(seller.sellerId).run();
+    await postStripeWebhook(accountUpdatedEvent('acct_quiet', { charges_enabled: true, payouts_enabled: true }));
+    expect(await notices(builderId)).toHaveLength(0);
+  });
+});

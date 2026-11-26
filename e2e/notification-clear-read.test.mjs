@@ -54,6 +54,12 @@ await bobPage.waitForFunction(
   null,
   { timeout: 10000 },
 );
+// #4498: a friend-request notice also opens Friends, which closes Notices; open Notices again.
+await bobPage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
+await bobPage.click('#friends-close-btn');
+await openAccountMenu(bobPage);
+await bobPage.click('#notifications-btn');
+await bobPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
 await bobPage.waitForSelector('#notifications-clear-read-btn:not([hidden])', { timeout: 5000 });
 const markAllHiddenWhenAllRead = await bobPage.locator('#notifications-mark-all-btn').isHidden();
 await bobPage.click('#notifications-clear-read-btn');

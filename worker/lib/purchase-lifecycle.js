@@ -597,7 +597,7 @@ export async function clawBackPurchaseCommission(db, purchase, templateName, { b
     // reading the purchase row and this point would otherwise fail the
     // notification's own FK and roll back the clawback debit along with it.
     await fireNotification(db, purchase.builder_id,
-      `"${templateName}" purchase refunded — ${formatCents(clawbackAmountCents)} commission clawed back.`);
+      `A sale of "${templateName}" was refunded, so ${formatCents(clawbackAmountCents)} comes off your higgles.`);
   }
 
   // #1304: tell the buyer what came back (the full total minus any earlier
