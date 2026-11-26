@@ -10,6 +10,7 @@ import {
   buildModelTiersSync,
   modelTierSteps,
   simplifyToTarget,
+  textureMeanOverSurface,
 } from './modelTiers.js';
 import { boundaryEdgeCountSteps, countTriangles } from './geometrySimplify.js';
 import { fidelityBatches } from './modelTiers.js';
@@ -848,5 +849,41 @@ describe('unlit far (#4111)', () => {
     };
     expect(farMaterial(new THREE.MeshBasicMaterial({ color: 0x336699 })).isMeshBasicMaterial).toBe(true);
     expect(farMaterial(material(0x336699)).isMeshStandardMaterial).toBe(true);
+  });
+});
+
+// #4111: the far version of a textured model is coloured with the mean of its texture over the surface it
+// shows, not with texels sampled at a few vertices (which made the brick a pale tube with a gradient).
+describe('far colour of a textured model (#4111)', () => {
+  it('textureMeanOverSurface counts only the part of the texture the surface shows', () => {
+    const texture = checkerTexture(64, [255, 255, 255], [0, 0, 0]);
+    // Left half of the texture white, right half black.
+    const data = texture.image.data;
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      const v = x < 32 ? 255 : 0;
+      const i = (y * 64 + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+    const pixels = { data, width: 64, height: 64 };
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const uv = geometry.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.4 + 0.05, uv.getY(i)); // u in 0.05..0.45: white only
+    const mean = textureMeanOverSurface(geometry, texture, pixels);
+    expect(mean.r).toBeGreaterThan(0.99);
+    // A mesh with no UVs falls back to the whole texture: about half.
+    const bare = textureMeanOverSurface(new THREE.PlaneGeometry(1, 1).deleteAttribute('uv'), texture, pixels);
+    expect(bare.r).toBeGreaterThan(0.2);
+    expect(bare.r).toBeLessThan(0.8);
+  });
+
+  it('a heavily reduced textured model has one colour on every vertex of its far version, with no gradient', () => {
+    const { far } = buildModelTiersSync(denseScan(), { midTextureMaxSize: 16 });
+    const color = meshesOf(far.object)[0].geometry.attributes.color;
+    const first = [color.getX(0), color.getY(0), color.getZ(0)];
+    for (let i = 1; i < color.count; i++) {
+      expect(color.getX(i)).toBeCloseTo(first[0], 5);
+      expect(color.getY(i)).toBeCloseTo(first[1], 5);
+      expect(color.getZ(i)).toBeCloseTo(first[2], 5);
+    }
   });
 });
