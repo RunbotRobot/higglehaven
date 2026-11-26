@@ -7121,18 +7121,6 @@
         user-select: text;
         -webkit-user-select: text;
       }
-      .item-card-nudge-pad {
-        flex-basis: 100%;
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: var(--space-xs);
-      }
-      #item-card-more .item-card-nudge-pad button {
-        padding: var(--space-xs) var(--space-2xs);
-        min-width: 0;
-        white-space: nowrap;
-        font-size: var(--text-xs);
-      }
       #item-card-angles {
         display: grid;
         grid-template-columns: repeat(3, 1fr);

@@ -340,7 +340,7 @@ import {
   enterPlacementMode, handlePlacementClick, handleMeasureClick,
   measureMode, measureMarkerWasDragged, setMeasureMarkerWasDragged,
   findRootProduct, toggleInSelection, selectOnly,
-  raycaster, ndcFromEvent, pointerDownPos, CLICK_DRAG_THRESHOLD_PX,
+  raycaster, ndcFromEvent, pointerDownPos, CLICK_DRAG_THRESHOLD_PX, consumeAxisTapClick,
   persistLayout, setProductInfo, relativeItemsForMeshes, updateSelectionUI,
   lowStockFilterMaxQty, lowStockFilterMaxDays,
   setLowStockFilterMaxQty, setLowStockFilterMaxDays, updateLowStockHighlights,
@@ -894,6 +894,7 @@ saveBundleBtn.addEventListener('click', async () => {
 
 // #2559: see src/build/scene.js's own comment.
 renderer.domElement.addEventListener('click', (event) => {
+  if (consumeAxisTapClick()) return; // #4414: that was a tap on an arrow of the movement axes
   if (pointerDownPos) {
     const dx = event.clientX - pointerDownPos.x;
     const dy = event.clientY - pointerDownPos.y;

@@ -3095,7 +3095,7 @@ function runSyntheticDrag(controls, mesh, change) {
 
 // Shows the height and the angles of the single selected item in the card; blocks are left out otherwise.
 function refreshCardNumbers(singleMesh = selectedMeshes.size === 1 ? [...selectedMeshes][0] : null) {
-  nudgeBlockEl.hidden = !singleMesh;
+  nudgeBlockEl.hidden = !singleMesh; // #4414: the block now only reads the height; the nudge is a tap on an axis arrow
   anglesBlockEl.hidden = !singleMesh;
   if (!singleMesh) {
     nudgeHeightEl.textContent = '';
@@ -3103,7 +3103,7 @@ function refreshCardNumbers(singleMesh = selectedMeshes.size === 1 ? [...selecte
   }
   const { height } = meshDimensions(singleMesh);
   const above = heightAboveFloor(singleMesh.position.z, height, levelFloorZ(currentLevelIndex));
-  const text = `Height ${formatLength(above)}`;
+  const text = formatLength(above);
   if (nudgeHeightEl.textContent !== text) nudgeHeightEl.textContent = text;
   const angles = anglesFromQuaternion(singleMesh.quaternion);
   for (const input of angleInputEls) {
@@ -3114,29 +3114,104 @@ function refreshCardNumbers(singleMesh = selectedMeshes.size === 1 ? [...selecte
 }
 setInterval(() => { if (selectedMeshes.size === 1) refreshCardNumbers(); }, 250);
 
-export function nudgeSelectedItem(direction) {
-  if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy || !NUDGE_DIRECTIONS.includes(direction)) return false;
-  const [mesh] = selectedMeshes;
-  const before = mesh.position.clone();
-  const step = nudgeStepMeters(getUnits());
-  const wanted = nudgeVector(mesh.quaternion, direction).multiplyScalar(step);
+// One small step for whatever the movement axes are on (one item, or a bundle as one rigid piece), through the same
+// drag path as any move: the landlet limits, collision, the undo step, saving and syncing. `wanted` is the step in
+// world metres; `start` is where the selection stood when a tap on an arrow began (the little the finger dragged is
+// undone first, so a tap is exactly one step from where it was).
+function nudgeSelectionBy(wanted, start = null) {
+  const object = translateControls.object;
+  if (!object || selectedMeshes.size === 0 || measureMode || sceneMutationBusy) return false;
+  const from = (start ?? object.position).clone();
+  const step = wanted.length();
   levelLimitAnnounced = false;
-  runSyntheticDrag(translateControls, mesh, () => mesh.position.add(wanted));
-  if (mesh.position.distanceTo(before) < step * 0.5 && !levelLimitAnnounced) {
+  const delta = from.clone().add(wanted).sub(object.position);
+  runSyntheticDrag(translateControls, object, () => object.position.add(delta));
+  if (object.position.distanceTo(from) < step * 0.5 && !levelLimitAnnounced) {
     // A press that does nothing must not do it silently, and says why: the floor, or something solid in the way
     // (the lándlet's edge needs no sentence, #4409). (The level limits say their own piece, in announceLevelLimit.)
-    const target = before.clone().add(wanted);
-    const clamped = clampToLandlet(mesh, target.x, target.y, target.z);
     levelLimitHit = null;
-    const { height } = meshDimensions(mesh);
-    // #4409: at the lándlet's edge it says nothing: the edge is on screen and the item resting at it is the answer.
-    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) { /* the edge: nothing to say */ }
-    else if (direction === 'down' && heightAboveFloor(before.z, height, levelFloorZ(currentLevelIndex)) === 0) showSelectionActionStatus("It's already on the floor.");
+    const meshes = [...selectedMeshes];
+    const atEdge = meshes.some((mesh) => {
+      const target = mesh.position.clone().add(wanted);
+      const clamped = clampToLandlet(mesh, target.x, target.y, target.z);
+      return Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6;
+    });
+    const onFloor = wanted.z < 0 && meshes.every((mesh) => heightAboveFloor(mesh.position.z, meshDimensions(mesh).height, levelFloorZ(currentLevelIndex)) === 0);
+    if (atEdge) { /* the edge: nothing to say */ }
+    else if (onFloor) showSelectionActionStatus("It's already on the floor.");
     else showSelectionActionStatus('Something is in the way.');
   }
   refreshCardNumbers();
   return true;
 }
+
+// The keyboard's nudge (Shift with the arrow keys): one item, in its own turned directions.
+export function nudgeSelectedItem(direction) {
+  if (selectedMeshes.size !== 1 || !NUDGE_DIRECTIONS.includes(direction)) return false;
+  const [mesh] = selectedMeshes;
+  return nudgeSelectionBy(nudgeVector(mesh.quaternion, direction).multiplyScalar(nudgeStepMeters(getUnits())));
+}
+
+// #4414 (the owner: "Let's move the nudge to the arrow on the movement axes. When you tap the arrow, it does the nudge
+// in that direction"): a tap on the arrow at either end of a movement axis moves the selection one step that way
+// (the step from nudgeStepMeters, the limits of any move); a drag from the same arrow is the axis move. They are told
+// apart by how far the finger travelled, not by how long it stayed (a slow tap is still a tap). The direction is the
+// arrow's own, read from the arrow nearest the press, so it is right from any camera angle and for a bundle.
+const AXIS_TAP_MAX_TRAVEL_PX = 8;
+let axisPress = null;
+let axisTapAt = 0;
+// The 'click' that follows a tap on an arrow would read as a tap on empty ground and deselect the item (src/main.js
+// asks); true once for the click that follows the lift of an arrow tap.
+export function consumeAxisTapClick() {
+  const was = performance.now() - axisTapAt < 500;
+  axisTapAt = 0;
+  return was;
+}
+function arrowDirection(axisName, clientX, clientY) {
+  const object = translateControls.object;
+  if (!object) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const centreWorld = object.getWorldPosition(new THREE.Vector3());
+  let best = null;
+  for (const pick of translateControls._gizmo.picker.translate.children) {
+    if (pick.name !== axisName) continue;
+    if (!pick.geometry.boundingBox) pick.geometry.computeBoundingBox();
+    const world = pick.localToWorld(pick.geometry.boundingBox.getCenter(new THREE.Vector3()));
+    const screen = world.clone().project(camera);
+    const dist = Math.hypot(rect.left + (screen.x * 0.5 + 0.5) * rect.width - clientX, rect.top + (-screen.y * 0.5 + 0.5) * rect.height - clientY);
+    if (!best || dist < best.dist) best = { dist, world };
+  }
+  return best ? best.world.sub(centreWorld).normalize() : null;
+}
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  axisPress = { x: event.clientX, y: event.clientY, armed: false, axis: null, object: null, start: null };
+}, { capture: true });
+translateControls.addEventListener('dragging-changed', (event) => {
+  if (!event.value || !axisPress) return;
+  const object = translateControls.object;
+  axisPress.armed = !!object && ['X', 'Y', 'Z'].includes(translateControls.axis);
+  axisPress.axis = translateControls.axis;
+  axisPress.object = object;
+  axisPress.start = object ? object.position.clone() : null;
+});
+renderer.domElement.addEventListener('pointerup', (event) => {
+  const press = axisPress;
+  axisPress = null;
+  if (!press?.armed || !translateControls.dragging || translateControls.object !== press.object) return;
+  if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > AXIS_TAP_MAX_TRAVEL_PX) return;
+  // While a bundle's members are being edited a tap on one of them selects it, even where an arrow's tip lies over it:
+  // the members are the target there, so the click goes through as it always has.
+  if (editingGroupId) return;
+  const direction = arrowDirection(press.axis, press.x, press.y);
+  axisTapAt = performance.now(); // the click that follows this lift is the arrow's, not a tap on the ground (src/main.js)
+  // A tap: the press already pushed the undo step of a drag; the nudge makes its own, so that one is dropped...
+  if (dragBeforeSnapshot && undoStack.at(-1) === dragBeforeSnapshot) { undoStack.pop(); updateUndoRedoButtons(); }
+  // ...and the little the finger dragged before it lifted is given back, so the drag that ends now changes nothing.
+  press.object.position.copy(press.start);
+  translateControls.dispatchEvent({ type: 'objectChange' });
+  // ...and, once that drag has ended, take the one step.
+  if (direction) setTimeout(() => nudgeSelectionBy(direction.multiplyScalar(nudgeStepMeters(getUnits())), press.start), 0);
+}, { capture: true });
 
 function applyTypedAngles() {
   if (selectedMeshes.size !== 1 || sceneMutationBusy) return;
@@ -3152,9 +3227,6 @@ function applyTypedAngles() {
   runSyntheticDrag(rotateControls, mesh, () => mesh.quaternion.copy(next));
   refreshCardNumbers();
 }
-document.querySelectorAll('#item-card-nudge [data-nudge]').forEach((button) => {
-  button.addEventListener('click', () => nudgeSelectedItem(button.dataset.nudge));
-});
 for (const input of angleInputEls) {
   input.addEventListener('change', applyTypedAngles);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter') input.blur(); });
@@ -3302,10 +3374,15 @@ window.addEventListener('pointerdown', (event) => {
   handlePressLoser = ring.distance <= arrow.distance ? translateControls : rotateControls;
   handlePressLoser.enabled = false;
 }, { capture: true });
-window.addEventListener('pointerdown', () => {
+function restoreHandlePressLoser() {
   if (handlePressLoser) handlePressLoser.enabled = true;
   handlePressLoser = null;
-});
+}
+window.addEventListener('pointerdown', restoreHandlePressLoser);
+// ...and if something between the canvas and the window stopped that event, the gizmo is still given back at the
+// release (or the cancel) of the same press, never left switched off.
+window.addEventListener('pointerup', restoreHandlePressLoser, { capture: true });
+window.addEventListener('pointercancel', restoreHandlePressLoser, { capture: true });
 window.__testAxisHandlePoints = () => { // e2e (#4410): the screen point of each arrow of the movement axes (two per axis)
   if (!translateControls.object) return [];
   const rect = renderer.domElement.getBoundingClientRect();
@@ -3315,9 +3392,11 @@ window.__testAxisHandlePoints = () => { // e2e (#4410): the screen point of each
     child.geometry.computeBoundingBox(); // the gizmo bakes each arrow's place into its geometry
     const at = child.geometry.boundingBox.getCenter(new THREE.Vector3());
     if (at.length() < 0.1) continue; // the shaft, centred on the item
+    const sign = Math.sign(at[child.name.toLowerCase()]); // #4414: which end of the axis (+1 or -1 along the gizmo's own axis)
     child.localToWorld(at);
+    const direction = at.clone().sub(translateControls.object.getWorldPosition(new THREE.Vector3())).normalize(); // the way a tap on it moves the selection, in the world
     at.project(camera);
-    out.push({ axis: child.name, x: rect.left + (at.x * 0.5 + 0.5) * rect.width, y: rect.top + (-at.y * 0.5 + 0.5) * rect.height });
+    out.push({ axis: child.name, sign, direction: { x: direction.x, y: direction.y, z: direction.z }, x: rect.left + (at.x * 0.5 + 0.5) * rect.width, y: rect.top + (-at.y * 0.5 + 0.5) * rect.height });
   }
   return out;
 };
