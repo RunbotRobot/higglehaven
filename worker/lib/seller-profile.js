@@ -26,7 +26,7 @@ import { adminActionLogStatement } from './admin-log.js';
 import {
   readJson, stringValue, labelValue, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
-import { requireCurrentUser, requireAdmin, assertOwner, sha256Hex } from './auth.js';
+import { requireCurrentUser, requireAdmin, requireAdminUnlessLocalWorker, assertOwner, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { handleSellerFeedbackList } from './reputation.js';
 // #2619 landed on main while this PR was in CI and already moved
@@ -149,6 +149,8 @@ async function handleSellers(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     // Unauthenticated on purpose — same reasoning as POST /api/builders
     // above: a brand-new, unlinked row, nothing to spoof.
+    // #4287: no client calls this (signup provisions the profile); a deployed Worker needs an admin session.
+    await requireAdminUnlessLocalWorker(request, db, env);
     const input = await readJson(request);
     await checkRateLimit(db, `seller-create:${clientIp(request)}`, SELLER_CREATE_RATE_LIMIT_MAX);
     const label = labelValue(input.label, 'label');

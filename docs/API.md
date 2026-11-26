@@ -2947,6 +2947,9 @@ deployed Worker (`401` with no session, `403` otherwise). It stays open without 
 `APP_BASE_URL` counts as deployed. Whatever the caller, seller-less creation is limited per address (120 per 15 minutes) and a
 batch carries at most 50 of them.
 
+The same rule covers `POST /api/builders` and `POST /api/sellers` (bare, unlinked profile rows with a caller-chosen id and no client
+caller; signup provisions the real ones): an admin session on a deployed Worker, open only on a local or test Worker.
+
 
 Creates a catalog template. `templateId` is optional; if omitted, the Worker
 generates one. If `sellerId` is set, requires a session logged in as that
