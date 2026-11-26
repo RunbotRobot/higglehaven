@@ -121,12 +121,12 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     expect(second.body.refundBuyers.refundCount).toBe(0);
   });
 
-  it('tells a card buyer the 99% that actually goes back, not the order total', async () => {
+  it('a card buyer is told the 99% that actually goes back when the caller says so', async () => {
     const buyer = await signupBuilder('cfr-buyer-e');
     await clawBackPurchaseCommission(env.DB, {
       purchase_id: 'cfr-e-p1', builder_id: null, buyer_builder_id: buyer.builderId, seller_id: null, template_id: 'cfr-e',
       product_name: 'Card thing', total_cents: 1000, builder_share_cents: 0, refunded_amount_cents: 0, payment_intent_id: 'pi_test',
-    }, 'Card thing');
+    }, 'Card thing', { buyerRefundCents: 990 });
     const note = await env.DB.prepare("SELECT message FROM notifications WHERE builder_id = ? AND message LIKE '%was refunded%'").bind(buyer.builderId).first();
     expect(note.message).toContain('$9.90');
   });

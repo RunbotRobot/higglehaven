@@ -92,7 +92,7 @@ export async function handleCounterfeitRefundBuyers(request, env, route) {
     try {
       // false: a concurrent refund or payout got there first; nothing is owed from this call for that purchase.
       if (!(await finalizeRefundReversal(env, purchase))) continue;
-      await clawBackPurchaseCommission(db, purchase, (await purchaseProductName(db, purchase)) || templateName, { buyerReason: BUYER_REASON });
+      await clawBackPurchaseCommission(db, purchase, (await purchaseProductName(db, purchase)) || templateName, { buyerReason: BUYER_REASON, buyerRefundCents: purchase.payment_intent_id ? refundAmountCents(purchase.total_cents) : null });
       refunded += 1;
       refundedCents += refundAmountCents(purchase.total_cents);
     } catch (err) {

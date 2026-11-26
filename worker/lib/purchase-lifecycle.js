@@ -521,7 +521,7 @@ export function sellerReversalNotice(purchase) {
 // its own refund-path test.
 // #4376: `buyerReason` is one plain sentence added to the buyer's refund notice (why it happened), for a refund the
 // buyer did not ask for.
-export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '' } = {}) {
+export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '', buyerRefundCents = null } = {}) {
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
@@ -602,10 +602,9 @@ export async function clawBackPurchaseCommission(db, purchase, templateName, { b
 
   // #1304: tell the buyer what came back (the full total minus any earlier
   // partial refund they were already notified about).
-  // A card purchase gets back refundAmountCents (99%, #651), not the order's total, so that is the figure the buyer is
-  // told; a purchase with no payment intent moved no card money and keeps the total it always read.
+  // `buyerRefundCents`: what really goes back when it is not the order's total (this app's own refund sends 99%, #651).
   await notifyBuyerOfRefund(db, purchase,
-    purchase.payment_intent_id ? refundAmountCents(purchase.total_cents) : purchase.total_cents - (purchase.refunded_amount_cents || 0),
+    buyerRefundCents ?? purchase.total_cents - (purchase.refunded_amount_cents || 0),
     { reason: buyerReason });
 
   // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
