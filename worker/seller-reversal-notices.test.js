@@ -183,3 +183,33 @@ describe('The buyer is told when their payment is refunded (#1304)', () => {
     expect(notices[0]).toContain('Your payment for "Product buyinapp" was refunded');
   });
 });
+
+// #4500: the hosting builder's own notices about the commission read in what happened to their higgles, not our
+// bookkeeping words ("clawed back", "reinstated") and not a spaced ASCII double hyphen.
+describe('The hosting builder reads commission notices in plain words (#4500)', () => {
+  const commissionNotices = async (builderId) => (await sellerNotices(builderId))
+    .filter((m) => /higgles\.$/.test(m) && !/^(Your|Part of your) payment for/.test(m));
+
+  it('a partial refund, a won dispute and a full in-app refund each say what happened to the higgles', async () => {
+    const partial = await createSellerPurchase('plain-partial', 'pi_plain_partial');
+    await postStripeWebhook(chargeRefunded('pi_plain_partial', { refunded: false, amount_refunded: 2000 }));
+    const partialNotice = (await commissionNotices(partial.buyerBuilderId)).at(-1);
+    expect(partialNotice).toMatch(/^A sale of "Product plain-partial" was refunded in part, so \$[\d.]+ comes off your higgles\.$/);
+
+    const disputed = await createSellerPurchase('plain-dispute', 'pi_plain_dispute');
+    await postStripeWebhook(dispute('charge.dispute.funds_withdrawn', 'pi_plain_dispute', 1000));
+    await postStripeWebhook(dispute('charge.dispute.funds_reinstated', 'pi_plain_dispute', 2000));
+    const wonNotice = (await commissionNotices(disputed.buyerBuilderId)).at(-1);
+    expect(wonNotice).toMatch(/^The dispute on "Product plain-dispute" went your way, so \$[\d.]+ is back in your higgles\.$/);
+
+    const inApp = await createSellerPurchase('plain-inapp', 'pi_plain_inapp');
+    await env.DB.prepare('UPDATE purchases SET payment_intent_id = NULL WHERE purchase_id = ?').bind(inApp.purchaseId).run();
+    expect((await api(`/purchases/${inApp.purchaseId}/refund`, inApp.seller.session({ method: 'POST' }))).response.status).toBe(200);
+    const fullNotice = (await commissionNotices(inApp.buyerBuilderId)).at(-1);
+    expect(fullNotice).toMatch(/^A sale of "Product plain-inapp" was refunded, so \$[\d.]+ comes off your higgles\.$/);
+    for (const notice of [partialNotice, wonNotice, fullNotice]) {
+      expect(notice).not.toContain(' -- ');
+      expect(notice).not.toMatch(/clawed|reinstated/);
+    }
+  });
+});
