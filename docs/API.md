@@ -473,9 +473,9 @@ PaymentMethod id directly — #1072: a client-supplied PaymentMethod id
 can't be trusted, since a `GET` on any PaymentMethod id that exists
 anywhere in this platform's own connected Stripe account succeeds
 regardless of who it belongs to). It fetches the SetupIntent, `403`s with
-`"This card verification session does not belong to you."` unless its
+`"This card verification session does not belong to you."` (code `card_check_mismatch`, #4478) unless its
 `metadata.userId` matches the caller, and `400`s with `"Card verification
-is not complete yet."` unless `status === "succeeded"` — then reads the
+is not complete yet."` (code `card_check_incomplete`) unless `status === "succeeded"` — then reads the
 PaymentMethod id **off the SetupIntent itself**, never off anything the
 client sent. It checks that PaymentMethod's `card.funding`: `"credit"`
 raises the account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"`

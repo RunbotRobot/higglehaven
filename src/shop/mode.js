@@ -231,6 +231,15 @@ export function reportRendererMemoryDiagnostic() {
   return Promise.resolve();
 }
 
+// #4484 (does a long session keep every product model it ever loaded?): what the page holds right now, read by the
+// live-site script's `mem` step and by e2e. Read only; the heap figure exists in Chromium only.
+window.__shopMemoryNow = () => ({
+  geometries: renderer.info.memory.geometries,
+  textures: renderer.info.memory.textures,
+  heapMb: typeof performance !== 'undefined' && performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null,
+  ...(window.__modelCacheSizes?.() ?? {}),
+});
+
 export function disposeObject3D(object) {
   object.traverse((child) => {
     // #1370: same Sprite gap disposeObject's own fix just closed — e.g. the
