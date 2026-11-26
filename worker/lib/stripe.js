@@ -28,6 +28,7 @@ import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
+import { notifyPayoutSetupNeedsAttention } from './stripe-payout-notice.js';
 import { cardNotAcceptedMessage, CARD_ALREADY_USED_MESSAGE } from './card-refusal.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
@@ -188,7 +189,17 @@ export async function handleStripeWebhook(request, env, db) {
       status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso,
       ...(hasCreated ? [event.created, account.id, event.created] : [account.id]),
     );
-    await db.batch([mk('sellers'), mk('builders')]);
+    // #4499: remember who held this account as `complete` before the write, and
+    // tell them only if this event is the one that moved it (a stale or repeated
+    // event changes no row, or finds the status already moved).
+    const before = [];
+    for (const table of ['sellers', 'builders']) {
+      const row = await db.prepare(`SELECT * FROM ${table} WHERE stripe_account_id = ?`).bind(account.id).first();
+      if (row) before.push({ table, row });
+    }
+    const results = await db.batch([mk('sellers'), mk('builders')]);
+    const moved = before.filter(({ table }) => (results[table === 'sellers' ? 0 : 1]?.meta?.changes ?? 0) > 0);
+    await notifyPayoutSetupNeedsAttention(db, account.id, moved, status);
     return json({ received: true });
   }
   if (event.type === 'payment_intent.succeeded') {

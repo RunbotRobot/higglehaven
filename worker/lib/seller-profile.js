@@ -29,6 +29,7 @@ import {
 import { requireCurrentUser, requireAdmin, requireAdminUnlessLocalWorker, assertOwner, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { handleSellerFeedbackList } from './reputation.js';
+import { notifyPayoutSetupNeedsAttention } from './stripe-payout-notice.js';
 // #2619 landed on main while this PR was in CI and already moved
 // handleSellerPayouts out of worker/index.js -- import it from its real
 // home instead of back through index.js.
@@ -720,6 +721,7 @@ async function refreshStoredStripeStatus(env, db, table, idColumn, row) {
         stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
     WHERE ${idColumn} = ? AND stripe_account_id = ?
   `).bind(status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso, fetchedAtS, row[idColumn], row.stripe_account_id).run();
+  await notifyPayoutSetupNeedsAttention(db, row.stripe_account_id, [{ table, row }], status); // #4499: row still holds the status read before this write
   return {
     ...row,
     stripe_onboarding_status: status,
