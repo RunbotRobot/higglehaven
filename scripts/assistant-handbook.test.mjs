@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import handbook from '../docs/assistant-handbook.md?raw';
+import { stockLimitMessage } from '../worker/stockLimit.js';
 import { parseHandbook, validateHandbook, controlMatches, looksCutOff, isHeadingSelector, NO_WORDS, SECTION_SEE, SECTION_WRONG } from './assistant-handbook-lib.mjs';
 
 // #3615 (part of #3614): the handbook assistants answer from stays in its format.
@@ -105,5 +106,11 @@ describe('a label cut short at an accented letter (#3734)', () => {
     expect(isHeadingSelector('#claim-confirm-btn')).toBe(false);
     expect(controlMatches({ exists: true, text: 'Claim a lándlet' }, 'Claim a', { whole: true })).toBe(false);
     expect(controlMatches({ exists: true, text: 'Claim a lándlet' }, 'Claim a lándlet', { whole: true })).toBe(true);
+  });
+
+  // #4492: the stock refusals the handbook quotes are the app's own words, so a change of the limit shows up here.
+  it('quotes the stock refusals exactly as the app says them', () => {
+    expect(handbook).toContain(stockLimitMessage());
+    expect(handbook).toContain(stockLimitMessage({ blankMeansNoLimit: true }));
   });
 });
