@@ -14,18 +14,20 @@ export const PAYOUT_SETUP_NOTICE = 'Stripe needs more information before it can 
 // on both a seller and a builder row.
 export async function notifyPayoutSetupNeedsAttention(db, accountId, owners, newStatus) {
   if (newStatus === 'complete') return;
-  const builderIds = new Set();
+  // #4498: a seller's notice opens the Payouts leaf on a tap ('payouts'); a builder-only account's own
+  // payout account (higgle redemptions) has no such leaf, so its notice has no door.
+  const kinds = new Map();
   try {
     for (const { table, row } of owners) {
       if (row.stripe_onboarding_status !== 'complete') continue;
       if (table === 'builders') {
-        builderIds.add(row.builder_id);
+        if (!kinds.has(row.builder_id)) kinds.set(row.builder_id, null);
       } else {
         const owner = await db.prepare('SELECT builder_id FROM builders WHERE user_id = ?').bind(row.user_id).first();
-        if (owner) builderIds.add(owner.builder_id);
+        if (owner) kinds.set(owner.builder_id, 'payouts');
       }
     }
-    for (const builderId of builderIds) await fireNotification(db, builderId, PAYOUT_SETUP_NOTICE);
+    for (const [builderId, kind] of kinds) await fireNotification(db, builderId, PAYOUT_SETUP_NOTICE, null, kind);
   } catch (err) {
     console.error('notifyPayoutSetupNeedsAttention failed', accountId, err);
   }

@@ -5,6 +5,7 @@ import notificationsSource from '../../worker/lib/notifications.js?raw';
 import socialSource from '../../worker/lib/social.js?raw';
 import lifecycleSource from '../../worker/lib/purchase-lifecycle.js?raw';
 import assistantSource from '../../worker/lib/assistant-chat.js?raw';
+import payoutNoticeSource from '../../worker/lib/stripe-payout-notice.js?raw';
 
 const KINDS = new Set();
 for (const source of [socialSource, lifecycleSource, assistantSource]) {
@@ -14,10 +15,11 @@ for (const source of [socialSource, lifecycleSource, assistantSource]) {
 describe('notice destinations (#4498)', () => {
   it('finds the kinds the Worker sets', () => {
     expect([...KINDS].sort()).toEqual(['assistant', 'friends', 'messages', 'purchases']);
+    expect(payoutNoticeSource).toContain("'payouts'");
     expect(notificationsSource).toContain('kind = null');
   });
 
-  for (const kind of ['assistant', 'friends', 'messages', 'purchases']) {
+  for (const kind of ['assistant', 'friends', 'messages', 'payouts', 'purchases']) {
     it(`the Notices leaf opens something for kind ${kind}`, () => {
       expect(menuSource).toMatch(new RegExp(`^\\s*${kind}: `, 'm'));
     });

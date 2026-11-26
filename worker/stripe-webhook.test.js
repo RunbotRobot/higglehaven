@@ -753,8 +753,12 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
 // #4499 (No silent loss): a payout that stops is money waiting.
 describe('Stripe account.updated tells a seller when payouts stop (#4499)', () => {
   async function notices(builderId) {
-    const { results } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ? ORDER BY rowid').bind(builderId).all();
+    const { results } = await env.DB.prepare('SELECT message, kind FROM notifications WHERE builder_id = ? ORDER BY rowid').bind(builderId).all();
     return results.map((r) => r.message);
+  }
+  async function kinds(builderId) {
+    const { results } = await env.DB.prepare('SELECT kind FROM notifications WHERE builder_id = ? ORDER BY rowid').bind(builderId).all();
+    return results.map((r) => r.kind);
   }
   const STOPPED = { requirements: { currently_due: ['individual.verification.document'] } };
 
@@ -769,6 +773,7 @@ describe('Stripe account.updated tells a seller when payouts stop (#4499)', () =
     const afterFirst = await notices(builderId);
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0]).toBe('Stripe needs more information before it can pay you out. Open Payouts to finish.');
+    expect(await kinds(builderId)).toEqual(['payouts']); // #4498: a tap opens the Payouts leaf
 
     await postStripeWebhook({ ...accountUpdatedEvent('acct_stops', STOPPED), created: 1001 });
     expect(await notices(builderId)).toHaveLength(1);
