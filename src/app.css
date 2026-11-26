@@ -890,7 +890,7 @@
         stroke-linecap: round;
         stroke-dasharray: 1 2;
         stroke-dashoffset: 0;
-        animation: bud-stem-grow var(--motion-open-stem) var(--ease-bloom) var(--delay-open-stem) both;
+        animation: bud-stem-grow var(--motion-open-stem) var(--ease-stem) var(--delay-open-stem) both;
       }
       #bud-stem .bud-stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10px; }
       #bud-stem .bud-stem-core { stroke: var(--brand-green); stroke-width: 6px; }
@@ -925,7 +925,7 @@
         animation-delay: 0s;
       }
       body[data-bud="on"] #account-menu-panel.bud-folding #bud-stem path {
-        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-fold) var(--motion-fold-leaf) both;
+        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-stem) var(--motion-fold-leaf) both;
       }
       /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
          (already finished), so changing its direction would jump to the end instead of playing. */

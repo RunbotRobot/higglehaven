@@ -194,6 +194,10 @@
   --motion-open-petals: 0.2s;
   --motion-open-stem: 0.25s;
   --delay-open-stem: 0.1s;
+  /* #4431: the stem is a long line drawn in a quarter second, so its easing must not front-load: the bloom curve
+     (overshooting) drew it in about four frames and past its end, which read as steps. An even sine ease spends the
+     whole time on it and stops at its end. */
+  --ease-stem: cubic-bezier(0.37, 0, 0.63, 1);
   --motion-open-leaf: 0.2s;
   --delay-open-leaves: 0.22s;
   --step-open-leaf: 0.02s;
