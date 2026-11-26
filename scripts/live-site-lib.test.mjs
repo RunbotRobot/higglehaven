@@ -69,6 +69,13 @@ describe('live-site steps (#3430)', () => {
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
   });
 
+  it('parses tp:<landlet> and pushpeer (#4491)', () => {
+    expect(parseStep('tp:central-mosaic-012')).toEqual({ command: 'tp', args: ['central-mosaic-012'] });
+    expect(() => parseStep('tp')).toThrow(/needs 1 argument/);
+    expect(() => parseStep('tp:Not A Landlet')).toThrow(/lándlet id/);
+    expect(parseStep('pushpeer')).toEqual({ command: 'pushpeer', args: [] });
+  });
+
   it('parses a key press and refuses a bad key name', () => {
     expect(parseStep('key:KeyN')).toMatchObject({ command: 'key', args: ['KeyN'] });
     expect(parseStep('key:Shift+KeyN')).toMatchObject({ command: 'key', args: ['Shift+KeyN'] });

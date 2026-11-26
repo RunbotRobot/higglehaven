@@ -300,7 +300,14 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [what, rest[0] || ''] };
     }
+    case 'tp': {
+      // tp:<landletId>: stand in the middle of that lándlet (#4491), so presence runs there.
+      need(1);
+      if (!/^[a-z0-9-]{3,80}$/.test(args[0])) throw new Error(`step "${token}": tp needs a lándlet id like central-mosaic-012`);
+      return { command, args: [args[0]] };
+    }
     case 'menu':
+    case 'pushpeer':
     case 'land':
     case 'fly':
     case 'settings':
@@ -313,7 +320,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, pos, marks)`);
   }
 }
 

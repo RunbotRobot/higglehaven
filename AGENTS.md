@@ -95,7 +95,11 @@ page beside the first (#3930), for what needs two people: a tap on a person, a n
 line arriving, a voice peer in the list. On the live site `<name>` must be a fleet account
 (`higglehaven` plus digits) other than your own, never a real person's; its steps are
 `peer:join` (its avatar walks up beside yours), `peer:say:<text>` (it speaks in nearby chat),
-`peer:shot[:name]` and `peer:pos`, and its console errors are reported apart under `peer`.
+`peer:shot[:name]` and `peer:pos`, and its console errors are reported apart under `peer`. Other people are
+drawn and felt only on a claimed lándlet (presence does not run on greenbelt), so a look that needs
+a second person starts with `tp:<landletId>` (stand in the middle of that lándlet, #4491; `tp:central-mosaic-012`
+is the fleet's own; end the spawn orbit first with a short `walk:forward:400`) and `pushpeer` walks
+straight at the second avatar with the stick's own collision-aware step and reports the closest it came.
 
 **A phone profile (#3935).** `--phone` (on `live-site.mjs` and `live-frame-cost.mjs`) slows the CPU 4x
 and uses a home-wifi phone connection (40 ms, 20/5 Mbps), and the report's `profile` says it ran;

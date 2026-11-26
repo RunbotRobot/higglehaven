@@ -35,6 +35,9 @@
 //                                         purchases are Shop's menu, so in Build or Sell that step fails
 //                                         (go to Shop first, #4025)
 //   settings                              the same as leaf:settings
+//   pushpeer                              (with --with) walk straight at the second avatar and report the closest it came (#4491)
+//   tp:<landletId>                        put this avatar at the middle of that lándlet on the ground (the page's own test hook), so
+//                                         presence runs there (it only does on a claimed lándlet); #4491
 //   land                                  land from flight. Every Shop arrival starts in flight 80 m
 //                                         up, looking down (docs/SPEC.md #1175), and walking
 //                                         forward there descends: a look that wants to walk on the
@@ -556,6 +559,50 @@ async function runStepAction(step, index) {
   switch (step.command) {
     case 'peer':
       return runPeerStep(a, b, index);
+    case 'pushpeer': {
+      // #4491: walk this avatar straight at the second one with the very move the stick makes (the page's own
+      // collision-aware step), 0.05 m at a time, and report how near it came: the 0.6 m barrier shows as a
+      // closest distance that stays about there, passing through as a distance near zero.
+      if (!peerPage) throw new Error('pushpeer needs --with');
+      const target = await peerPage.evaluate(() => window.__testShopAvatarPosition?.() ?? null);
+      if (!target) throw new Error('the second page has no avatar position yet');
+      return page.evaluate(async ({ bx, by }) => {
+        const first = window.__testShopAvatarPosition();
+        let closest = Math.hypot(bx - first.x, by - first.y);
+        const startDistance = closest;
+        const steps = Math.ceil(startDistance / 0.05) + 80;
+        for (let i = 0; i < steps; i += 1) {
+          const p = window.__testShopAvatarPosition();
+          const d = Math.hypot(bx - p.x, by - p.y);
+          closest = Math.min(closest, d);
+          if (d < 1e-6) break;
+          window.__testMoveShopAvatarWithCollision(((bx - p.x) / d) * 0.05, ((by - p.y) / d) * 0.05);
+          await new Promise((r) => setTimeout(r, 4));
+        }
+        const end = window.__testShopAvatarPosition();
+        return { startDistance, closest, endDistance: Math.hypot(bx - end.x, by - end.y) };
+      }, { bx: target.x, by: target.y });
+    }
+    case 'tp': {
+      // #4491: presence (other people drawn, crowding, a collected orb seen by a bystander) only runs on a
+      // claimed lándlet, and a Shop arrival lands anywhere. This stands the avatar in the middle of one.
+      await waitForAppOpen();
+      const at = await page.evaluate(async (landletId) => {
+        const res = await fetch(`/api/landlets/${encodeURIComponent(landletId)}`, { credentials: 'include' });
+        if (!res.ok) return { error: `GET /api/landlets/${landletId} answered ${res.status}` };
+        const body = await res.json();
+        const landlet = body.landlet || body;
+        const x = landlet.center?.x;
+        const y = landlet.center?.y;
+        if (typeof x !== 'number' || typeof y !== 'number') return { error: 'the lándlet has no centre; the answer has: ' + Object.keys(landlet).join(', ') };
+        window.__testTeleportShopAvatar?.(x, y, 0);
+        window.__testForceShopProximityCheck?.();
+        return { x, y };
+      }, a);
+      if (at.error) throw new Error(`tp:${a}: ${at.error}`);
+      await page.waitForTimeout(1500);
+      return at;
+    }
     case 'menu':
       await ensureMenuOpen();
       return null;
@@ -847,7 +894,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' ? { drag: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
