@@ -46,6 +46,7 @@ export const ERROR_CODES = Object.freeze({
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
+  PRICE_CHANGED: 'price_changed', // #4456
 });
 
 export class HttpError extends Error {
