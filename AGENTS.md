@@ -1604,6 +1604,54 @@ most likely to come up again.
   private to the doer (their balance, their note) is left out for the
   onlooker.
 
+- **A username has no spaces.** (2026-11-26, #4407.) Told that sign-up
+  let spaces through and that sites differ, with "keep single spaces"
+  recommended, the owner chose otherwise: "When I see a name with spaces
+  in it, I don't assume it's a unique username, but a string of chosen
+  text that anyone else could also have. Aesthetically ... I also prefer
+  no spaces. Let's go with that. Please modify the existing ones that have
+  spaces." So a name reads as a handle: one unbroken word that looks like
+  it can belong to only one person. Sign-up and every rename refuse
+  whitespace through the one shared rule; an existing name with a space
+  keeps working until the owner renames it with an admin Rename action
+  (never a session, never SQL). The principle: a thing that is unique
+  should look unique; and a recommendation is only that, so when the
+  owner picks the other option it is built without a second round.
+
+- **In Build, the handles are on the thing and all of them at once; a
+  tool used many times a minute may stand in one small row; and a limit a
+  person can see needs no sentence.** (2026-11-26, #4409 to #4414, six
+  notes from an evening of building on a phone.) On moving: "I'm having a
+  hard time moving products in build mode. Let's put back the axes that
+  you move with. You probably got rid of them in an attempt to declutter
+  the UI, which I would love to be able to do, but I think in this
+  instance, the move axes are necessary. I like the idea of not having a
+  move or rotate button. Selecting an item shows rotation circles and
+  movement axes, each in all three directions." On nudging: "Left, Right,
+  Forward, and Backward lose or change their meaning when looking at the
+  lándlet from different angles. Let's move the nudge to the arrow on the
+  movement axes." On Undo: "Let's bring the undo/redo button out of the
+  menu in build mode. Make it a small always-visible (or grayed out, if
+  nothing to undo) icon in the upper-right ... a single row of
+  always-visible build tools, sized and arranged for compactness." On the
+  edge: "We don't need a \"That's the edge of this lándlet\" note ... It
+  should be obvious that that's the reason." And on the top bar: smaller,
+  no outline each, "a single background", pushed to the upper right. So:
+  selecting an item or a bundle shows three rings and three two-way axes
+  together, with no mode to choose first; a touch that starts on a handle
+  never falls through to the item; a direction is shown on the thing (an
+  arrow) and never named in words that depend on where the camera is; and
+  the second time a handle is taken away to tidy up and the owner asks
+  for it back is the last: decluttering is welcome everywhere except
+  where it removes a way to act on the thing in front of the person. This
+  amends "Nothing stands on the world but the head" for Build only: Undo
+  and Redo stand in one compact row under the top bar, always drawn and
+  greyed when they can do nothing, and another tool joins that row only
+  by the owner's word. It amends "A gesture is constrained while it
+  happens": the stop stays, and the sentence is kept for limits that
+  cannot be seen (a level limit, a cap, a server refusal); the edge of
+  the lándlet is on screen and needs none.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
