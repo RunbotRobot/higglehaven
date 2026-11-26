@@ -17,6 +17,10 @@ import * as THREE from 'three';
 export const BATCH_TIER_FULL = 'full';
 export const BATCH_TIER_MID = 'mid';
 export const BATCH_TIER_FAR = 'far';
+// #4365: a placement enclosed by its neighbours (src/shop/enclosedPlacements.js) is in no set at all: its
+// handle stays in batch.handles (and in the landlet's objects, so collision, reviews and attention see it
+// as before) but no instanced matrix is drawn for it. It never moves again.
+export const BATCH_TIER_HIDDEN = 'hidden';
 
 const scratch = new THREE.Matrix4();
 const moved = new THREE.Matrix4();
@@ -84,6 +88,7 @@ function markChanged(tier) {
 // Moves one placement to `wanted` (after the fallback). Returns the tier it is in now. Nothing
 // happens if it is already there.
 export function moveBatchHandle(batch, handle, wanted) {
+  if (handle.userData.batchTier === BATCH_TIER_HIDDEN) return BATCH_TIER_HIDDEN;
   const toName = resolveBatchTier(batch, wanted);
   const fromName = handle.userData.batchTier;
   if (toName === fromName) return toName;
@@ -127,10 +132,12 @@ export function moveBatchHandle(batch, handle, wanted) {
 // asked for the i-th placement (batch.handles order); each goes through the same fallback as
 // moveBatchHandle. Returns the tier each placement ended in.
 export function partitionBatch(batch, wanted) {
-  const resolved = batch.handles.map((handle, index) => resolveBatchTier(batch, wanted[index] ?? BATCH_TIER_FULL));
+  const resolved = batch.handles.map((handle, index) => (handle.userData.batchTier === BATCH_TIER_HIDDEN
+    ? BATCH_TIER_HIDDEN : resolveBatchTier(batch, wanted[index] ?? BATCH_TIER_FULL)));
   for (const tier of Object.values(batch.tiers)) tier.live.length = 0; // the full set's array is the one its meshes read: keep it
   batch.handles.forEach((handle, index) => {
     const name = resolved[index];
+    if (name === BATCH_TIER_HIDDEN) return;
     const tier = batch.tiers[name];
     handle.updateMatrix();
     const slot = tier.live.length;
@@ -146,6 +153,37 @@ export function partitionBatch(batch, wanted) {
   });
   for (const tier of Object.values(batch.tiers)) markChanged(tier);
   return resolved;
+}
+
+// Takes a placement out of the drawn sets (#4365). Its slot goes to the last live placement of the set it was
+// in, exactly as when it changes version. Returns false if it was already out.
+export function hideBatchHandle(batch, handle) {
+  const fromName = handle.userData.batchTier;
+  if (fromName === BATCH_TIER_HIDDEN) return false;
+  const from = batch.tiers[fromName];
+  const slot = handle.userData.batchSlot;
+  const lastSlot = from.live.length - 1;
+  if (slot !== lastSlot) {
+    for (const mesh of from.meshes) {
+      mesh.getMatrixAt(lastSlot, moved);
+      mesh.setMatrixAt(slot, moved);
+    }
+    const last = from.live[lastSlot];
+    from.live[slot] = last;
+    last.userData.batchSlot = slot;
+  }
+  from.live.pop();
+  markChanged(from);
+  handle.userData.batchTier = BATCH_TIER_HIDDEN;
+  handle.userData.batchSlot = -1;
+  return true;
+}
+
+// How many placements are left out of every set because they are enclosed (#4365).
+export function batchHiddenCount(batch) {
+  let count = 0;
+  for (const handle of batch.handles) if (handle.userData.batchTier === BATCH_TIER_HIDDEN) count++;
+  return count;
 }
 
 // How many placements are drawn in each set right now: the numbers sum to the batch's placements.

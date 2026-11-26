@@ -43,7 +43,7 @@
 // the fade ends (a little extra culling slack, never a missed draw).
 // Imports only three.js and the batch books, so it runs in the unit-test pool.
 import * as THREE from 'three';
-import { moveBatchHandle, resolveBatchTier } from './batchTiers.js';
+import { moveBatchHandle, resolveBatchTier, BATCH_TIER_HIDDEN } from './batchTiers.js';
 import { createArrivalDissolve } from './arrivalEffect.js';
 
 export const BATCH_CROSSFADE_MS = 400;
@@ -315,6 +315,7 @@ export function createBatchCrossfades({
     // Moves one placement to `wanted` (after the batch's own fallback). Returns the tier it is in.
     // With `canWait` it may answer BATCH_WAITING: the placement was left as it was, to be moved again later.
     move(batch, handle, wanted, { instant = false, canWait = false } = {}) {
+      if (handle.userData.batchTier === BATCH_TIER_HIDDEN) return BATCH_TIER_HIDDEN; // #4365: enclosed, drawn in no version
       const toName = resolveBatchTier(batch, wanted);
       const fromName = handle.userData.batchTier;
       if (toName === fromName) {

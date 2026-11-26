@@ -6,7 +6,7 @@
 // be measured against a lándlet as heavy as the owner's.
 //
 //   npm run build && npx wrangler dev --local     # one terminal
-//   node scripts/seed-heavy-landlet.mjs [--bricks 1650] [--no-tiers] [--mid-level 3] [--url http://127.0.0.1:8787]
+//   node scripts/seed-heavy-landlet.mjs [--bricks 1650] [--no-tiers] [--mid-level 3] [--shape box] [--url http://127.0.0.1:8787]
 //
 // Prints one JSON line: { email, password, username, landletId, templateId, bricks }. Sign in with
 // that account (scripts/live-frame-cost.mjs --login local does it for you). Local only: it creates
@@ -14,7 +14,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { icosphereGlb } from './icosphere-glb.mjs';
+import { icosphereGlb, boxGlb } from './icosphere-glb.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
@@ -110,7 +110,12 @@ if (landlets.length === 0) throw new Error('no greenbelt lándlet to claim');
 const landletId = (await api(`/landlets/${landlets[0].landletId}/claim`, builder.cookie, { method: 'POST' })).landlet.landletId;
 const { seller } = await api('/sellers/me', builder.cookie);
 
-const { glb, triangles } = icosphereGlb(4, 0.25);
+// #4365: --shape box seeds the brick as a real solid box (5,292 triangles full, 1,200 mid, 12 far) instead of an
+// icosphere, so a wall of it has an inside to leave out (an icosphere does not fill its box, so the enclosure
+// rule rightly never culls a wall of them). The default stays the icosphere, so every figure taken before
+// #4365 can still be repeated.
+const BOX_SHAPE = flag('--shape', 'icosphere') === 'box';
+const { glb, triangles } = BOX_SHAPE ? boxGlb(21, 0.5) : icosphereGlb(4, 0.25);
 const brickModelUrl = await uploadModel('seed-brick.glb', glb);
 // Stored reduced versions, as the upload optimiser leaves on a real product, so Shop and Build load
 // them instead of building them in the browser frame by frame. Pass --no-tiers to leave them off and
@@ -125,8 +130,8 @@ const brickModelUrl = await uploadModel('seed-brick.glb', glb);
 // 320, to compare against earlier figures.
 const withTiers = !args.includes('--no-tiers');
 const MID_LEVEL = Number(flag('--mid-level', 3));
-const brickMidUrl = withTiers ? await uploadModel('seed-brick-mid.glb', icosphereGlb(MID_LEVEL, 0.25).glb) : null;
-const brickFarUrl = withTiers ? await uploadModel('seed-brick-far.glb', icosphereGlb(1, 0.25).glb) : null;
+const brickMidUrl = withTiers ? await uploadModel('seed-brick-mid.glb', (BOX_SHAPE ? boxGlb(10, 0.5) : icosphereGlb(MID_LEVEL, 0.25)).glb) : null;
+const brickFarUrl = withTiers ? await uploadModel('seed-brick-far.glb', (BOX_SHAPE ? boxGlb(1, 0.5) : icosphereGlb(1, 0.25)).glb) : null;
 const mkTemplate = async (name, category, modelUrl, dimensions, priceCents, tiers = {}) => (await api('/catalog', builder.cookie, {
   method: 'POST',
   body: JSON.stringify({ name, category, color: '#d98a3a', dimensions, priceCents, sellerId: seller.sellerId, modelUrl, metadata: {}, ...tiers }),

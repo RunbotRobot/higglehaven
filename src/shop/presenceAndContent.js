@@ -64,7 +64,8 @@ import { createBatchCrossfades, BATCH_WAITING } from './batchCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadBatchTierSources, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { initBatchTiers, addBatchTier, partitionBatch } from './batchTiers.js';
+import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
+import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
@@ -647,11 +648,61 @@ window.__testShopSetTiers = () => {
   return [...groups.values()].filter((g) => g.set).map((g) => ({ ...g, px: Math.round(g.px * 10) / 10 }));
 };
 
+// #4365: placements enclosed by their neighbours are left out of what is drawn (src/shop/enclosedBatch.js). A big
+// batch of solid boxes is asked for its reduced versions (the rule needs to know every version is a box too),
+// then worked in slices of about 1.5 ms a tick.
+// e2e / measurement only: set before the landlet loads (window.__testSetShopEnclosure(false), as an init script) to
+// see the same wall without the cull. A batch already culled does not come back.
+let enclosureEnabled = true;
+window.__testSetShopEnclosure = (enabled) => { enclosureEnabled = enabled !== false; };
+// e2e / measurement only (#4365): draws the left-out placements again, each from the version it would have been
+// drawn from, as extra instanced meshes under the batch's root. `'marker'` draws them in flat magenta with the
+// ordinary depth test: a still with no magenta in it proves nothing of them could be seen. `'xray'` draws the same
+// with the depth test off, the control that shows the markers are on screen and findable. `false` removes them.
+// Returns how many placements it drew.
+const proofMeshes = [];
+window.__testShopDrawEnclosed = (on) => {
+  for (const mesh of proofMeshes.splice(0)) { mesh.removeFromParent(); mesh.dispose(); }
+  if (!on) return 0;
+  let drawn = 0;
+  const m = new THREE.Matrix4();
+  for (const entry of shopLandlets.values()) {
+    for (const batch of entry.batches) {
+      const hidden = batch.handles.filter((h) => h.userData.batchTier === 'hidden');
+      if (!hidden.length) continue;
+      const tier = batch.tiers[resolveBatchTier(batch, hidden[0].userData.lodApplied ?? 'full')];
+      const proofMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff, depthTest: on !== 'xray' });
+      tier.parts.forEach((part) => {
+        const mesh = new THREE.InstancedMesh(part.geometry, proofMaterial, hidden.length);
+        mesh.renderOrder = 1000;
+        hidden.forEach((h, i) => { h.updateMatrix(); m.multiplyMatrices(h.matrix, part.matrix); mesh.setMatrixAt(i, m); });
+        mesh.frustumCulled = false;
+        batch.root.add(mesh);
+        proofMeshes.push(mesh);
+      });
+      drawn += hidden.length;
+    }
+  }
+  return drawn;
+};
+// One deadline serves every batch of every landlet for the tick (a shared ENCLOSURE_SLICE_MS, not one slice each).
+function updateBatchEnclosure(entry, deadline) {
+  if (!enclosureEnabled) return;
+  for (const batch of entry.batches) {
+    if (batch.enclosure?.state === 'done' || batch.enclosure?.state === 'off') continue;
+    if (batch.handles.length < MIN_ENCLOSURE_BATCH) continue;
+    if (performance.now() >= deadline) return;
+    if (advanceBatchEnclosure(batch, { deadline }) === 'needTiers') requestBatchTiers(entry, batch);
+  }
+}
+
 function updateInstanceLodTiers() {
   lodItemsScratch.length = 0;
   lodObjectsScratch.length = 0;
+  const enclosureDeadline = performance.now() + ENCLOSURE_SLICE_MS;
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
+    updateBatchEnclosure(entry, enclosureDeadline);
     // #3443: a bundle changes detail as one set, from the set's size on screen,
     // and is protected as a whole when any member is beside the avatar.
     const sets = lodSetsFor(entry);
@@ -667,7 +718,9 @@ function updateInstanceLodTiers() {
       // #4089: one pass over the members also finds the nearest one and what the set costs whole.
       let nearestSquared = Infinity;
       let fullTriangles = 0;
+      set.shownMember = undefined; // #4365: the set's current version is read from its first member that is drawn
       for (const member of set.members) {
+        if (!set.shownMember && member.userData.batchTier !== 'hidden') set.shownMember = member;
         if (!set.near && isNearFullDetail(horizontalDistanceM(
           entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
           shopAvatarPosition.x, shopAvatarPosition.y,
@@ -685,6 +738,9 @@ function updateInstanceLodTiers() {
     }
     for (const object of entry.objects) {
       if (!hasLodTiers(object)) continue;
+      // #4365: a placement left out of every set draws nothing: it spends none of the full-detail budget and is not
+      // flipped. It stays in the set above (nearness, size on screen) and in entry.objects, so nothing else changes.
+      if (object.userData.batchTier === 'hidden') continue;
       // #4189: an item no finished set job has looked at yet (first load, a reload, anything added since) keeps the
       // version it has and is not judged: judged alone it would take a different version from the set it is
       // about to join, and a person would see the change when the job finishes. A failed job releases the hold.
@@ -703,7 +759,7 @@ function updateInstanceLodTiers() {
       // applies to the set as a whole rather than to each member's own state;
       // every member of a set carries the set's size, so the budget drops or
       // keeps the set together.
-      const currentTier = set ? set.members[0].userData.lodTier : object.userData.lodTier;
+      const currentTier = set ? (set.shownMember ?? set.members[0]).userData.lodTier : object.userData.lodTier;
       lodItemsScratch.push({
         px,
         protected: nearAvatar,
