@@ -230,6 +230,21 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     expect(callers).toEqual(OPTED_IN);
   });
 
+  it('and each calls it exactly as many times as listed, so a new opt-in inside a listed file fails here too', () => {
+    // models.js holds handleModelListing, which lists the product, video job and Control Room card behind every upload
+    // and stays closed to a viewer; tax-education.js and world-generation.js hold writes. A second call in any of them
+    // is a new route a viewer can read, and is decided here, on purpose (#4382).
+    const COUNTS = {
+      './lib/account-moderation.js': 3, './lib/admin-delete-account.js': 1, './lib/admin-landlet-search.js': 1,
+      './lib/admin-users-table.js': 1, './lib/admin-video-jobs.js': 1, './lib/models.js': 1, './lib/tax-education.js': 2,
+      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2,
+    };
+    expect(Object.keys(COUNTS).sort()).toEqual(OPTED_IN);
+    for (const path of OPTED_IN) {
+      expect(sources[path].match(/requireAdminOrViewer\(/g)?.length, path).toBe(COUNTS[path]);
+    }
+  });
+
   it('every call site is in a handler that is reached by a GET route or guards its own writes', () => {
     // The helper itself refuses any non-GET, so a handler that opts in can never let a viewer write; this
     // asserts the helper still says so, so a later edit that relaxes it fails here.

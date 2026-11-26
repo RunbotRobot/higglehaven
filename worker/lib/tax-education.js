@@ -2,7 +2,8 @@
 // education content — storage + admin-editable UI only. Surfacing this
 // content to builders (#2843) and deciding who authors/reviews it (#2844,
 // owner judgment) are separate sub-issues; every route here is
-// requireAdmin-gated, same bar as the rest of public/admin-dashboard.html.
+// admin-gated, same bar as the rest of public/admin-dashboard.html (the two
+// GET reads also let a look-only admin through, #4382; every write is admin-only).
 import { json, HttpError } from './http.js';
 import { readJson, stringValue, labelValue } from './validation.js';
 import { requireAdmin, requireAdminOrViewer, requireCurrentUser } from './auth.js';

@@ -25,8 +25,13 @@ localD1(`UPDATE users SET is_admin_viewer = 1 WHERE email = '${email}'`);
 
 const page = await browser.newPage();
 const refused = [];
+const writeRequests = []; // a request with a method that changes something, seen leaving the page (independent of the page's own guard)
 page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error' && !msg.text().includes('Failed to load resource')) errors.push(msg.text()); });
+page.on('request', (request) => {
+  const url = new URL(request.url());
+  if (url.pathname.startsWith('/api/') && !['GET', 'HEAD'].includes(request.method())) writeRequests.push(`${request.method()} ${url.pathname}`);
+});
 page.on('response', (response) => {
   const url = new URL(response.url());
   if (url.pathname.startsWith('/api/') && response.status() >= 400) refused.push(`${response.status()} ${url.pathname}`);
@@ -45,15 +50,20 @@ const sections = {};
 for (const name of [...OPEN, ...CLOSED, 'fixtures']) {
   await page.click(`nav button[data-panel="${name}"]`);
   await page.waitForTimeout(700);
+  // Press every enabled button in the section (not the navigation), twice, so the rows and buttons that the first
+  // round draws are pressed as well. None may send a change: no hand-kept list of write buttons is relied on here.
+  let pressed = 0;
+  for (let round = 0; round < 2; round += 1) {
+    pressed += await page.evaluate((n) => {
+      const buttons = [...document.querySelectorAll('#panel-' + n + ' button')]
+        .filter((b) => !b.disabled && !b.hidden && !b.closest('[hidden]') && !b.classList.contains('nav-item'));
+      buttons.forEach((b) => b.click());
+      return buttons.length;
+    }, name);
+    await page.waitForTimeout(400);
+  }
   const text = await page.evaluate((n) => document.getElementById('panel-' + n).innerText, name);
-  // Press every enabled button in the section: none may send a change.
-  const pressed = await page.evaluate((n) => {
-    const buttons = [...document.querySelectorAll('#panel-' + n + ' button')].filter((b) => !b.disabled && !b.hidden && !b.closest('[hidden]'));
-    buttons.forEach((b) => b.click());
-    return buttons.map((b) => b.id || b.className || b.textContent.trim());
-  }, name);
-  await page.waitForTimeout(400);
-  sections[name] = { failed: /Failed to load/i.test(text), notShown: /Not shown to a look-only account/.test(text), pressed: pressed.length };
+  sections[name] = { failed: /Failed to load/i.test(text), notShown: /Not shown to a look-only account/.test(text), pressed };
 }
 const blockedWrites = await page.evaluate(() => window.__viewerBlockedWrites);
 // The one part of a section that is closed inside an open section.
@@ -64,7 +74,7 @@ const accountsText = await page.evaluate(() => document.getElementById('panel-ac
 const rosterRows = await page.evaluate(() => document.querySelectorAll('#rosterTableWrap tbody tr').length);
 const rosterEmails = await page.evaluate(() => document.getElementById('rosterTableWrap').innerText);
 
-console.log(JSON.stringify({ banner, landedOn, sections, blockedWrites, refused, rosterRows }, null, 1));
+console.log(JSON.stringify({ banner, landedOn, sections, blockedWrites, writeRequests, refused, rosterRows }, null, 1));
 const pass = /most of what is here/.test(banner)
   && landedOn === 'accounts'
   && [...OPEN, 'fixtures'].every((n) => !sections[n].failed)
@@ -72,7 +82,8 @@ const pass = /most of what is here/.test(banner)
   && /Not shown to a look-only account/.test(modelsText) && /Used|used of/.test(modelsText)
   && /Not shown to a look-only account/.test(accountsText)
   && rosterRows >= 1 && !rosterEmails.includes('@example.com') === true
-  && blockedWrites.length === 0
+  && blockedWrites.length === 0 && writeRequests.length === 0
+  && Object.values(sections).reduce((sum, section) => sum + section.pressed, 0) >= 10 // the pressing really pressed things
   && refused.length === 0
   && errors.length === 0;
 await finish(browser, { pass, label: 'Admin dashboard: a look-only admin opens every section without a refusal and without a control that only fails (#4382)', errors });

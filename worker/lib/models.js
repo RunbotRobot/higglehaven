@@ -423,7 +423,8 @@ async function handleModelListing(request, env, url) {
   });
 }
 
-// Admin-only, same reasoning as handleModelListing above — live storage
+// Admin-only (a look-only admin may read this one, #4382: it is byte counts and
+// nothing personal; handleModelListing above stays admin-only) — live storage
 // utilization against the shared cap is operational data, not something a
 // shopper/builder/seller session has any business reading.
 async function handleModelStorage(request, env) {
