@@ -126,6 +126,10 @@ Not built yet; do not describe these to a person as if they exist:
   attributes and variables, a face is fetched once and only when a name asks for it, and an
   id that `shared/wordmark-set.js` does not offer draws the default look. The owner's pick
   from the lettering page is one line in that set.
+  Builders choose in My lándlets, Wordmark (beside Rename; `src/ui/wordmarkPicker.js`, #3783), which is
+  drawn only once the set offers more than the default. The name wears the choice in the open menu (Shop
+  and Build) and in the My lándlets list (#3784); the assistant handbook gets its Wordmark steps when the
+  owner's pick makes the button appear, since the handbook is tested against the real controls.
 - **Loading tips that last** (#3763): paced for a slow reader, switchable off in
   Settings, kept under Help.
 

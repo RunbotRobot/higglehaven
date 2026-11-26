@@ -7269,6 +7269,10 @@
       }
       /* A real <button> (see its own click-handler comment, src/main.js),
          styled to read as the clickable land name it is. */
+      /* #3784: the lándlet's name in its chosen lettering inside the list link: the list's own size, no accent bar. */
+      .my-lands-open-link .bud-place-name { font-size: inherit; line-height: inherit; letter-spacing: inherit; font-weight: inherit; }
+      .my-lands-open-link .bud-place-name:not([data-wordmark]) { font-family: inherit; }
+      .my-lands-open-link .bud-place-name::after { display: none; }
       .my-lands-open-link {
         border: none;
         background: none;
