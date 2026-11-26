@@ -67,7 +67,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
 import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, orderViolations, isTierUpgrade, createFlipGate, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -811,6 +811,7 @@ function updateInstanceLodTiers() {
       if (object.userData.batchWaitSince !== undefined) batchCrossfades.clearWait(object);
       continue;
     }
+    lodItemsScratch[i].upgrade = isTierUpgrade(object.userData.lodApplied, tier); // #4113: the order and the gate below
     lodFlipScratch.push(i);
   }
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
@@ -819,10 +820,17 @@ function updateInstanceLodTiers() {
   // so they are the ones that get a cross-fade (few can run at once) and the
   // ones served before the slice runs out.
   const flipStartMs = performance.now();
+  // #4113: the room the fade caps leave goes to the front of the wall first (nearest upgrade, farthest downgrade): once a
+  // placement has had to wait, no placement behind it in the same direction takes that room this tick (createFlipGate).
+  const flipGate = createFlipGate();
   for (const i of largestFirst(lodFlipScratch, lodItemsScratch)) {
     const object = lodObjectsScratch[i].object;
     const tier = tiers[i];
     const appliedBefore = object.userData.lodApplied;
+    if (object.userData.batch) {
+      const overdueNow = versionOverdue(appliedBefore, tier, lodItemsScratch[i].px, !!object.userData.lodSetId);
+      if (!flipGate.allows(lodItemsScratch[i].upgrade, overdueNow)) continue; // keeps its version; tried again next tick
+    }
     object.userData.lodApplied = tier;
     // #3403: a batched placement changes version by moving between the batch's instanced sets.
     // #4062: the ones that change dissolve from the old version to the new (a few at a time).
@@ -836,6 +844,7 @@ function updateInstanceLodTiers() {
       const overdue = versionOverdue(appliedBefore, tier, lodItemsScratch[i].px, !!object.userData.lodSetId);
       if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: !overdue }) === BATCH_WAITING) {
         object.userData.lodApplied = appliedBefore;
+        flipGate.waited(lodItemsScratch[i].upgrade);
         // A waiting placement is a comparison when nothing has changed, but a pass over thousands of them still
         // spends the slice like any other flip, so the ones behind them are reached on a later tick.
         if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
@@ -870,6 +879,27 @@ export function batchCrossfadeStats() {
     transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
     hardSwaps: batchCrossfades.hardSwapCount,
   };
+}
+// #4113 (e2e): how many drawn batched placements show a worse version than some placement farther from the avatar.
+export function batchOrderViolations() {
+  const bricks = [];
+  const rankOf = { far: 0, mid: 1, full: 2 };
+  for (const entry of shopLandlets.values()) {
+    for (const batch of entry.batches) {
+      for (const handle of batch.handles) {
+        const rank = rankOf[handle.userData.batchTier];
+        if (rank === undefined) continue;
+        bricks.push({
+          rank,
+          d: horizontalDistanceM(
+            entry.group.position.x + handle.position.x, entry.group.position.y + handle.position.y,
+            shopAvatarPosition.x, shopAvatarPosition.y,
+          ),
+        });
+      }
+    }
+  }
+  return orderViolations(bricks);
 }
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 

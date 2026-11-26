@@ -295,9 +295,75 @@ export function setApparentPx(set, fovDeg, viewportHeightPx) {
 // of them get one of the few cross-fades that can run at once, and who is
 // served before the tick's time slice runs out; the rest follow on later ticks.
 // `indices` are positions in `items` ({ px }); returns them, largest first, with
-// ties kept in their original order (the sort is stable). Sorts in place.
+// ties (every member of a set shares the set's size) are ordered by what the change is. #4113: a wall improves from the
+// front and degrades from the back, so among equal sizes an UPGRADE (`upgrade`: a better version than the one drawn)
+// goes before a downgrade, the NEARER upgrade first and the FARTHER downgrade first (`dist`, when both have it); the rest
+// keep their original order (the sort is stable). Without that a wall of loose bricks changed in the order they were
+// placed, so a brick a metre away could wait behind one ten metres away. Sorts in place.
 export function largestFirst(indices, items) {
-  return indices.sort((a, b) => items[b].px - items[a].px);
+  return indices.sort((a, b) => {
+    const bySize = items[b].px - items[a].px;
+    if (bySize !== 0) return bySize;
+    const ua = items[a].upgrade === true;
+    const ub = items[b].upgrade === true;
+    if (ua !== ub) return ua ? -1 : 1;
+    const da = items[a].dist;
+    const db = items[b].dist;
+    if (!Number.isFinite(da) || !Number.isFinite(db)) return 0;
+    return ua ? da - db : db - da;
+  });
+}
+
+// #4113 (the walk, e2e/shop-wall-walk-continuous.test.mjs): going in, the nearest bricks of a wall waited on the far
+// version while the ones behind them already had mid. The fade caps (batchCrossfade.js) are shared, the cheap far-to-mid
+// changes of the back of the wall fitted in the room a far-to-full change of the front was waiting for, and kept fitting
+// there: head-of-line blocking. So within one tick's flips, once a placement has had to wait for room, no placement
+// behind it that changes in the SAME direction (better, or worse) is admitted that tick: the room goes to the front of
+// the wall first (nearest upgrade, farthest downgrade, see largestFirst), and a wall never has its near bricks on a worse
+// version than the ones behind them because the far ones had cheaper changes. The cost is the leftover smaller than one
+// placement for the length of a fade. A version that is overdue (already well past its size, versionOverdue) is not held.
+const TIER_RANK_ORDER = { [TIER_FAR]: 0, [TIER_MID]: 1, [TIER_FULL]: 2 };
+export function isTierUpgrade(currentTier, wantedTier) {
+  return (TIER_RANK_ORDER[wantedTier] ?? 2) > (TIER_RANK_ORDER[currentTier] ?? 2);
+}
+export function createFlipGate() {
+  const blocked = { up: false, down: false };
+  const key = (upgrade) => (upgrade ? 'up' : 'down');
+  return {
+    // May a placement with this change be admitted now?
+    allows(upgrade, overdue) {
+      return overdue === true || !blocked[key(upgrade)];
+    },
+    // A placement was made to wait for room.
+    waited(upgrade) {
+      blocked[key(upgrade)] = true;
+    },
+    get blocked() {
+      return blocked.up || blocked.down;
+    },
+  };
+}
+
+// #4113 (e2e measure): how many of `bricks` ({ d: distance from the avatar, rank: 0 far, 1 mid, 2 full }) show a worse
+// version than some brick strictly farther away. A wall improving from the front has none (in a settled wall); the
+// owner's band, the near bricks on far while the ones behind have mid, has many.
+export function orderViolations(bricks) {
+  const sorted = bricks.slice().sort((a, b) => b.d - a.d);
+  let violations = 0;
+  let bestFarther = -1;
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i;
+    let groupBest = bestFarther;
+    while (j < sorted.length && sorted[j].d === sorted[i].d) {
+      if (sorted[j].rank < bestFarther) violations++;
+      groupBest = Math.max(groupBest, sorted[j].rank);
+      j++;
+    }
+    bestFarther = groupBest;
+    i = j;
+  }
+  return violations;
 }
 
 // #3920 (moved here by #3929 so Build counts the same way): what a model costs to draw, in triangles.
