@@ -1048,6 +1048,30 @@ describe('Simulated purchases', () => {
     expect(after.higgles_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
 
+  // #4456: a purchase says the price the shopper saw; if it moved, it is refused before anything is charged or written.
+  it('refuses, uncharged, a purchase whose expected price is not the live price', async () => {
+    const seller = await signupAdmin('purchase-price-changed-seller');
+    await createGreenbeltLandletWithArea('purchase-price-changed-landlet', 1000);
+    await claim('purchase-price-changed-landlet', seller);
+    await createTemplate('purchase-price-changed-template', { priceCents: 700 });
+    await placeInstance('purchase-price-changed-instance', 'purchase-price-changed-landlet', 'purchase-price-changed-template', seller);
+    const buy = (expectedUnitPriceCents) => api('/instances/purchase-price-changed-instance/purchase', seller.session({
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedUnitPriceCents }),
+    }));
+
+    const stale = await buy(500);
+    expect(stale.response.status).toBe(409);
+    expect(stale.body.code).toBe('price_changed');
+    expect(stale.body.unitPriceCents).toBe(700);
+    expect(stale.body.error).toMatch(/price changed to \$7\.00.*not charged/i);
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM purchases WHERE instance_id = 'purchase-price-changed-instance'").first();
+    expect(rows.n).toBe(0);
+
+    const fresh = await buy(700);
+    expect(fresh.response.status).toBe(201);
+    expect(fresh.body.purchase.totalCents).toBe(700);
+  });
+
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
     const seller = await signupAdmin('purchase-no-returns-seller');
     await createGreenbeltLandletWithArea('purchase-no-returns-landlet', 1000);

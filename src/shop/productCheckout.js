@@ -318,6 +318,20 @@ function showPurchaseCelebration(review) {
   markProductJustBought(review);
 }
 
+// #4456: the price moved after the shopper saw it. The card's own copy of the price follows the server's, and the
+// shopper is told, in terms of money, that nothing was charged and what to do next.
+async function showPriceChanged(review, unitPriceCents) {
+  const known = Number.isInteger(unitPriceCents);
+  if (known) review.mesh.userData.template.priceCents = unitPriceCents;
+  await showNotice({
+    title: 'The price changed',
+    message: known
+      ? `The price is now ${formatPriceCents(unitPriceCents)}. You were not charged. Review it and buy again if you still want it.`
+      : 'The price changed. You were not charged. Review the new price and buy again.',
+    returnFocusEl: productCardBuyButton(),
+  });
+}
+
 export async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
@@ -335,6 +349,12 @@ export async function handleShopProductBuyClick() {
     // opens the one payment sheet (price, refund line, card field, Pay), so Pay is the one yes;
     // anything else keeps the one-tap confirm below. A refusal surfaces here, before any sheet.
     const quote = await getPurchaseQuote(instanceId);
+    // #4456: the sheet and the Pay button show the price the shopper saw, and the server charges the live one. If
+    // the seller changed it since this card was loaded, say so before anything is shown to pay.
+    if (Number.isInteger(quote.unitPriceCents) && quote.unitPriceCents !== priceCents) {
+      await showPriceChanged(review, quote.unitPriceCents);
+      return;
+    }
     if (!quote.paysWithCard) {
       // #659: a one-line mention right at the moment of buying, alongside the
       // full Return policy button this same tapped product already surfaces
@@ -355,7 +375,7 @@ export async function handleShopProductBuyClick() {
       if (!confirmed) return;
       productCardBuyButton().disabled = true;
     }
-    const result = await purchaseInstance(instanceId);
+    const result = await purchaseInstance(instanceId, { expectedUnitPriceCents: priceCents });
     if (result.requiresPayment) {
       const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });
       // #473: only clear the persisted idempotency key (see purchaseInstance
@@ -398,7 +418,10 @@ export async function handleShopProductBuyClick() {
     // item); My purchases offers "Rate this seller" per purchase for when
     // they actually know how it went (#3198).
   } catch (err) {
-    if (err.message !== 'Checkout cancelled.') {
+    if (err.code === 'price_changed') {
+      // The race the quote could not catch: the seller changed it between the quote and Buy. Nothing was charged.
+      await showPriceChanged(review, err.body?.unitPriceCents);
+    } else if (err.message !== 'Checkout cancelled.') {
       await showNotice({
         title: "Purchase didn't go through",
         message: err.message || 'Couldn\'t complete this purchase.',
