@@ -115,3 +115,27 @@ describe('pullGroupTowardCentre', () => {
     expect(pullGroupTowardCentre(SQUARE, wide)).toEqual({ x: 0, y: 0, limited: false });
   });
 });
+
+describe('the square rule that goes with the outline (#4403)', () => {
+  // An outline that reaches past the 31.6 m square (as the real organic ones do): the Worker still holds an item
+  // inside the square by its turned footprint, so Build's limit must too.
+  const BIG = [{ x: -20, y: -20 }, { x: 20, y: -20 }, { x: 20, y: 20 }, { x: -20, y: 20 }];
+  const PLANK = { width: 2, depth: 0.5, rotationZ: 0 };
+
+  it('does not rest an item where the square would refuse it, though the outline allows it', () => {
+    expect(itemLegalAt(BIG, PLANK, 15.4, 0, 0)).toBe(false); // 15.4 + 1 is past 15.81
+    expect(itemLegalAt(BIG, { ...PLANK, rotationZ: Math.PI / 2 }, 15.4, 0, 0)).toBe(true); // turned, it is 0.5 wide along x
+    expect(itemLegalAt(BIG, { ...PLANK, rotationZ: Math.PI / 2 }, 0, 15.4, 0)).toBe(false); // and 2 long along y
+  });
+
+  it('stops a push into the square at the square, not at the bigger outline', () => {
+    const stopped = limitItemMove(BIG, PLANK, { x: 0, y: 0 }, { x: 19, y: 0 }, 0);
+    expect(stopped.limited).toBe(true);
+    expect(stopped.x).toBeCloseTo(15.81 - 1, 2);
+  });
+
+  it('applies the square when the lándlet has no polygon at all', () => {
+    expect(itemLegalAt(null, PLANK, 15.4, 0, 0)).toBe(false);
+    expect(itemLegalAt(null, PLANK, 14.5, 0, 0)).toBe(true);
+  });
+});

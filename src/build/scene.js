@@ -520,6 +520,9 @@ let suppressDragCycleSideEffects = false;
 // since a normal drag already starts with the camera tens of meters from
 // the object (see EDGE_PAN_MAX_PAN_FROM_DRAG_START_M).
 let edgePanDragStartCameraPos = null;
+// #4403: the whole layout as it stood when the current drag began (the snapshot pushed for Undo), kept so that if the
+// server refuses part of a bundle's save, every member can be put back to this, not left half moved.
+let dragBeforeSnapshot = null;
 
 function wireDraggingBehavior(transformControls) {
   transformControls.addEventListener('dragging-changed', (event) => {
@@ -535,7 +538,12 @@ function wireDraggingBehavior(transformControls) {
       // proceeds either way — it only repositions the one mesh already
       // being dragged, not the productMeshes array's own membership, so
       // it isn't itself part of the race #402 is about.
-      if (!sceneMutationBusy) pushUndoSnapshot();
+      if (!sceneMutationBusy) {
+        pushUndoSnapshot();
+        dragBeforeSnapshot = undoStack.at(-1) ?? null;
+      } else {
+        dragBeforeSnapshot = null;
+      }
       return;
     }
     edgePanDragStartCameraPos = null;
@@ -552,7 +560,9 @@ function wireDraggingBehavior(transformControls) {
       groupMoveSet = null;
       groupMoveStartPositions = null;
       groupRotatePivot.quaternion.identity();
-      syncBatchUpdate(meshes);
+      const before = dragBeforeSnapshot;
+      dragBeforeSnapshot = null;
+      syncBatchUpdate(meshes, { before, editSeq: layoutEditSeq });
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
     }
@@ -966,8 +976,10 @@ function applyBundleRotation(delta) {
   // #4198: every member must also stand on the lándlet's real outline at its new place and angle, the same
   // rule the single-item move uses. A turn that would swing a member over the edge stops at the last angle
   // that was legal, with one line saying why.
+  // #4403: with or without a polygon, the Worker also holds every member inside the square by its turned footprint,
+  // so that is part of "legal" here (itemLegalAt), and a lándlet with no polygon is checked too.
   const outline = getBuildOutline();
-  if (outline) {
+  {
     const meshes = groupMoveMeshes ?? [];
     const probe = new THREE.Euler();
     for (let i = 0; i < meshes.length; i += 1) {
@@ -2023,13 +2035,50 @@ async function applyStaleInstances(staleInstances, { gateHeld = false } = {}) {
   return true;
 }
 
+// #4403: puts the members of a refused bundle save back to the poses they had when the gesture began (`before` is the
+// layout snapshot taken then) and saves that, whichever chunks the server had already stored. Runs inside the update
+// chain, so it saves directly. False (nothing changed here) when another edit has started since, or the save of the
+// old poses fails: the caller then falls back to reading the server.
+async function restoreMembersToBefore(meshes, before, editSeq) {
+  if (editSeq !== null && editSeq !== layoutEditSeq) return false;
+  if (sceneMutationBusy || translateControls.dragging || rotateControls.dragging || trimControls.dragging) return false;
+  const beforeById = new Map(before.map((instance) => [instance.instanceId, instance]));
+  const members = meshes.filter((mesh) => productMeshes.includes(mesh) && beforeById.has(mesh.userData.instanceId));
+  if (members.length === 0) return false;
+  const moved = members.map((mesh) => ({ mesh, pose: { position: mesh.position.clone(), rotation: mesh.rotation.clone() } }));
+  for (const mesh of members) {
+    const old = beforeById.get(mesh.userData.instanceId);
+    mesh.position.set(old.x, old.y, old.z);
+    mesh.rotation.set(old.rotationX, old.rotationY, old.rotationZ);
+    mesh.userData.safePosition = mesh.position.clone();
+  }
+  try {
+    await upsertInstancesRemote(members.map(instanceForSave), { updateOnly: true, onChunkStored: (stored) => stored.forEach(adoptVersion) });
+  } catch (error) {
+    console.warn('Could not save the members back where they were:', error);
+    // Leave the scene as the gesture left it: the caller's fallback reads the server.
+    for (const { mesh, pose } of moved) {
+      mesh.position.copy(pose.position);
+      mesh.rotation.copy(pose.rotation);
+      mesh.userData.safePosition = mesh.position.clone();
+    }
+    return false;
+  }
+  // The Undo step for the refused gesture describes a move that did not happen.
+  if (undoStack.at(-1) === before) undoStack.pop();
+  updateUndoRedoButtons();
+  persistLayout();
+  updateSelectionUI();
+  return true;
+}
+
 function syncBatchUpdate(meshes, options) {
   if (meshes.length === 0) return Promise.resolve();
   syncsInFlight += 1; // counted from queueing, like syncUpdate (see inOrder)
   return inOrder(() => runBatchUpdate(meshes, options));
 }
 
-async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
+async function runBatchUpdate(meshes, { gateHeld = false, before = null, editSeq = null } = {}) {
   const attemptId = ++syncAttemptSeq;
   try {
     // #3101: updateOnly -- a mesh the server no longer has was deleted from
@@ -2089,7 +2138,12 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     // they are saved and say so, rather than leaving them somewhere that
     // "may not survive a reload".
     if (err.code === 'out_of_level_range' || err.code === 'outside_landlet_outline') {
-      const putBack = await revertSceneToServer();
+      // #4403: a bundle is saved in chunks, so by now earlier chunks may already hold the new poses. All or
+      // nothing: put every member back to where the gesture began and save that, so the server is never left with
+      // part of the bundle moved. Only when that cannot be done (another edit has started) does it fall back to
+      // reading whatever the server holds.
+      const allBack = before ? await restoreMembersToBefore(meshes, before, editSeq) : false;
+      const putBack = allBack || await revertSceneToServer();
       tellBuilder("Couldn't move those items", putBack
         ? `${err.message} They have been put back where they were.`
         : `${err.message} They may not stay where they are after a reload.`);
@@ -5171,6 +5225,18 @@ function addEverythingInBrushAtClientPos(x, y) {
 window.__testSyncBatchUpdate = (instanceIds) => syncBatchUpdate(
   productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId)),
 );
+
+// #4403: moves the named instances `dx` metres along x the way a bundle drag does (the Undo snapshot taken first,
+// then the move, then one batched save carrying that snapshot), so a test can have the server refuse part of the
+// save and see every member come back. Same "inert unless a test calls it" convention.
+window.__testMoveAndSyncBatch = (instanceIds, dx) => {
+  pushUndoSnapshot();
+  const before = undoStack.at(-1);
+  const meshes = productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId));
+  for (const mesh of meshes) mesh.position.x += dx;
+  return syncBatchUpdate(meshes, { before, editSeq: layoutEditSeq });
+};
+window.__testInstancePositions = () => Object.fromEntries(productMeshes.map((mesh) => [mesh.userData.instanceId, [mesh.position.x, mesh.position.y, mesh.position.z]]));
 
 // #1062: same convention, for the single-item save (what a one-item drag calls).
 window.__testSyncUpdate = (instanceId) => {
