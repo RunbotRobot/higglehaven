@@ -78,7 +78,8 @@ import { disposeObject3D, reportRendererMemoryDiagnostic } from './mode.js';
 // established in this file, using this app's actual pill colors
 // (index.html's --pill-rgb/--ink-rgb) rather than inventing new ones, and
 // lowercase "afk" to match the lowercase higglehaven wordmark convention.
-function makeAfkBadgeSprite() {
+// #4390: also drawn above another person's avatar when their presence row says they have stepped away.
+export function makeAfkBadgeSprite() {
   const canvas = document.createElement('canvas');
   canvas.width = 104;
   canvas.height = 44;
@@ -690,6 +691,11 @@ export function setShopAvatarAnimationState(shopAvatar, state) {
 export function advanceShopIdleForTest(seconds, stepS = 0.1) {
   const steps = Math.ceil(seconds / stepS - 1e-9);
   for (let i = 0; i < steps; i++) updateShopAvatarIdle(false, stepS);
+}
+
+// #4390: whether this person's own avatar is showing its AFK badge, reported so others see the same mark.
+export function isShopAvatarAfk() {
+  return shopAfkBlend > 0.5;
 }
 
 export function updateShopAvatarIdle(hasActiveInput, dt) {

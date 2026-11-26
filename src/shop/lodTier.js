@@ -115,6 +115,22 @@ export function nextSetTier(currentTier, apparentPx) {
   return nextTier(currentTier, apparentPx, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX);
 }
 
+// #4113 (the owner's recording, 2026-11-26): a member that is waiting for room to fade (batchCrossfade.js) keeps the
+// version it has, and on a wall of 1,650 bricks the wait outlasted the walk: two to three metres from the wall a third
+// of it was still the far version, each brick 60 to 80 px tall. A fade is the nicety; the right version is the rule.
+// A member whose version has been left behind by this much stops waiting and changes at once if no fade has room.
+// Only an upgrade counts (the better version wanted than the one drawn): drawing a better version than needed is
+// never something a person can see.
+export const LOD_OVERDUE_FACTOR = 1.5;
+const TIER_RANK = { [TIER_FAR]: 0, [TIER_MID]: 1, [TIER_FULL]: 2 };
+export function versionOverdue(currentTier, wantedTier, apparentPx, inSet = false) {
+  if ((TIER_RANK[wantedTier] ?? 2) <= (TIER_RANK[currentTier] ?? 2)) return false;
+  const limitPx = currentTier === TIER_FAR
+    ? (inSet ? LOD_SET_FAR_EXIT_PX : LOD_FAR_EXIT_PX)
+    : currentTier === TIER_MID ? LOD_MID_EXIT_PX : Infinity;
+  return apparentPx >= limitPx * LOD_OVERDUE_FACTOR;
+}
+
 // The tier every item ends up in once the budget is applied. `items` is a list
 // of { px, wanted, protected }: its apparent size, the tier nextTier asked for,
 // and whether it is protected (beside the avatar: always full, outside the

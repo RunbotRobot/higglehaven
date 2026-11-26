@@ -51,6 +51,7 @@
 // reset into one exported function mirrors shop/avatar.js's own
 // resetShopAvatarIdleState() precedent for the identical problem.
 import * as THREE from 'three';
+import { crowdAdjustedStep } from './avatarCrowding.js';
 import { camera, renderer } from '../world/scene.js';
 import { curvatureDropM } from '../../worker/earthCurvature.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier, flightBodyReach } from '../flight.js';
@@ -1712,6 +1713,16 @@ window.__testShopLandingObstructionTopZ = (x, y) => shopLandingObstructionTopZ(x
 // at an angle slows the shopper down rather than stopping them dead.
 function moveShopAvatarWithCollision(dx, dy) {
   const { x, y, z } = shopAvatarPosition;
+  // #4389: other people on the ground resist a step toward them (docs/SPEC.md
+  // §2 crowding); flying is above everyone, so it is exempt.
+  if (shopFlightState === 'grounded' && shopOtherAvatars.size > 0) {
+    const others = [];
+    for (const entry of shopOtherAvatars.values()) {
+      if (entry.group.visible === false) continue;
+      others.push({ x: entry.group.position.x, y: entry.group.position.y });
+    }
+    ({ dx, dy } = crowdAdjustedStep(x, y, dx, dy, others));
+  }
   if (!shopPositionBlocked(x + dx, y + dy, z)) {
     shopAvatarPosition.x += dx;
     shopAvatarPosition.y += dy;

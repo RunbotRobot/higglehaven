@@ -88,7 +88,7 @@ describe('POST /api/presence', () => {
     // proves that if the statement ever returned nothing the caller would get
     // the same clean 404. Same env.DB.prepare hijack idiom as the other
     // POST-then-reselect tests in this suite, swapping the write for a
-    // statement that returns no row (it keeps the seven bound parameters the
+    // statement that returns no row (it keeps the eight bound parameters the
     // real one takes).
     const builder = await signupBuilder('presence-post-reselect-race');
 
@@ -97,7 +97,7 @@ describe('POST /api/presence', () => {
     env.DB.prepare = (sql) => {
       if (armed && sql.includes('INSERT INTO avatar_presence') && sql.includes('RETURNING')) {
         armed = false;
-        return originalPrepare('SELECT * FROM avatar_presence WHERE 0 AND ?1 IS ?2 AND ?3 IS ?4 AND ?5 IS ?6 AND ?7 IS NULL');
+        return originalPrepare('SELECT * FROM avatar_presence WHERE 0 AND ?1 IS ?2 AND ?3 IS ?4 AND ?5 IS ?6 AND ?7 IS NULL AND ?8 IS NULL');
       }
       return originalPrepare(sql);
     };
@@ -146,6 +146,25 @@ describe('POST /api/presence', () => {
     }));
     expect(landedAgain.response.status).toBe(200);
     expect(landedAgain.body.presence.flying).toBe(false);
+  });
+
+  // #4390: the AFK bit (a person standing still too long) travels the same way flying does.
+  it('afk is optional, defaults to false, and is stored/returned as a real boolean', async () => {
+    const builder = await signupBuilder('presence-afk');
+    const defaulted = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0 }),
+    }));
+    expect(defaulted.body.presence.afk).toBe(false);
+    const away = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0, afk: true }),
+    }));
+    expect(away.response.status).toBe(200);
+    expect(away.body.presence.afk).toBe(true);
+    expect((await presenceRow(builder.builderId)).afk).toBe(1);
+    const back = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0, afk: false }),
+    }));
+    expect(back.body.presence.afk).toBe(false);
   });
 
   it('accepts a real landletId and stores it on the row', async () => {
