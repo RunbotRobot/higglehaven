@@ -174,6 +174,8 @@ if (farCandidateVisible) {
   console.log('editing the far candidate through the UI persists its new name (should be true):', renamedCandidateVisible);
 
   await renamedRow.locator('.candidate-delete-btn').click();
+  await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+  await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
   await renamedRow.waitFor({ state: 'detached', timeout: 10000 });
   deletedCandidateGone = await page.locator('#candidatesTableWrap', { hasText: editedName }).count() === 0;
   console.log('deleting the far candidate through the UI removes it from the table (should be true):', deletedCandidateGone);

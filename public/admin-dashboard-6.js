@@ -113,7 +113,7 @@
     // the server already reports as unreferenced; the DELETE handler's own
     // last-step referenced-model re-check is still the real guard.
     async function deleteModel(modelUrl) {
-      if (!window.confirm('Permanently delete ' + modelUrl + ' from R2? This cannot be undone.')) return;
+      if (!(await window.adminConfirm({ title: 'Delete upload', message: 'Permanently delete ' + modelUrl + ' from R2? This cannot be undone.', confirmLabel: 'Delete' }))) return;
       clearErr(errLine);
       try {
         await fetchJson(modelUrl, { method: 'DELETE' });
@@ -198,9 +198,9 @@
       }
     }
     dryRunBtn.addEventListener('click', () => runCleanup(true));
-    realRunBtn.addEventListener('click', () => {
+    realRunBtn.addEventListener('click', async () => {
       if (lastDryRunMaxDeletes !== Number(maxInput.value)) return; // stale arm guard, belt-and-suspenders
-      if (!window.confirm('Permanently delete these unreferenced uploads from R2? This cannot be undone.')) return;
+      if (!(await window.adminConfirm({ title: 'Delete unreferenced uploads', message: 'Permanently delete these unreferenced uploads from R2? This cannot be undone.', confirmLabel: 'Delete' }))) return;
       runCleanup(false);
     });
 

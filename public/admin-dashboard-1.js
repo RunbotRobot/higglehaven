@@ -638,7 +638,7 @@
   }
 
   async function deleteCandidate(landletId) {
-    if (!confirm('Delete land candidate ' + landletId + '?')) return;
+    if (!(await window.adminConfirm({ title: 'Delete land candidate', message: 'Delete land candidate ' + landletId + '?', confirmLabel: 'Delete' }))) return;
     clearError();
     try {
       await apiFetch('/api/land-candidates/' + encodeURIComponent(landletId), { method: 'DELETE' });
@@ -813,7 +813,7 @@
     const prompt = action === 'file'
       ? 'File this form with the e-filing vendor? This transmits a real submission and cannot be undone here.'
       : (action === 'void' ? 'Void this form?' : 'Approve this form?');
-    if (!confirm(prompt)) return;
+    if (!(await window.adminConfirm({ title: action === 'file' ? 'File form' : (action === 'void' ? 'Void form' : 'Approve form'), message: prompt, confirmLabel: action === 'file' ? 'File' : (action === 'void' ? 'Void' : 'Approve') }))) return;
     clearMessages();
     try {
       await apiFetch('/api/tax/admin-forms/' + encodeURIComponent(formId) + '/' + action, { method: 'POST' });
