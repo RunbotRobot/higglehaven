@@ -138,6 +138,7 @@ import {
   handleProductReviews, handleProductFlags, handleProductFlagsList,
   handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete, handleSellerFeedbackList,
 } from './lib/reputation.js';
+import { handleCounterfeitRefundBuyers } from './lib/counterfeit-refunds.js';
 // #2619 (leaf of #2536): seller-payout claim/resume, builder
 // higgles-redemption, W-9/W-8BEN tax-ID collection, and 1099
 // tax-reporting/e-filing handlers, extracted into
@@ -901,6 +902,11 @@ async function handleApi(request, env, url, ctx) {
   // #3040: admin-initiated, insert-only NCMEC report records.
   if (route[0] === 'ncmec-reports') {
     return handleNcmecReports(request, env, route, url);
+  }
+
+  // #4376: Refund buyers, on an approved counterfeit flag.
+  if (route.length === 3 && route[0] === 'product-flags' && route[2] === 'refund-buyers') {
+    return handleCounterfeitRefundBuyers(request, env, route);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {

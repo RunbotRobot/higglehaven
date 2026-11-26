@@ -485,13 +485,13 @@ export async function notifySellerOfSaleChange(db, purchase, messageFor) {
 // money has committed, and only on the branch that did the first real state
 // change. Best-effort like the seller notice. A guest/removed buyer
 // (buyer_builder_id NULL) has nobody to tell.
-export async function notifyBuyerOfRefund(db, purchase, amountCents, { partial = false } = {}) {
+export async function notifyBuyerOfRefund(db, purchase, amountCents, { partial = false, reason = '' } = {}) {
   try {
     if (!purchase.buyer_builder_id || !(amountCents > 0)) return;
     const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     const name = template?.name || 'Your purchase';
     await fireNotification(db, purchase.buyer_builder_id,
-      `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.`);
+      `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.${reason ? ` ${reason}` : ''}`);
   } catch (err) {
     console.error('notifyBuyerOfRefund failed', purchase.purchase_id, err);
   }
@@ -519,7 +519,9 @@ export function sellerReversalNotice(purchase) {
 // Exported so #1122's own regression test can exercise the debit/notify
 // split directly, the same way refundIdempotencyKey above is exported for
 // its own refund-path test.
-export async function clawBackPurchaseCommission(db, purchase, templateName) {
+// #4376: `buyerReason` is one plain sentence added to the buyer's refund notice (why it happened), for a refund the
+// buyer did not ask for.
+export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '' } = {}) {
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
@@ -600,7 +602,11 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
 
   // #1304: tell the buyer what came back (the full total minus any earlier
   // partial refund they were already notified about).
-  await notifyBuyerOfRefund(db, purchase, purchase.total_cents - (purchase.refunded_amount_cents || 0));
+  // A card purchase gets back refundAmountCents (99%, #651), not the order's total, so that is the figure the buyer is
+  // told; a purchase with no payment intent moved no card money and keeps the total it always read.
+  await notifyBuyerOfRefund(db, purchase,
+    purchase.payment_intent_id ? refundAmountCents(purchase.total_cents) : purchase.total_cents - (purchase.refunded_amount_cents || 0),
+    { reason: buyerReason });
 
   // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
   const sellerNotice = sellerReversalNotice(purchase);
@@ -698,7 +704,7 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
 // apart from each other. Returns false if a concurrent request (a refund,
 // a payout claim, or another dispute) already won the race; the caller is
 // responsible for re-reading the row to report why.
-async function finalizeRefundReversal(env, purchase) {
+export async function finalizeRefundReversal(env, purchase) {
   const db = env.DB;
   // The refunded_at read at each caller's own top is a fast-path only — two
   // concurrent reversal requests (a double-click, a client retry, or a
