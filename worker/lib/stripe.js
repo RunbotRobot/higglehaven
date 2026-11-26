@@ -599,7 +599,7 @@ export async function handleConfirmCard(request, env, db) {
     // await gap since the UPDATE above can remove this row before this
     // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
     // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
-    if (!updated) return json({ error: 'Account no longer exists' }, 404);
+    if (!updated) return json({ error: 'Account no longer exists', code: ERROR_CODES.ACCOUNT_NOT_FOUND }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -619,10 +619,10 @@ export async function handleConfirmCard(request, env, db) {
   const setupIntentId = stringValue(input.setupIntentId, 'setupIntentId');
   const setupIntent = await stripeRequest(env, 'GET', `setup_intents/${encodeURIComponent(setupIntentId)}`);
   if (setupIntent.metadata?.userId !== user.user_id) {
-    throw new HttpError('This card verification session does not belong to you.', 403);
+    throw new HttpError('This card verification session does not belong to you.', 403, { code: ERROR_CODES.CARD_CHECK_MISMATCH });
   }
   if (setupIntent.status !== 'succeeded' || !setupIntent.payment_method) {
-    throw new HttpError('Card verification is not complete yet.', 400);
+    throw new HttpError('Card verification is not complete yet.', 400, { code: ERROR_CODES.CARD_CHECK_INCOMPLETE });
   }
   const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(setupIntent.payment_method)}`);
   const funding = paymentMethod.card?.funding || null;
@@ -651,6 +651,6 @@ export async function handleConfirmCard(request, env, db) {
   // #2430: same concurrent-account-deletion race as handleConfirmCard's own
   // re-SELECT above -- a concurrent delete landing in the await gap since
   // the UPDATE can remove this row before this re-SELECT runs.
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
+  if (!updated) return json({ error: 'Account no longer exists', code: ERROR_CODES.ACCOUNT_NOT_FOUND }, 404);
   return json({ user: userFromRow(updated) });
 }

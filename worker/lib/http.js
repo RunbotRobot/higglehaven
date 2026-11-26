@@ -48,6 +48,9 @@ export const ERROR_CODES = Object.freeze({
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
   PRICE_CHANGED: 'price_changed', // #4456
+  CARD_CHECK_MISMATCH: 'card_check_mismatch', // #4478
+  CARD_CHECK_INCOMPLETE: 'card_check_incomplete', // #4478
+  ACCOUNT_NOT_FOUND: 'account_not_found', // #4478
 });
 
 export class HttpError extends Error {

@@ -100,6 +100,9 @@ let verifyStripeSetup = null;
 // 2026-10-28): calling Stripe(...) fresh in both enterVerifyCardStep and
 // the click handler below hit exactly this.
 let verifyStripeInstance = null;
+// #4478: set when the card step failed to load, so Continue reads Try again and loads it again.
+let verifyRetryLoad = false;
+const CARD_FORM_LOAD_FAILED = "The card form couldn't load. You were not charged. Try again, or verify with an ID instead.";
 
 async function enterVerifyCardStep() {
   verifyAgeStepEl.hidden = true;
@@ -128,11 +131,19 @@ async function enterVerifyCardStep() {
     setVerifyStatus('');
     verifyContinueBtn.disabled = false;
   } catch (err) {
-    setVerifyStatus(err.message || 'Couldn\'t load card verification.', 'error');
+    // #4478: this modal has no Escape and Continue was left disabled, so a card form that failed to load (or a
+    // refused set-up) was a dead end. Say what happened in fixed words (never the loader's own text), and turn
+    // Continue into Try again; the ID route below stays offered.
+    setVerifyStatus((err && err.code && err.message) || CARD_FORM_LOAD_FAILED, 'error');
+    verifyCardFormEl.hidden = true;
+    verifyContinueBtn.textContent = 'Try again';
+    verifyContinueBtn.disabled = false;
+    verifyRetryLoad = true;
   }
 }
 
 function openVerifyModal(user) {
+  verifyRetryLoad = false;
   verifyStripeSetup = null;
   verifyStripeInstance = null;
   verifyAgeAttestInput.checked = false;
@@ -187,6 +198,12 @@ verifyContinueBtn.addEventListener('click', async () => {
       setVerifyStatus(err.message || 'Couldn\'t confirm age.', 'error');
       verifyContinueBtn.disabled = false;
     }
+    return;
+  }
+
+  if (verifyRetryLoad) {
+    verifyRetryLoad = false;
+    await enterVerifyCardStep();
     return;
   }
 
