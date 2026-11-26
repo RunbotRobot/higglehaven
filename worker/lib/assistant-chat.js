@@ -867,7 +867,7 @@ async function fireReplyNotice(db, builderId, assistantUsername) {
   const message = replyNoticeText(assistantUsername);
   const unread = await db.prepare('SELECT 1 AS n FROM notifications WHERE builder_id = ? AND message = ? AND read_at IS NULL LIMIT 1')
     .bind(builderId, message).first();
-  if (!unread) await fireNotification(db, builderId, message);
+  if (!unread) await fireNotification(db, builderId, message, null, 'assistant');
 }
 
 // The shopper is looking at the answer, so the note about it has done its job.

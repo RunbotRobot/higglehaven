@@ -81,7 +81,12 @@ console.log('mark-read PATCH requests sent after the first click (should be 1):'
 // Second click on the now-read row: before the fix this re-fired the same
 // listener (never removed) and sent a second PATCH; with the fix, the
 // listener was removed right after the first click succeeded, so this
-// click is now plain and inert.
+// click sends no second PATCH. (#4498: the first click also opened Friends, which closed Notices, so
+// Notices is opened again first; the second click opens Friends again but must not mark anything.)
+await bobPage.click('#friends-close-btn');
+await openAccountMenu(bobPage);
+await bobPage.click('#notifications-btn');
+await bobPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
 await notificationRow().click();
 await bobPage.waitForTimeout(500);
 console.log('mark-read PATCH requests sent after a second click on the already-read row (should still be 1):', markReadRequestCount);
