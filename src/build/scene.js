@@ -613,13 +613,24 @@ translateControls.showYZ = false;
 translateControls.showXZ = false;
 translateControls.size = 1.2;
 translateControls.showXYZ = false; // the centre handle (a free move on the screen plane) would take a press meant for the item's body
-// The shaft of each axis is a long pick cylinder through the item's own middle, which would take a press meant
-// for the item's body (a drag from the middle moves the item). Only the arrow at each end is a handle: the shaft
-// is still drawn, but cannot be picked.
-for (const handle of [...translateControls._gizmo.picker.translate.children]) {
-  handle.geometry.computeBoundingBox();
-  if (['X', 'Y', 'Z'].includes(handle.name) && handle.geometry.boundingBox.getCenter(new THREE.Vector3()).length() < 0.1) {
-    translateControls._gizmo.picker.translate.remove(handle);
+// The pick area of each axis (a cone from the item's middle out to the arrow) would take a press meant for the item's
+// own body, a drag from the middle that moves it. Only the arrow at each end is a handle: its pick area is a short
+// cylinder round the arrow, and nothing near the middle can be picked. (Shafts and cones are still drawn.)
+{
+  const pickers = translateControls._gizmo.picker.translate;
+  for (const handle of [...pickers.children]) if (['X', 'Y', 'Z'].includes(handle.name)) pickers.remove(handle);
+  const invisible = new THREE.MeshBasicMaterial({ visible: false });
+  for (const [name, axis] of [['X', new THREE.Vector3(1, 0, 0)], ['Y', new THREE.Vector3(0, 1, 0)], ['Z', new THREE.Vector3(0, 0, 1)]]) {
+    for (const sign of [1, -1]) {
+      const geometry = new THREE.CylinderGeometry(0.17, 0.17, 0.34, 6); // along Y
+      geometry.rotateX(Math.PI / 2); // along Z
+      if (name === 'X') geometry.rotateY(Math.PI / 2);
+      if (name === 'Y') geometry.rotateX(-Math.PI / 2);
+      geometry.translate(axis.x * sign * 0.55, axis.y * sign * 0.55, axis.z * sign * 0.55);
+      const pick = new THREE.Mesh(geometry, invisible);
+      pick.name = name;
+      pickers.add(pick);
+    }
   }
 }
 scene.add(translateControls.getHelper());
