@@ -395,8 +395,8 @@ describe('Fleet assistants: agent names', () => {
   });
 
   it('signup cannot claim an agent name, in any case, and a session name is refused on the real site (#4383)', async () => {
-    await withMapping({ higglehaven9: 'Reserved Agent' }, async () => {
-      for (const username of ['Reserved Agent', 'reserved agent', ' Reserved Agent ']) {
+    await withMapping({ higglehaven9: 'ReservedAgent' }, async () => {
+      for (const username of ['ReservedAgent', 'reservedagent', ' ReservedAgent ']) {
         const result = await api('/auth/signup', {
           method: 'POST',
           headers: ip(),

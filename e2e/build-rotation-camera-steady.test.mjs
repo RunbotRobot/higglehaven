@@ -37,7 +37,9 @@ async function findGrab(axis) {
   for (const at of fresh[axis] || []) {
     await page.mouse.move(at.x, at.y);
     await page.waitForTimeout(30);
-    if ((await page.evaluate(() => window.__testRotateActiveAxis())) === axis.toUpperCase()) return at;
+    // (and no movement arrow under it: where an arrow and a ring meet, the nearer one takes the press, #4410)
+    if ((await page.evaluate(() => window.__testRotateActiveAxis())) === axis.toUpperCase()
+      && !(await page.evaluate(([x, y]) => window.__testHandleAt(x, y).arrow, [at.x, at.y]))) return at;
   }
   return null;
 }

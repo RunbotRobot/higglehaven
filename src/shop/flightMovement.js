@@ -73,7 +73,7 @@ import { createHeightControl, FLIGHT_CLIMB_FRACTION } from './flightHeight.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, updateShopAvatarBuiltinMotion,
-  addShopIdleSwayYawOffset, shopIdleSwayYawOffset,
+  addShopIdleSwayYawOffset, shopIdleSwayYawOffset, getShopAfkBlend,
   shopSitYawOffset, shopSitHeightOffset, shopLeanBlend, shopLeanYawOffset, shopLeanPositionOffset,
 } from './avatar.js';
 import {
@@ -1013,13 +1013,10 @@ let shopAvatarOriginalTransparent = new WeakMap();
 
 // #1176: fades every material in the avatar's own group uniformly — used
 // by the "Go to last location" sequence's fade-out/fade-in (see
-// updateGoToLastLocation). Skips the AFK sprite: that one already drives
-// its own opacity every frame from shopAfkBlend (updateShopAvatarIdle),
-// independently of this sequence, and fighting it here would just lose to
-// whichever ran later this same frame.
+// updateGoToLastLocation).
 function setShopAvatarOpacity(opacity) {
   shopAvatar.group.traverse((object) => {
-    if (object === shopAvatar.afkSprite || !object.material) return;
+    if (!object.material) return;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       if (!shopAvatarOriginalTransparent.has(material)) {
@@ -1037,7 +1034,7 @@ function setShopAvatarOpacity(opacity) {
 // never resets this on its own.
 function restoreShopAvatarTransparency() {
   shopAvatar.group.traverse((object) => {
-    if (object === shopAvatar.afkSprite || !object.material) return;
+    if (!object.material) return;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       if (shopAvatarOriginalTransparent.has(material)) {
@@ -2037,8 +2034,8 @@ export function updateShopMovementCore(now) {
   window.__shopCameraYaw = shopYaw;
   window.__shopCameraPitch = shopPitch; // added for #4044 -- the landing ease: lets a test read the pitch after a landing
   // #1586: same reasoning as window.__shopAvatarOrientation just above —
-  // the AFK sprite's own opacity is otherwise only checkable by eye.
-  window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
+  // the away state is otherwise only checkable by waiting for another person to see it (#4441: no label any more).
+  window.__shopAfkOpacity = getShopAfkBlend();
   shopAvatar.group.position.copy(shopAvatarPosition);
   // #2478: visual-only (see shopSitHeightOffset's own declaration for why
   // this never touches the real shopAvatarPosition.z that positionShopCamera

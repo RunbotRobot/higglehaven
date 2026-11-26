@@ -226,16 +226,6 @@ export function notificationFromRow(row) {
 // The fuller version of this (actually deleting long-stale rows, not just
 // filtering them at read time) is #1101's own scope.
 const PRESENCE_STALE_AFTER_MS = 10_000;
-// #4387: how long an orb that someone else collected is still named in the nearby-presence answer, so a person who
-// sees it can show the same pop. Longer than a poll, so a missed poll does not leave the orb standing; short, so a
-// person arriving later is not told about orbs the landlet's own list (which leaves out collected ones) already omits.
-const COLLECTED_ORB_WINDOW_MS = 30_000;
-const COLLECTED_ORB_LIMIT = 20;
-// Orbs live only on greenbelt lándlets, where a person's presence names no lándlet at all (only a claimed one is
-// reported), so "which orbs" is answered by where the caller stands: those within this many metres, a little beyond
-// the 60/90 m radii the client loads and unloads orbs at. A position older than this is not trusted.
-const COLLECTED_ORB_RANGE_M = 100;
-const COLLECTED_ORB_POSITION_FRESH_MS = 30_000;
 
 // #1438: every other list-shaped GET in this file caps its row count (either
 // real pagination, or a flat LIMIT 200 for a "snapshot, not something to
@@ -289,23 +279,6 @@ function currentLandletIdFromRow(ownPresence) {
 // #3597 piece 3 (AGENTS.md, "The fleet has a lándlet of its own in the live world and may use it
 // freely; it is never used to steer people"): "Go to Last Location" is the caller's own last position only; nothing here suggests anyone else's lándlet. Never add a branch that favours the
 // fleet's lot here; scripts/fleet-lot-never-steers.test.mjs pins it.
-// #4387: the orbs someone else collected in the last half minute within range of where the caller stands (ownRow is
-// the caller's own presence row; null or old means no position to go by, so none).
-async function collectedOrbsNear(db, callerBuilderId, ownRow) {
-  const updatedMs = ownRow ? Date.parse(ownRow.updated_at) : NaN;
-  if (!ownRow || !(Date.now() - updatedMs <= COLLECTED_ORB_POSITION_FRESH_MS)) return [];
-  const collectedSince = new Date(Date.now() - COLLECTED_ORB_WINDOW_MS).toISOString();
-  const { results } = await db.prepare(`
-    SELECT credit_orbs.orb_id FROM credit_orbs
-    JOIN landlets ON landlets.landlet_id = credit_orbs.landlet_id
-    WHERE credit_orbs.collected_at >= ?1 AND coalesce(credit_orbs.collected_by_builder_id, '') != ?2
-      AND ABS(landlets.center_x_m + credit_orbs.x_m - ?3) <= ?5
-      AND ABS(landlets.center_y_m + credit_orbs.y_m - ?4) <= ?5
-    ORDER BY credit_orbs.collected_at DESC LIMIT ${COLLECTED_ORB_LIMIT}
-  `).bind(collectedSince, callerBuilderId, ownRow.x, ownRow.y, COLLECTED_ORB_RANGE_M).all();
-  return results;
-}
-
 export async function handlePresence(request, db, route, url) {
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
   // the caller's own last-reported row, unfiltered by staleness or
@@ -328,7 +301,7 @@ export async function handlePresence(request, db, route, url) {
     const nearbyBucket = `presence-nearby:${sessionBuilder.user_id}`;
     const [limitInsert, ownPresenceRead] = await db.batch([
       rateLimitInsertStatement(db, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX),
-      db.prepare('SELECT landlet_id, x, y, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
+      db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
     ]);
     await rateLimitRefusal(db, limitInsert, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX);
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
@@ -343,14 +316,9 @@ export async function handlePresence(request, db, route, url) {
     // trust a client-supplied location claim" fix already applied to the
     // credit-orb collect endpoint (#2222) -- so a caller can only ever see
     // who's nearby wherever they themselves actually, recently were.
-    const ownRow = ownPresenceRead.results[0];
-    const landletId = currentLandletIdFromRow(ownRow);
-    // #4387: ids only, never who collected: an onlooker is told that the orb is gone, nothing about the person.
-    // Started here so that, with a lándlet, it shares the trip window of the reads below (#3464); without one
-    // (a greenbelt lándlet, where the orbs are) it is the only read.
-    const collectedOrbsRead = collectedOrbsNear(db, sessionBuilder.builder_id, ownRow);
+    const landletId = currentLandletIdFromRow(ownPresenceRead.results[0]);
     if (landletId === null) {
-      return json({ avatars: [], collectedOrbs: (await collectedOrbsRead).map((row) => row.orb_id) });
+      return json({ avatars: [] });
     }
     // #3147: presence is stored against the account; the wire still names
     // each person by their CURRENT builder profile, so the join supplies it
@@ -359,7 +327,7 @@ export async function handlePresence(request, db, route, url) {
     // #3464: the on-shift assistants are read alongside this query, not after
     // it (their lookup never needed these rows, only the exclusion below does,
     // and that is applied here in memory), so the two D1 round trips overlap.
-    const [{ results }, shiftCandidates, collectedOrbRows] = await Promise.all([
+    const [{ results }, shiftCandidates] = await Promise.all([
       db.prepare(`
         SELECT avatar_presence.*, builders.builder_id AS builder_id,
           users.is_fleet AS is_fleet, users.username AS fleet_username
@@ -371,7 +339,6 @@ export async function handlePresence(request, db, route, url) {
         ORDER BY avatar_presence.updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
       `).bind(landletId, sessionBuilder.user_id, staleBefore, sessionBuilder.user_id).all(),
       onShiftAssistantRowsFor(db, landletId, [sessionBuilder.user_id]),
-      collectedOrbsRead,
     ]);
     // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
     // the client is the one actually hiding the mesh, but a flying avatar's
@@ -391,7 +358,6 @@ export async function handlePresence(request, db, route, url) {
     ]);
     return json({
       avatars: visible.map((row) => ({ ...avatarPresenceFromRow(row), equippedAvatar: equipped.get(row.builder_id) ?? null, equippedAnimation: animations.get(row.builder_id) ?? null })),
-      collectedOrbs: collectedOrbRows.map((row) => row.orb_id),
     });
   }
 

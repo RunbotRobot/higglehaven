@@ -55,6 +55,8 @@ for (let i = 0; i < 40 && !after?.afk; i++) {
   await pageB.waitForTimeout(500);
   after = await seen(pageB, builderA.builderId);
 }
+// B must have reached A's scene before it can be asserted on: on a loaded runner A's poll can lag B's first report.
+await pageA.waitForFunction((id) => (window.__shopOtherAvatars || []).some((a) => a.builderId === id), builderB.builderId, { timeout: 30000 });
 const bInA = await seen(pageA, builderB.builderId);
 console.log('A as B sees it before / after A idles:', before?.afk, after?.afk, '; B as A sees it:', bInA?.afk);
 

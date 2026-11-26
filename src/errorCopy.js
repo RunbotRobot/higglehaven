@@ -18,6 +18,7 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   auction_not_owner: 'Only the current owner of a claimed lándlet can start an auction on it.',
   service_unavailable: "That isn't available right now. Try again later.",
   upstream_failed: "That didn't go through on our side. Try again in a moment.",
+  unreadable_request: "That didn't go through. Reload and try again.",
   stale_reference: 'Something you were working with was removed or changed. Reload and try again.',
   seller_suspended: "That product isn't available right now.",
   // #3372: the Build client stops a move at the top and bottom level, so this

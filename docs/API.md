@@ -375,8 +375,11 @@ other rejection on this endpoint — a cheap validation failure isn't a free
 way to probe past the limiter.
 
 `username` (#4136, `worker/lib/username-rules.js`; the same rules apply to a rename,
-`PUT`/`PATCH /api/builders/:id`): stored in NFC with odd spaces turned into a plain space
-and runs of white space collapsed; at most 40 characters; refused with `400` ("That name
+`PUT`/`PATCH /api/builders/:id`): stored in NFC; at most 40 characters; **no spaces** (#4407,
+owner 2026-11-26): a name with any space is refused with `400` ("A name can't have spaces. Try
+BenjaminChae or Benjamin_Chae."); every other showable character stays allowed, and a server on
+this machine (`wrangler dev`) still accepts spaces for the test suites. An existing name with a
+space keeps working until it is renamed. Refused with `400` ("That name
 contains a character we cannot show...") when it holds control, zero-width, direction-override
 or other format characters, private-use or unassigned characters, line separators or a lone
 surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
@@ -1402,6 +1405,16 @@ Refused with `409` and a reason: the caller's own account, any admin, an already
 account that still owns a lándlet, a fleet account or assistant unless `includeFleet` is `true`, and
 money still owed (the cascade's own guards). `400` when `confirmUsername` is not the exact username.
 Recorded in the admin action log as `delete_account` (username, email, kind and the counts) after it succeeds.
+
+### `POST /api/auth/admin-rename-account` (#4407)
+
+Full admin only (`401` signed out, `403` non-admin or a look-only account). The dashboard's Rename on a user,
+the owner's tool for an existing name with a space. Takes `{ userId, newUsername }` and answers
+`{ renamed: true, userId, oldUsername, username }`. It applies sign-up's rules exactly (no spaces, the reserved
+names, the folded uniqueness) and sets the account's username and its builder label together. Refused with a
+reason: `404` unknown id, `409` a deleted account, a fleet account or assistant, a reserved name or one
+someone else holds, `400` a name with a space or one that is already this account's. The person gets a notice
+that their name changed and why; recorded in the admin action log as `rename_account` (old and new name).
 
 ### `GET /api/auth/admin-landlet-search?q=...` (#4074)
 
@@ -3253,6 +3266,11 @@ seller, and the request must be a session logged in as that seller — `403`
 otherwise (unlike `PATCH` above, this endpoint never falls open for an
 unowned/orphaned template, since it writes new bytes to storage rather than
 just editing a row). `404` if the template doesn't exist.
+
+**A template with no owner (#4437)** (a seeded placeholder: `brick`, `door`, ...)
+needs a full admin session instead (a look-only viewer is refused, `403`), so
+Prompt mode can match it; the admin's browser sends it the first time its
+picker renders such a tile. The rate limit is per admin.
 
 Rate-limited per seller (20 per 15-minute window, `429` past that — same
 window `POST /api/models` and `POST .../concept-image` use) and, like those
@@ -6542,16 +6560,6 @@ seller_feedback. Without it, a landlet with many concurrent visitors would
 return every one of them in one response, and the client spawns a real
 avatar mesh group per entry on every poll tick.
 
-**`collectedOrbs` (#4387)**: the response also carries `"collectedOrbs": [orbId, ...]`, the credit orbs that
-*someone else* collected in the last 30 seconds within 100 m of where the caller last reported standing (at most
-20, newest first), so an onlooker can show the same pop the collector sees. Ids only: never who collected. The
-caller's own collects are left out (they popped it themselves), and so is everything older, farther or collected by
-no one. Orbs live only on greenbelt landlets, where a person's presence names no landlet, so this is answered by
-position and also when `avatars` is empty (the early `{ "avatars": [] }` answer reads `"collectedOrbs": []`
-for a caller with no fresh row of their own, whose position is older than 30 seconds). It rides in the same trip
-window as the other reads, adding no D1 round trip of its own when a landlet is named, and one when none is.
-The client asks while an orb is loaded even off a claimed landlet, at its usual one-second pace.
-
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
 Requires a session. Unlike `GET /api/presence` above, this returns the
@@ -6589,8 +6597,8 @@ Request body:
   other than the literal `true` is treated as not-flying, so an older
   client that never sends this field simply keeps reporting as grounded.
 - `afk` is optional (#4390), defaults to `false`, same literal-`true` rule: whether the
-  person has stepped away (their own avatar's AFK badge). It rides every nearby row so the
-  other avatar can wear the same small mark; where someone is looking is not carried. The
+  person has stepped away (#4441: no label is drawn for it any more; it is the state behind the idle pose). It rides every nearby row so the
+  other avatar can idle too; where someone is looking is not carried. The
   client reports a change of it at once (a person standing still sends nothing else).
 
 Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying", "afk",
@@ -6929,7 +6937,10 @@ reviews and calendar events already keep.
 Three independent ways in, either sufficient on its own:
 
 - **An admin**, outright — checked first (`#781`), regardless of who posted
-  it or who owns the hosting landlet. Rate-limited per admin (same
+  it or who owns the hosting landlet, except for a note the admin wrote
+  themselves: that is the author's own delete below (no body; #4442). The
+  same holds for calendar events, product reviews and seller feedback.
+  (An admin who is not the note's author is moderating it.) Rate-limited per admin (same
   `SIGN_POST_DELETE_RATE_LIMIT_MAX` bucket as the other two paths) and
   logged via `admin_action_log` (`action_type: 'delete_sign_post_override'`),
   the same shape as the product-review (`#1712`) admin override.

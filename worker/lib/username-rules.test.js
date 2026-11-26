@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeUsername, usernameSkeleton, isReservedSkeleton, USERNAME_CHARACTER_MESSAGE } from './username-rules.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton, USERNAME_CHARACTER_MESSAGE, USERNAME_SPACES_MESSAGE } from './username-rules.js';
 
 const refused = (value) => { try { normalizeUsername(value); return null; } catch (e) { return e.message; } };
 
 describe('normalizeUsername', () => {
   it('trims and collapses runs of spaces to one', () => {
-    expect(normalizeUsername('  Ada   Builder ')).toBe('Ada Builder');
+    expect(normalizeUsername('  Ada   Builder ', { allowSpaces: true })).toBe('Ada Builder');
   });
   it('turns odd spaces into a plain one', () => {
-    expect(normalizeUsername('Ada Builder')).toBe('Ada Builder');
-    expect(normalizeUsername('Ada　 Builder')).toBe('Ada Builder');
+    expect(normalizeUsername('Ada Builder', { allowSpaces: true })).toBe('Ada Builder');
+    expect(normalizeUsername('Ada　 Builder', { allowSpaces: true })).toBe('Ada Builder');
   });
   it('normalises to NFC', () => {
     expect(normalizeUsername('José')).toBe('José');
@@ -24,7 +24,7 @@ describe('normalizeUsername', () => {
     expect(refused('\udc00Ada')).toBe(USERNAME_CHARACTER_MESSAGE);
   });
   it('allows an emoji (a surrogate pair)', () => {
-    expect(normalizeUsername('Ada 🌿')).toBe('Ada 🌿');
+    expect(normalizeUsername('Ada 🌿', { allowSpaces: true })).toBe('Ada 🌿');
   });
   it('requires a name and caps it at 40 characters, counting characters not code units', () => {
     expect(refused('   ')).toBe('username is required');
@@ -32,6 +32,18 @@ describe('normalizeUsername', () => {
     expect(normalizeUsername('a'.repeat(40))).toBe('a'.repeat(40));
     expect(refused('a'.repeat(41))).toBe('username must be at most 40 characters');
     expect(normalizeUsername('🌿'.repeat(40))).toBe('🌿'.repeat(40));
+  });
+});
+
+describe('a username has no spaces (#4407)', () => {
+  it('refuses a name with a space, however it was typed, and says what to do', () => {
+    for (const bad of ['Ada Builder', '  Ada   Builder ', 'Ada Builder', 'Ada 🌿']) {
+      expect(refused(bad), bad).toBe(USERNAME_SPACES_MESSAGE);
+    }
+    expect(USERNAME_SPACES_MESSAGE).toBe("A name can't have spaces. Try BenjaminChae or Benjamin_Chae.");
+  });
+  it('allows everything else that can be shown', () => {
+    for (const ok of ['Ada_Builder', 'ada-builder', 'Ada.B', 'José', '🌿Ada', 'Ada123']) expect(normalizeUsername(ok)).toBe(ok);
   });
 });
 

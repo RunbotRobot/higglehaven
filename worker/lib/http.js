@@ -45,6 +45,7 @@ export const ERROR_CODES = Object.freeze({
   NOT_FOR_SALE: 'not_for_sale', // #3948
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
+  UNREADABLE_REQUEST: 'unreadable_request', // #4442
 });
 
 export class HttpError extends Error {

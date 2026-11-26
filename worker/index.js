@@ -1,5 +1,5 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
-import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalRequest } from './lib/username-rules.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalDevServer } from './lib/username-rules.js';
 import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
@@ -92,6 +92,7 @@ import { handleAdminSetViewer, handleAdminRole } from './lib/admin-viewer-grant.
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
+import { handleAdminRenameAccount } from './lib/admin-rename-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
@@ -1523,9 +1524,9 @@ async function handleBuilders(request, env, db, route, url) {
     // function (spaces collapsed, unshowable characters refused, look-alikes
     // and the reserved names compared in folded form).
     // labelValue first: its 100-character bound runs before anything is normalised.
-    const label = normalizeUsername(labelValue(input.label, 'label'));
+    const label = normalizeUsername(labelValue(input.label, 'label'), { allowSpaces: isLocalDevServer(env) });
     const labelSkeleton = usernameSkeleton(label);
-    if (isReservedSkeleton(labelSkeleton, { allowSessionNames: isLocalRequest(request) })) {
+    if (isReservedSkeleton(labelSkeleton, { allowSessionNames: isLocalDevServer(env) })) {
       throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
     }
     await ensureUsernameSkeletons(db);
@@ -3259,6 +3260,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
     return handleAdminDeleteAccount(request, db, env);
+  }
+  // #4407: the admin dashboard's Rename on a user (full admin only, logged, the person is told).
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-rename-account') {
+    return handleAdminRenameAccount(request, db);
   }
   // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {

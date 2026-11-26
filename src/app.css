@@ -808,14 +808,16 @@
       body[data-bud-note] .bud-word { display: none !important; }
       body[data-bud="on"] #bud-note {
         position: absolute;
-        left: calc(var(--bud-size) + var(--space-sm));
+        left: var(--bud-size); /* flush against the head: attached, but never over it (the head stays tappable) */
         top: calc((var(--bud-size) - 44px) / 2);
         min-height: 44px;
         padding: 0 var(--space-2xl);
         border: 0;
-        border-radius: var(--radius-word);
-        background: rgb(var(--white-rgb) / 0.85);
-        box-shadow: var(--shadow-card);
+        border-radius: var(--radius-pill);
+        /* #4443: the same cream surface and shadow as the top bar's pill (#bud-row), so the word the head wears
+           is part of the flower and not a stock tooltip. */
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: var(--shadow-petal);
         color: var(--ink);
         font: var(--text-xs)/1 var(--font-sans);
         white-space: nowrap;
@@ -890,7 +892,7 @@
         stroke-linecap: round;
         stroke-dasharray: 1 2;
         stroke-dashoffset: 0;
-        animation: bud-stem-grow var(--motion-open-stem) var(--ease-bloom) var(--delay-open-stem) both;
+        animation: bud-stem-grow var(--motion-open-stem) var(--ease-stem) var(--delay-open-stem) both;
       }
       #bud-stem .bud-stem-edge { stroke: rgb(var(--panel-rgb) / 0.95); stroke-width: 10px; }
       #bud-stem .bud-stem-core { stroke: var(--brand-green); stroke-width: 6px; }
@@ -915,12 +917,6 @@
         outline-offset: 2px;
         box-shadow: 0 0 0 6px rgb(var(--panel-rgb) / 0.95);
       }
-      /* #4038: the row grows out of the head with the petals, left to right (src/ui/bud.js sets --row-i and the
-         distance each item travels, --row-pull), and folds back into it, the last item first. */
-      body[data-bud="on"] #bud-row button {
-        animation: bud-row-grow var(--motion-open-petals) var(--ease-soft) both;
-        animation-delay: calc(var(--row-i, 0) * var(--step-open-row));
-      }
       /* #4012: the flower folds in the reverse order it unfolds (src/ui/bud.js): the leaves fold into the
          stem, then the stem draws up into the head (after the leaves are done), then the petals close. The
          panel is still drawn while it does (not tappable). */
@@ -931,7 +927,7 @@
         animation-delay: 0s;
       }
       body[data-bud="on"] #account-menu-panel.bud-folding #bud-stem path {
-        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-fold) var(--motion-fold-leaf) both;
+        animation: bud-stem-draw var(--motion-fold-leaf) var(--ease-stem) var(--motion-fold-leaf) both;
       }
       /* Their own names, not the unfold's played backwards: an animation that keeps its name keeps running
          (already finished), so changing its direction would jump to the end instead of playing. */
@@ -1075,16 +1071,28 @@
       body[data-bud="on"] #bud-row #account-auth-btn { flex: 1 1 0; min-width: 0; max-width: 80px; }
       body[data-bud="on"] #bud-row button { position: relative; flex: 1 1 0; min-width: 0; width: auto; height: 60px; min-height: 0; border-radius: var(--radius-leaf); }
       body[data-bud="on"] #bud-row button[hidden] { display: none; }
-      body[data-bud-ring="staged"] #bud-row button { animation: none; }
-      body[data-bud-ring="folding"] #bud-row button {
-        animation: bud-row-fold var(--motion-fold) var(--ease-fold) both;
-        animation-delay: calc((var(--row-n, 4) - 1 - var(--row-i, 0)) * var(--step-open-row));
+      /* #4412: the row is one small pill in the upper right: a single background and shadow behind four bare
+         icons, 44px targets with the icons drawn smaller (budIcons.js), no outline each. The word stays in each
+         button for a screen reader and shows as its title. The pill grows from its own corner and folds back
+         into it as one piece, in step with the petals. */
+      body[data-bud="on"] #bud-row {
+        position: fixed;
+        top: calc(8px + env(safe-area-inset-top, 0px));
+        right: calc(8px + env(safe-area-inset-right, 0px));
+        left: auto;
+        width: auto;
+        max-width: none;
+        align-items: center;
+        gap: 0;
+        border-radius: var(--radius-round);
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: var(--shadow-petal);
+        transform-origin: top right;
+        animation: bud-row-pill-grow var(--motion-open-petals) var(--ease-soft) both;
+        z-index: 21;
       }
-      /* #4199: the row is a slim run of round icon chips with no words drawn (the four are known everywhere;
-         the word stays in the button for a screen reader and shows on hover or long-press as its title, set
-         by src/ui/bud.js). Each chip keeps its own grow and fold, so every part stays attached to the head.
-         Targets are 44px; the icons are drawn smaller (budIcons.js). */
-      body[data-bud="on"] #bud-row { align-items: center; gap: var(--space-2xs); width: auto; max-width: calc(100vw - 166px); }
+      body[data-bud-ring="staged"] #bud-row { animation: none; }
+      body[data-bud-ring="folding"] #bud-row { animation: bud-row-pill-fold var(--motion-fold) var(--ease-fold) both; }
       body[data-bud="on"] #bud-row button,
       body[data-bud="on"] #bud-row #account-auth-btn {
         flex: 0 0 auto;
@@ -1099,11 +1107,32 @@
         padding: 0;
         font-size: 0;
         overflow: visible;
+        box-shadow: none;
+        animation: none;
       }
+      /* bare icons on the pill: no fill or outline of their own (a separate rule, so it is not a new button look) */
+      body[data-bud="on"] #bud-row > [id] { background: none; border: 0; border-radius: var(--radius-round); }
       body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
       body[data-bud="on"] #bud-row .bud-icon { margin: 0; }
-      body[data-bud="on"] #bud-row > [id] { border-radius: var(--radius-round); }
-      body[data-bud="on"] #bud-row button #notifications-badge { top: 0; right: 0; font-size: var(--text-xs); }
+      body[data-bud="on"] #bud-row .bud-icon svg { width: 22px; height: 22px; }
+      /* #4443: the bell's count is a small yellow chip drawn whole inside the pill: the base dot is 10px with
+         overflow hidden and a zero line height, which cut the digit in half. */
+      body[data-bud="on"] #bud-row span#notifications-badge {
+        top: 2px;
+        right: 2px;
+        width: auto;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        box-sizing: border-box;
+        border-radius: var(--radius-pill);
+        font-size: var(--text-xs);
+        line-height: 16px;
+        text-align: center;
+        font-weight: 600;
+        color: var(--ink);
+        overflow: visible;
+      }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
       body[data-bud="on"] #bud-modes .mode-nav-btn {
@@ -1166,6 +1195,53 @@
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="shop"] { animation-delay: 0.06s; }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="build"] { animation-delay: 0.03s; }
       body[data-bud-ring="folding"] #bud-modes .mode-nav-btn[data-mode="sell"] { animation-delay: 0s; }
+      /* #4440: the bloomed head, behind ?bloom= (src/ui/bloom.js) until the owner has picked a look. Drawn petals
+         are plain shapes beside the mode petals with the same outline, shadow, growing and folding, and they never
+         take a tap; while the menu is open the head eases down to the flower's centre. */
+      #bud-bloom {
+        --ring-flip: 0;
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+        pointer-events: none;
+        filter: var(--filter-petals);
+      }
+      body[data-bud-corner="bottom-right"] #bud-bloom { --ring-flip: 1; }
+      body[data-bud="on"] #account-menu-panel.expanded ~ #bud-bloom,
+      body[data-bud="on"][data-bud-ring] #bud-bloom { display: block; }
+      body[data-bud="on"] #bud-bloom .bloom-petal {
+        --petal-turn: calc(var(--ring-a) * 1deg + var(--ring-flip) * 180deg);
+        position: absolute;
+        left: calc(var(--bud-size) / 2);
+        top: calc(var(--bud-size) / 2 - 22px);
+        width: 84px;
+        height: 44px;
+        clip-path: path('M0 22 C 10 6, 34 0, 58 2 C 74 4, 84 13, 84 22 C 84 31, 74 40, 58 42 C 34 44, 10 38, 0 22 Z');
+        transform-origin: 0 22px;
+        transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(var(--petal-len, 1));
+        animation: bloom-grow var(--motion-open-petals) var(--ease-soft) both;
+      }
+      #bud-bloom .bloom-pale { background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94)); }
+      #bud-bloom .bloom-green { background: linear-gradient(160deg, #9fcb5a, var(--brand-green)); }
+      #bud-bloom .bloom-cream { background: linear-gradient(160deg, #fbf6e6, #f6d65c); }
+      #bud-bloom .bloom-sepal { background: linear-gradient(160deg, #82b845, #6ca42e); }
+      body[data-bud-ring="held"] #bud-bloom .bloom-petal,
+      body[data-bud-ring="staged"] #bud-bloom .bloom-petal { animation: none; }
+      body[data-bud-ring="folding"] #bud-bloom .bloom-petal { animation: bloom-fold var(--motion-fold) var(--ease-fold) both; }
+      @keyframes bloom-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(calc(var(--petal-len, 1) * 0.2)); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(var(--petal-len, 1)); } }
+      @keyframes bloom-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(var(--petal-len, 1)); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(calc(var(--petal-len, 1) * 0.2)); } }
+      body[data-bloom][data-bud="on"] .bud-logo { transition: transform var(--motion-open-petals) var(--ease-soft); }
+      body[data-bloom][data-bud="on"]:has(#account-menu-panel.expanded) .bud-logo { transform: scale(0.86); }
+      @media (prefers-reduced-motion: reduce) {
+        body[data-bud="on"] #bud-bloom .bloom-petal { animation: bud-fade var(--motion-reduced) linear both; }
+        body[data-bud-ring="held"] #bud-bloom .bloom-petal,
+        body[data-bud-ring="staged"] #bud-bloom .bloom-petal { animation: none; }
+        body[data-bud-ring="folding"] #bud-bloom .bloom-petal { animation: bud-fade var(--motion-reduced) linear reverse both; }
+        body[data-bloom][data-bud="on"] .bud-logo { transition: none; }
+      }
       /* The petals cover the word beside the bud and the Sell pager while they are out. */
       body:has(#account-menu-panel.expanded) .bud-word,
       body[data-bud-ring] .bud-word { visibility: hidden; }
@@ -1187,8 +1263,8 @@
       /* The petals grow from the bud's centre: turned out from the base and scaled up. */
       @keyframes bud-grow { from { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } to { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } }
       @keyframes bud-fold { from { opacity: 1; transform: rotate(var(--petal-turn)) translateX(calc(var(--bud-size) / 2)) scale(1); } to { opacity: 0; transform: rotate(calc(var(--petal-turn) - 40deg)) translateX(0) scale(0.2); } }
-      @keyframes bud-row-grow { from { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } to { opacity: 1; transform: none; } }
-      @keyframes bud-row-fold { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(var(--row-pull, -60px)) scale(0.2); } }
+      @keyframes bud-row-pill-grow { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: none; } }
+      @keyframes bud-row-pill-fold { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.3); } }
       @keyframes bud-fade { from { opacity: 0; } to { opacity: 1; } }
       @keyframes bud-stem-grow { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
       @media (prefers-reduced-motion: reduce) {
@@ -1201,6 +1277,9 @@
         body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
         body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
         body[data-bud-ring="folding"] #bud-modes .mode-nav-btn { animation: bud-fade var(--motion-reduced) linear reverse both; }
+        body[data-bud="on"] #bud-row { animation: bud-fade var(--motion-reduced) linear both; }
+        body[data-bud-ring="staged"] #bud-row { animation: none; }
+        body[data-bud-ring="folding"] #bud-row { animation: bud-fade var(--motion-reduced) linear reverse both; }
       }
       /* The leaf: a soft sheet by the bud, close control upper right (#3649). */
       .bud-leaf {

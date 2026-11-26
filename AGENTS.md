@@ -29,7 +29,18 @@
   education content authoring (§7, #2841) — each blocked on an
   `[owner judgment needed]` sub-issue; friend "follow"/"stay with"
   group movement (§2, #1044, owner-gated); and mandatory NCMEC
-  CyberTipline reporting (§6, #3031, owner/counsel-gated). See
+  CyberTipline reporting (§6, #3031, owner/counsel-gated). **Third pass
+  (2026-11-26, higglehaven8, #4283, SPEC §1-7 against the code):** also
+  not built, each filed with a card: the engaged signal to nearby avatars
+  (§2, #4390; the AFK half is settled by "A person's state is shown by the
+  avatar itself"), the shopper-side version toggle (§3, #4391 leaf 2, decided
+  to stay in Build), Draco/Basis compression and mesh-merge on save (§3,
+  tracked under #4063/#4366), 30% withholding without a W-8BEN (§7, #4392),
+  multi-currency higgles (§5, #4393), international shipping filter, zone
+  costs and combined shipping (§5, #4394, owner-gated), builder-chosen
+  ambient music (§6, #4395, owner-gated), and prompt mode built on an 8x8
+  colour grid rather than CLIP (§3, #4396). Avatar-avatar crowding (§2) is
+  now built (#4400). See
   "Proposing big feature work" below: build toward the unblocked ones the
   same way you'd pick up any other backlog item, broken into small
   pieces.
@@ -1634,7 +1645,7 @@ most likely to come up again.
   menu in build mode. Make it a small always-visible (or grayed out, if
   nothing to undo) icon in the upper-right ... a single row of
   always-visible build tools, sized and arranged for compactness." On the
-  edge: "We don't need a \"That's the edge of this lándlet\" note ... It
+  edge: "We don't need a 'That's the edge of this lándlet' note ... It
   should be obvious that that's the reason." And on the top bar: smaller,
   no outline each, "a single background", pushed to the upper right. So:
   selecting an item or a bundle shows three rings and three two-way axes
@@ -1651,6 +1662,26 @@ most likely to come up again.
   happens": the stop stays, and the sentence is kept for limits that
   cannot be seen (a level limit, a cap, a server refusal); the edge of
   the lándlet is on screen and needs none.
+
+- **An open menu is a flower in bloom; and a person's state is shown by
+  the avatar itself, never by a label hung on it.** (2026-11-26, #4440,
+  #4441.) On the head: "It feels weird that clicking the bud opens petals,
+  while the bud stays closed. We need opening the menu to open the bud as
+  well so that the opened menu shows a normal bloomed flower. This may
+  mean the gg can't be visible while the menu is open." So the head is a
+  bud only while folded; opening blooms the head itself, folding closes
+  it, and the logo may give way while it is open. This amends "The
+  interface is one bud": the closed bud carries the brand, the open flower
+  is the menu. Because it is a change of look, it is built as two or three
+  variants behind address switches for the owner to try, like the height
+  gestures. On idle people: "Let's get rid of the 'afk' note that pops up
+  when a shopper has been idle. We already have an idle animation slot for
+  that scenario." A session had just extended that badge to other people's
+  avatars (#4399). So what a person is doing (idle, away, sitting, talking)
+  is read from how their avatar behaves; text over an avatar is kept for
+  what cannot be shown (a name when asked for, words they say). Before
+  adding a label to something in the world, look for the animation, pose
+  or effect that says it.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 

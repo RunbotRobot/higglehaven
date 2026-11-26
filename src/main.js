@@ -662,6 +662,7 @@ import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 import { captureSwitchSnapshot } from './ui/switchSnapshot.js'; // #3873: the world kept on screen across a mode switch's reload
+import './ui/bloom.js'; // #4440: the bloomed head, behind ?bloom= until the owner picks a look
 import { beginBudModeSwitch } from './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
@@ -1186,7 +1187,7 @@ export const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in
 // directly self-testable. Deliberately much longer than SHOP_IDLE_DELAY_S:
 // idle sway should read as "still paying attention," AFK should only show
 // once that stops being a believable read — a minute-plus of true stillness.
-export const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the AFK label starts fading in
+export const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the away state starts (no label: #4441)
 export const SHOP_AFK_BLEND_PER_S = 0.6; // matches SHOP_IDLE_BLEND_PER_S's own feel — in on stillness, out instantly on movement
 export const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
 export const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
@@ -1294,7 +1295,7 @@ export function setShopEquippedAvatarSkeletonSignature(value) {
 
 
 
-// #2623: makeAfkBadgeSprite/createShopAvatar/createCustomShopAvatar/
+// #2623: createShopAvatar/createCustomShopAvatar/
 // shopAvatar(/setShopAvatar)/shopAvatarCollisionHalfM/shopAvatarHeightM/
 // shopCameraAnchorHeightM/refreshEquippedShopAvatar now live in
 // src/shop/avatar.js — see that module's own header comment for its
@@ -1579,7 +1580,7 @@ window.__testShopInstanceLodHitSource = (instanceId) => {
 window.__testShopAvatarHasTransparentMaterial = () => {
   let found = false;
   shopAvatar.group.traverse((object) => {
-    if (object === shopAvatar.afkSprite || !object.material) return;
+    if (!object.material) return;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     if (materials.some((material) => material.transparent)) found = true;
   });

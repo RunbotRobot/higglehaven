@@ -12,12 +12,20 @@ const email = () => `u-${crypto.randomUUID()}@example.com`;
 const trySignup = (username) => signup(email(), 'a fine long password here', { username });
 
 describe('sign-up username rules (#4136)', () => {
-  it('stores a trimmed name with runs of spaces collapsed, and refuses the collapsed twin', async () => {
-    const first = await trySignup('  Ada   Builder4136 ');
+  it('stores a trimmed name and refuses its other-case twin', async () => {
+    const first = await trySignup('  AdaBuilder4136 ');
     expect(first.response.status).toBe(201);
-    expect(first.body.user.username).toBe('Ada Builder4136');
-    const twin = await trySignup('ada builder4136');
+    expect(first.body.user.username).toBe('AdaBuilder4136');
+    const twin = await trySignup('adabuilder4136');
     expect(twin.response.status).toBe(409);
+  });
+
+  it('refuses a name with a space and says what to do (#4407)', async () => {
+    for (const name of ['Ada Builder', '  Ada   Builder4407 ']) {
+      const result = await trySignup(name);
+      expect(result.response.status, name).toBe(400);
+      expect(result.body.error).toBe("A name can't have spaces. Try BenjaminChae or Benjamin_Chae.");
+    }
   });
 
   it('refuses unshowable characters and says why', async () => {
@@ -35,7 +43,7 @@ describe('sign-up username rules (#4136)', () => {
   });
 
   it('reserves the misleading names and the assistants, also as look-alikes', async () => {
-    for (const name of ['Admin', 'support', 'Staff', 'Moderator', 'Higgle haven', 'Junіper', 'Sage']) {
+    for (const name of ['Admin', 'support', 'Staff', 'Moderator', 'Higgle_haven', 'Junіper', 'Sage']) {
       const result = await trySignup(name);
       expect(result.response.status, name).toBe(409);
     }
@@ -54,7 +62,7 @@ describe('sign-up username rules (#4136)', () => {
 
 describe('names that read as the team (#4383)', () => {
   it('sign-up refuses a name starting with higglehaven and says it is taken', async () => {
-    for (const name of ['higglehaven17', 'Higgle haven 99', 'higglehaven-2']) {
+    for (const name of ['higglehaven17', 'Higgle_haven_99', 'higglehaven-2']) {
       const result = await trySignup(name);
       expect(result.response.status, name).toBe(409);
       expect(result.body.error).toMatch(/already taken/);
@@ -84,10 +92,13 @@ describe('rename username rules (#4136)', () => {
     const a = { builderId: me.body.builder.builderId, session: (o) => withSession(tok, o) };
     const rename = (label) => api(`/builders/${a.builderId}`, a.session({ method: 'PUT', body: JSON.stringify({ label }) }));
 
-    const spaced = await rename('  New   Name4136 ');
-    expect(spaced.body, JSON.stringify(spaced.body)).toBeTruthy();
+    const spaced = await rename('  NewName4136 ');
     expect(spaced.response.status, JSON.stringify(spaced.body)).toBe(200);
-    expect(spaced.body.builder.label).toBe('New Name4136');
+    expect(spaced.body.builder.label).toBe('NewName4136');
+    // #4407: a space is refused on a rename too
+    const withSpace = await rename('New Name4136');
+    expect(withSpace.response.status).toBe(400);
+    expect(withSpace.body.error).toMatch(/can't have spaces/);
 
     expect((await rename('Bad​Name')).response.status).toBe(400);
     expect((await rename('Admin')).response.status).toBe(409);

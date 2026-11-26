@@ -65,10 +65,10 @@ describe('Builders', () => {
     // actual rename path instead.
     const renamer = await signupBuilder('rename-builder');
     const renamed = await api(`/builders/${renamer.builderId}`, renamer.session({
-      method: 'PATCH', body: JSON.stringify({ label: 'Ada Lovelace' }),
+      method: 'PATCH', body: JSON.stringify({ label: 'AdaLovelace' }),
     }));
     expect(renamed.response.status).toBe(200);
-    expect(renamed.body.builder.label).toBe('Ada Lovelace');
+    expect(renamed.body.builder.label).toBe('AdaLovelace');
 
     const unauthenticatedRename = await api(`/builders/${renamer.builderId}`, {
       method: 'PATCH', body: JSON.stringify({ label: 'Someone else' }),
@@ -94,15 +94,15 @@ describe('Builders', () => {
     });
 
     it('rejects renaming to a label another builder already holds, case-insensitively', async () => {
-      await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Existing Holder' }) });
+      await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'ExistingHolder' }) });
       const renamer = await signupBuilder('label-collision-renamer');
       const collided = await api(`/builders/${renamer.builderId}`, renamer.session({
-        method: 'PATCH', body: JSON.stringify({ label: 'existing HOLDER' }),
+        method: 'PATCH', body: JSON.stringify({ label: 'existingHOLDER' }),
       }));
       expect(collided.response.status).toBe(409);
       // The rejected attempt must not have partially applied.
       const me = await api('/builders/me', renamer.session());
-      expect(me.body.builder.label).not.toBe('existing HOLDER');
+      expect(me.body.builder.label).not.toBe('existingHOLDER');
     });
 
     // #3142 (*One alias per person*): the builder label is a copy of the
@@ -111,21 +111,21 @@ describe('Builders', () => {
     it('renaming a builder sets the account username and the label together (#3142)', async () => {
       const renamer = await signupBuilder('one-alias-renamer');
       const renamed = await api(`/builders/${renamer.builderId}`, renamer.session({
-        method: 'PATCH', body: JSON.stringify({ label: 'One Alias Renamed' }),
+        method: 'PATCH', body: JSON.stringify({ label: 'OneAliasRenamed' }),
       }));
       expect(renamed.response.status).toBe(200);
-      expect(renamed.body.builder.label).toBe('One Alias Renamed');
+      expect(renamed.body.builder.label).toBe('OneAliasRenamed');
       const me = await api('/auth/me', renamer.session());
-      expect(me.body.user.username).toBe('One Alias Renamed');
+      expect(me.body.user.username).toBe('OneAliasRenamed');
 
       const other = await signupBuilder('one-alias-other');
       const taken = await api(`/builders/${other.builderId}`, other.session({
-        method: 'PATCH', body: JSON.stringify({ label: 'one alias RENAMED' }),
+        method: 'PATCH', body: JSON.stringify({ label: 'oneAliasRENAMED' }),
       }));
       expect(taken.response.status).toBe(409);
       const otherMe = await api('/auth/me', other.session());
-      expect(otherMe.body.user.username).not.toBe('one alias RENAMED');
-      expect((await api('/builders/me', other.session())).body.builder.label).not.toBe('one alias RENAMED');
+      expect(otherMe.body.user.username).not.toBe('oneAliasRENAMED');
+      expect((await api('/builders/me', other.session())).body.builder.label).not.toBe('oneAliasRENAMED');
 
       // #3142: the label is now the username, so a rename obeys signup's
       // 40-character username cap, not just the general 100-character one.

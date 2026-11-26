@@ -604,6 +604,35 @@ wireDraggingBehavior(rotateControls);
 export const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
 translateControls.space = 'local';
+// #4410 (the owner: "Selecting an item shows rotation circles and movement axes, each in all three directions"):
+// the three axes (each with an arrow at both ends) stand on the selection beside the three rings, with no mode to
+// choose first. The plane squares are left out: moving on the ground is the drag from the item, and a square is one
+// more thing a finger aimed at a ring can land on. Drawn larger than the rings so the arrows stand clear of them.
+translateControls.showXY = false;
+translateControls.showYZ = false;
+translateControls.showXZ = false;
+translateControls.size = 1.2;
+translateControls.showXYZ = false; // the centre handle (a free move on the screen plane) would take a press meant for the item's body
+// The pick area of each axis (a cone from the item's middle out to the arrow) would take a press meant for the item's
+// own body, a drag from the middle that moves it. Only the arrow at each end is a handle: its pick area is a short
+// cylinder round the arrow, and nothing near the middle can be picked. (Shafts and cones are still drawn.)
+{
+  const pickers = translateControls._gizmo.picker.translate;
+  for (const handle of [...pickers.children]) if (['X', 'Y', 'Z'].includes(handle.name)) pickers.remove(handle);
+  const invisible = new THREE.MeshBasicMaterial({ visible: false });
+  for (const [name, axis] of [['X', new THREE.Vector3(1, 0, 0)], ['Y', new THREE.Vector3(0, 1, 0)], ['Z', new THREE.Vector3(0, 0, 1)]]) {
+    for (const sign of [1, -1]) {
+      const geometry = new THREE.CylinderGeometry(0.17, 0.17, 0.34, 6); // along Y
+      geometry.rotateX(Math.PI / 2); // along Z
+      if (name === 'X') geometry.rotateY(Math.PI / 2);
+      if (name === 'Y') geometry.rotateX(-Math.PI / 2);
+      geometry.translate(axis.x * sign * 0.55, axis.y * sign * 0.55, axis.z * sign * 0.55);
+      const pick = new THREE.Mesh(geometry, invisible);
+      pick.name = name;
+      pickers.add(pick);
+    }
+  }
+}
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 
@@ -3009,13 +3038,40 @@ function setGizmoMode(mode) {
       return;
     }
     rotateControls.attach(mesh);
+    syncMoveAxes();
     return;
   }
   if (selectedMeshes.size > 1 && isSingleBundleSelection()) {
     groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
     groupRotatePivot.quaternion.identity();
     rotateControls.attach(groupRotatePivot);
+    syncMoveAxes();
   }
+}
+
+// #4410: the movement axes stand on the selection whenever the rings do (one item, or one bundle), and are gone
+// otherwise (several loose items, Trim, nothing selected). One place decides, so the select, undo, trim and
+// body-drag paths cannot disagree about it. A bundle's axes hang on groupMovePivot, put back on the bundle's
+// centre every frame (see the frame loop), as the rings' pivot is (#4413).
+function syncMoveAxes() {
+  const single = selectedMeshes.size === 1 && currentGizmoMode !== 'trim' && !multiSelectMode;
+  const bundle = selectedMeshes.size > 1 && isSingleBundleSelection() && !multiSelectMode;
+  if (!single && !bundle) {
+    translateControls.detach();
+    return;
+  }
+  if (single) {
+    const [mesh] = selectedMeshes;
+    translateControls.space = 'local';
+    if (translateControls.object !== mesh) translateControls.attach(mesh);
+  } else {
+    translateControls.space = 'world';
+    if (translateControls.object !== groupMovePivot) {
+      groupMovePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+      translateControls.attach(groupMovePivot);
+    }
+  }
+  translateControls.getHelper().visible = true;
 }
 
 // #3689: precise placement and exact angles for ONE item, in the item card's More (the plan's "nudging
@@ -3131,6 +3187,27 @@ function selectedItemHitAt(event) {
   return raycaster.intersectObjects([...selectedMeshes], true)[0] ?? null;
 }
 
+// #4410 (the owner: moving "is difficult to use"): a drag has to start ON the selected item, and a small or far-off item
+// is a few pixels wide on a phone, which a finger cannot hit. A press within 22 px of the middle of a SMALL selected
+// item (one whose whole size on screen is under 22 px) counts as on it, the same 44 px a finger needs for a handle;
+// a press that lands on another item, or anywhere near a larger one, is unchanged. A tap that does not move is still a
+// tap (the drag starts only past the tap threshold), so this never selects or deselects anything by itself.
+const SMALL_ITEM_GRAB_PX = 22;
+function nearSmallItemHit(event) {
+  if (selectedMeshes.size !== 1) return null;
+  const [mesh] = selectedMeshes;
+  const core = itemScreenCore(mesh);
+  if (!core || core.radius >= SMALL_ITEM_GRAB_PX || Math.hypot(event.clientX - core.x, event.clientY - core.y) > SMALL_ITEM_GRAB_PX) return null;
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const other = raycaster.intersectObjects(productMeshes, true)[0];
+  if (other) {
+    let owner = other.object;
+    while (owner && !productMeshes.includes(owner)) owner = owner.parent;
+    if (owner && !selectedMeshes.has(owner)) return null; // a press on another item is that item's
+  }
+  return { point: mesh.getWorldPosition(new THREE.Vector3()) };
+}
+
 function beginBodyDrag() {
   if (selectedMeshes.size === 0 || sceneMutationBusy) return false;
   let target;
@@ -3141,7 +3218,7 @@ function beginBodyDrag() {
     target = groupMovePivot;
     attachGroupMovePivot();
   }
-  translateControls.getHelper().visible = false; // the arrows are not drawn; only the drag moves it
+  translateControls.getHelper().visible = false; // the axes are put away for the drag from the item (syncMoveAxes brings them back)
   translateControls.dispatchEvent({ type: 'dragging-changed', value: true });
   bodyDrag.target = target;
   bodyDrag.startPos = target.position.clone();
@@ -3156,7 +3233,7 @@ function endBodyDrag() {
   controls.enableRotate = !multiSelectMode;
   if (!drag.started) return;
   translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
-  translateControls.detach();
+  syncMoveAxes(); // #4410: the axes stay on the selection; an arbitrary several have none and are detached here
 }
 
 // #4118: the red and green rings pass over the item (a ring seen edge-on is a line through its middle), so a
@@ -3164,13 +3241,90 @@ function endBodyDrag() {
 // on the item's own body is the item's: for that one press the red and green rings cannot be picked
 // (TransformControls reads the pickers' visibility on the press; the next frame sets them again). The blue
 // ring, the easy one, and a press on any ring where it stands clear of the item are unchanged.
+// #4410 (the owner: "trying to rotate using the rotation handles often accidentally selects the item to move
+// freely instead"): that held for the whole silhouette, so a finger aimed at a tilt ring where it passes over the
+// item grabbed the body. A handle wins over the body: only the item's middle (a core of a quarter of its size
+// on screen, where both tilt rings cross edge-on and a drag from the middle is the item's) gives the press to
+// the body. Anywhere else on the item the rings stay pickable, and a press that is not on a ring is still the
+// body's, as before.
+const ITEM_CORE_FRACTION = 0.25;
+const ITEM_CORE_MIN_PX = 16;
+const coreBox = new THREE.Box3();
+const coreCorner = new THREE.Vector3();
+function itemScreenCore(mesh) {
+  const centre = projectMeshToScreen(mesh);
+  if (!centre) return null;
+  coreBox.setFromObject(mesh);
+  const rect = renderer.domElement.getBoundingClientRect();
+  let radius = 0;
+  for (let i = 0; i < 8; i++) {
+    coreCorner.set(i & 1 ? coreBox.max.x : coreBox.min.x, i & 2 ? coreBox.max.y : coreBox.min.y, i & 4 ? coreBox.max.z : coreBox.min.z).project(camera);
+    const x = rect.left + (coreCorner.x * 0.5 + 0.5) * rect.width;
+    const y = rect.top + (-coreCorner.y * 0.5 + 0.5) * rect.height;
+    radius = Math.max(radius, Math.hypot(x - centre.x, y - centre.y));
+  }
+  return { x: centre.x, y: centre.y, radius, core: Math.max(ITEM_CORE_MIN_PX, radius * ITEM_CORE_FRACTION) };
+}
+function pressIsInItemCore(event) {
+  if (selectedMeshes.size !== 1) return true; // several items: as before, a press on them is theirs
+  const [mesh] = selectedMeshes;
+  const core = itemScreenCore(mesh);
+  return !core || Math.hypot(event.clientX - core.x, event.clientY - core.y) <= core.core;
+}
+window.__testItemScreenCore = () => (selectedMeshes.size === 1 ? itemScreenCore([...selectedMeshes][0]) : null); // e2e (#4410)
+window.__testSelectedItemHitAt = (x, y) => !!selectedItemHitAt({ clientX: x, clientY: y }); // e2e (#4410): is this point on the selected item's body
 window.addEventListener('pointerdown', (event) => {
   if (!event.isPrimary || event.button > 0 || !rotateControls.object) return;
   if (!selectedItemHitAt(event)) return;
+  if (!pressIsInItemCore(event)) return; // away from the middle a ring under the finger is the ring's
   for (const picker of rotateControls._gizmo.picker.rotate.children) {
     if (picker.name === 'X' || picker.name === 'Y') picker.visible = false;
   }
 }, { capture: true });
+// #4410: a ring and an arrow can lie under the same finger, and each TransformControls reads the press on its
+// own, so both would start a drag. The nearer handle takes the press and the other gizmo is switched off for that one press
+// only (restored in the bubble phase, after both controls have read it).
+function nearestHandleHit(controlsOf, event) {
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  for (const hit of raycaster.intersectObject(controlsOf._gizmo.picker[controlsOf.mode], true)) {
+    if (hit.object.visible) return hit;
+  }
+  return null;
+}
+let handlePressLoser = null;
+window.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary || event.button > 0 || !rotateControls.object || !translateControls.object) return;
+  if (!translateControls.getHelper().visible) return;
+  const ring = nearestHandleHit(rotateControls, event);
+  const arrow = nearestHandleHit(translateControls, event);
+  if (!ring || !arrow) return;
+  // The handle nearer the camera at that point is the one a person sees on top (a tie goes to the ring).
+  handlePressLoser = ring.distance <= arrow.distance ? translateControls : rotateControls;
+  handlePressLoser.enabled = false;
+}, { capture: true });
+window.addEventListener('pointerdown', () => {
+  if (handlePressLoser) handlePressLoser.enabled = true;
+  handlePressLoser = null;
+});
+window.__testAxisHandlePoints = () => { // e2e (#4410): the screen point of each arrow of the movement axes (two per axis)
+  if (!translateControls.object) return [];
+  const rect = renderer.domElement.getBoundingClientRect();
+  const out = [];
+  for (const child of translateControls._gizmo.picker.translate.children) {
+    if (!['X', 'Y', 'Z'].includes(child.name)) continue;
+    child.geometry.computeBoundingBox(); // the gizmo bakes each arrow's place into its geometry
+    const at = child.geometry.boundingBox.getCenter(new THREE.Vector3());
+    if (at.length() < 0.1) continue; // the shaft, centred on the item
+    child.localToWorld(at);
+    at.project(camera);
+    out.push({ axis: child.name, x: rect.left + (at.x * 0.5 + 0.5) * rect.width, y: rect.top + (-at.y * 0.5 + 0.5) * rect.height });
+  }
+  return out;
+};
+window.__testHandleAt = (x, y) => ({ // e2e (#4410): which handle is under this point
+  ring: nearestHandleHit(rotateControls, { clientX: x, clientY: y })?.object.name ?? null,
+  arrow: translateControls.object ? nearestHandleHit(translateControls, { clientX: x, clientY: y })?.object.name ?? null : null,
+});
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (bodyDrag) { endBodyDrag(); return; } // a second finger: it is looking, not moving
   if (!event.isPrimary || event.button > 0) return;
@@ -3178,7 +3332,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   // TransformControls' own pointerdown (registered earlier) has already set .dragging when the ring or a
   // trim handle was grabbed, so a press on those never starts this.
   if (translateControls.dragging || rotateControls.dragging || trimControls.dragging) return;
-  const hit = selectedItemHitAt(event);
+  const hit = selectedItemHitAt(event) ?? nearSmallItemHit(event);
   if (!hit) return;
   bodyDragPlane.setFromNormalAndCoplanarPoint(UP_Z, hit.point);
   bodyDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startHit: hit.point.clone(), started: false, target: null, startPos: null };
@@ -5832,6 +5986,9 @@ export function buildModeFrameUpdate(now) {
   // is held (then the pivot is the thing being turned and the turn moves the bundle round it).
   if (rotateControls.object === groupRotatePivot && !rotateControls.dragging && selectedMeshes.size > 0) {
     groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+  }
+  if (translateControls.object === groupMovePivot && !translateControls.dragging && !bodyDrag?.started && selectedMeshes.size > 0) {
+    groupMovePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position))); // #4410: the bundle's axes
   }
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();

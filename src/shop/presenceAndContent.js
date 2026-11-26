@@ -87,7 +87,7 @@ import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
 import { createCreditOrbFades } from './creditOrbArrival.js';
 import { beginAvatarSwapFog } from './avatarSwapFog.js';
 import { beginOtherAvatarWait } from './otherAvatarWait.js';
-import { createShopAvatar, makeAfkBadgeSprite, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
+import { createShopAvatar, isShopAvatarAfk, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { createBuiltinMotion, stepBuiltinMotion } from './builtinMotion.js';
 import { createOtherLimbMotion, stepOtherLimbMotion, shouldAnimateOtherAvatar, OTHER_AVATAR_WALK_MAGNITUDE } from './otherAvatarMotion.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
@@ -1246,9 +1246,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
   if (now - shopLastPresencePollAt < SHOP_PRESENCE_POLL_INTERVAL_MS) return;
   shopLastPresencePollAt = now;
   const landletId = shopCurrentLandletEntry?.record.landletId;
-  // #4387: off a claimed lándlet there is nobody to show, but orbs (which live on greenbelt ones) are told of through
-  // this same answer, so while one is loaded the poll still runs, at its usual pace. With none, nothing is asked.
-  if (!landletId && shopCreditOrbs.length === 0) {
+  if (!landletId) {
     despawnOtherShopAvatars();
     return;
   }
@@ -1260,9 +1258,8 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // file already uses (friendsLoadToken, dmLoadToken, etc.).
   const myPresencePollToken = ++presencePollToken;
   let avatars;
-  let collectedOrbs;
   try {
-    ({ avatars, collectedOrbs } = await fetchNearbyPresence());
+    avatars = await fetchNearbyPresence();
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
@@ -1273,7 +1270,6 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // applied (a livelock; seen as the flaky background-tab despawn e2e).
   if (myPresencePollToken < presenceAppliedToken) return;
   presenceAppliedToken = myPresencePollToken;
-  for (const orbId of collectedOrbs) popCreditOrbCollectedByOther(orbId); // #4387
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
@@ -1300,17 +1296,11 @@ export async function pollNearbyPresenceIfNeeded(now) {
       const defaultAvatar = waitsForModel ? null : createShopAvatar();
       const body = defaultAvatar ? defaultAvatar.group : new THREE.Group();
       group.add(body);
-      // #4390: the same small "afk" mark the person sees on their own avatar, above the head, shown while their presence says they have stepped away.
-      const afkMark = makeAfkBadgeSprite();
-      afkMark.position.set(0, 0, 2.1);
-      afkMark.material.opacity = 0;
-      group.add(afkMark);
       group.position.set(avatar.x, avatar.y, avatar.z);
       scene.add(group);
       entry = {
         group,
         body,
-        afkMark,
         afk: false,
         // #4067: the fog that stands in for a body still loading; null once it is in place.
         modelWait: waitsForModel
@@ -1552,8 +1542,8 @@ function stepOtherAvatarMotion(entry, dt, state) {
 
 // A cloned custom model with its feet at local z=0, matching the default
 // body's contract (createCustomShopAvatar does the same measurement for the
-// shopper's own avatar). No animation or AFK badge for other players: the
-// presence row carries neither.
+// shopper's own avatar). No animation for other players: the
+// presence row carries none (#4441: nor an AFK label).
 async function loadOtherAvatarCustomBody(modelUrl) {
   // #3230: skeletonSafe, so each avatar's own AnimationMixer drives only its
   // own bones even when several nearby players wear the same model.
@@ -1770,8 +1760,6 @@ export function updateOtherShopAvatars(now) {
       THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
     );
     entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
-    // #4390: ease the mark in and out the way the person's own badge does.
-    if (entry.afkMark) entry.afkMark.material.opacity += ((entry.afk ? 1 : 0) - entry.afkMark.material.opacity) * 0.15;
     // #3449: an assistant on shift is placed by the server and never reports a
     // position of its own, so it wanders a little around that spot on the
     // client (assistantIdle.js: seeded from its name and the clock, nothing to
@@ -2365,7 +2353,7 @@ const CREDIT_ORB_RETURN_SCALE_IN_S = 0.25;
 const CREDIT_ORB_POP_END_SCALE = 2.5;
 const creditOrbPopEffects = [];
 
-// e2e only (#4387): how many pops have been spawned in all. The effect lives under half a second and a slow
+// e2e only (#4387, #4427): how many pops have been spawned in all. The effect lives under half a second and a slow
 // frame can remove it before a sampler looks, so a test reads this instead of catching it playing.
 let creditOrbPopsSpawned = 0;
 window.__testCreditOrbPopsSpawned = () => creditOrbPopsSpawned;
@@ -2607,18 +2595,6 @@ function markCreditOrbCollectFailedToReachServer() {
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
     sayCreditOrbOffline();
   }
-}
-
-// #4387 (owner: one event in the world looks the same to everyone who sees it): an orb that another person
-// collected pops for me too, where it floats, with the one pop effect the collector sees. No toast or credit word:
-// those belong to the person who collected it. Fog stays for coming into and going out of range. With reduced
-// motion the orb is simply gone. An orb I am collecting myself is left to that path.
-function popCreditOrbCollectedByOther(orbId) {
-  const orb = shopCreditOrbs.find((candidate) => candidate.orbId === orbId && !candidate.collecting);
-  if (!orb) return;
-  creditOrbFades.finish(orb);
-  if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
-  removeCreditOrb(orb);
 }
 
 function removeCreditOrb(orb) {

@@ -575,6 +575,50 @@ describe('Community signs', () => {
     expect(JSON.parse(history.results[0].snapshot_json).post_id).toBe(posted.body.post.postId);
   });
 
+  // #4442: the owner (an admin, on their own lándlet) wrote a note and was told "Expected application/json request body"
+  // deleting it: the admin branch came first and wanted a moderation category. The author's own delete reads no body
+  // whatever else the caller is; moderating someone else's note still names a category.
+  it('lets an author who is also the lándlet owner or an admin delete their own note with no body', async () => {
+    const ownerAdmin = await signupAdmin('sign-owner-admin');
+    await createGreenbeltLandlet('sign-owner-admin-landlet');
+    expect((await api('/landlets/sign-owner-admin-landlet/claim', ownerAdmin.session({ method: 'POST' }))).response.status).toBe(200);
+    await api('/instances', ownerAdmin.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'sign-owner-admin-instance', landletId: 'sign-owner-admin-landlet', templateId: 'placeholder-tree', x: 3, y: 3, isCommunitySign: true }),
+    }));
+    // The admin who owns the lándlet writes two notes, a stranger writes one.
+    const mine = await api('/instances/sign-owner-admin-instance/posts', ownerAdmin.session({ method: 'POST', body: JSON.stringify({ text: 'This is a test.' }) }));
+    const mine2 = await api('/instances/sign-owner-admin-instance/posts', ownerAdmin.session({ method: 'POST', body: JSON.stringify({ text: 'Second.' }) }));
+    const theirs = await api('/instances/sign-owner-admin-instance/posts', signsShopper.session({ method: 'POST', body: JSON.stringify({ text: 'A stranger.' }) }));
+    expect([mine, mine2, theirs].map((r) => r.response.status)).toEqual([201, 201, 201]);
+
+    // Author and admin and lándlet owner at once: no body, the author's own delete (kept in edit history, no moderation snapshot).
+    const own = await api(`/instances/sign-owner-admin-instance/posts/${mine.body.post.postId}`, ownerAdmin.session({ method: 'DELETE' }));
+    expect(own.response.status).toBe(200);
+    const history = await env.DB.prepare('SELECT action FROM user_content_edit_history WHERE source_table = ? AND source_id = ?').bind('sign_posts', mine.body.post.postId).all();
+    expect(history.results.map((r) => r.action)).toEqual(['delete']);
+    const removed = await env.DB.prepare('SELECT COUNT(*) AS n FROM moderation_removal_snapshots WHERE source_id = ?').bind(mine.body.post.postId).first();
+    expect(removed.n).toBe(0);
+
+    // Someone else's note is still a moderation: it needs a category, and then it is logged as one.
+    const noCategory = await api(`/instances/sign-owner-admin-instance/posts/${theirs.body.post.postId}`, ownerAdmin.session({ method: 'DELETE' }));
+    expect(noCategory.response.status).toBe(415);
+    expect(noCategory.body.code).toBe('unreadable_request');
+    const moderated = await api(`/instances/sign-owner-admin-instance/posts/${theirs.body.post.postId}`, ownerAdmin.session({ method: 'DELETE', body: JSON.stringify({ category: 'spam' }) }));
+    expect(moderated.response.status).toBe(200);
+
+    // A plain author who owns the lándlet: author branch before moderation (no body).
+    const plainOwner = await signupBuilder('sign-plain-owner');
+    await createGreenbeltLandlet('sign-plain-owner-landlet');
+    await api('/landlets/sign-plain-owner-landlet/claim', plainOwner.session({ method: 'POST' }));
+    await api('/instances', plainOwner.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'sign-plain-owner-instance', landletId: 'sign-plain-owner-landlet', templateId: 'placeholder-tree', x: 3, y: 3, isCommunitySign: true }),
+    }));
+    const plain = await api('/instances/sign-plain-owner-instance/posts', plainOwner.session({ method: 'POST', body: JSON.stringify({ text: 'Mine.' }) }));
+    expect((await api(`/instances/sign-plain-owner-instance/posts/${plain.body.post.postId}`, plainOwner.session({ method: 'DELETE' }))).response.status).toBe(200);
+  });
+
   // #781: an admin can remove any sign post outright, regardless of who
   // posted it or who owns the hosting landlet -- same reasoning and shape
   // as #1712's product-review admin override.

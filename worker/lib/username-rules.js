@@ -6,7 +6,10 @@ import { HttpError } from './http.js';
 import { ASSISTANT_AGENT_NAMES } from './fleet-agents.js';
 
 export const USERNAME_MAX_LENGTH = 40;
-export const USERNAME_CHARACTER_MESSAGE = 'That name contains a character we cannot show. Try letters, numbers and single spaces.';
+export const USERNAME_CHARACTER_MESSAGE = 'That name contains a character we cannot show. Try letters and numbers.';
+// #4407 (owner, 2026-11-26): a name with spaces reads as a string of chosen text anyone could have, not a unique
+// username, so a username has none. Every other showable character stays allowed.
+export const USERNAME_SPACES_MESSAGE = "A name can't have spaces. Try BenjaminChae or Benjamin_Chae.";
 
 // A lone surrogate half is not text; it breaks encoders further along.
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
@@ -17,7 +20,9 @@ const UNSHOWABLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 
 // Validates and normalises a username a person typed: NFC, odd spaces to a plain space, runs of white space collapsed
 // to one, trimmed. Returns the name to store. Throws a 400 whose message says why, in the person's terms.
-export function normalizeUsername(value) {
+// `allowSpaces` is only for a server on this machine (wrangler dev), where the test suites and local looks sign up
+// under labels with spaces; the real site never passes it.
+export function normalizeUsername(value, { allowSpaces = false } = {}) {
   if (typeof value !== 'string' || value.trim() === '') throw new HttpError('username is required', 400);
   if (LONE_SURROGATE.test(value)) throw new HttpError(USERNAME_CHARACTER_MESSAGE, 400);
   // \t, \n and friends are Cc, which would be refused below; a person pasting a tab is as unshowable as one pasting a
@@ -26,6 +31,7 @@ export function normalizeUsername(value) {
   if (UNSHOWABLE.test(spaced)) throw new HttpError(USERNAME_CHARACTER_MESSAGE, 400);
   const name = spaced.replace(/ {2,}/g, ' ').trim();
   if (name === '') throw new HttpError('username is required', 400);
+  if (!allowSpaces && name.includes(' ')) throw new HttpError(USERNAME_SPACES_MESSAGE, 400);
   if ([...name].length > USERNAME_MAX_LENGTH) {
     throw new HttpError(`username must be at most ${USERNAME_MAX_LENGTH} characters`, 400);
   }
@@ -85,12 +91,13 @@ export function isReservedSkeleton(skeleton, { allowSessionNames = false } = {})
   return ASSISTANT_NUMBERED.test(compact);
 }
 
-// True when the request came to a server on this machine (wrangler dev), never the real site.
-export function isLocalRequest(request) {
-  try {
-    const { hostname } = new URL(request.url);
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-  } catch {
-    return false;
-  }
+// True on a throwaway server on this machine (wrangler dev), read from its own APP_BASE_URL (.dev.vars). Not from the
+// request URL: wrangler dev shows the route's host there. Production has an https APP_BASE_URL, and so do the
+// vitest workers, so an unset or deployed value counts as the real site (it fails closed).
+export function isLocalDevServer(env) {
+  // The vitest workers read the same .dev.vars, so they look local too; they take the real site's rules, so the
+  // rules themselves are tested (TEST_MIGRATIONS is what only they have).
+  if (env?.TEST_MIGRATIONS) return false;
+  const base = typeof env?.APP_BASE_URL === 'string' ? env.APP_BASE_URL : '';
+  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(base);
 }

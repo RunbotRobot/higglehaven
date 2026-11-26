@@ -28,6 +28,7 @@
 // #account-menu-panel, so the account rows (Settings, Friends, My purchases, ...) are petals
 // without being rebuilt, and the id the e2e suite drives is unchanged.
 
+import { stemPathD } from './stemPath.js';
 import { iconKeyFor, svgIcon } from './budIcons.js';
 import { BUD_MENUS, BUD_ROW, budMenuProblem } from './budMenuRules.js';
 
@@ -365,17 +366,6 @@ function layoutStem() {
   if (host.classList.contains('bud-folding')) return; // #4012: the leaves are folding, so their boxes are not the stem's length
   const rowButtons = [...(document.getElementById('bud-row')?.querySelectorAll('button') || [])];
   rowButtons.forEach(decorateLeaf);
-  // #4038: the row grows out of the head, left to right: each item knows its place in the row and how far it has to
-  // travel from the head's centre line (the animations in src/app.css read --row-i, --row-n and --row-pull).
-  const headBox = toggle()?.getBoundingClientRect();
-  const shownRow = rowButtons.filter((el) => !el.hidden);
-  shownRow.forEach((el, i) => {
-    el.style.setProperty('--row-i', String(i));
-    el.style.setProperty('--row-n', String(shownRow.length));
-    // Measured from the layout (offsetLeft), not from the box on screen, which is already moved by the animation.
-    const rowLeft = el.parentElement.getBoundingClientRect().left;
-    if (headBox && el.offsetWidth > 0) el.style.setProperty('--row-pull', `${Math.round(headBox.left + headBox.width / 2 - (rowLeft + el.offsetLeft + el.offsetWidth / 2))}px`);
-  });
   let index = 0;
   let first = null;
   let last = null;
@@ -441,8 +431,7 @@ function drawStem(host, first, last) {
   const curve = Math.max(16, Math.min(56, firstTop - y0 - 24));
   const y2 = Math.round(firstTop - 6); // where it is on the leaves' line
   const y1 = y2 - curve;
-  const mid = (y1 + y2) / 2;
-  const d = `M ${x0} ${y0} L ${x0} ${y1} C ${x0} ${mid} ${stemX} ${mid} ${stemX} ${y2} L ${stemX} ${Math.max(y2 + 1, lastMid)}`;
+  const d = stemPathD({ x0, y0, stemX, y1, y2, lastMid });
   for (const path of stemSvg(host).children) path.setAttribute('d', d);
 }
 

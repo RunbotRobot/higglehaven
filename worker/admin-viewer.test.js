@@ -171,6 +171,7 @@ describe('everything that changes something refuses a look-only admin (#4175)', 
     const id = await userIdOf(target.email);
     const writes = [
       ['POST', '/auth/admin-delete-account', { userId: id, confirmUsername: 'viewer-test-target' }],
+      ['POST', '/auth/admin-rename-account', { userId: id, newUsername: 'ViewerRenamed' }], // #4407
       ['POST', '/auth/grant-admin', { email: target.email }],
       ['POST', '/auth/suspend-account', { email: target.email }],
       ['POST', '/auth/unsuspend-account', { email: target.email }],
