@@ -1864,7 +1864,9 @@ independent-filters-with-`ids`-checked-first precedence. `?label=` still
 returns every matching row, not just the first: #1219 enforces uniqueness
 going forward on create/rename (see `POST /api/sellers` below), but
 doesn't retroactively guarantee it against whatever already existed
-before that, same caveat #1187 left for builders. Added so a
+before that, same caveat #1187 left for builders. With `ids`, each row also carries
+`ratingAverage` and `ratingCount` (#4375: the seller's all-time feedback summary,
+`null`/`0` for none, never any feedback text) for the shopper's product card. Added so a
 shopper/builder can look up a specific seller's shop by name — until now
 the only discovery paths were browsing catalog items by a `sellerId`
 already known, or stumbling on products in-world.

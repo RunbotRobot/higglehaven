@@ -195,9 +195,14 @@ export function clampAnchorRadius(radiusPx) {
 // seller's storefront name (a shop's name, not a person's); with no name known
 // (a seller who has closed their shop, or a lookup that has not answered) the card
 // says nothing rather than something made up.
-export function sellerLine(label) {
+export function sellerLine(label, rating = null) {
   const name = typeof label === 'string' ? label.trim() : '';
-  return name ? `Sold by ${name}` : '';
+  if (!name) return '';
+  // #4375: how well the seller is rated, once they have any ratings (nothing is said for none).
+  const count = rating?.ratingCount ?? 0;
+  const average = rating?.ratingAverage;
+  if (count > 0 && Number.isFinite(average)) return `Sold by ${name} · ${average.toFixed(1)} ★ (${count})`;
+  return `Sold by ${name}`;
 }
 
 // #3681: `owned` is true when the shopper already owns this product as a digital

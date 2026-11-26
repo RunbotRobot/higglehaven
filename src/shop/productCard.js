@@ -30,7 +30,7 @@ import { camera } from '../world/scene.js';
 import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
-import { fetchSellerLabels } from '../api.js';
+import { fetchSellerSummaries } from '../api.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 import { loadUnratedOrders, hasUnratedOrder } from './unratedOrders.js';
 
@@ -81,9 +81,9 @@ function loadSellerName(sellerId) {
   if (!sellerId) return Promise.resolve(null);
   if (sellerNames.has(sellerId)) return Promise.resolve(sellerNames.get(sellerId));
   if (!sellerLookups.has(sellerId)) {
-    sellerLookups.set(sellerId, fetchSellerLabels([sellerId])
-      .then((labels) => {
-        sellerNames.set(sellerId, labels[sellerId] ?? null);
+    sellerLookups.set(sellerId, fetchSellerSummaries([sellerId])
+      .then((summaries) => {
+        sellerNames.set(sellerId, summaries[sellerId] ?? null);
         return sellerNames.get(sellerId);
       })
       // A failed lookup is not remembered as "no name": the next tap tries again.
@@ -95,11 +95,11 @@ function loadSellerName(sellerId) {
 
 function fillSellerLine(review) {
   const sellerId = review.mesh.userData.template?.sellerId;
-  sellerEl.textContent = sellerLine(sellerNames.get(sellerId));
+  sellerEl.textContent = sellerLine(sellerNames.get(sellerId)?.label, sellerNames.get(sellerId));
   if (!sellerId || sellerNames.has(sellerId)) return;
   loadSellerName(sellerId).then((name) => {
     if (review !== openReview) return; // folded away, or another product opened meanwhile
-    sellerEl.textContent = sellerLine(name);
+    sellerEl.textContent = sellerLine(name?.label, name);
     card.markDirty();
   });
 }

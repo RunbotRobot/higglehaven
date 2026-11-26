@@ -361,6 +361,14 @@ describe('Seller feedback', () => {
     expect(listed.body.count).toBe(2);
     expect(listed.body.averageRating).toBe(4);
     expect(listed.body.feedback.every((f) => f.sellerId === sellerId)).toBe(true);
+
+    // #4375: the same summary rides on the seller lookup the product card already makes (no feedback text).
+    await env.DB.batch([sellerId, otherSellerId].map((id) => env.DB.prepare('INSERT INTO sellers (seller_id, label) VALUES (?, ?)').bind(id, id)));
+    const lookup = await api(`/sellers?ids=${sellerId},${otherSellerId},seller-with-no-ratings-4375`);
+    const byId = Object.fromEntries(lookup.body.sellers.map((x) => [x.sellerId, x]));
+    expect(byId[sellerId]).toMatchObject({ ratingAverage: 4, ratingCount: 2 });
+    expect(byId[otherSellerId]).toMatchObject({ ratingAverage: 1, ratingCount: 1 });
+    expect(JSON.stringify(lookup.body)).not.toMatch(/"text"/);
   });
 
   it('notifies the seller (via their builder profile) when new feedback is posted', async () => {
