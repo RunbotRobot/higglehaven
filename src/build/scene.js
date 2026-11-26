@@ -613,6 +613,15 @@ translateControls.showYZ = false;
 translateControls.showXZ = false;
 translateControls.size = 1.2;
 translateControls.showXYZ = false; // the centre handle (a free move on the screen plane) would take a press meant for the item's body
+// The shaft of each axis is a long pick cylinder through the item's own middle, which would take a press meant
+// for the item's body (a drag from the middle moves the item). Only the arrow at each end is a handle: the shaft
+// is still drawn, but cannot be picked.
+for (const handle of [...translateControls._gizmo.picker.translate.children]) {
+  handle.geometry.computeBoundingBox();
+  if (['X', 'Y', 'Z'].includes(handle.name) && handle.geometry.boundingBox.getCenter(new THREE.Vector3()).length() < 0.1) {
+    translateControls._gizmo.picker.translate.remove(handle);
+  }
+}
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 
