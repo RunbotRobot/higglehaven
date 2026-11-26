@@ -125,6 +125,19 @@ describe('Didit verification webhook (#589)', () => {
     expect(session.status).toBe('declined');
   });
 
+  // #4477: Abandoned and Expired are stored as 'declined' too, but the status answer says it was not a refusal.
+  it('tells an abandoned or expired session apart from a refusal in the status answer', async () => {
+    const abandoned = await signupBuilder('didit-status-abandoned');
+    const abandonedId = await insertPendingSession(abandoned.email);
+    await postDiditWebhook({ session_id: abandonedId, status: 'Abandoned' });
+    expect((await api('/auth/didit-verification-status', abandoned.session())).body).toEqual({ status: 'declined', reason: 'unfinished' });
+
+    const declined = await signupBuilder('didit-status-refused');
+    const declinedId = await insertPendingSession(declined.email);
+    await postDiditWebhook({ session_id: declinedId, status: 'Declined' });
+    expect((await api('/auth/didit-verification-status', declined.session())).body).toEqual({ status: 'declined', reason: 'not_approved' });
+  });
+
   it('leaves a session pending on a non-terminal status like "In Review"', async () => {
     const builder = await signupBuilder('didit-webhook-inreview');
     const sessionId = await insertPendingSession(builder.email);

@@ -176,7 +176,7 @@ await page.evaluate(() => window.__testShopSetTiers()); // switch the read-out o
 // The walk, in the page: one position per animation frame at running speed, and a row per frame.
 const FAR_M = 60;
 const NEAR_M = 2;
-const RUN_M_S = 4.4704;
+const RUN_M_S = 4.4704 * Number(process.env.WALK_SPEED_SCALE ?? 1); // a smaller scale walks the wall more slowly per frame (what a faster frame rate does)
 const walkRows = await page.evaluate(([x, y0, farM, nearM, speed]) => new Promise((resolve) => {
   const rows = [];
   let d = farM;
@@ -194,7 +194,7 @@ const walkRows = await page.evaluate(([x, y0, farM, nearM, speed]) => new Promis
     window.__testTeleportShopAvatar(x, y0 - d, 0);
     const counts = window.__testShopBatchTierCounts();
     const fades = window.__testShopBatchCrossfades();
-    const row = { t: now, g: game, d, dir: direction, ...counts, inFlight: fades.inFlight, started: fades.started, hard: fades.hardSwaps - hardSwapsStart };
+    const row = { t: now, g: game, d, dir: direction, viol: window.__testShopBatchOrderViolations(), ...counts, inFlight: fades.inFlight, started: fades.started, hard: fades.hardSwaps - hardSwapsStart };
     if (frame % 6 === 0) {
       const sets = window.__testShopSetTiers();
       row.sets = sets.map((s) => ({ px: s.px, tiers: s.tiers, reasons: s.reasons }));
@@ -232,6 +232,38 @@ const outLastOff = [...outRows].reverse().find((r) => r.mid + r.full > 0);
 const sweepOutM = outFirst && outLastOff ? Math.max(0, outLastOff.d - outFirst.d) : -1;
 console.log(`the wall goes back to the far version over ${sweepOutM.toFixed(1)} m of walking out (from ${outFirst?.d.toFixed(1)} m to ${outLastOff?.d.toFixed(1)} m)`);
 
+// #4113: ORDER. A wall should improve from the front: no brick shows a worse version than a brick farther from the avatar
+// (the near bricks on far while the ones behind them have mid is the owner's straight-edged band, seen from the side).
+// `viol` is, each frame, how many bricks show a worse version than some farther one. Frames with any, and the worst
+// frame, each way; a hysteresis band can leave a few for a frame or two, so the bound is on how long and how many.
+const violFramesIn = inRows.filter((r) => r.viol > 0).length;
+const violFramesOut = outRows.filter((r) => r.viol > 0).length;
+const worstViolIn = Math.max(0, ...inRows.map((r) => r.viol));
+const worstViolOut = Math.max(0, ...outRows.map((r) => r.viol));
+const violSumIn = inRows.reduce((sum, r) => sum + r.viol, 0);
+// A band lasts; a brick on the wrong version for a frame at a hysteresis edge does not. What counts is how LONG (real
+// milliseconds: a frame is 60 ms on a fast machine and 160 ms on a slow one, and a fade is 400 ms either way), as the
+// longest run of consecutive frames with any and as the total over the leg. A frame counts for the time until the next.
+function violationTimes(rows) {
+  let longestMs = 0;
+  let totalMs = 0;
+  let runMs = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const frameMs = i + 1 < rows.length ? rows[i + 1].t - rows[i].t : 0;
+    if (rows[i].viol > 0) {
+      runMs += frameMs;
+      totalMs += frameMs;
+    } else {
+      runMs = 0;
+    }
+    longestMs = Math.max(longestMs, runMs);
+  }
+  return { longestMs: Math.round(longestMs), totalMs: Math.round(totalMs) };
+}
+const timesIn = violationTimes(inRows);
+const timesOut = violationTimes(outRows);
+console.log(`order (bricks on a worse version than one farther away): in: ${violFramesIn} of ${inRows.length} frames (longest run ${timesIn.longestMs} ms, ${timesIn.totalMs} ms in all), worst ${worstViolIn}, sum ${violSumIn}; out: ${violFramesOut} of ${outRows.length} frames (longest run ${timesOut.longestMs} ms, ${timesOut.totalMs} ms in all), worst ${worstViolOut}`);
+
 // Overdue: a set on far while each brick is past the size where far reads as a colour (LOD_SET_FAR_EXIT_PX 14, 1.5x).
 let overdueFrames = 0;
 let worstOverduePx = 0;
@@ -246,16 +278,25 @@ for (let i = 0; i < walkRows.length; i++) {
   const interesting = (r.d < 24 && r.d > 1.9) || i % 40 === 0;
   if (!interesting) continue;
   const set = r.sets?.[0];
-  console.log(`  ${r.dir < 0 ? 'in ' : 'out'} ${r.d.toFixed(1).padStart(5)} m  g ${r.g.toFixed(2)}  full ${r.full} mid ${r.mid} far ${r.far}  fades ${r.inFlight}${set ? `  set px ${set.px} ${JSON.stringify(set.reasons)}` : ''}`);
+  console.log(`  ${r.dir < 0 ? 'in ' : 'out'} ${r.d.toFixed(1).padStart(5)} m  g ${r.g.toFixed(2)}  full ${r.full} mid ${r.mid} far ${r.far}  fades ${r.inFlight}  hard ${r.hard}  order ${r.viol}${set ? `  set px ${set.px} ${JSON.stringify(set.reasons)}` : ''}`);
 }
 
-// #4113: bounds measured on this wall (800 bricks of 0.1 m, software GL) with margin: 5.5 m in and 5.7 m out. They pin the
-// shape (one sweep of a few metres, no hard swap on the way in); they are not the goal, which is no visible band.
-// Bricks that changed in one frame because the caps were full: 0 to 69 in the runs made (it depends on the frame
-// times: a brick more than 1.5x past its size limit changes at once, #4398, rather than wait), against 800 bricks.
-// A bound of 15%, so a rule that stops fading altogether fails; the number to bring down is on #4113.
-const MAX_HARD_SWAPS = 120;
-const MAX_SWEEP_M = Number(process.env.WALK_MAX_SWEEP_M ?? 9);
+// #4113: bounds on this wall (800 bricks of 0.1 m, software GL). The goal is no visible band; these pin its shape.
+// Order: a wall improves from the front, so no brick shows a worse version than one farther away. A hysteresis edge or a
+// fade waiting for room can leave some for a short while; what counts is for how long, in real time (a fade is 400 ms),
+// as one run and as the total of a leg. The order the flips are served in (nearest upgrade first) keeps both short; the
+// unordered rule left the wall out of order for 1.3 to 1.8 s going in and 1.3 to 3.6 s going out; the ordered one 0 to 1.7 s going in and none going out (see the PR).
+const MAX_ORDER_RUN_MS = 3000;
+const MAX_ORDER_TOTAL_MS = 3000;
+// Hard swaps (a brick that changed in one frame because the fade caps were full, or because it was well past its size
+// limit, #4398) are mostly a software-GL artefact of this walk: at a few frames a second a fade spans two or three frames
+// of walking: 0 of 800 in 8 of 8 runs of the final rule, 133 in one of 3 of the rule before it, and 500 to 535 (one group of
+// bricks past its size limit together) with a rule that held bricks back. The bound fails that kind of pop, not a stray one.
+const MAX_HARD_SWAPS = Number(process.env.WALK_MAX_HARD_SWAPS ?? 200);
+// The metres from the first brick to leave the far version to the last, each way: one sweep (the order above says it is a
+// sweep and not a band), slowed by software-GL frames and the fade caps, so the bound is generous.
+const MAX_SWEEP_M = Number(process.env.WALK_MAX_SWEEP_M ?? 12);
 const pass = !!landlet && created.status < 300 && loaded && walkRows.length > 30 && total(walkRows[walkRows.length - 1]) >= PER_PRODUCT * PRODUCT_COUNT
-  && sweepInM >= 0 && sweepInM <= MAX_SWEEP_M && sweepOutM >= 0 && sweepOutM <= MAX_SWEEP_M && hardIn <= MAX_HARD_SWAPS && hardOut <= MAX_HARD_SWAPS && overdueFrames === 0 && errors.length === 0;
+  && sweepInM >= 0 && sweepInM <= MAX_SWEEP_M && sweepOutM >= 0 && sweepOutM <= MAX_SWEEP_M && hardIn <= MAX_HARD_SWAPS && hardOut <= MAX_HARD_SWAPS && timesIn.longestMs <= MAX_ORDER_RUN_MS && timesOut.longestMs <= MAX_ORDER_RUN_MS && timesIn.totalMs <= MAX_ORDER_TOTAL_MS && timesOut.totalMs <= MAX_ORDER_TOTAL_MS
+  && overdueFrames === 0 && errors.length === 0;
 await finish(browser, { pass, label: '#4113: a wall walked at running speed from 60 m to 2 m and back changes version without a hard swap, a long split, or far past its size', errors });

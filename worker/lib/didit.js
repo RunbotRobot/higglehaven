@@ -45,7 +45,10 @@ async function diditRequest(env, method, path, body) {
   // function's own intended 502/400.
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
+    // #4477: the vendor's own sentence (data.message) is logged, never sent on: it reaches the person through
+    // every `err.message || ...` fallback in the UI. A code makes src/api.js show player copy (src/errorCopy.js).
+    console.warn('didit-request-failed', JSON.stringify({ status: response.status, message: data?.message ?? null }));
+    throw new HttpError('Didit request failed', response.status >= 500 ? 502 : 400, { code: ERROR_CODES.VERIFICATION_UNAVAILABLE });
   }
   return data;
 }
@@ -334,12 +337,12 @@ function ignoreDiditStatus(status, sessionId) {
 // webhook re-applying the same value is a safe no-op either way); it's
 // only ever included in the batch when `approved` is true in the first
 // place, so a decline never reaches it.
-async function applyDiditDecision(db, sessionId, userId, approved) {
+async function applyDiditDecision(db, sessionId, userId, approved, diditStatus = null) {
   const statements = [
     db.prepare(`
-      UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      UPDATE didit_verification_sessions SET status = ?, end_reason = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE session_id = ? AND processed_at IS NULL
-    `).bind(approved ? 'approved' : 'declined', sessionId),
+    `).bind(approved ? 'approved' : 'declined', diditStatus, sessionId),
   ];
   if (approved) {
     statements.push(db.prepare(`
@@ -377,7 +380,7 @@ export async function reconcileDiditSession(env, db, latest, userId) {
     return 'pending';
   }
   const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
-  await applyDiditDecision(db, latest.session_id, userId, approved);
+  await applyDiditDecision(db, latest.session_id, userId, approved, overallStatus);
   return approved ? 'approved' : 'declined';
 }
 
@@ -391,7 +394,7 @@ export async function handleDiditVerificationStatus(request, env, db) {
   const latest = await latestDiditSession(db, user.user_id);
   if (!latest) return json({ status: 'none' });
   if (latest.processed_at !== null) {
-    return json({ status: latest.status });
+    return json(diditStatusBody(latest.status, latest.end_reason));
   }
   // #1037: rate-limited before the diditConfigured check inside
   // reconcileDiditSession (not after), same ordering #839 already
@@ -403,7 +406,16 @@ export async function handleDiditVerificationStatus(request, env, db) {
   // happen for a session that's no longer pending.
   await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
   const status = await reconcileDiditSession(env, db, latest, user.user_id);
-  return json({ status });
+  if (status !== 'declined') return json({ status });
+  const after = await latestDiditSession(db, user.user_id);
+  return json(diditStatusBody(status, after?.end_reason));
+}
+
+// #4477: 'declined' covers Declined, Abandoned and Expired (one stuck-pending-free status), so the response also
+// says which kind it was: the person who closed the tab is not told they were turned down.
+function diditStatusBody(status, endReason) {
+  if (status !== 'declined') return { status };
+  return { status, reason: endReason === 'Abandoned' || endReason === 'Expired' ? 'unfinished' : 'not_approved' };
 }
 
 // Didit signs its webhook deliveries with an HMAC-SHA256 of the raw body,
@@ -453,6 +465,6 @@ export async function handleDiditWebhook(request, env, db) {
   }
   const session = await db.prepare('SELECT * FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
   if (!session) return json({ received: true });
-  await applyDiditDecision(db, sessionId, session.user_id, DIDIT_TERMINAL_STATUSES[overallStatus]);
+  await applyDiditDecision(db, sessionId, session.user_id, DIDIT_TERMINAL_STATUSES[overallStatus], overallStatus);
   return json({ received: true });
 }

@@ -47,6 +47,8 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   card_check_mismatch: "That card check didn't work. You were not charged. Try again, or verify with an ID instead.",
   card_check_incomplete: "Your card wasn't confirmed. You were not charged. Try again, or verify with an ID instead.",
   account_not_found: 'This account is no longer available. Log out and sign in again.',
+  // #4477: the ID-check provider refused or failed a request; its own wording is logged, never shown.
+  verification_unavailable: "We couldn't reach the ID check just now. Try again in a moment.",
   payments_unavailable: "We can't confirm your payment right now. If your card was charged, the order will appear in My purchases. Check there before paying again.",
 });
 

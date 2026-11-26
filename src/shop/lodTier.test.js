@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   apparentSizePx, nextTier, nextSetTier, versionOverdue, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
-  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES,
+  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES, isTierUpgrade, orderViolations,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -241,6 +241,68 @@ describe('largestFirst', () => {
     expect(largestFirst([2, 0, 1], items)).toEqual([2, 0, 1]);
     expect(largestFirst([], items)).toEqual([]);
     expect(largestFirst([1], items)).toEqual([1]);
+  });
+});
+
+// #4113: among equal sizes (a set's members share its size) an upgrade goes before a downgrade, the nearer upgrade
+// first and the farther downgrade first: a wall improves from the front and degrades from the back.
+describe('largestFirst, ties by direction and distance', () => {
+  it('serves the nearer upgrade first, and a bigger one before a nearer smaller one', () => {
+    const items = [
+      { px: 50, dist: 9, upgrade: true }, { px: 50, dist: 2, upgrade: true }, { px: 50, dist: 5, upgrade: true },
+      { px: 80, dist: 30, upgrade: true },
+    ];
+    expect(largestFirst([0, 1, 2, 3], items)).toEqual([3, 1, 2, 0]);
+  });
+
+  it('serves the farther downgrade first, after the upgrades of the same size', () => {
+    const items = [
+      { px: 50, dist: 2, upgrade: false }, { px: 50, dist: 9, upgrade: false }, { px: 50, dist: 4, upgrade: true },
+      { px: 50, dist: 6, upgrade: false },
+    ];
+    expect(largestFirst([0, 1, 2, 3], items)).toEqual([2, 1, 3, 0]);
+  });
+
+  it('puts an unknown distance last, in a consistent order (upgrades and downgrades alike)', () => {
+    const ups = [{ px: 50, dist: 9, upgrade: true }, { px: 50, upgrade: true }, { px: 50, dist: 2, upgrade: true }];
+    expect(largestFirst([0, 1, 2], ups)).toEqual([2, 0, 1]);
+    const downs = [{ px: 50, dist: 2, upgrade: false }, { px: 50, upgrade: false }, { px: 50, dist: 9, upgrade: false }];
+    expect(largestFirst([0, 1, 2], downs)).toEqual([2, 0, 1]);
+    expect(largestFirst([1, 0, 2], ups)).toEqual([2, 0, 1]); // the same whatever order they arrive in
+  });
+});
+
+// #4113: which changes are upgrades.
+describe('isTierUpgrade', () => {
+  it('an upgrade is a better version than the one drawn', () => {
+    expect(isTierUpgrade(TIER_FAR, TIER_MID)).toBe(true);
+    expect(isTierUpgrade(TIER_FAR, TIER_FULL)).toBe(true);
+    expect(isTierUpgrade(TIER_MID, TIER_FULL)).toBe(true);
+    expect(isTierUpgrade(TIER_FULL, TIER_MID)).toBe(false);
+    expect(isTierUpgrade(TIER_MID, TIER_MID)).toBe(false);
+  });
+});
+
+// #4113: the measure the walk e2e reads each frame.
+describe('orderViolations', () => {
+  it('is 0 for a wall that improves from the front, however many versions it shows', () => {
+    const wall = [{ d: 2, rank: 2 }, { d: 4, rank: 2 }, { d: 6, rank: 1 }, { d: 8, rank: 1 }, { d: 10, rank: 0 }];
+    expect(orderViolations(wall)).toBe(0);
+    expect(orderViolations([])).toBe(0);
+    expect(orderViolations([{ d: 3, rank: 0 }])).toBe(0);
+  });
+
+  it("counts the owner's band: near bricks on far while farther ones already have mid", () => {
+    const wall = [
+      ...Array.from({ length: 4 }, (_, i) => ({ d: 2 + i, rank: 0 })), // nearest four still far
+      ...Array.from({ length: 6 }, (_, i) => ({ d: 8 + i, rank: 1 })), // the ones behind have mid
+    ];
+    expect(orderViolations(wall)).toBe(4);
+  });
+
+  it('does not count bricks at the same distance against each other', () => {
+    expect(orderViolations([{ d: 5, rank: 0 }, { d: 5, rank: 2 }])).toBe(0);
+    expect(orderViolations([{ d: 5, rank: 0 }, { d: 6, rank: 2 }])).toBe(1);
   });
 });
 
