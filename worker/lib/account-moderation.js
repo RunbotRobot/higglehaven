@@ -154,13 +154,14 @@ export async function handleRevokeAdmin(request, db) {
 // the Control Room" — with (per handleGrantAdmin's own reasoning above)
 // admin status being mintable only via a real session, an admin losing
 // track of who currently holds it is otherwise unrecoverable without
-// direct D1 access. requireAdmin-gated the same way grant-admin is (any
-// admin can see the roster, not just whoever granted it), returning a
+// direct D1 access. Gated like grant-admin (any admin can see the roster, not
+// just whoever granted it; a look-only admin may read it too, #4382, with emails
+// masked, and every write stays admin-only), returning a
 // deliberately narrow shape — userId/email/username/createdAt only, never
 // the full userFromRow (trustTier, cardFunding, taxFormType, ...) every
 // other admin viewing this roster has no reason to see about a peer.
 export async function handleListAdmins(request, db) {
-  await requireAdmin(request, db);
+  const viewer = await requireAdminOrViewer(request, db); // #4382: names and roles only; a look-only admin reads it with emails masked
   // #1561: created_at is the account's signup date, not when is_admin was
   // set -- admin_action_log already records the exact grant moment (#814/
   // #1074's own accountability-trail reasoning), so read that back instead
@@ -196,7 +197,7 @@ export async function handleListAdmins(request, db) {
   `).all();
   return json({
     admins: results.map((row) => ({
-      userId: row.user_id, email: row.email, username: row.username,
+      userId: row.user_id, email: emailFor(viewer, row.email), username: row.username,
       createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
   });

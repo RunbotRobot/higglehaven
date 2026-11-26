@@ -83,6 +83,7 @@ describe('Avatar presence (#1095)', () => {
         z: 6,
         heading: 90,
         flying: false,
+        afk: false, // #4390
         updatedAt: expect.any(String),
         equippedAvatar: null, // #2045: default body when nothing custom is equipped
         equippedAnimation: null, // #2045: the avatar's own clips when no animation is equipped
@@ -236,6 +237,7 @@ describe('Avatar presence (#1095)', () => {
         z: 9,
         heading: 45,
         flying: false,
+        afk: false, // #4390
         updatedAt: expect.any(String),
       });
     });

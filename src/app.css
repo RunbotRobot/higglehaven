@@ -3511,6 +3511,64 @@
         color: var(--pill-text);
         font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
+      /* #3783: the wordmark picker (My lándlets > Wordmark). Same shell as the name modal; the name is drawn in
+         every option so the choice is made by looking at it. */
+      #wordmark-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: var(--scrim-soft);
+        padding: var(--space-2xl);
+      }
+      #wordmark-modal.visible { display: flex; }
+      #wordmark-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        max-height: 100%;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: var(--radius-lg);
+        padding: var(--space-2xl);
+        color: var(--pill-text);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+      }
+      #wordmark-modal-content h2 { margin: 0; font-size: var(--text-lg); }
+      #wordmark-preview {
+        padding: var(--space-xs) var(--space-lg);
+        border-radius: var(--radius-petal-flip);
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        user-select: text;
+      }
+      .wordmark-group { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
+      .wordmark-group legend { padding: 0; font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.85); }
+      .wordmark-options { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+      .wordmark-option {
+        font: var(--text-md)/var(--leading-tight) var(--font-sans);
+        color: var(--pill-text);
+        padding: var(--space-xs) var(--space-md);
+        border-radius: var(--radius-pill);
+        border: 2px solid transparent;
+        background: rgb(var(--pill-rgb));
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+      }
+      .wordmark-option[aria-checked="true"] { border-color: var(--brand-green); background: rgb(var(--white-rgb)); }
+      .wordmark-option:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 2px; }
+      .wordmark-option .bud-place-name { font-size: var(--text-lg); }
+      .wordmark-chip { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 1px rgb(var(--ink-rgb) / 0.18); }
+      .wordmark-chip i { flex: 1; display: block; }
+      #wordmark-status { min-height: 1.2em; font-size: var(--text-sm); user-select: text; }
+      #wordmark-status.error { color: var(--danger-text); }
+      #wordmark-modal-actions { display: flex; justify-content: flex-start; }
       /* #4358: the browser's blue radio and black focus ring were the one browser-default look in this window; every
          radio in the app takes the brand green, and the Name field wears the brand's ring when it has the keyboard. */
       input[type="radio"] {

@@ -44,7 +44,7 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger, errorMessages,
 } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireAdminOrViewer } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
   candidateFromRow, landletFromRow, landCandidateRingFromRow, worldFromRow, validateLandlet, validateWorld,
@@ -598,7 +598,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
-    await requireAdmin(request, db);
+    await requireAdminOrViewer(request, db); // #4382: geometry and counts, nothing personal; a look-only admin may read it
     const state = url.searchParams.get('state');
     if (state !== null && state !== 'pending' && state !== 'materialized') {
       throw new HttpError('state must be pending or materialized', 400);
@@ -632,7 +632,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
-    await requireAdmin(request, db);
+    await requireAdminOrViewer(request, db); // #4382: geometry and counts, nothing personal; a look-only admin may read it
     const row = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(route[1]).first();
     return row ? json({ candidate: candidateFromRow(row) }) : json({ error: 'Land candidate not found' }, 404);
   }
@@ -779,7 +779,7 @@ const LAND_CANDIDATE_RING_GENERATION_COMPLETE_RATE_LIMIT_MAX = 20;
 
 async function handleLandCandidateRings(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    await requireAdmin(request, db);
+    await requireAdminOrViewer(request, db); // #4382: geometry and counts, nothing personal; a look-only admin may read it
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = [];
@@ -808,7 +808,7 @@ async function handleLandCandidateRings(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
-    await requireAdmin(request, db);
+    await requireAdminOrViewer(request, db); // #4382: geometry and counts, nothing personal; a look-only admin may read it
     const row = await getLandCandidateRingWithLifecycle(db, route[1]);
     return row
       ? json({ ring: landCandidateRingFromRow(row) })

@@ -382,7 +382,13 @@ or other format characters, private-use or unassigned characters, line separator
 surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
 Cyrillic and Greek look-alike letters), so a name that reads as an existing one is `409`; the
 misleading names (admin, administrator, support, staff, moderator, higglehaven) and every
-assistant's name are reserved in that form, also with spaces taken out. Accounts older than
+assistant's name are reserved in that form, also with spaces taken out. #4383: so is every name
+that starts with `higglehaven` once spaces and punctuation are taken out (`higglehaven17`,
+`higglehaven-2`, `higglehavenfan`), and an assistant's name followed only by digits (`juniper2`);
+a name that merely contains `higglehaven` later, or a longer word that begins with an
+assistant's name (`fernando`), stays free. Both sign-up and the rename apply it. A server on
+this machine (`wrangler dev`) still lets a session sign up under its own `higglehaven<N>` name
+for `scripts/live-site.mjs --login local`. Accounts older than
 migration 0235 have the column filled in the next time any name is checked
 (`worker/lib/username-store.js`); existing names are never changed.
 
@@ -1360,6 +1366,16 @@ users table, `admin-user-search`, `admin-user-detail`, `admin-landlet-search`, t
 a suspension's free-text `evidenceNote` is `null`; and `admin-user-search` matches usernames only, never emails.
 `worker/admin-viewer.test.js` lists every file that may opt a route in.
 
+Also opted in (#4382), each decided on purpose: `GET /api/auth/admins` (names and roles; emails masked),
+`GET /api/models/storage` (byte counts), `GET /api/land-candidates` and `/:id`, `GET /api/land-candidate-rings` and
+`/:id` (geometry and counts), `GET /api/tax-education` and `/:id` (authored text; `reviewedBy` is `null`). Closed to a
+viewer (`403`): `GET /api/models` (it lists the product, video job and Control Room card behind each upload),
+`/api/tax/admin-forms`, `/api/purchases`, `/api/product-flags`, `/api/self-dealing-flags`, `/api/ncmec-reports`,
+`/api/auth/suspension-status`, `/api/admin-items-outside-landlets` and `/api/admin-action-log`. The two lists are
+asserted in `worker/admin-viewer.test.js`, so moving a path between them is a reviewed change. The dashboard says
+"Not shown to a look-only account." where a section is closed, and does not draw the controls that could only be
+refused.
+
 `POST /api/auth/admin-set-viewer` `{ userId, enabled }` (full admin only; `401`, `403`) is the owner's switch,
 used by the dashboard's "Give look-only access" / "Remove look-only access" on a user's detail. It answers
 `{ userId, adminViewer, changed }`. Giving the role is refused with `409` and a reason for a person's account
@@ -1369,9 +1385,9 @@ changes nothing writes nothing. `admin-user-detail` carries `adminViewer` and `a
 dashboard draws the switch only where it can work.
 
 `GET /api/auth/admin-role` answers `{ role: 'admin' }` or `{ role: 'viewer' }` (`403` for anyone else). The
-dashboard page asks it once when it opens; for a viewer the page then says it is look-only, disables every
-form submit button, danger button and account action with the reason, and stops any non-GET request locally
-(the server refuses it too). Use by a viewer is logged: each ask here is an `admin_viewer_page_open` line, each
+dashboard page asks it once when it opens; for a viewer the page then says it is look-only, lands on Users, disables every
+button that changes something with the reason, answers the reads a viewer is not shown without asking the server,
+and stops any non-GET request locally (the server refuses it too). Use by a viewer is logged: each ask here is an `admin_viewer_page_open` line, each
 fleet sign-in by an account holding the role is `admin_viewer_sign_in`. `/admin/dashboard` lets a viewer
 through; `/admin/control-room` and `/admin/action-log` and the Control Room API stay admin-only.
 
@@ -6455,6 +6471,7 @@ returned by `GET /api/presence`.
   "z": -4.25,
   "heading": 1.57,
   "flying": false,
+  "afk": false,
   "updatedAt": "2026-10-01T00:00:00.000Z"
 }
 ```
@@ -6561,8 +6578,12 @@ Request body:
 - `flying` is optional (#2043), defaults to `false` when omitted — anything
   other than the literal `true` is treated as not-flying, so an older
   client that never sends this field simply keeps reporting as grounded.
+- `afk` is optional (#4390), defaults to `false`, same literal-`true` rule: whether the
+  person has stepped away (their own avatar's AFK badge). It rides every nearby row so the
+  other avatar can wear the same small mark; where someone is looking is not carried. The
+  client reports a change of it at once (a person standing still sends nothing else).
 
-Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying",
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying", "afk",
 "updatedAt" } }` — the row as stored, after the upsert.
 
 Rate-limited server-side (`presence-report:<builderId>`, 600 per the
