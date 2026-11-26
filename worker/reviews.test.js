@@ -1582,4 +1582,3 @@ describe('Product reviews', () => {
     });
   });
 });
-
