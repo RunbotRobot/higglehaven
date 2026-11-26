@@ -99,7 +99,9 @@ console.log('B\'s position as rendered in A\'s own scene (should be a real {x, y
 const result = await pageA.evaluate(async ([bx, by]) => {
   const start = window.__testShopAvatarPosition();
   const startDist = Math.hypot(bx - start.x, by - start.y);
-  for (let i = 0; i < 200; i++) {
+  // 0.05 m a step: enough steps to cross the whole landlet (the two avatars spawn at random places in it, 13 to 18 m apart
+  // in a third of the runs, and 200 steps only walk 10 m, so the walk ended in the open and the file failed on the spawn).
+  for (let i = 0; i < 1000; i++) {
     const p = window.__testShopAvatarPosition();
     const d = Math.hypot(bx - p.x, by - p.y);
     if (d < 1e-6) break;
