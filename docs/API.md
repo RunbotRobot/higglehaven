@@ -2216,7 +2216,8 @@ builder's Stripe account was flagged, with the rubric-relevant disposition
 against. Distinct from (and stored in a separate table from) the AI-made
 *decision* itself: this is a record of an incident, logged by an admin;
 `account_moderation_decisions` (below) is a record of the AI's own
-judgment call given that incident.
+judgment call given that incident. Also writes one `admin_action_log` row
+(`stripe_account_flag`, #4515), in the same batch as the flag.
 
 Request body: `{ "disposition": "confirmed_fraud" | "suspected", "reason": "..." }`.
 `disposition` must be exactly one of those two strings — anything else
