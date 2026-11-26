@@ -1104,6 +1104,13 @@ window.__testRotateRingPoints = () => {
   }
   return out;
 };
+// e2e (#4413): where the rings are centred and where the selection's own centre is, so a test can see them stay together
+// when the selection moves.
+window.__testRotateRingCentre = () => {
+  const centre = bundlePivot([...selectedMeshes].map((mesh) => mesh.position));
+  const object = rotateControls.object;
+  return object ? { ring: { x: object.position.x, y: object.position.y, z: object.position.z }, selection: { x: centre.x, y: centre.y, z: centre.z } } : null;
+};
 window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
@@ -5824,6 +5831,13 @@ export function buildModeFrameUpdate(now) {
     },
     ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
+  // #4413: a bundle's rings hang on a pivot (groupRotatePivot) that was placed at the bundle's centre when it was
+  // selected; a single item's rings hang on the item itself, so they follow it. When the bundle moves by a body drag,
+  // an undo or redo, a nudge or a paste, the pivot is put back on its centre here, every frame, except while a ring
+  // is held (then the pivot is the thing being turned and the turn moves the bundle round it).
+  if (rotateControls.object === groupRotatePivot && !rotateControls.dragging && selectedMeshes.size > 0) {
+    groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+  }
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   applyBuildKeyboardCamera(now);
