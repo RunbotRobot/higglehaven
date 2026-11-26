@@ -3264,12 +3264,48 @@ function selectedItemHitAt(event) {
 // item (one whose whole size on screen is under 22 px) counts as on it, the same 44 px a finger needs for a handle;
 // a press that lands on another item, or anywhere near a larger one, is unchanged. A tap that does not move is still a
 // tap (the drag starts only past the tap threshold), so this never selects or deselects anything by itself.
+// #4489: the same for ONE selected bundle, whose members can be a few pixels each with gaps between them (a small fence,
+// a few bricks far off): its translucent box is drawn, so a press inside it is on the bundle, up to a size where the
+// bundle still leaves room round it to orbit the view by (a wall that fills the screen has no such room, and its press
+// stays the members' own).
 const SMALL_ITEM_GRAB_PX = 22;
+const SMALL_BUNDLE_GRAB_RADIUS_PX = 110;
+const bundleBox = new THREE.Box3();
+const bundleMemberBox = new THREE.Box3();
+const bundleCentre = new THREE.Vector3();
+// The on-screen circle round a single bundle's box: where its middle is and how far its corners reach.
+function bundleScreenCore() {
+  if (selectedMeshes.size < 2 || !isSingleBundleSelection()) return null;
+  bundleBox.makeEmpty();
+  for (const mesh of selectedMeshes) bundleBox.union(bundleMemberBox.setFromObject(mesh));
+  if (bundleBox.isEmpty()) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  bundleBox.getCenter(bundleCentre);
+  const middle = bundleCentre.clone();
+  const centre = middle.clone().project(camera);
+  if (centre.z > 1 || centre.z < -1) return null;
+  const x = rect.left + (centre.x * 0.5 + 0.5) * rect.width;
+  const y = rect.top + (-centre.y * 0.5 + 0.5) * rect.height;
+  let radius = 0;
+  for (let i = 0; i < 8; i++) {
+    coreCorner.set(i & 1 ? bundleBox.max.x : bundleBox.min.x, i & 2 ? bundleBox.max.y : bundleBox.min.y, i & 4 ? bundleBox.max.z : bundleBox.min.z).project(camera);
+    radius = Math.max(radius, Math.hypot(rect.left + (coreCorner.x * 0.5 + 0.5) * rect.width - x, rect.top + (-coreCorner.y * 0.5 + 0.5) * rect.height - y));
+  }
+  return { x, y, radius, middle };
+}
+window.__testBundleScreenCore = () => { const core = bundleScreenCore(); return core ? { x: core.x, y: core.y, radius: core.radius } : null; }; // e2e (#4489)
 function nearSmallItemHit(event) {
-  if (selectedMeshes.size !== 1) return null;
-  const [mesh] = selectedMeshes;
-  const core = itemScreenCore(mesh);
-  if (!core || core.radius >= SMALL_ITEM_GRAB_PX || Math.hypot(event.clientX - core.x, event.clientY - core.y) > SMALL_ITEM_GRAB_PX) return null;
+  let point;
+  if (selectedMeshes.size === 1) {
+    const [mesh] = selectedMeshes;
+    const core = itemScreenCore(mesh);
+    if (!core || core.radius >= SMALL_ITEM_GRAB_PX || Math.hypot(event.clientX - core.x, event.clientY - core.y) > SMALL_ITEM_GRAB_PX) return null;
+    point = mesh.getWorldPosition(new THREE.Vector3());
+  } else {
+    const core = bundleScreenCore();
+    if (!core || core.radius > SMALL_BUNDLE_GRAB_RADIUS_PX || Math.hypot(event.clientX - core.x, event.clientY - core.y) > Math.max(core.radius, SMALL_ITEM_GRAB_PX)) return null;
+    point = core.middle;
+  }
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const other = raycaster.intersectObjects(productMeshes, true)[0];
   if (other) {
@@ -3277,7 +3313,7 @@ function nearSmallItemHit(event) {
     while (owner && !productMeshes.includes(owner)) owner = owner.parent;
     if (owner && !selectedMeshes.has(owner)) return null; // a press on another item is that item's
   }
-  return { point: mesh.getWorldPosition(new THREE.Vector3()) };
+  return { point, grabArea: true };
 }
 
 function beginBodyDrag() {
@@ -3414,7 +3450,15 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   const hit = selectedItemHitAt(event) ?? nearSmallItemHit(event);
   if (!hit) return;
   bodyDragPlane.setFromNormalAndCoplanarPoint(UP_Z, hit.point);
-  bodyDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startHit: hit.point.clone(), started: false, target: null, startPos: null };
+  let startHit = hit.point.clone();
+  if (hit.grabArea) {
+    // #4410, #4489: a press beside the item, not on it: the drag follows the finger from where it pressed (on the
+    // plane the item's middle stands in), so the item does not jump by the distance between the two on the first move.
+    raycaster.setFromCamera(ndcFromEvent(event), camera);
+    if (!raycaster.ray.intersectPlane(bodyDragPlane, bodyDragHit)) return;
+    startHit = bodyDragHit.clone();
+  }
+  bodyDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startHit, started: false, target: null, startPos: null };
   controls.enableRotate = false;
 });
 window.addEventListener('pointermove', (event) => {
