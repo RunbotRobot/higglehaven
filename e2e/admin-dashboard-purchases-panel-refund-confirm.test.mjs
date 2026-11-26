@@ -159,17 +159,22 @@ const statusCell = () => row().locator('td').nth(6);
 // listener takes over resolving it from Playwright's own auto-dismiss
 // default, so this handler must call dismiss() itself or the dialog --
 // and the page's JS, since window.confirm() is synchronous -- hangs.)
-let dialogMessageSeen = null;
-page.once('dialog', (dialog) => { dialogMessageSeen = dialog.message(); dialog.dismiss(); });
+// #4522: the confirmation is the page's own dialog, never a browser confirm(): any native dialog fails this test.
+let nativeDialogs = 0;
+page.on('dialog', (dialog) => { nativeDialogs += 1; dialog.dismiss(); });
 await row().locator('.action-refund').click({ timeout: 30000 });
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+const dialogMessageSeen = await page.locator('dialog.admin-confirm-dialog p').textContent();
+await page.click('dialog.admin-confirm-dialog .admin-confirm-cancel');
 await page.waitForTimeout(1000);
-console.log('confirm() dialog message on dismissed click (should mention "Refund" and this purchase id):', dialogMessageSeen);
+console.log('in-app dialog message on a cancelled click (should mention "Refund" and this purchase id):', dialogMessageSeen);
 const statusTextAfterDismiss = await statusCell().textContent();
 console.log('status cell after dismissing the confirm (should still be the pre-refund dash):', JSON.stringify(statusTextAfterDismiss));
 
 // Second click: accept the confirm -- the refund should actually go through.
-page.once('dialog', (dialog) => dialog.accept());
 await row().locator('.action-refund').click({ timeout: 30000 });
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForFunction(
   (id) => {
     const r = document.querySelector(`tr[data-purchase-id="${id}"]`);
@@ -184,6 +189,7 @@ console.log('status cell after accepting the confirm (should mention "Refunded")
 
 const pass = !!template && purchased.status === 201 &&
   deleteResult.status === 200 &&
+  nativeDialogs === 0 &&
   dialogMessageSeen != null && dialogMessageSeen.includes('Refund') && dialogMessageSeen.includes(purchaseId) &&
   statusTextAfterDismiss.trim() === '—' &&
   statusTextAfterAccept.includes('Refunded') &&

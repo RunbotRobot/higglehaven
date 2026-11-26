@@ -37,9 +37,10 @@ const adminEmail = (await me.json()).user.email;
 const page = await browser.newPage();
 page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
-// The roster panel's Revoke button goes through a confirm() -- auto-accept
-// it, same as launchPage's own dialog handler elsewhere in this suite.
-page.on('dialog', (dialog) => dialog.accept());
+// #4522: the roster panel's Revoke button goes through the page's own confirm dialog, not a browser confirm();
+// a native dialog is dismissed here and fails the test below.
+let nativeDialogs = 0;
+page.on('dialog', (dialog) => { nativeDialogs += 1; dialog.dismiss(); });
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -78,6 +79,8 @@ const grantedRowVisible = await grantedRow.isVisible();
 console.log('granting a new admin by email adds it to the roster list (should be true):', grantedRowVisible);
 
 await grantedRow.locator('.revoke-btn').click();
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await grantedRow.waitFor({ state: 'detached', timeout: 10000 });
 const grantedRowGoneAfterRevoke = await page.locator('#rosterTableWrap', { hasText: grantEmail }).count() === 0;
 console.log('revoking that admin removes it from the roster list (should be true):', grantedRowGoneAfterRevoke);
@@ -259,6 +262,7 @@ const pass = anonStatus === 401 &&
   ownRowVisible &&
   grantedRowVisible &&
   grantedRowGoneAfterRevoke &&
+  nativeDialogs === 0 &&
   raceGrantedRowVisibleBeforeStaleResponse &&
   raceGrantedRowStillVisibleAfterStaleResponse &&
   modelsVisibleAfterClick &&

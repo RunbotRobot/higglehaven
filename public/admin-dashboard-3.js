@@ -70,7 +70,7 @@
     // without one — every other irreversible admin action here already
     // confirms first (revoke-admin, delete-land-candidate, tax-form
     // approve/file/void, R2 model delete, auction-cancel-and-reassign).
-    if (action === 'refund' && !confirm('Refund purchase ' + purchaseId + '? This cannot be undone.')) return;
+    if (action === 'refund' && !(await window.adminConfirm({ title: 'Refund purchase', message: 'Refund purchase ' + purchaseId + '? This cannot be undone.', confirmLabel: 'Refund purchase' }))) return;
     statusEl.textContent = 'Working…';
     statusEl.classList.remove('error');
     try {
