@@ -16,9 +16,20 @@ await page.waitForTimeout(500);
 const ARROWS = { left: ['X', -1], right: ['X', 1], forward: ['Y', 1], back: ['Y', -1], up: ['Z', 1], down: ['Z', -1] };
 async function tapArrow(direction) {
   const [axis, sign] = ARROWS[direction];
-  const point = (await page.evaluate(() => window.__testAxisHandlePoints())).find((p) => p.axis === axis && p.sign === sign);
-  if (!point) throw new Error(`no arrow for ${direction}`);
-  await page.mouse.click(point.x, point.y);
+  const points = await page.evaluate(() => window.__testAxisHandlePoints());
+  const arrow = points.find((p) => p.axis === axis && p.sign === sign);
+  if (!arrow) throw new Error(`no arrow for ${direction}`);
+  // A ring can pass under an arrow's tip (the nearer handle wins the press, a tie goes to the ring): aim at a point
+  // on the arrow where no ring lies, as a finger would.
+  const cx = points.reduce((a, p) => a + p.x, 0) / points.length;
+  const cy = points.reduce((a, p) => a + p.y, 0) / points.length;
+  const ox = arrow.x - cx; const oy = arrow.y - cy; const ol = Math.hypot(ox, oy) || 1;
+  for (let k = -6; k <= 14; k++) {
+    const x = Math.round(arrow.x + (ox / ol) * k * 2); const y = Math.round(arrow.y + (oy / ol) * k * 2);
+    const hit = await page.evaluate(([a, b]) => window.__testHandleAt(a, b), [x, y]);
+    if (hit.arrow === axis && !hit.ring) { await page.mouse.click(x, y); return; }
+  }
+  throw new Error(`no clear point on the arrow for ${direction}`);
 }
 
 let pass = true;

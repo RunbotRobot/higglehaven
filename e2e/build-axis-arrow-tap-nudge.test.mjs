@@ -31,7 +31,19 @@ async function tap(axis, sign) {
   const points = await arrows();
   const arrow = points.find((p) => p.axis === axis && p.sign === sign);
   if (!arrow) return { missing: true };
-  await page.mouse.click(arrow.x, arrow.y);
+  // A ring can pass under an arrow's tip (the nearer handle wins the press, a tie goes to the ring): aim at a point
+  // on the arrow where no ring lies, as a finger would.
+  const cx = points.reduce((a, p) => a + p.x, 0) / points.length;
+  const cy = points.reduce((a, p) => a + p.y, 0) / points.length;
+  const ox = arrow.x - cx; const oy = arrow.y - cy; const ol = Math.hypot(ox, oy) || 1;
+  let aim = null;
+  for (let k = -6; k <= 14 && !aim; k++) {
+    const x = Math.round(arrow.x + (ox / ol) * k * 2); const y = Math.round(arrow.y + (oy / ol) * k * 2);
+    const hit = await page.evaluate(([a, b]) => window.__testHandleAt(a, b), [x, y]);
+    if (hit.arrow === axis && !hit.ring) aim = { x, y };
+  }
+  if (!aim) return { missing: true };
+  await page.mouse.click(aim.x, aim.y);
   await page.waitForTimeout(450);
   const after = await positions();
   return { arrow, moves: after.map((a, i) => ({ x: a.x - before[i].x, y: a.y - before[i].y, z: a.z - before[i].z })) };
