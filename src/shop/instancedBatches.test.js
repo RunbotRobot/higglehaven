@@ -1,7 +1,7 @@
 // #3402: one InstancedMesh per model part, one matrix per placement.
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { buildInstancedBatch } from './instancedBatches.js';
+import { buildInstancedBatch, allocateInstancedBatch, fillInstancedBatch } from './instancedBatches.js';
 
 function handleAt(x, y, z, rotationZ = 0, scale = 1) {
   const handle = new THREE.Object3D();
@@ -53,5 +53,20 @@ describe('buildInstancedBatch', () => {
     const handles = [handleAt(0, 0, 0), handleAt(1, 1, 1)];
     const { meshes } = buildInstancedBatch([part(), part()], handles);
     for (const mesh of meshes) expect(mesh.userData.instanceHandles).toBe(handles);
+  });
+});
+
+describe('allocateInstancedBatch and fillInstancedBatch (#4483)', () => {
+  it('filled in consecutive ranges they write exactly what buildInstancedBatch writes', () => {
+    const parts = [part(new THREE.Matrix4().makeTranslation(0, 0, 1)), part()];
+    const handles = Array.from({ length: 150 }, (_, i) => handleAt(i, i * 0.5, 2, i * 0.1, 1 + (i % 3) * 0.1));
+    const whole = buildInstancedBatch(parts, handles);
+    const sliced = allocateInstancedBatch(parts, handles);
+    for (let from = 0; from < handles.length; from += 64) fillInstancedBatch(sliced, parts, from, from + 64); // the last range overshoots
+    sliced.meshes.forEach((mesh, partIndex) => {
+      expect(mesh.count).toBe(150);
+      expect(Array.from(mesh.instanceMatrix.array)).toEqual(Array.from(whole.meshes[partIndex].instanceMatrix.array));
+      expect(mesh.userData.instanceHandles).toBe(handles);
+    });
   });
 });
