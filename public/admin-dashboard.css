@@ -151,6 +151,9 @@
   .users-order li { padding: 3px 0; }
   .users-move { min-width: 40px; min-height: 32px; margin-left: 6px; }
   /* #4134: scrolls both ways inside its own box, so the heading and filter rows can stay in view while the rows move. */
+  /* #4495: a table drawn into one of these wrappers scrolls inside it instead of widening the whole page (on a phone the
+     R2 model list made the page 980 px wide and the admin roster 472 px, so everything beside the table slid off screen). */
+  [id$="TableWrap"], #ncmecReportsWrap, #videoJobsWrap, #ringDetailWrap, #outsideItemsWrap, #userDetailWrap { overflow-x: auto; max-width: 100%; }
   .users-scroll { overflow: auto; max-height: calc(100vh - 150px); margin-bottom: 16px; border-radius: 12px; }
   /* #4073: fixed layout, each column a set width from its kind (the script sets the table's and each <col>'s
      width, and the owner drags a heading's right edge to change it). A value that does not fit is cut with an
