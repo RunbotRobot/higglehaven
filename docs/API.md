@@ -382,7 +382,13 @@ or other format characters, private-use or unassigned characters, line separator
 surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
 Cyrillic and Greek look-alike letters), so a name that reads as an existing one is `409`; the
 misleading names (admin, administrator, support, staff, moderator, higglehaven) and every
-assistant's name are reserved in that form, also with spaces taken out. Accounts older than
+assistant's name are reserved in that form, also with spaces taken out. #4383: so is every name
+that starts with `higglehaven` once spaces and punctuation are taken out (`higglehaven17`,
+`higglehaven-2`, `higglehavenfan`), and an assistant's name followed only by digits (`juniper2`);
+a name that merely contains `higglehaven` later, or a longer word that begins with an
+assistant's name (`fernando`), stays free. Both sign-up and the rename apply it. A server on
+this machine (`wrangler dev`) still lets a session sign up under its own `higglehaven<N>` name
+for `scripts/live-site.mjs --login local`. Accounts older than
 migration 0235 have the column filled in the next time any name is checked
 (`worker/lib/username-store.js`); existing names are never changed.
 

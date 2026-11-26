@@ -65,7 +65,32 @@ const RESERVED_SKELETONS = new Set([
   ...ASSISTANT_AGENT_NAMES,
 ].map((name) => usernameSkeleton(name).replace(/ /g, '')));
 
+const HOUSE_NAME = 'higglehaven';
+const SESSION_NAME = /^higglehaven\d{1,3}$/;
+const ASSISTANT_NUMBERED = new RegExp(`^(?:${ASSISTANT_AGENT_NAMES.map((name) => usernameSkeleton(name).replace(/[^\p{L}\p{N}]/gu, '')).join('|')})\\d+$`, 'u');
+
 // Compared with the spaces taken out as well, so "Hig gle haven" is no more available than "Higglehaven".
-export function isReservedSkeleton(skeleton) {
-  return RESERVED_SKELETONS.has(String(skeleton).replace(/ /g, ''));
+export function isReservedSkeleton(skeleton, { allowSessionNames = false } = {}) {
+  const spaced = String(skeleton).replace(/ /g, '');
+  if (RESERVED_SKELETONS.has(spaced)) return true;
+  // #4383: nor a name that reads as the team or an assistant by its start. Punctuation is taken out as well as spaces
+  // ("higglehaven-2", "higglehaven_support"), so every such spelling folds to one string. A name that merely CONTAINS
+  // "higglehaven" later ("thehigglehavenfan") does not read as the team and stays free.
+  const compact = spaced.replace(/[^\p{L}\p{N}]/gu, '');
+  // A throwaway local server (wrangler dev on this machine) lets a session sign up under its own session name
+  // ("higglehaven10"), which scripts/live-site.mjs --login local relies on; on the real site those names are refused.
+  if (compact.startsWith(HOUSE_NAME) && !(allowSessionNames && SESSION_NAME.test(compact))) return true;
+  // An assistant is marked by name in the world, so the name followed only by digits ("juniper2") is reserved too; a
+  // longer word that happens to begin with it ("fernando", "sagebrush") is not.
+  return ASSISTANT_NUMBERED.test(compact);
+}
+
+// True when the request came to a server on this machine (wrangler dev), never the real site.
+export function isLocalRequest(request) {
+  try {
+    const { hostname } = new URL(request.url);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
 }

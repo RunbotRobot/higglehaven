@@ -52,6 +52,27 @@ describe('sign-up username rules (#4136)', () => {
   });
 });
 
+describe('names that read as the team (#4383)', () => {
+  it('sign-up refuses a name starting with higglehaven and says it is taken', async () => {
+    for (const name of ['higglehaven17', 'Higgle haven 99', 'higglehaven-2']) {
+      const result = await trySignup(name);
+      expect(result.response.status, name).toBe(409);
+      expect(result.body.error).toMatch(/already taken/);
+    }
+    expect((await trySignup('thehigglehavenfan4383')).response.status).toBe(201);
+  });
+
+  it('a rename refuses them too', async () => {
+    const su = await signup(email(), 'a fine long password here', { username: 'Renamer4383' });
+    const tok = extractSessionCookie(su.response);
+    const me = await api('/builders/me', withSession(tok));
+    const rename = (label) => api(`/builders/${me.body.builder.builderId}`, withSession(tok, { method: 'PUT', body: JSON.stringify({ label }) }));
+    expect((await rename('higglehaven17')).response.status).toBe(409);
+    expect((await rename('Juniper2')).response.status).toBe(409);
+    expect((await rename('Renamed4383')).response.status).toBe(200);
+  });
+});
+
 describe('rename username rules (#4136)', () => {
   it('applies the same rules to a rename', async () => {
     const holder = await signupBuilder('Renamer4136Holder');

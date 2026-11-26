@@ -54,7 +54,7 @@ import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
 import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
 import { isReservedUsername } from './fleet-agents.js';
-import { normalizeUsername, usernameSkeleton, isReservedSkeleton } from './username-rules.js';
+import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalRequest } from './username-rules.js';
 import { ensureUsernameSkeletons } from './username-store.js';
 import { verifyEmailMessage, passwordResetMessage } from './email-layout.js'; // #3877
 import {
@@ -178,7 +178,7 @@ export async function handleSignup(request, env, db, url) {
   // #3445: the assistants' agent names belong to the fleet; nobody else can
   // sign up as one. #4136: nor can they be matched by a look-alike, and the
   // plainly misleading names (admin, support, ...) are reserved the same way.
-  if (isReservedUsername(username) || isReservedSkeleton(usernameSkeletonValue)) {
+  if (isReservedUsername(username) || isReservedSkeleton(usernameSkeletonValue, { allowSessionNames: isLocalRequest(request) })) {
     throw new HttpError('Username is already taken', 409);
   }
   await ensureUsernameSkeletons(db);
