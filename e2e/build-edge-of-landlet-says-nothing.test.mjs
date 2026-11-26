@@ -10,6 +10,17 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.waitForTimeout(500);
 
+
+// #4414: the nudge is a tap on the arrow at one end of a movement axis (X is the item's left/right, Y forward/back,
+// Z up/down); the real press lands on the arrow wherever the camera shows it.
+const ARROWS = { left: ['X', -1], right: ['X', 1], forward: ['Y', 1], back: ['Y', -1], up: ['Z', 1], down: ['Z', -1] };
+async function tapArrow(direction) {
+  const [axis, sign] = ARROWS[direction];
+  const point = (await page.evaluate(() => window.__testAxisHandlePoints())).find((p) => p.axis === axis && p.sign === sign);
+  if (!point) throw new Error(`no arrow for ${direction}`);
+  await page.mouse.click(point.x, point.y);
+}
+
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 const state = () => page.evaluate(() => window.__testSelectedItemState());
@@ -53,7 +64,7 @@ const blockedNotes = [];
 let blockedPresses = 0;
 for (const direction of ['left', 'right', 'forward', 'back', 'left', 'forward']) {
   const before = await state();
-  await page.click(`[data-nudge="${direction}"]`);
+  await tapArrow(direction);
   await page.waitForTimeout(350);
   const after = await state();
   if (Math.hypot(after.x - before.x, after.y - before.y) < 0.05) {
@@ -67,7 +78,7 @@ check(blockedPresses >= 1, `nudging outward at the corner goes nowhere (${blocke
 check(blockedNotes.length === 0, `and says nothing about the edge (${JSON.stringify(blockedNotes)})`);
 
 // A limit that cannot be seen still says so: a nudge down at the floor.
-await page.click('[data-nudge="down"]');
+await tapArrow('down');
 await page.waitForTimeout(300);
 check(/already on the floor/.test(await status()), `a nudge into the floor still says why (${await status()})`);
 

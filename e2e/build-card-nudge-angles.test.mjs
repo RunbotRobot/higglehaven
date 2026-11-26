@@ -1,5 +1,5 @@
-// #3689 (Build in the bud, slice a): under the item card's More, a Nudge pad (Left, Right, Forward, Back in
-// the item's own turned axes; Up and Down vertical) with the height shown, and an Angles block (Turn and the
+// #3689 (Build in the bud, slice a), as #4414 changed it: a tap on an arrow of the movement axes nudges (X, Y in
+// the item's own turned axes; Z vertical) and the card's More shows the height, and an Angles block (Turn and the
 // two Tilts, typed in degrees). Both go through the same path as a drag: undo restores, a press that cannot
 // move says why, and the blocks are left out unless exactly one item is selected. Phone width.
 import { launchPage, chooseIdentity, claimLandlet, finish, budClick } from './helpers.mjs';
@@ -9,6 +9,17 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL, viewpo
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.waitForTimeout(500);
+
+
+// #4414: the nudge is a tap on the arrow at one end of a movement axis (X is the item's left/right, Y forward/back,
+// Z up/down); the real press lands on the arrow wherever the camera shows it.
+const ARROWS = { left: ['X', -1], right: ['X', 1], forward: ['Y', 1], back: ['Y', -1], up: ['Z', 1], down: ['Z', -1] };
+async function tapArrow(direction) {
+  const [axis, sign] = ARROWS[direction];
+  const point = (await page.evaluate(() => window.__testAxisHandlePoints())).find((p) => p.axis === axis && p.sign === sign);
+  if (!point) throw new Error(`no arrow for ${direction}`);
+  await page.mouse.click(point.x, point.y);
+}
 
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
@@ -29,23 +40,23 @@ if (!(await page.isVisible('#item-card-nudge'))) await page.click('#item-card-mo
 await page.waitForSelector('#item-card-nudge:not([hidden])', { timeout: 5000 });
 if (process.env.E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SHOT_DIR}/card-more-open.png` });
 const h0 = await page.textContent('#nudge-height-readout');
-check(/^Height 0(\.00)?\s?(m|ft)?$/.test(h0.trim()), `a freshly placed item reads Height 0 (${h0})`);
+check(/^0(\.00)?\s?(m|ft)?$/.test(h0.trim()), `a freshly placed item reads a height of 0 (${h0})`);
 
 const s0 = await state();
-await page.click('[data-nudge="up"]');
+await tapArrow('up');
 await page.waitForTimeout(250);
 const sUp = await state();
 check(near(sUp.z - s0.z, 0.1), `Up lifts it a tenth of a metre (${sUp.z - s0.z})`);
-check(/Height 0\.10/.test(await page.textContent('#nudge-height-readout')), `and the height reads it (${await page.textContent('#nudge-height-readout')})`);
-await page.click('[data-nudge="down"]');
+check(/^0\.10/.test(await page.textContent('#nudge-height-readout')), `and the height reads it (${await page.textContent('#nudge-height-readout')})`);
+await tapArrow('down');
 await page.waitForTimeout(250);
 check(near((await state()).z, s0.z), 'Down puts it back on the floor');
-await page.click('[data-nudge="down"]');
+await tapArrow('down');
 await page.waitForTimeout(250);
 check(near((await state()).z, s0.z), 'Down again cannot go through the floor');
 check(/already on the floor/.test(await status()), `and says why (${await status()})`);
 
-for (let i = 0; i < 3; i++) { await page.click('[data-nudge="right"]'); await page.waitForTimeout(150); }
+for (let i = 0; i < 3; i++) { await tapArrow('right'); await page.waitForTimeout(150); }
 await page.waitForTimeout(250);
 const sR = await state();
 check(near(sR.x - s0.x, 0.3) && near(sR.y, s0.y), `Right three times slides it 0.3 m along its own axis (${JSON.stringify({ dx: sR.x - s0.x, dy: sR.y - s0.y })})`);
@@ -66,7 +77,7 @@ const sT = await state();
 check(near(sT.turn, 90, 0.2), `typing 90 in Turn turns it a quarter (${sT.turn})`);
 // ...and the nudges follow the turned axes: Forward is now along the world's -X.
 const before = await state();
-await page.click('[data-nudge="forward"]');
+await tapArrow('forward');
 await page.waitForTimeout(250);
 const after = await state();
 check(near(after.x - before.x, -0.1) && near(after.y, before.y), `after a quarter turn Forward slides along the turned axis (${JSON.stringify({ dx: after.x - before.x, dy: after.y - before.y })})`);

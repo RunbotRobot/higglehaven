@@ -747,8 +747,10 @@ go. It stops at the edge of how far you can go and never turns upside down.
    finger, staying at the same height. If you start the drag on empty ground
    instead, the view turns and the item stays put.
 3. Let go where you want it. It saves by itself.
-4. To lift it, lower it or move it in small exact steps, tap "More" on the card:
-   see "Nudge" below. On a keyboard, hold Shift: Shift with the arrow keys slides the
+4. To move it one small exact step, tap one of the arrows (a quick tap, without sliding your
+   finger): it moves a tenth of a metre, or a quarter of a foot, the way that arrow points. Red and
+   green steps go across the ground, blue lifts or lowers it. A bundle steps the same way, all
+   together. On a keyboard, hold Shift: Shift with the arrow keys slides the
    selected item a small step, Shift with Page Up and Page Down lifts and lowers it,
    and Shift with Q and E turns it.
 
@@ -762,12 +764,12 @@ go. It stops at the edge of how far you can go and never turns upside down.
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
 - Wrong spot: tap the "Undo" arrow at the top right.
-- You want to place it exactly: tap "More" on the card beside the item. "Nudge" has "Left", "Right",
-  "Forward" and "Back", which slide it a small step along the item's own direction (a tenth of a metre,
-  or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
-  or lower it, with its height shown beside the word "Nudge". At the edge of the lándlet a press (or a drag)
+- You want to place it exactly: tap an arrow beside the item. Each tap slides it one small step (a tenth of
+  a metre, or a quarter of a foot) the way that arrow points, along the item's own direction, so sliding
+  along a turned wall is one tap; the blue arrows raise or lower it. Tap "More" on the card to read its
+  height, beside the word "Height". At the edge of the lándlet a tap (or a drag)
   simply stops: the item rests against the edge and no line appears, because the edge can be seen. If any other
-  press does nothing, a line says why: the floor, or something in the way.
+  tap does nothing, a line says why: the floor, or something in the way.
 - A note says "Part of this is off your lándlet. Move it back to keep editing it.": the item reaches past the
   edge of the lándlet. Drag it back inside. A save can also say "That's past the edge of this lándlet."
 
