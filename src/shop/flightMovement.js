@@ -97,7 +97,7 @@ import { shopDomeRiseM } from './sky.js';
 // see that module's own comment for its dependency notes.
 import {
   shopLandlets, shopOtherAvatars,
-  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars, updateShopArrivals,
+  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars, updateShopArrivals, shopPendingSolid,
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo, shopTerrainHeightAtM,
   refreshShopLandletRecordsIfNeeded,
@@ -1465,6 +1465,26 @@ function shopAvatarFootprintCorners(x, y) {
   ];
 }
 
+// #4391: an item that arrived through a change of version becomes an obstacle once its arrival has finished and the
+// avatar's footprint no longer overlaps it (see shopPendingSolid in presenceAndContent.js). An item whose landlet
+// was unloaded is simply forgotten.
+function releasePendingSolid() {
+  if (shopPendingSolid.size === 0) return;
+  for (const pending of [...shopPendingSolid]) {
+    const { object, run } = pending;
+    if (!object.parent) { shopPendingSolid.delete(pending); continue; }
+    if (!run.settled()) continue;
+    const group = object.parent;
+    const overlapped = positionBlockedIn(
+      { forEachObstacle: (visit) => visit(object, group.position.x, group.position.y, group.position.z) === true },
+      SHOP_MOVEMENT_GEOMETRY, shopAvatarFootprintCorners(shopAvatarPosition.x, shopAvatarPosition.y), shopAvatarPosition.z, shopAvatarHeightM(),
+    );
+    if (overlapped) continue; // still standing where it arrived: not solid yet
+    object.userData.pendingSolid = false;
+    shopPendingSolid.delete(pending);
+  }
+}
+
 function shopPositionBlocked(x, y, z) {
   // #3293: the obstacle walk lives in movementWorld.js, over whichever world
   // the core is registered against (Shop's loaded landlets by default).
@@ -2058,6 +2078,7 @@ export function updateShopWorldServices(now, dt) {
   updateOtherShopAvatars(now);
   // #3407: arrival fogs and dissolves of landlets still loading in.
   updateShopArrivals();
+  releasePendingSolid(); // #4391
   // #2818: after updateOtherShopAvatars above, so this frame's distance
   // checks read this tick's own smoothed/interpolated positions, not last
   // frame's stale ones.
