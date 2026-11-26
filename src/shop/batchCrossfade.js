@@ -144,6 +144,8 @@ export function createBatchCrossfades({
   let transientMeshes = 0;
   let started = 0;
   let hardSwaps = 0; // placements that changed in one frame because a cap (or the wait limit) said so
+  // #4113: why each hard swap happened (e2e diagnostics): the caller cannot retry, nothing running would make room, or the wait ran out.
+  const hardSwapReasons = { callerCannotWait: 0, noRoomComing: 0, waitRanOut: 0 };
   let waitSkips = 0; // retries of a waiting placement answered without looking at anything (nothing had changed)
   // Bumped whenever room may have come back (a fade ended, a placement left one, a new frame's start): a
   // waiting placement is looked at again only after this has moved, so a retry pass over thousands of
@@ -194,6 +196,9 @@ export function createBatchCrossfades({
       handle.userData.batchWaitEpoch = roomEpoch;
       if (stillWaiting(handle, nowMs)) return BATCH_WAITING;
     }
+    if (!canWait) hardSwapReasons.callerCannotWait++;
+    else if (!willFit) hardSwapReasons.noRoomComing++;
+    else hardSwapReasons.waitRanOut++;
     clearWait(handle);
     hardSwaps++;
     return move(batch, handle, toName);
@@ -321,6 +326,9 @@ export function createBatchCrossfades({
     // #4113 (e2e): placements that swapped in one frame because a cap said so.
     get hardSwapCount() {
       return hardSwaps;
+    },
+    get hardSwapReasons() {
+      return { ...hardSwapReasons };
     },
     // Forgets a placement's wait (it no longer wants the change it was waiting for).
     clearWait,

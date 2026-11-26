@@ -871,6 +871,7 @@ export function batchCrossfadeStats() {
     inFlight: batchCrossfades.inFlightCount, started: batchCrossfades.startedCount,
     transientMeshes: batchCrossfades.transientMeshCount, triangles: batchCrossfades.trianglesInFlight,
     hardSwaps: batchCrossfades.hardSwapCount,
+    hardSwapReasons: batchCrossfades.hardSwapReasons, // #4113: why they happened (e2e diagnostics)
   };
 }
 // #4113 (e2e): how many drawn batched placements show a worse version than some placement farther from the avatar.
