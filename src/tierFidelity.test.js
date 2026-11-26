@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem, meanBatchColor } from './tierFidelity.js';
 
 // A unit cube as twelve triangles with outward-facing (counter-clockwise from outside) windings.
 function cube(scale = 1, doubleSided = false, flip = false) {
@@ -117,5 +117,30 @@ describe('material kind (#4111)', () => {
   });
   it('gives no verdict with nothing to compare', () => {
     expect(materialKindProblem([], [batch(true)])).toBeNull();
+  });
+});
+
+// #4111: a reader that cannot decode textures gives a textured batch no colour; the few batches that do carry one
+// must not stand in for the whole model (the Door: nine textured batches, one small plain white one).
+describe('meanBatchColor with batches of no colour (#4111)', () => {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  it('is null when most of the surface has no colour, so the colour check has nothing wrong to compare', () => {
+    const batches = [
+      { positions: tri, area: 9.7 }, // textured, unreadable
+      { positions: tri, area: 0.025, color: [1, 1, 1] },
+    ];
+    expect(meanBatchColor(batches)).toBeNull();
+    const far = [{ positions: tri, area: 3.9, color: [0.2, 0.1, 0.05] }];
+    expect(silhouetteFidelity(batches, far).colorShift).toBeNull();
+  });
+  it('still averages the batches that carry a colour when a small share of the surface has none', () => {
+    const mean = meanBatchColor([
+      { positions: tri, area: 9, color: [0.5, 0.5, 0.5] },
+      { positions: tri, area: 0.5 },
+    ]);
+    expect(mean[0]).toBeCloseTo(0.5, 5);
+  });
+  it('is null with no coloured batch at all', () => {
+    expect(meanBatchColor([{ positions: tri, area: 1 }])).toBeNull();
   });
 });

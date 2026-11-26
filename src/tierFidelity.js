@@ -183,15 +183,30 @@ function toSrgb(c) {
   return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
 }
 
+// #4111 (the Door the scan failed on colour, 2026-11-26): the mean colour is the area-weighted mean over the batches
+// that carry a colour. A reader that cannot read a texture (scripts/glb-batches-lib.mjs decodes no images) gives a
+// textured batch none, so a model of nine textured batches and one small plain white one was "white": the scan
+// compared the far version's real colour with the white of 0.3% of the surface and reported a shift of 0.53, while
+// the generator, which reads every texture, had made the far version rightly. When the batches with no colour
+// hold more than this share of the surface, the colour of the whole is not known and none is returned: no colour
+// to compare, not a wrong one.
+export const MAX_UNCOLORED_AREA_SHARE = 0.25;
+
 export function meanBatchColor(batches) {
   let area = 0;
+  let uncolored = 0;
   const sum = [0, 0, 0];
   for (const batch of batches) {
-    if (!batch.color || !(batch.area > 0)) continue;
+    if (!(batch.area > 0)) continue;
+    if (!batch.color) {
+      uncolored += batch.area;
+      continue;
+    }
     area += batch.area;
     for (let k = 0; k < 3; k++) sum[k] += batch.color[k] * batch.area;
   }
-  return area > 0 ? sum.map((v) => v / area) : null;
+  if (!(area > 0) || uncolored > MAX_UNCOLORED_AREA_SHARE * (area + uncolored)) return null;
+  return sum.map((v) => v / area);
 }
 
 export function colorShift(full, tier) {
