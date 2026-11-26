@@ -133,7 +133,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop" and "Build".
-3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
+3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too, inside a closed row called "Account and tax".
 4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My avatars" and "My animations" once they own any.
 5. "Build" holds the settings for building, including the person's username (with "Rename"). Selling has no tab here: the payout account and the shop name are petals in the Sell menu (see "Where do I set up payouts and tax forms?").
 6. At the bottom of every tab is "Send feedback".
@@ -1197,8 +1197,8 @@ nobody owns and nothing uses is removed completely.
 1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
 2. Tap "Payouts". The leaf that opens says first what is owed to them so far (even when it is $0.00), then whether a payout account is set up.
 3. "Set up payouts" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them; the last step's button is "Set up payout account". If an account already exists, "Change payout details" (or "Continue setup", when the payment provider needs something more) opens the same steps.
-4. Tax forms and identity checks, where they are asked for, are filled in by you on
-   those screens.
+4. Once a payout account exists, a "Cash out" button appears whenever something is available. Under the amount owed the leaf says "Available to cash out", and "Held" and "Next eligible" when some sales are still clearing. Tapping "Cash out" says "Payout requested." beside the balance. The button is not there while nothing is available.
+5. Tax paperwork is not in Sell. It is in Settings, on the "General" tab, in the closed row "Account and tax": "Tax paperwork" shows its status (it says "Not needed yet" until combined earnings make it required), and "Submit tax paperwork" (or "Update tax paperwork" once one is on file) opens the form. An identity check, where one is asked for, is filled in on the screen that asks for it.
 
 **You will see:** at the top of the "Payouts" leaf, how much is owed to them so far, then the payout account's status.
 
@@ -1218,7 +1218,8 @@ nobody owns and nothing uses is removed completely.
 
 1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
 2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when.
-3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. A sale that has been refunded says "Refunded".
+3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. After it, the row says "Shipped" with the date, and that the money is available 7 days after shipping if the buyer has not confirmed delivery sooner; once they have, it says "Delivery confirmed — available to cash out."
+4. "Refund" on a row asks "Refund this order?" first, names the buyer and the amount, and says it cannot be undone. A sale that has been refunded says "Refunded". A product with returns turned off says "Returns are turned off for this product" instead of the button, and a sale already paid out says "Paid out — contact support for a refund".
 
 **You will see:** "No orders yet. When someone buys one of your products, it will show up here." until something sells.
 
