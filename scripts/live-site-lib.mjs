@@ -394,6 +394,7 @@ const PEER_STEPS = ['join', 'shot', 'pos', 'say'];
 export function parseArgs(argv, env = {}) {
   const options = {
     url: env.LIVE_SITE_URL || 'https://higglehaven.com',
+    query: '', // #4440: a query string for the landing page, such as ?bloom=ring, for a look behind a switch in the address
     name: env.LIVE_SITE_NAME || null,
     desktop: false,
     size: null,
@@ -415,6 +416,7 @@ export function parseArgs(argv, env = {}) {
       return argv[i];
     };
     if (arg === '--url') options.url = value();
+    else if (arg === '--query') options.query = value();
     else if (arg === '--name') options.name = value();
     else if (arg === '--desktop') options.desktop = true;
     else if (arg === '--size') options.size = touchDeviceForSize(value());

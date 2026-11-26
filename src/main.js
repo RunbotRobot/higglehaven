@@ -662,6 +662,7 @@ import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 import { captureSwitchSnapshot } from './ui/switchSnapshot.js'; // #3873: the world kept on screen across a mode switch's reload
+import './ui/bloom.js'; // #4440: the bloomed head, behind ?bloom= until the owner picks a look
 import { beginBudModeSwitch } from './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 import './ui/helpLeaf.js'; // #3762: the "?" leaf (how to move, how higglehaven works, the manuals, Ask an assistant)
 import './build/budPetals.js'; // #3690: Build's Undo/Redo pair petal and Levels leaf
