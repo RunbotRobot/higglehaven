@@ -34,6 +34,8 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   // #4459: the provider's own sentence never reaches a buyer.
   payment_not_started: "We couldn't start your payment. You were not charged. Try again in a moment.",
   payment_unconfirmed: "We couldn't confirm your payment yet. If your card was charged, the order appears in My purchases shortly. Check there before paying again.",
+  // #4456: refused before any card is touched: the price moved between the one the shopper saw and now.
+  price_changed: 'The price changed. You were not charged. Review the new price and buy again.',
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
 });
 

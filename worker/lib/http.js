@@ -48,6 +48,7 @@ export const ERROR_CODES = Object.freeze({
   PAYMENT_NOT_STARTED: 'payment_not_started', // #4459
   PAYMENT_UNCONFIRMED: 'payment_unconfirmed', // #4459
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
+  PRICE_CHANGED: 'price_changed', // #4456
 });
 
 export class HttpError extends Error {

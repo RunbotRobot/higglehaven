@@ -296,6 +296,15 @@ export async function handleInstancePurchase(request, env, instanceId) {
     }
   });
 
+  // #4456: the shopper bought at the price on their screen. If the seller changed it since, refuse before any
+  // card is touched, with the live price, instead of charging a different amount than the one shown.
+  if (Number.isInteger(input.expectedUnitPriceCents) && input.expectedUnitPriceCents !== template.price_cents) {
+    throw new HttpError(
+      `The price changed to ${formatCents(template.price_cents)}. You were not charged. Review it and buy again.`,
+      409,
+      { code: ERROR_CODES.PRICE_CHANGED, unitPriceCents: template.price_cents },
+    );
+  }
   if (paysWithCard) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }

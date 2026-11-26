@@ -2708,6 +2708,12 @@ function, so it refuses with the same status and code, and answers:
 It creates nothing, charges nothing and never calls Stripe. Rate-limited
 separately from the purchase itself.
 
+`POST /api/instances/:id/purchase` also takes an optional integer `expectedUnitPriceCents` (#4456): the price the
+shopper saw. If the template's live `price_cents` is different, the purchase is refused with `409`, code
+`price_changed` and `unitPriceCents` (the live price) before any PaymentIntent is created or any row is written
+("The price changed to $7.00. You were not charged..."). The Shop client sends it, and compares the quote's
+`unitPriceCents` to the price on the card before opening the payment sheet.
+
 ### Payment errors a buyer reads (#4459)
 
 The provider's own error text never reaches a buyer. When creating the payment fails, `POST /api/instances/:id/purchase`
