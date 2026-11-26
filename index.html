@@ -302,6 +302,27 @@
         </div>
       </div>
     </div>
+    <!-- #3783 (part of #3771): a builder's choice of lettering and colours for their lándlet's name, opened from My lándlets
+         beside Rename. The name is drawn in every option, so the choice is made by looking; it applies as it is tapped. -->
+    <div id="wordmark-modal" role="dialog" aria-modal="true" aria-labelledby="wordmark-modal-title" tabindex="-1">
+      <div id="wordmark-modal-content">
+        <button id="wordmark-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="wordmark-modal-title">Wordmark</h2>
+        <div id="wordmark-preview" class="bud-place"><span class="bud-place-name"></span></div>
+        <fieldset class="wordmark-group">
+          <legend>Lettering</legend>
+          <div id="wordmark-styles" class="wordmark-options" role="radiogroup" aria-label="Lettering"></div>
+        </fieldset>
+        <fieldset class="wordmark-group">
+          <legend>Colours</legend>
+          <div id="wordmark-colours" class="wordmark-options" role="radiogroup" aria-label="Colours"></div>
+        </fieldset>
+        <div id="wordmark-status" role="status" aria-live="polite"></div>
+        <div id="wordmark-modal-actions">
+          <button id="wordmark-default-btn" type="button">Back to the default look</button>
+        </div>
+      </div>
+    </div>
     <!-- #3249: the product review modal Shop's "Rate this product" opens
          (write, edit, delete), replacing a chain of native prompt()/alert()
          calls. See src/ui/productReviewModal.js. -->
