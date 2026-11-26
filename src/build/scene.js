@@ -5794,6 +5794,19 @@ export function buildModeFrameUpdate(now) {
 // unreachable, this throws and bootstrap()'s own fallback below takes over
 // before the modal is ever shown, same as it always has for catalog/instance
 // fetches — there's nothing to claim in offline/local-fallback mode.
+// #3873: Build's start used to ask for "my lándlet" only after the builder id had come back (builders/me, then the
+// lándlet list: two requests back to back). The list can answer `ownerBuilderId=me` from the session, so for an
+// account already known to be verified (the same test the verification step uses, so nothing new is ever refused)
+// it is asked while the builder id is still on its way. A failed or skipped early ask falls back to the old order.
+let earlyOwnedLandlets = null;
+export function startEarlyOwnedLandletLookup() {
+  earlyOwnedLandlets = null;
+  const user = currentAuthUser;
+  if (!user || !user.ageAttested || user.trustTier === 'none') return;
+  if (sessionStorage.getItem(BUILD_TARGET_LANDLET_ID_KEY)) return; // a chosen lándlet needs no lookup
+  earlyOwnedLandlets = fetchLandlets({ status: 'claimed', ownerBuilderId: 'me', limit: 1 }).catch(() => null);
+}
+
 export async function resolveLandletId() {
   // #1150: "My Lands" (a builder can own more than one claimed landlet —
   // auctions can transfer extra ones in, see ownedLandletsByBuilderId's own
@@ -5803,7 +5816,9 @@ export async function resolveLandletId() {
   const targetLandletId = sessionStorage.getItem(BUILD_TARGET_LANDLET_ID_KEY);
   sessionStorage.removeItem(BUILD_TARGET_LANDLET_ID_KEY);
   if (targetLandletId) return targetLandletId;
-  const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
+  const early = earlyOwnedLandlets;
+  earlyOwnedLandlets = null;
+  const owned = (early ? await early : null) ?? await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
   if (owned.length > 0) return owned[0].landletId;
   return runClaimFlow();
 }
