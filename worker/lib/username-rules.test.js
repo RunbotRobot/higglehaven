@@ -57,7 +57,9 @@ describe('isReservedSkeleton', () => {
     }
   });
   it('does not reserve ordinary names or ones that merely contain one', () => {
-    for (const name of ['Ada', 'Admiral', 'Figure', 'higglehaven3', 'Support Cat']) {
+    // #4383: 'higglehaven3' used to be here; a name that starts with higglehaven is now reserved (see
+    // worker/username-rules.test.js), except on a local server.
+    for (const name of ['Ada', 'Admiral', 'Figure', 'thehigglehaven3', 'Support Cat']) {
       expect(isReservedSkeleton(usernameSkeleton(name))).toBe(false);
     }
   });
