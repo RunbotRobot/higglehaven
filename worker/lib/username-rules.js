@@ -91,12 +91,13 @@ export function isReservedSkeleton(skeleton, { allowSessionNames = false } = {})
   return ASSISTANT_NUMBERED.test(compact);
 }
 
-// True when the request came to a server on this machine (wrangler dev), never the real site.
-export function isLocalRequest(request) {
-  try {
-    const { hostname } = new URL(request.url);
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-  } catch {
-    return false;
-  }
+// True on a throwaway server on this machine (wrangler dev), read from its own APP_BASE_URL (.dev.vars). Not from the
+// request URL: wrangler dev shows the route's host there. Production has an https APP_BASE_URL, and so do the
+// vitest workers, so an unset or deployed value counts as the real site (it fails closed).
+export function isLocalDevServer(env) {
+  // The vitest workers read the same .dev.vars, so they look local too; they take the real site's rules, so the
+  // rules themselves are tested (TEST_MIGRATIONS is what only they have).
+  if (env?.TEST_MIGRATIONS) return false;
+  const base = typeof env?.APP_BASE_URL === 'string' ? env.APP_BASE_URL : '';
+  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(base);
 }
