@@ -244,6 +244,16 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [n, dx, dy] };
     }
+    case 'drag': {
+      // #4489: drag:<x>:<y>:<dx>:<dy>: press at a point and drag it dx, dy pixels with a real mouse (a ring, an
+      // arrow, the body of the selected item: whatever stands there), so a handle can be looked at doing its job.
+      need(4);
+      const [x, y, dx, dy] = args.map(Number);
+      if (args.length !== 4 || ![x, y, dx, dy].every(Number.isFinite) || x < 0 || y < 0) {
+        throw new Error(`step "${token}": drag needs a point and a distance in pixels (drag:150:600:40:-30)`);
+      }
+      return { command, args: [x, y, dx, dy] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -313,7 +323,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, pos, marks)`);
   }
 }
 

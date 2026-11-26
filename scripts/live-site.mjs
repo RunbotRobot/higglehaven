@@ -25,6 +25,7 @@
 //                                         `tap:text=Orders` works on a label too)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198)
+//   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
@@ -654,6 +655,21 @@ async function runStepAction(step, index) {
       const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
       return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
     }
+    case 'drag': {
+      // #4489: a real mouse press at (x, y), then a drag of (dx, dy) in 20 steps; the selected item's place before and
+      // after is reported (lándlet-local metres) and the selection status line. Changes what it moves: use it on the
+      // fleet's own lándlet (sign in as higglehaven0) and put the item back.
+      const [x, y, dx, dy] = step.args;
+      const stateBefore = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + dx, y + dy, { steps: 20 });
+      await page.waitForTimeout(300);
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
+    }
     case 'mode': {
       const before = await page.evaluate(() => document.body.dataset.mode);
       await clickModeButton(page, a);
@@ -847,7 +863,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' ? { drag: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' ? { drag: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
