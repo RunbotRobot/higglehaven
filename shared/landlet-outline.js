@@ -47,6 +47,22 @@ export function footprintCorners({ x, y, width, depth, rotationZ = 0 }) {
   }));
 }
 
+// #4403: how far a footprint reaches from its centre along x and along y once it is turned: the half-sides of the
+// box that just contains the turned rectangle. A long item turned a quarter way round lies along the other axis.
+export function turnedReach(width, depth, rotationZ = 0) {
+  const cos = Math.abs(Math.cos(rotationZ));
+  const sin = Math.abs(Math.sin(rotationZ));
+  return { x: (width / 2) * cos + (depth / 2) * sin, y: (width / 2) * sin + (depth / 2) * cos };
+}
+
+// The older rule that goes with the outline: the turned footprint must lie inside the lándlet's square, `halfSpan`
+// (half the side, already scaled for the item's height) each way from the centre. The Worker enforces it next to the
+// outline, so Build's stops read it from here too and rest where the Worker will accept.
+export function footprintWithinSquare({ x, y, width, depth, rotationZ = 0 }, halfSpan, tolerance = 1e-6) {
+  const reach = turnedReach(width, depth, rotationZ);
+  return Math.abs(x) + reach.x <= halfSpan + tolerance && Math.abs(y) + reach.y <= halfSpan + tolerance;
+}
+
 // How close to an edge still counts as on it. A move that stops at the outline (Build's clamp) lands exactly on it,
 // and floating point must not turn that into "outside" by a hair.
 export const OUTLINE_EDGE_TOLERANCE_M = 1e-6;
