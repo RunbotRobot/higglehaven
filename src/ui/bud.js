@@ -28,6 +28,7 @@
 // #account-menu-panel, so the account rows (Settings, Friends, My purchases, ...) are petals
 // without being rebuilt, and the id the e2e suite drives is unchanged.
 
+import { stemPathD } from './stemPath.js';
 import { iconKeyFor, svgIcon } from './budIcons.js';
 import { BUD_MENUS, BUD_ROW, budMenuProblem } from './budMenuRules.js';
 
@@ -430,8 +431,7 @@ function drawStem(host, first, last) {
   const curve = Math.max(16, Math.min(56, firstTop - y0 - 24));
   const y2 = Math.round(firstTop - 6); // where it is on the leaves' line
   const y1 = y2 - curve;
-  const mid = (y1 + y2) / 2;
-  const d = `M ${x0} ${y0} L ${x0} ${y1} C ${x0} ${mid} ${stemX} ${mid} ${stemX} ${y2} L ${stemX} ${Math.max(y2 + 1, lastMid)}`;
+  const d = stemPathD({ x0, y0, stemX, y1, y2, lastMid });
   for (const path of stemSvg(host).children) path.setAttribute('d', d);
 }
 

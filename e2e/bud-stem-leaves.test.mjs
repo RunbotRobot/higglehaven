@@ -70,7 +70,12 @@ async function inspect(label) {
     check(row.tap.every(([w, h]) => w >= 44 && h >= 44), `${label}: ${row.id} tap size ${JSON.stringify(row.tap)}`);
     check(row.box.left >= 0 && row.box.right <= report.vw && row.box.bottom <= report.vh, `${label}: ${row.id} is on the screen`);
   });
-  check(Math.abs(report.stemTop - report.headBaseY) <= 2 && Math.abs(report.stemLeft - report.headBaseX) <= 2, `${label}: the stem enters the head at its base, the upper left (top ${report.stemTop}, left ${report.stemLeft}; base ${report.headBaseY}, ${report.headBaseX})`);
+  // #4432: the top of the stem curls into the base: it rises beside the head, a little left of the base, and arcs
+  // over to meet it (so its box starts a few px above and left of the base, never far from it, and never straight
+  // up the base's own line).
+  check(report.stemTop <= report.headBaseY + 2 && report.stemTop >= report.headBaseY - 8
+    && report.stemLeft <= report.headBaseX - 3 && report.stemLeft >= report.headBaseX - 16,
+  `${label}: the stem curls into the head at its base, the upper left (top ${report.stemTop}, left ${report.stemLeft}; base ${report.headBaseY}, ${report.headBaseX})`);
   check(Math.abs(report.stemBottom - report.lastTip) <= 2, `${label}: the stem ends at the last leaf's tip (${report.stemBottom} vs ${report.lastTip})`);
   // #4200: every leaf joins the stem at its tip: a right leaf's left edge, a left leaf's right edge, is on the stem's line.
   for (const row of report.rows) {
