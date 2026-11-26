@@ -24,7 +24,8 @@
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
 //                                         `tap:text=Orders` works on a label too)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
-//   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198)
+//   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198).
+//                                         n counts EVERY item on screen, other sessions' too: look first (a shot), and move only your own (#4489)
 //   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
