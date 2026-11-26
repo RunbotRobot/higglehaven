@@ -37,12 +37,13 @@ import {
   activeCatalog, myBundles, setMyBundles, communityBundles, setCommunityBundles, builderId,
 } from '../world/state.js';
 import {
-  catalogThumbnailCache, renderCatalogThumbnail, solidColorDataUrl, computeThumbnailEmbedding,
+  catalogThumbnailCache, renderCatalogThumbnail, solidColorDataUrl, computeThumbnailEmbedding, persistCatalogThumbnail,
   activeBundleTab, setActiveBundleTab,
 } from '../main.js';
 // #2559: enterPlacementMode/cancelPlacementMode/pendingPlacement now live in
 // src/build/scene.js -- see that module's own comment.
 // #2560: hideBackupReferenceMesh now lives in src/build/metadataModals.js.
+import { currentAuthUser } from '../account/auth.js';
 import { hideBackupReferenceMesh } from '../build/metadataModals.js';
 import { enterPlacementMode, cancelPlacementMode, pendingPlacement, focusWorldForPlacement } from '../build/scene.js';
 
@@ -273,6 +274,9 @@ export function buildCatalogPickerButtons() {
     if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
       renderCatalogThumbnail(template).then((dataUrl) => {
         if (dataUrl) thumb.src = dataUrl;
+        // #4437: a seeded placeholder has no seller to store its thumbnail and grid, so Prompt
+        // mode could not match it. An admin's own browser stores it, once (it then has an imageUrl).
+        if (dataUrl && !template.sellerId && currentAuthUser?.isAdmin) persistCatalogThumbnail(template);
       });
     }
   }

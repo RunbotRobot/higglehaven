@@ -3267,6 +3267,11 @@ otherwise (unlike `PATCH` above, this endpoint never falls open for an
 unowned/orphaned template, since it writes new bytes to storage rather than
 just editing a row). `404` if the template doesn't exist.
 
+**A template with no owner (#4437)** (a seeded placeholder: `brick`, `door`, ...)
+needs a full admin session instead (a look-only viewer is refused, `403`), so
+Prompt mode can match it; the admin's browser sends it the first time its
+picker renders such a tile. The rate limit is per admin.
+
 Rate-limited per seller (20 per 15-minute window, `429` past that — same
 window `POST /api/models` and `POST .../concept-image` use) and, like those
 two, subject to the same application-level `MAX_TOTAL_STORAGE_BYTES` cap on
