@@ -65,7 +65,7 @@
 //                                         (share of the viewport, number of separate elements, the
 //                                         largest one); how it is counted is in live-site-lib.mjs
 //
-// Flags: --with <name> (a second signed-in page: a fleet account on the live site, see the peer steps), --url (default https://higglehaven.com), --name (required; this
+// Flags: --with <name> (a second signed-in page: a fleet account on the live site, see the peer steps), --url (default https://higglehaven.com), --query <?a=b> (a query string for the landing page, to look behind a switch in the address, #4440), --name (required; this
 // session's name), --desktop (1280x800 instead of phone), --size WxH (a touch screen of that size,
 // e.g. 844x390 for a phone on its side, 768x1024 for a tablet; #3874), --login fleet|local,
 // --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
@@ -816,7 +816,7 @@ async function runCoverReport() {
 
 try {
   await signIn();
-  const landing = await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  const landing = await page.goto(`${baseUrl}/${options.query || ''}`, { waitUntil: 'domcontentloaded' });
   if (landing && landing.status() === 401) fail(`live-site: ${gateRefusalMessage(401)}`);
   await settle();
   if (options.login === 'local') await clearLocalVerifyModal();
