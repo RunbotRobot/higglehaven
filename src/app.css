@@ -808,14 +808,16 @@
       body[data-bud-note] .bud-word { display: none !important; }
       body[data-bud="on"] #bud-note {
         position: absolute;
-        left: calc(var(--bud-size) + var(--space-sm));
+        left: var(--bud-size); /* flush against the head: attached, but never over it (the head stays tappable) */
         top: calc((var(--bud-size) - 44px) / 2);
         min-height: 44px;
         padding: 0 var(--space-2xl);
         border: 0;
-        border-radius: var(--radius-word);
-        background: rgb(var(--white-rgb) / 0.85);
-        box-shadow: var(--shadow-card);
+        border-radius: var(--radius-pill);
+        /* #4443: the same cream surface and shadow as the top bar's pill (#bud-row), so the word the head wears
+           is part of the flower and not a stock tooltip. */
+        background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+        box-shadow: var(--shadow-petal);
         color: var(--ink);
         font: var(--text-xs)/1 var(--font-sans);
         white-space: nowrap;
@@ -1113,7 +1115,24 @@
       body[data-bud="on"] #bud-row #account-auth-btn .bud-icon,
       body[data-bud="on"] #bud-row .bud-icon { margin: 0; }
       body[data-bud="on"] #bud-row .bud-icon svg { width: 22px; height: 22px; }
-      body[data-bud="on"] #bud-row button #notifications-badge { top: 0; right: 0; font-size: var(--text-xs); }
+      /* #4443: the bell's count is a small yellow chip drawn whole inside the pill: the base dot is 10px with
+         overflow hidden and a zero line height, which cut the digit in half. */
+      body[data-bud="on"] #bud-row span#notifications-badge {
+        top: 2px;
+        right: 2px;
+        width: auto;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        box-sizing: border-box;
+        border-radius: var(--radius-pill);
+        font-size: var(--text-xs);
+        line-height: 16px;
+        text-align: center;
+        font-weight: 600;
+        color: var(--ink);
+        overflow: visible;
+      }
       /* The ring sits under the bud so every petal's base is tucked beneath it. */
       body[data-bud="on"] #account-menu-toggle { z-index: 1; }
       body[data-bud="on"] #bud-modes .mode-nav-btn {
