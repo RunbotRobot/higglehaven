@@ -1572,6 +1572,38 @@ most likely to come up again.
   table, and "Clean-up of live data is done by the owner's own tap" is
   unchanged.
 
+- **Money that goes back to people after a wrong is sent by the owner's
+  own tap, with the count and the total shown first; it is never
+  automatic.** (2026-11-26, #4376.) docs/SPEC.md asked for buyers to be
+  refunded automatically on a credible counterfeit flag; only the hiding
+  and the strike were built. Offered a "Refund buyers" button on the
+  approved flag (A), the automatic refund (B) or leaving buyers to ask one
+  by one (C), the owner: "I agree, let's go with A. It attempts to do right
+  by buyers while still giving me a check-in before handing out a
+  potentially large amount of money." So when a confirmed violation means
+  people are owed money, the platform offers the owner one action that
+  names how many people and how much, the owner confirms, everyone is
+  repaid and told why, and it is written to the admin log. The principle:
+  doing right by the people harmed is the default and is made one tap
+  easy, and a sum of unknown size never leaves on a rule alone. Apply it to
+  the next bulk refund, reversal or credit of the same shape (a suspended
+  seller's open orders, a product recalled after sale) without asking;
+  where the platform itself would cover the money, that sentence and the
+  amount go to the owner first. This sits with "Clean-up of live data is
+  done by the owner's own tap" and replaces the automatic refund in
+  docs/SPEC.md section 5.
+
+- **One event in the world looks the same to everyone who sees it.**
+  (2026-11-26, #4387.) An orb a person collects pops on contact; the same
+  orb, seen by someone standing near, dissolved into fog as if it had gone
+  out of range. The owner: "I think we should display the same pop for
+  consistency of world." Fog is for a thing coming into or going out of
+  one person's view. Something that happens (an orb collected, a thing
+  placed or removed while you watch) shows what happened, with the same
+  effect for the person who did it and for anyone looking on; only what is
+  private to the doer (their balance, their note) is left out for the
+  onlooker.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
