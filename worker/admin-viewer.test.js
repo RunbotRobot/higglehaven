@@ -238,7 +238,7 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     const COUNTS = {
       './lib/account-moderation.js': 3, './lib/admin-delete-account.js': 1, './lib/admin-landlet-search.js': 1,
       './lib/admin-users-table.js': 1, './lib/admin-video-jobs.js': 1, './lib/models.js': 1, './lib/tax-education.js': 2,
-      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2,
+      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2, './lib/counterfeit-refunds.js': 1,
     };
     expect(Object.keys(COUNTS).sort()).toEqual(OPTED_IN);
     for (const path of OPTED_IN) {
