@@ -12,7 +12,7 @@ const moreBtn = document.getElementById('item-card-more-btn');
 const moreEl = document.getElementById('item-card-more');
 const closeBtn = document.getElementById('item-card-close-btn');
 const card = createWorldCard(cardEl);
-const RING_CLEARANCE_PX = 112;
+const RING_CLEARANCE_PX = 122; // #4410: the movement arrows (drawn a little larger than the rings) reach about 110 px
 // #3691: the Selecting brush's size slider. It lives in #tool-controls (and the Tools leaf lends it
 // out); while Selecting is on and the card shows the selection, it is hosted here, beside what is
 // being painted, so it can be adjusted without leaving the world. scene.js keeps the same element,

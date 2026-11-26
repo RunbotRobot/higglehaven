@@ -604,6 +604,35 @@ wireDraggingBehavior(rotateControls);
 export const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
 translateControls.space = 'local';
+// #4410 (the owner: "Selecting an item shows rotation circles and movement axes, each in all three directions"):
+// the three axes (each with an arrow at both ends) stand on the selection beside the three rings, with no mode to
+// choose first. The plane squares are left out: moving on the ground is the drag from the item, and a square is one
+// more thing a finger aimed at a ring can land on. Drawn larger than the rings so the arrows stand clear of them.
+translateControls.showXY = false;
+translateControls.showYZ = false;
+translateControls.showXZ = false;
+translateControls.size = 1.2;
+translateControls.showXYZ = false; // the centre handle (a free move on the screen plane) would take a press meant for the item's body
+// The pick area of each axis (a cone from the item's middle out to the arrow) would take a press meant for the item's
+// own body, a drag from the middle that moves it. Only the arrow at each end is a handle: its pick area is a short
+// cylinder round the arrow, and nothing near the middle can be picked. (Shafts and cones are still drawn.)
+{
+  const pickers = translateControls._gizmo.picker.translate;
+  for (const handle of [...pickers.children]) if (['X', 'Y', 'Z'].includes(handle.name)) pickers.remove(handle);
+  const invisible = new THREE.MeshBasicMaterial({ visible: false });
+  for (const [name, axis] of [['X', new THREE.Vector3(1, 0, 0)], ['Y', new THREE.Vector3(0, 1, 0)], ['Z', new THREE.Vector3(0, 0, 1)]]) {
+    for (const sign of [1, -1]) {
+      const geometry = new THREE.CylinderGeometry(0.17, 0.17, 0.34, 6); // along Y
+      geometry.rotateX(Math.PI / 2); // along Z
+      if (name === 'X') geometry.rotateY(Math.PI / 2);
+      if (name === 'Y') geometry.rotateX(-Math.PI / 2);
+      geometry.translate(axis.x * sign * 0.55, axis.y * sign * 0.55, axis.z * sign * 0.55);
+      const pick = new THREE.Mesh(geometry, invisible);
+      pick.name = name;
+      pickers.add(pick);
+    }
+  }
+}
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 
@@ -3009,13 +3038,40 @@ function setGizmoMode(mode) {
       return;
     }
     rotateControls.attach(mesh);
+    syncMoveAxes();
     return;
   }
   if (selectedMeshes.size > 1 && isSingleBundleSelection()) {
     groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
     groupRotatePivot.quaternion.identity();
     rotateControls.attach(groupRotatePivot);
+    syncMoveAxes();
   }
+}
+
+// #4410: the movement axes stand on the selection whenever the rings do (one item, or one bundle), and are gone
+// otherwise (several loose items, Trim, nothing selected). One place decides, so the select, undo, trim and
+// body-drag paths cannot disagree about it. A bundle's axes hang on groupMovePivot, put back on the bundle's
+// centre every frame (see the frame loop), as the rings' pivot is (#4413).
+function syncMoveAxes() {
+  const single = selectedMeshes.size === 1 && currentGizmoMode !== 'trim' && !multiSelectMode;
+  const bundle = selectedMeshes.size > 1 && isSingleBundleSelection() && !multiSelectMode;
+  if (!single && !bundle) {
+    translateControls.detach();
+    return;
+  }
+  if (single) {
+    const [mesh] = selectedMeshes;
+    translateControls.space = 'local';
+    if (translateControls.object !== mesh) translateControls.attach(mesh);
+  } else {
+    translateControls.space = 'world';
+    if (translateControls.object !== groupMovePivot) {
+      groupMovePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+      translateControls.attach(groupMovePivot);
+    }
+  }
+  translateControls.getHelper().visible = true;
 }
 
 // #3689: precise placement and exact angles for ONE item, in the item card's More (the plan's "nudging
@@ -3141,7 +3197,7 @@ function beginBodyDrag() {
     target = groupMovePivot;
     attachGroupMovePivot();
   }
-  translateControls.getHelper().visible = false; // the arrows are not drawn; only the drag moves it
+  translateControls.getHelper().visible = false; // the axes are put away for the drag from the item (syncMoveAxes brings them back)
   translateControls.dispatchEvent({ type: 'dragging-changed', value: true });
   bodyDrag.target = target;
   bodyDrag.startPos = target.position.clone();
@@ -3156,7 +3212,7 @@ function endBodyDrag() {
   controls.enableRotate = !multiSelectMode;
   if (!drag.started) return;
   translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
-  translateControls.detach();
+  syncMoveAxes(); // #4410: the axes stay on the selection; an arbitrary several have none and are detached here
 }
 
 // #4118: the red and green rings pass over the item (a ring seen edge-on is a line through its middle), so a
@@ -3204,6 +3260,50 @@ window.addEventListener('pointerdown', (event) => {
     if (picker.name === 'X' || picker.name === 'Y') picker.visible = false;
   }
 }, { capture: true });
+// #4410: a ring and an arrow can lie under the same finger, and each TransformControls reads the press on its
+// own, so both would start a drag. The nearer handle takes the press and the other gizmo is switched off for that one press
+// only (restored in the bubble phase, after both controls have read it).
+function nearestHandleHit(controlsOf, event) {
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  for (const hit of raycaster.intersectObject(controlsOf._gizmo.picker[controlsOf.mode], true)) {
+    if (hit.object.visible) return hit;
+  }
+  return null;
+}
+let handlePressLoser = null;
+window.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary || event.button > 0 || !rotateControls.object || !translateControls.object) return;
+  if (!translateControls.getHelper().visible) return;
+  const ring = nearestHandleHit(rotateControls, event);
+  const arrow = nearestHandleHit(translateControls, event);
+  if (!ring || !arrow) return;
+  // The handle nearer the camera at that point is the one a person sees on top (a tie goes to the ring).
+  handlePressLoser = ring.distance <= arrow.distance ? translateControls : rotateControls;
+  handlePressLoser.enabled = false;
+}, { capture: true });
+window.addEventListener('pointerdown', () => {
+  if (handlePressLoser) handlePressLoser.enabled = true;
+  handlePressLoser = null;
+});
+window.__testAxisHandlePoints = () => { // e2e (#4410): the screen point of each arrow of the movement axes (two per axis)
+  if (!translateControls.object) return [];
+  const rect = renderer.domElement.getBoundingClientRect();
+  const out = [];
+  for (const child of translateControls._gizmo.picker.translate.children) {
+    if (!['X', 'Y', 'Z'].includes(child.name)) continue;
+    child.geometry.computeBoundingBox(); // the gizmo bakes each arrow's place into its geometry
+    const at = child.geometry.boundingBox.getCenter(new THREE.Vector3());
+    if (at.length() < 0.1) continue; // the shaft, centred on the item
+    child.localToWorld(at);
+    at.project(camera);
+    out.push({ axis: child.name, x: rect.left + (at.x * 0.5 + 0.5) * rect.width, y: rect.top + (-at.y * 0.5 + 0.5) * rect.height });
+  }
+  return out;
+};
+window.__testHandleAt = (x, y) => ({ // e2e (#4410): which handle is under this point
+  ring: nearestHandleHit(rotateControls, { clientX: x, clientY: y })?.object.name ?? null,
+  arrow: translateControls.object ? nearestHandleHit(translateControls, { clientX: x, clientY: y })?.object.name ?? null : null,
+});
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (bodyDrag) { endBodyDrag(); return; } // a second finger: it is looking, not moving
   if (!event.isPrimary || event.button > 0) return;
@@ -5865,6 +5965,9 @@ export function buildModeFrameUpdate(now) {
   // is held (then the pivot is the thing being turned and the turn moves the bundle round it).
   if (rotateControls.object === groupRotatePivot && !rotateControls.dragging && selectedMeshes.size > 0) {
     groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+  }
+  if (translateControls.object === groupMovePivot && !translateControls.dragging && !bodyDrag?.started && selectedMeshes.size > 0) {
+    groupMovePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position))); // #4410: the bundle's axes
   }
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();

@@ -50,7 +50,9 @@ for (const axis of ['z', 'x', 'y']) {
   for (const p of points) {
     await page.mouse.move(p.x, p.y);
     await page.waitForTimeout(30);
-    if ((await page.evaluate(() => window.__testRotateActiveAxis())) === axis.toUpperCase()) { at = p; break; }
+    // (and no movement arrow under it: where an arrow and a ring meet, the nearer one takes the press, #4410)
+    if ((await page.evaluate(() => window.__testRotateActiveAxis())) === axis.toUpperCase()
+      && !(await page.evaluate(([x, y]) => window.__testHandleAt(x, y).arrow, [p.x, p.y]))) { at = p; break; }
   }
   if (!at) { console.log(`no point on the ${axis} ring is on screen at this zoom; skipped`); continue; }
   const before = await page.evaluate(() => window.__testSelectedItemState());
