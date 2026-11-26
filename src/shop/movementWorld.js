@@ -51,6 +51,7 @@ export function createShopMovementWorld({ landlets, terrainHeightAt, worldRadius
         if (!entry.loaded) continue;
         const { x, y, z } = entry.group.position;
         for (const mesh of entry.objects) {
+          if (mesh.userData.pendingSolid) continue; // #4391: still arriving; not an obstacle yet
           if (visit(mesh, x, y, z) === true) return true;
         }
       }

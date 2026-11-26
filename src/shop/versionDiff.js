@@ -4,23 +4,41 @@
 // list leaves; an id only in the new list arrives; an id in both with anything different is the old one leaving
 // and the new one arriving (the same two things as any other swap). Pure, no three.js.
 
+// Field by field, without serialising (this runs for every instance of a lándlet in one tick): numbers, strings and
+// booleans by value, and the small objects an instance carries (a crop) key by key.
 function sameValue(a, b) {
   if (a === b) return true;
   if (a === null || b === null || a === undefined || b === undefined) return (a ?? null) === (b ?? null);
-  if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
-  return false;
+  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) if (!sameValue(a[key], b[key])) return false;
+  return true;
 }
 
 export function instanceIdOf(instance) {
   return instance?.instanceId ?? instance?.id;
 }
 
+// The fields of an instance that a shopper can see or touch. A fixed list, not "every key": a draft's instances
+// carry landletId, createdAt and updatedAt that a version's do not (worker/index.js, instanceFromRow and
+// versionInstanceFromRow), so comparing every key called every item changed on the first publish of a lándlet.
+const VISIBLE_FIELDS = [
+  'templateId', 'x', 'y', 'z', 'rotationX', 'rotationY', 'rotationZ', 'scale', 'crop', 'label',
+  'groupId', 'bundleId', 'isCommunitySign', 'isCommunityCalendar',
+];
+
+// An absent crop is an empty crop, an absent flag is false, and null and missing are the same for the rest.
+function normalized(instance, key) {
+  const value = instance[key];
+  if (key === 'crop') return value && typeof value === 'object' ? value : {};
+  if (key === 'isCommunitySign' || key === 'isCommunityCalendar') return Boolean(value);
+  return value ?? null;
+}
+
 // True when nothing a shopper could see or touch differs between the two records of one instance.
 export function sameInstance(a, b) {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const key of keys) {
-    if (key === 'id' || key === 'instanceId') continue;
-    if (!sameValue(a[key], b[key])) return false;
+  for (const key of VISIBLE_FIELDS) {
+    if (!sameValue(normalized(a, key), normalized(b, key))) return false;
   }
   return true;
 }

@@ -27,10 +27,20 @@ export function createDepartureRun({
 } = {}) {
   const items = []; // { dissolve, startMs, onGone }
   let disposed = false;
+  let expected = 0; // items promised by expect() that have not been added (or given up) yet
   const durationS = reducedMotion ? DEPARTURE_REDUCED_MOTION_S : DEPARTURE_S;
   return {
     // `object` is fully drawn now; onGone(object) runs once it is invisible (or the run is disposed).
+    // The caller sets items up one at a time over several frames: it says how many are coming, so the run is not
+    // reported settled (and dropped) before they have all been added or given up.
+    expect(count) {
+      expected += count;
+    },
+    giveUp() {
+      expected = Math.max(0, expected - 1);
+    },
     add(object, onGone) {
+      expected = Math.max(0, expected - 1);
       if (disposed) { onGone(object); return; }
       const dissolve = createDissolve(object);
       dissolve.setLevel(1);
@@ -51,7 +61,7 @@ export function createDepartureRun({
       }
     },
     settled() {
-      return items.length === 0;
+      return items.length === 0 && expected === 0;
     },
     count() {
       return items.length;
@@ -60,6 +70,7 @@ export function createDepartureRun({
     dispose() {
       if (disposed) return;
       disposed = true;
+      expected = 0;
       for (const item of items.splice(0)) {
         item.dissolve.restore();
         item.onGone(item.object);

@@ -108,7 +108,7 @@ import {
 // own enterShopMode in turn imports shopLandlets/pickShopSpawnLocation/etc.
 // from this module, same mutually-dependent shape flightMovement.js's own
 // header comment already documents for shop/avatar.js and itself.
-import { disposeObject3D, unloadShopLandletInstances, unregisterShopObject, buildShopGroundMesh } from './mode.js';
+import { disposeObject3D, unloadShopLandletInstances, unregisterShopObjects, buildShopGroundMesh } from './mode.js';
 import { diffVersionInstances, instanceIdOf, planVersionChange } from './versionDiff.js'; // #4391
 import { createDepartureRun } from './departureRun.js'; // #4391
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
@@ -572,11 +572,16 @@ const SHOP_SETS_SLICE_MS = 2;
 const NO_SETS = new Map();
 function lodSetsFor(entry) {
   const current = entry.lodSetsToken === entry.loadToken;
-  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion)) {
-    entry.lodSetsJob = null; // its load is gone (the members are disposed) or the e2e switch changed
+  // #4391: a change of the live version swaps items without always changing their count, so it bumps
+  // entry.lodSetsEpoch; a job that started before it worked from the old list and is dropped, and sets worked out
+  // before it are kept for the frames until the new ones are done (never reported as up to date).
+  const epoch = entry.lodSetsEpoch ?? 0;
+  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion
+    || (entry.lodSetsJob.epoch ?? 0) !== epoch)) {
+    entry.lodSetsJob = null; // its load is gone (the members are disposed), the e2e switch changed, or the items did
   }
   const upToDate = entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
-    && entry.lodSetsVersion === implicitSetsVersion;
+    && entry.lodSetsVersion === implicitSetsVersion && (entry.lodSetsEpochSeen ?? 0) === epoch;
   if (upToDate && !entry.lodSetsJob) return entry.lodSets;
   if (!entry.lodSetsJob) {
     entry.lodSetsFailed = false;
@@ -584,6 +589,7 @@ function lodSetsFor(entry) {
       token: entry.loadToken,
       count: entry.objects.length,
       version: implicitSetsVersion,
+      epoch,
       // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
       job: startLodSetsJob(entry.objects, {
         hasTiers: hasLodTiers,
@@ -601,6 +607,7 @@ function lodSetsFor(entry) {
     entry.lodSets = sets;
     entry.lodSetsObjectCount = running.count;
     entry.lodSetsVersion = running.version;
+    entry.lodSetsEpochSeen = running.epoch;
     entry.lodSetsToken = running.token; // an unload and reload with the same count must not reuse stale members
     entry.lodSetsFailed = running.job.failed;
     entry.lodSetsJob = null;
@@ -1789,6 +1796,7 @@ export function updateOtherShopAvatars(now) {
 // current load already added.
 async function loadShopLandletInstances(entry, myToken) {
   let instances;
+  let loadedVersionId = null; // #4391: the version this load draws, read once (the record refresh may replace entry.record meanwhile)
   try {
     // #1282: entry.record is a one-time snapshot taken when Shop mode was
     // entered (fetchAllLandlets, far above) and was never refreshed after
@@ -1800,27 +1808,29 @@ async function loadShopLandletInstances(entry, myToken) {
     // fresh on every load keeps this decision current, the same way a
     // fresh page load already would, without changing anything else
     // entry.record is used for.
-    entry.record.activeVersionId = (await fetchLandlet(entry.record.landletId)).activeVersionId;
+    loadedVersionId = (await fetchLandlet(entry.record.landletId)).activeVersionId ?? null;
+    entry.record.activeVersionId = loadedVersionId;
     // A landlet that's actually been published (see the Build settings
     // tab's "Publish"/Version History) shows shoppers a frozen snapshot,
     // not the builder's own live in-progress edits — the whole point of a
     // draft/publish split. A landlet with no activeVersionId has never
     // been published, so this falls back to the live draft (today's
     // behavior for every landlet that existed before this feature).
-    instances = entry.record.activeVersionId
-      ? (await fetchLandletVersion(entry.record.landletId, entry.record.activeVersionId)).instances
+    instances = loadedVersionId
+      ? (await fetchLandletVersion(entry.record.landletId, loadedVersionId)).instances
       : await fetchInstances(entry.record.landletId);
   } catch {
     if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
     return;
   }
-  // #4391: what this load draws, so a later change of the live version can be told apart from it (versionDiff.js).
-  entry.shownVersionId = entry.record.activeVersionId ?? null;
-  entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
   // #4295: a load that was put away while its requests were in flight (an unload, then a newer load) must not go
   // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
   // stale, so nothing would be drawn at all.
   if (myToken !== entry.loadToken) return;
+  // #4391: what this load draws, so a later change of the live version can be told apart from it (versionDiff.js).
+  // After the check above: a superseded load must not overwrite what the current one recorded.
+  entry.shownVersionId = loadedVersionId;
+  entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
   // #3396: moving, looking and drawing never wait on loading. Each item is its
   // own small unit of work, run inside the per-frame time budget (see
   // src/world/frameBudgetQueue.js), nearest and largest on screen first, so a
@@ -1922,18 +1932,32 @@ async function applyShopVersionChange(entry) {
     if (leaving.length) {
       const gone = new Set(leaving);
       entry.objects = entry.objects.filter((object) => !gone.has(object));
-      entry.departureRun ??= createDepartureRun();
-      for (const object of leaving) {
-        unregisterShopObject(entry, object);
-        entry.departureRun.add(object, (done) => {
-          entry.group.remove(done);
-          worldWorkQueue.enqueue(() => disposeObject3D(done), { priority: DISPOSE_QUEUE_PRIORITY });
-        });
-      }
+      unregisterShopObjects(entry, gone); // one pass over the reviews, not one per item
+      // Each item's fade is set up as its own small unit inside the frame budget (the dissolve clones its materials),
+      // so a change of several hundred does not land in one frame and the fades start a few at a time. Until its
+      // turn an item simply stays drawn, as it was.
+      const departure = createDepartureRun(); // reads reduced motion afresh for each change
+      departure.expect(leaving.length);
+      (entry.departureRuns ??= []).push(departure);
+      const departureGroup = entry.departureGroup ??= {};
+      entry.leavingObjects ??= new Set();
+      leaving.forEach((object, index) => {
+        entry.leavingObjects.add(object);
+        worldWorkQueue.enqueue(() => {
+          if (!entry.leavingObjects.has(object)) { departure.giveUp(); return; } // the lándlet was unloaded meanwhile
+          // A version cross-fade still running on it would put the plain materials back over this fade.
+          tierCrossfades.finish(object);
+          departure.add(object, (done) => {
+            entry.leavingObjects.delete(done);
+            entry.group.remove(done);
+            worldWorkQueue.enqueue(() => disposeObject3D(done), { priority: DISPOSE_QUEUE_PRIORITY });
+          });
+        }, { group: departureGroup, priority: index });
+      });
     }
-    // The sets worked out for this load name the objects that just left, and a swap can keep the count: forget them.
-    entry.lodSets = null;
-    entry.lodSetsObjectCount = -1;
+    // The sets worked out for this load name the objects that just left, and a swap can keep the count: they are
+    // worked out again (kept meanwhile, so the rest of the lándlet does not lose its sets for a moment).
+    entry.lodSetsEpoch = (entry.lodSetsEpoch ?? 0) + 1;
     // Arriving: a run over just these, so each cluster gets its fog and resolves out of it like a first visit.
     if (arriving.length) {
       const run = createArrivalRun({
@@ -1946,13 +1970,13 @@ async function applyShopVersionChange(entry) {
       const group = entry.loadGroup ?? (entry.loadGroup = {});
       const { batches, singles } = groupPlacements(arriving, findTemplate);
       for (const members of batches.values()) {
-        worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, token, group, run), {
+        worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, token, group, run, run), {
           group,
           priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
         });
       }
       for (const instance of singles) {
-        worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, token, run), {
+        worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, token, run, run), {
           group,
           priority: instanceLoadPriority(entry, instance),
         });
@@ -1987,7 +2011,7 @@ function initialBatchTiers(entry, handles, fullTriangles) {
   return budgetedTiers(items, undefined, undefined, fullTriangleCap);
 }
 
-async function buildAndAttachBatch(entry, members, myToken, group, run) {
+async function buildAndAttachBatch(entry, members, myToken, group, run, solidAfter = null) {
   const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
   if (myToken !== entry.loadToken) { // superseded while queued
     settleAll();
@@ -1997,7 +2021,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   const source = await loadBatchSource(template);
   if (!source) {
     for (const instance of members) {
-      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
+      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run, solidAfter), {
         group,
         priority: instanceLoadPriority(entry, instance),
       });
@@ -2067,6 +2091,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   let topZ = -Infinity;
   for (const handle of handles) {
     entry.objects.push(handle);
+    markPendingSolid(handle, solidAfter);
     topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
     registerShopReview(handle, entry);
   }
@@ -2095,7 +2120,7 @@ function instanceLoadPriority(entry, instance) {
 // One item of a landlet load (#3396): build it, attach it, register it. The
 // loop this came from checked its token before and after the build; those
 // checks are unchanged.
-async function buildAndAttachInstance(entry, instance, myToken, run) {
+async function buildAndAttachInstance(entry, instance, myToken, run, solidAfter = null) {
   if (myToken !== entry.loadToken) return; // superseded while queued
   const object = await createMeshForInstance(instance);
   if (!object) {
@@ -2121,6 +2146,7 @@ async function buildAndAttachInstance(entry, instance, myToken, run) {
   }
   entry.group.add(object);
   entry.objects.push(object);
+  markPendingSolid(object, solidAfter);
   growShopDomeIfNeeded(object);
   // #3416: the item starts on its full model. Its mid and far versions are
   // added the first time updateInstanceLodTiers asks for one (see
@@ -2149,6 +2175,17 @@ function shopArrivalAnchor(entry) {
   };
 }
 
+// #4391: an item that arrives through a change of version is not an obstacle until its arrival has finished and the
+// avatar is not standing where it is: it is invisible while its fog gathers, and one that appeared on top of a walking
+// shopper would hold them for good (flightMovement.js blocks any step from inside an overlap). movementWorld.js
+// skips an object with `pendingSolid`; flightMovement.js releases them each frame (releasePendingSolid).
+export const shopPendingSolid = new Set(); // { object, run }
+function markPendingSolid(object, run) {
+  if (!run) return;
+  object.userData.pendingSolid = true;
+  shopPendingSolid.add({ object, run });
+}
+
 // Drives every landlet's arrival effects (one cheap loop over the clusters
 // still arriving; a landlet at rest has none). Called once per frame from
 // updateShopWorldServices.
@@ -2160,7 +2197,10 @@ export function updateShopArrivals() {
       for (const run of entry.versionRuns) run.update();
       entry.versionRuns = entry.versionRuns.filter((run) => !run.settled());
     }
-    entry.departureRun?.update();
+    if (entry.departureRuns?.length) {
+      for (const run of entry.departureRuns) run.update();
+      entry.departureRuns = entry.departureRuns.filter((run) => !run.settled());
+    }
   }
   // #3479: far models dissolving in (a no-op when none are).
   shopFarView?.tick();

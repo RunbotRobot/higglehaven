@@ -1,18 +1,28 @@
-// #4391 (leaf 1): a builder switches which version of their lándlet is live while a shopper stands on it.
+// #4391 (leaf 1): a builder changes which version of their lándlet is live while a shopper stands on it.
 // Before, the shopper's picture never changed until they walked away and back. Now what is in both versions is not
 // touched, what is only in the old one fades out where it stands, and what is only in the new one arrives through
-// fog. Two versions of a lándlet of loose boxes: v1 has keep, leave, move; v2 has keep, move (moved), arrive.
-//   keep   -> same object (same three.js uuid), never dissolving
-//   leave  -> still drawn but no longer interactive, dissolving, then gone (not removed in one frame)
-//   move   -> the old one fades out and a new one arrives (a change is the old leaving and the new arriving)
-//   arrive -> not there before; there after, arriving through a dissolve
+// fog. Phases, on one lándlet of loose boxes (no model, so each is an ordinary item):
+//   0  never published (the shopper sees the draft); the builder publishes it: nothing is different, nothing is touched.
+//   1  v2: keep stays, leave goes, move stands somewhere else, arrive is new.
+//   2  v3 and v4 close together, so v4 lands while v3's items are still fading in / out.
+//   3  an item arrives where the shopper stands: it is not an obstacle until they have stepped off.
+//   4  an item leaves and the shopper walks away before its fade ends: nothing is left behind.
+//   5  300 items arrive and then 300 leave: no long frame.
 import { launchPage, chooseIdentity, claimLandlet, finish, shopStickBox } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const LABEL = 'Version Change Diff Builder';
 const STAMP = Date.now();
 const TEMPLATE_ID = `version-diff-box-${STAMP}`;
-const ID = { keep: `vd-keep-${STAMP}`, leave: `vd-leave-${STAMP}`, move: `vd-move-${STAMP}`, arrive: `vd-arrive-${STAMP}` };
+const ID = {
+  keep: `vd-keep-${STAMP}`, leave: `vd-leave-${STAMP}`, move: `vd-move-${STAMP}`, arrive: `vd-arrive-${STAMP}`,
+  p3: `vd-three-${STAMP}`, p4: `vd-four-${STAMP}`, here: `vd-here-${STAMP}`, away: `vd-away-${STAMP}`,
+};
+const MAX_FRAME_GAP_MS = Number(process.env.E2E_MAX_FRAME_GAP_MS || 250);
+const MANY = 300;
+
+let pass = true;
+const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
@@ -43,17 +53,16 @@ const created = await pageFetchJson('/api/catalog', jsonOptions('POST', {
   sellerId: sellerMe.seller.sellerId, priceCents: 500,
 }));
 const place = (id, x, y) => pageFetchJson('/api/instances', jsonOptions('POST', { instanceId: id, landletId: landlet.landletId, templateId: TEMPLATE_ID, x, y }));
-const first = [await place(ID.keep, 0, 0), await place(ID.leave, 4, 0), await place(ID.move, -4, 0)];
-const v1 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions`, jsonOptions('POST', { name: 'one' }));
-const act1 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions/${v1.body.version.versionId}/activate`, jsonOptions('POST', {}));
-console.log('setup statuses (template, three places, v1, activate):', created.status, first.map((r) => r.status), v1.status, act1.status);
+const remove = (id) => pageFetchJson(`/api/instances/${id}`, { method: 'DELETE' });
+const publish = async (name) => {
+  const v = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions`, jsonOptions('POST', { name }));
+  const act = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions/${v.body.version.versionId}/activate`, jsonOptions('POST', {}));
+  return v.status === 201 && act.status === 200;
+};
 
-// The second version: leave is gone, move stands somewhere else, arrive is new.
-const removed = await pageFetchJson(`/api/instances/${ID.leave}`, { method: 'DELETE' });
-const moved = await pageFetchJson(`/api/instances/${ID.move}`, jsonOptions('PATCH', { x: -4, y: 4 }));
-const arrived = await place(ID.arrive, 0, 4);
-const v2 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions`, jsonOptions('POST', { name: 'two' }));
-console.log('second version statuses (delete, move, place, v2):', removed.status, moved.status, arrived.status, v2.status);
+// Phase 0 setup: a draft only (never published).
+const first = [await place(ID.keep, 0, 0), await place(ID.leave, 4, 0), await place(ID.move, -4, 0)];
+check(created.status === 201 && first.every((r) => r.status === 201), 'the template and the first three boxes are created');
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('body.shop-ready', { timeout: 10000 });
@@ -66,89 +75,152 @@ await page.mouse.down();
 await page.mouse.move(cx + 25, cy, { steps: 5 });
 await page.waitForTimeout(100);
 await page.mouse.up();
-await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y); window.__testForceShopProximityCheck(); }, [landlet.center.x, landlet.center.y]);
+// z: 0 puts the avatar on the ground (a shopper who is flying cannot be trapped by anything).
+const standAt = (x, y, z) => page.evaluate(([px, py, pz]) => { window.__testTeleportShopAvatar(px, py, pz ?? undefined); window.__testForceShopProximityCheck(); }, [landlet.center.x + x, landlet.center.y + y, z ?? null]);
+await standAt(0, 6);
 
 const state = (id) => page.evaluate((i) => window.__testShopVersionState(i), id);
-// v1 is live: wait until its three items are drawn and every arrival has settled.
-await page.waitForFunction((ids) => ids.every((id) => window.__testShopVersionState(id).inObjects), [ID.keep, ID.leave, ID.move], { timeout: 20000 });
-await page.waitForFunction(() => window.__shopArrivalRun?.settled?.(), null, { timeout: 25000 });
-const before = { keep: await state(ID.keep), leave: await state(ID.leave), move: await state(ID.move), arrive: await state(ID.arrive) };
-console.log('before the switch (v1 live):', JSON.stringify(before));
-
-// The builder switches to v2 while the shopper stands here. (The shopper's page learns of it on its next record
-// refresh; forced here instead of waiting 20 s.)
-const act2 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions/${v2.body.version.versionId}/activate`, jsonOptions('POST', {}));
-console.log('activate v2 status:', act2.status);
-await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
-
-// Sample the next few seconds: a leaving item must stay drawn (and dissolving) for a while, not vanish in a frame.
-const samples = [];
-const deadline = Date.now() + 9000;
-while (Date.now() < deadline) {
-  samples.push({ at: Date.now(), leave: await state(ID.leave), keep: await state(ID.keep), arrive: await state(ID.arrive), move: await state(ID.move) });
-  if (samples.length > 3 && !samples.at(-1).leave.inGroup && samples.at(-1).arrive.inObjects) break;
-  await page.waitForTimeout(150);
-}
-const counters = await page.evaluate(() => ({ ...window.__shopVersionChange }));
-console.log('version change counters:', JSON.stringify(counters));
-
-const leaveDrawnSamples = samples.filter((s) => s.leave.inGroup && !s.leave.inObjects);
-const leaveSeenDissolving = leaveDrawnSamples.some((s) => s.leave.dissolving);
-const keepUuids = new Set(samples.map((s) => s.keep.uuid));
-const keepNeverDissolved = samples.every((s) => !s.keep.dissolving);
-const arriveSeen = samples.some((s) => s.arrive.inObjects);
-const leaveGoneAtEnd = !samples.at(-1).leave.inGroup;
-const moveOldFadedAndNewArrived = samples.some((s) => s.move.inGroup);
-const leaveDurationMs = leaveDrawnSamples.length ? leaveDrawnSamples.at(-1).at - leaveDrawnSamples[0].at : 0;
-console.log('leave: drawn-but-not-interactive samples', leaveDrawnSamples.length, 'dissolving seen', leaveSeenDissolving, 'visible for ms', leaveDurationMs, 'gone at end', leaveGoneAtEnd);
-console.log('keep: uuids seen', [...keepUuids].length, 'uuid unchanged', keepUuids.size === 1 && keepUuids.has(before.keep.uuid), 'never dissolved', keepNeverDissolved);
-
-// Second half: a later change with more of both (v3 adds four boxes, v4 removes two of them) is applied the same way,
-// the untouched items keep their objects through both, and the lándlet is never loaded again from scratch.
-// (A batched item leaving, a sign, a calendar, a diff over the size limit and a load or arrival still under way fall
-// back to a plain reload instead; that decision is unit-tested in versionDiff.test.js, since a batch needs a real model.)
-const EXTRA = [1, 2, 3, 4].map((n) => `vd-extra-${n}-${STAMP}`);
-const placedExtra = [];
-for (const [index, id] of EXTRA.entries()) placedExtra.push((await place(id, -6 + index * 2, 9)).status);
-const v3 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions`, jsonOptions('POST', { name: 'three' }));
-const act3 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions/${v3.body.version.versionId}/activate`, jsonOptions('POST', {}));
-async function refreshUntil(predicate) {
-  for (let tries = 0; tries < 25; tries += 1) {
+const counters = () => page.evaluate(() => ({ ...window.__shopVersionChange }));
+const delta = (a, b) => Object.fromEntries(Object.keys(b).map((k) => [k, b[k] - (a[k] ?? 0)]));
+async function refreshUntil(predicate, arg) {
+  for (let tries = 0; tries < 30; tries += 1) {
     await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
-    if (await page.evaluate(predicate)) return true;
+    if (await page.evaluate(predicate, arg)) return true;
     await page.waitForTimeout(1000);
   }
   return false;
 }
-const v3Applied = await refreshUntil(() => window.__shopVersionChange.diffed >= 2);
-await page.waitForFunction((ids) => ids.every((id) => window.__testShopVersionState(id).inObjects), EXTRA, { timeout: 20000 });
-const keepSurvivedV3 = (await state(ID.keep)).uuid === before.keep.uuid;
-const removeExtra = [await pageFetchJson(`/api/instances/${EXTRA[2]}`, { method: 'DELETE' }), await pageFetchJson(`/api/instances/${EXTRA[3]}`, { method: 'DELETE' })];
-const v4 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions`, jsonOptions('POST', { name: 'four' }));
-const act4 = await pageFetchJson(`/api/landlets/${landlet.landletId}/versions/${v4.body.version.versionId}/activate`, jsonOptions('POST', {}));
-const v4Applied = await refreshUntil(() => window.__shopVersionChange.diffed >= 3);
-await page.waitForFunction((ids) => ids.every((id) => !window.__testShopVersionState(id).inGroup), [EXTRA[2], EXTRA[3]], { timeout: 15000 });
-const keepSurvivedV4 = (await state(ID.keep)).uuid === before.keep.uuid && (await state(EXTRA[0])).inObjects && (await state(EXTRA[1])).inObjects;
-const finalCounters = await page.evaluate(() => ({ ...window.__shopVersionChange }));
-console.log('second half:', JSON.stringify({ placedExtra, v3Applied, v4Applied, keepSurvivedV3, keepSurvivedV4, finalCounters }));
-const secondHalfPass = placedExtra.every((status) => status === 201) && v3.status === 201 && act3.status === 200
-  && removeExtra.every((r) => r.status < 300) && v4.status === 201 && act4.status === 200
-  && v3Applied && v4Applied && keepSurvivedV3 && keepSurvivedV4 && finalCounters.plainReload === 0 && finalCounters.diffed === 3;
+const allIn = (ids) => page.waitForFunction((list) => list.every((id) => window.__testShopVersionState(id).inObjects), ids, { timeout: 25000 });
+const allArrived = () => page.waitForFunction(() => window.__shopVersionChange && (window.__shopArrivalRun?.settled?.() ?? true), null, { timeout: 25000 });
+await allIn([ID.keep, ID.leave, ID.move]);
+await allArrived();
+await page.waitForTimeout(500);
 
-const frame = await page.evaluate(() => window.__shopFrameStats?.() ?? null).catch(() => null);
-const pass = created.status === 201 && first.every((r) => r.status === 201) && v1.status === 201 && act1.status === 200
-  && removed.status < 300 && moved.status < 300 && arrived.status === 201 && v2.status === 201 && act2.status === 200
-  && before.keep.inObjects && before.leave.inObjects && before.move.inObjects && !before.arrive.inGroup
-  && counters.diffed === 1 && counters.plainReload === 0 && counters.leaving === 2 && counters.arriving === 2 && counters.unchanged === 1
-  && leaveDrawnSamples.length >= 3 && leaveSeenDissolving && leaveDurationMs >= 800 && leaveGoneAtEnd
-  && keepUuids.size === 1 && keepUuids.has(before.keep.uuid) && keepNeverDissolved
-  && arriveSeen && moveOldFadedAndNewArrived
-  && secondHalfPass
-  && errors.length === 0;
-void frame;
+// ---- Phase 0: the first publish of a lándlet the shopper already has loaded changes nothing ----
+const c0 = await counters();
+const draftState = { keep: await state(ID.keep), leave: await state(ID.leave), move: await state(ID.move) };
+check(await publish('one'), 'v1 is published and activated');
+await refreshUntil((base) => window.__shopVersionChange.diffed > base, c0.diffed ?? 0);
+const d0 = delta(c0, await counters());
+const after0 = { keep: await state(ID.keep), leave: await state(ID.leave), move: await state(ID.move) };
+check(d0.diffed === 1 && d0.plainReload === 0 && d0.leaving === 0 && d0.arriving === 0 && d0.unchanged === 3,
+  `the first publish is a diff of nothing: ${JSON.stringify(d0)}`);
+check(['keep', 'leave', 'move'].every((k) => after0[k].uuid === draftState[k].uuid && !after0[k].dissolving && after0[k].copies === 1),
+  'after the first publish every item is the very same object, not dissolving, drawn once');
+
+// ---- Phase 1: v2 ----
+await remove(ID.leave);
+await pageFetchJson(`/api/instances/${ID.move}`, jsonOptions('PATCH', { x: -4, y: 4 }));
+await place(ID.arrive, 0, 4);
+const c1 = await counters();
+check(await publish('two'), 'v2 is published and activated');
+await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
+const samples = [];
+const deadline = Date.now() + 10000;
+while (Date.now() < deadline) {
+  samples.push({ at: Date.now(), leave: await state(ID.leave), keep: await state(ID.keep), arrive: await state(ID.arrive), move: await state(ID.move) });
+  const last = samples.at(-1);
+  if (samples.length > 3 && !last.leave.inGroup && last.arrive.inObjects && last.move.copies === 1 && last.move.inObjects && last.move.y > 3) break;
+  await page.waitForTimeout(120);
+}
+const d1 = delta(c1, await counters());
+const leaveDrawn = samples.filter((s) => s.leave.inGroup && !s.leave.inObjects);
+const leaveMs = leaveDrawn.length ? leaveDrawn.at(-1).at - leaveDrawn[0].at : 0;
+check(d1.diffed === 1 && d1.plainReload === 0 && d1.leaving === 2 && d1.arriving === 2 && d1.unchanged === 1, `v2 is one diff: ${JSON.stringify(d1)}`);
+check(leaveDrawn.length >= 3 && leaveDrawn.some((s) => s.leave.dissolving) && leaveMs >= 800 && !samples.at(-1).leave.inGroup,
+  `the removed item stays drawn and dissolving for a while, then is gone (visible ${leaveMs} ms, ${leaveDrawn.length} samples)`);
+check(leaveDrawn.every((s) => s.leave.obstacle === false) && samples.every((s) => s.keep.obstacle === true || s.keep.obstacle === false) && samples.at(-1).keep.obstacle,
+  'a leaving item is not an obstacle from the first frame of its fade; the kept item is');
+check(samples.every((s) => s.keep.uuid === after0.keep.uuid && !s.keep.dissolving && s.keep.copies === 1), 'the kept item stays the very same object, never dissolving, drawn once');
+const moveDuring = samples.filter((s) => s.move.copies === 2);
+const moveEnd = samples.at(-1).move;
+check(moveDuring.length >= 1, 'the moved item is drawn twice for a while (the old one fading out, the new one arriving)');
+check(moveEnd.copies === 1 && moveEnd.inObjects && Math.abs(moveEnd.x + 4) < 0.01 && Math.abs(moveEnd.y - 4) < 0.01,
+  `at the end exactly one moved item stands at its new place (copies ${moveEnd.copies}, at ${moveEnd.x}, ${moveEnd.y})`);
+check(samples.at(-1).arrive.inObjects && samples.at(-1).arrive.copies === 1, 'the new item arrived, drawn once');
+
+// ---- Phase 2: v3 and v4 close together (v4 lands while v3's items are still arriving and leaving) ----
+await allArrived();
+await place(ID.p3, -8, 8);
+await remove(ID.arrive);
+const c2 = await counters();
+check(await publish('three'), 'v3 is published and activated');
+await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
+await page.waitForTimeout(700); // v3 is being applied: its item is still arriving and `arrive` is still fading out
+await place(ID.p4, 8, 8);
+await remove(ID.p3);
+check(await publish('four'), 'v4 is published and activated while v3 is still settling');
+await refreshUntil((ids) => !window.__testShopVersionState(ids[0]).inGroup && window.__testShopVersionState(ids[1]).inObjects, [ID.p3, ID.p4]);
+await page.waitForFunction((ids) => ids.every((id) => window.__testShopVersionState(id).copies <= 1), [ID.keep, ID.move, ID.arrive, ID.p3, ID.p4], { timeout: 15000 });
+const two = { arrive: await state(ID.arrive), p3: await state(ID.p3), p4: await state(ID.p4), keep: await state(ID.keep), move: await state(ID.move) };
+const d2 = delta(c2, await counters());
+check(!two.arrive.inGroup && !two.p3.inGroup && two.p4.inObjects && two.keep.uuid === after0.keep.uuid && two.keep.copies === 1 && two.move.copies === 1 && d2.plainReload === 0,
+  `after v3 and v4 close together the picture is v4's, nothing double-drawn or left behind: ${JSON.stringify({ d2, p3: two.p3.inGroup, p4: two.p4.inObjects })}`);
+
+// ---- Phase 3: an item arrives where the shopper stands ----
+await allArrived();
+await standAt(2, -2, 0);
+await place(ID.here, 2, -2);
+check(await publish('five'), 'v5 (an item where the shopper stands) is published and activated');
+await refreshUntil((id) => window.__testShopVersionState(id).inObjects, ID.here);
+await allArrived();
+await page.waitForTimeout(600);
+const underfoot = await state(ID.here);
+check(underfoot.inObjects && underfoot.obstacle === false, `an item that arrived under the shopper is not an obstacle while they stand on it (obstacle ${underfoot.obstacle})`);
+await standAt(2, 6, 0);
+await page.waitForFunction((id) => window.__testShopVersionState(id).obstacle === true, ID.here, { timeout: 10000 }).catch(() => {});
+check((await state(ID.here)).obstacle === true, 'once the shopper has stepped off it becomes an obstacle');
+
+// ---- Phase 4: the shopper leaves while an item is still fading out ----
+await place(ID.away, 6, 6);
+await publish('six');
+await refreshUntil((id) => window.__testShopVersionState(id).inObjects, ID.away);
+await allArrived();
+await remove(ID.away);
+check(await publish('seven'), 'v7 (without the last item) is published and activated');
+await refreshUntil((id) => !window.__testShopVersionState(id).inObjects, ID.away);
+await standAt(5000, 5000); // far away: the lándlet unloads while that item is still fading out
+await page.waitForFunction(() => window.__testShopLoadedInstanceCount() === 0, null, { timeout: 30000 });
+await page.waitForTimeout(500);
+const leftBehind = await state(ID.away);
+check(!leftBehind.inGroup && leftBehind.copies === 0, `an unload in the middle of a fade leaves nothing behind (copies ${leftBehind.copies})`);
+await standAt(0, 6);
+await page.waitForFunction((ids) => ids.every((id) => window.__testShopVersionState(id).inObjects), [ID.keep, ID.here], { timeout: 30000 });
+check(!(await state(ID.away)).inGroup, 'coming back loads the live version (without the removed item)');
+
+// ---- Phase 5: three hundred arrive, then three hundred leave: no long frame ----
+const manyIds = Array.from({ length: MANY }, (_, i) => `vd-many-${i}-${STAMP}`);
+const manyRows = manyIds.map((instanceId, i) => ({
+  instanceId, landletId: landlet.landletId, templateId: TEMPLATE_ID, x: -7 + (i % 20) * 0.7, y: -14 + Math.floor(i / 20) * 0.7,
+}));
+for (let i = 0; i < MANY; i += 100) {
+  const batch = await pageFetchJson('/api/instances/batch', jsonOptions('PUT', { instances: manyRows.slice(i, i + 100) }));
+  check(batch.status === 200 || batch.status === 201, `300 items are placed (chunk ${i / 100}: ${batch.status})`);
+}
+await allArrived();
+await page.evaluate(() => window.__frameMonitor.reset());
+check(await publish('many'), 'v8 (300 more items) is published and activated');
+await refreshUntil((ids) => ids.every((id) => window.__testShopVersionState(id).inObjects), manyIds.slice(0, 3));
+await page.waitForFunction((ids) => ids.every((id) => window.__testShopVersionState(id).inObjects), manyIds.slice(-3), { timeout: 60000 });
+const arrivalGap = await page.evaluate(() => window.__frameMonitor.longestFrameGapMs());
+await allArrived();
+await page.waitForTimeout(500);
+await page.evaluate(async (ids) => { await Promise.all(ids.map((id) => fetch(`/api/instances/${id}`, { method: 'DELETE' }))); }, manyIds);
+await page.evaluate(() => window.__frameMonitor.reset());
+check(await publish('none'), 'v9 (the 300 gone again) is published and activated');
+await refreshUntil((ids) => ids.every((id) => !window.__testShopVersionState(id).inObjects), manyIds.slice(0, 3));
+await page.waitForFunction((ids) => ids.every((id) => !window.__testShopVersionState(id).inGroup), manyIds, { timeout: 60000 });
+const leaveGap = await page.evaluate(() => window.__frameMonitor.longestFrameGapMs());
+console.log(`300 arriving: longest frame gap ${Math.round(arrivalGap)} ms; 300 leaving (and gone): longest frame gap ${Math.round(leaveGap)} ms`);
+check(arrivalGap < MAX_FRAME_GAP_MS, `300 items arriving never block a frame of ${MAX_FRAME_GAP_MS} ms or more (longest ${Math.round(arrivalGap)} ms)`);
+check(leaveGap < MAX_FRAME_GAP_MS, `300 items leaving never block a frame of ${MAX_FRAME_GAP_MS} ms or more (longest ${Math.round(leaveGap)} ms)`);
+const finalCounters = await counters();
+check(finalCounters.plainReload === 0, `no change in this test needed a plain reload (${JSON.stringify(finalCounters)})`);
+
 await finish(browser, {
-  pass,
-  label: '#4391: a change of the live version, seen by a shopper on the lándlet, leaves what is in both versions untouched, '
-    + 'fades out what left (still drawn, not interactive, gone only after the fade) and brings in what is new',
+  pass: pass && errors.length === 0,
+  label: '#4391: a change of the live version, seen by a shopper on the lándlet, leaves what is in both versions untouched '
+    + '(also on a first publish), fades out what left, brings in what is new, never traps a shopper, survives overlapping changes and an '
+    + 'unload mid-fade, and never blocks a frame at 300 items',
   errors,
 });

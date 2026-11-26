@@ -276,8 +276,19 @@ export function unloadShopLandletInstances(entry) {
   // fading out leaves now, and what the diff showed (and the version it was) is forgotten with the load.
   for (const run of entry.versionRuns ?? []) run.dispose();
   entry.versionRuns = [];
-  entry.departureRun?.dispose();
-  entry.departureRun = null;
+  // Whatever was still fading out leaves now: those already fading are handed back by dispose(); those still waiting
+  // for their turn in the budget are removed here.
+  if (entry.departureGroup) {
+    worldWorkQueue.dropGroup(entry.departureGroup);
+    entry.departureGroup = null;
+  }
+  for (const run of entry.departureRuns ?? []) run.dispose();
+  entry.departureRuns = [];
+  for (const object of entry.leavingObjects ?? []) {
+    entry.group.remove(object);
+    worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
+  }
+  entry.leavingObjects = new Set();
   entry.shownInstances = null;
   entry.shownVersionId = undefined;
   for (const object of entry.objects) {
@@ -359,15 +370,22 @@ export function unloadShopLandletInstances(entry) {
   }
 }
 
-// #4391: takes one placed item out of everything a shopper can interact with (its review sprites, and the product
-// card, hints and highlight if they were on it) while it is still drawn, so a change of version can let it fade out
-// instead of removing it in one frame. Its picture is the caller's to remove and dispose afterwards. Signs and
-// calendars are not handled here: the caller does not let them leave this way.
-export function unregisterShopObject(entry, object) {
-  for (const review of [...shopReviews]) {
-    if (review.group !== entry.group || review.mesh !== object) continue;
+// #4391: takes placed items out of everything a shopper can interact with (their review sprites, and the product
+// card, hints and highlight if they were on one) while they are still drawn, so a change of version can let them fade
+// out instead of removing them in one frame. One pass over the reviews for the whole set. Their pictures are the
+// caller's to remove and dispose afterwards. Signs and calendars are not handled here: the caller does not let them
+// leave this way.
+export function unregisterShopObjects(entry, objects) {
+  const leaving = [];
+  const kept = [];
+  for (const review of shopReviews) {
+    if (review.group === entry.group && objects.has(review.mesh)) leaving.push(review);
+    else kept.push(review);
+  }
+  if (!leaving.length) return;
+  shopReviews.splice(0, shopReviews.length, ...kept);
+  for (const review of leaving) {
     disposeReviewSprites(review);
-    shopReviews.splice(shopReviews.indexOf(review), 1);
     if (shopTappedProduct === review) {
       setShopTappedProduct(null);
       setShopReviewHintsVisible(false);

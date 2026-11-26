@@ -28,6 +28,13 @@ describe('diffVersionInstances (#4391)', () => {
     expect(sameInstance({ ...inst('a'), crop: { x: 1 } }, { ...inst('a'), crop: { x: 1 } })).toBe(true);
     expect(sameInstance({ ...inst('a'), label: null }, inst('a'))).toBe(true); // null and missing are the same
   });
+  it('calls a draft-shaped and a version-shaped record of the same item the same (first publish changes nothing)', () => {
+    const version = { instanceId: 'a', id: 'a', templateId: 't', x: 1, y: 2, z: 0, rotationX: 0, rotationY: 0, rotationZ: 0, label: null, crop: {}, scale: 1, isCommunitySign: false, isCommunityCalendar: false, groupId: null, bundleId: null };
+    const draft = { ...version, landletId: 'l1', createdAt: '2026-11-26T00:00:00Z', updatedAt: '2026-11-26T01:00:00Z' };
+    expect(sameInstance(draft, version)).toBe(true);
+    expect(diffVersionInstances(new Map([['a', draft]]), [version])).toEqual({ removed: [], added: [], changed: [], unchanged: 1 });
+    expect(sameInstance(draft, { ...version, x: 1.5 })).toBe(false);
+  });
   it('treats a list that is wholly different as all leaving and all arriving', () => {
     const diff = diffVersionInstances(mapOf([inst('a')]), [inst('z')]);
     expect(diff.removed).toEqual(['a']);
@@ -64,6 +71,17 @@ describe('createDepartureRun (#4391)', () => {
     expect(f.restored).toEqual(['lamp']);
     expect(f.gone).toEqual(['lamp']);
     expect(f.run.settled()).toBe(true);
+  });
+  it('is not settled while items it was told to expect have not been added, and settles when they are added or given up', () => {
+    const f = fakes();
+    f.run.expect(2);
+    expect(f.run.settled()).toBe(false);
+    f.run.add({ name: 'a' }, f.onGone);
+    f.run.giveUp();
+    f.advance(DEPARTURE_S * 1000 + 10);
+    f.run.update();
+    expect(f.run.settled()).toBe(true);
+    expect(f.gone).toEqual(['a']);
   });
   it('hands everything back at once on dispose, and an add after dispose goes straight back', () => {
     const f = fakes();
