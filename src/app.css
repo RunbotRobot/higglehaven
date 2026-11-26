@@ -692,13 +692,19 @@
          instead, rather than needing a brand new one. That row's left
          side (once the account menu's own spot — see #topbar-left) is
          empty now that the account menu moved up next to the wordmark. */
+      /* #4411: Undo and Redo, the owner's exception to "nothing stands on the world but the head": two small icons in one
+         shared pill at the upper right, always drawn, greyed when there is nothing to undo or redo. Build only (main.js
+         hides the panel in Shop and Sell). The row is built to take other often-used Build tools later. */
       #undo-redo-panel {
         position: fixed;
-        top: 48px;
+        top: 52px;
         right: 8px;
         z-index: 10;
         display: flex;
-        gap: var(--space-sm);
+        gap: var(--space-3xs);
+        padding: var(--space-3xs);
+        border-radius: var(--radius-pill);
+        background: rgb(var(--pill-rgb) / 0.55);
       }
       /* Account menu — Identity/Notices/Friends/Settings used to be four
          separate persistent pills across two rows. Consolidated into one
@@ -879,7 +885,10 @@
       #bud-stem path {
         fill: none;
         stroke-linejoin: round;
-        stroke-dasharray: 1;
+        /* #4408: the lower end is a rounded tip in every frame, growing and folding included. The gap is wider than the
+           path so no zero-length dash is left at the far end while the stem is drawn away (a round cap on one would be a dot). */
+        stroke-linecap: round;
+        stroke-dasharray: 1 2;
         stroke-dashoffset: 0;
         animation: bud-stem-grow var(--motion-open-stem) var(--ease-stem) var(--delay-open-stem) both;
       }
@@ -2127,16 +2136,21 @@
         border-bottom: 14px solid rgb(var(--ink-rgb) / 0.85);
         transform-origin: 4px 14px;
       }
-      /* #3942: Undo and Redo are quiet buttons (DESIGN.md, "Inside a leaf"). */
       #undo-redo-panel button {
-        min-height: 44px;
-        padding: var(--space-xs) var(--space-lg);
-        border-radius: var(--radius-pill);
-        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        width: 36px;
+        height: 36px;
+        min-height: 0;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
         background: transparent;
         color: var(--ink);
-        font: var(--text-md)/var(--leading-normal) var(--font-sans);
       }
+      /* The round shape lives on the states, so the row adds no new button look (check-leaf-parts). */
+      #undo-redo-panel button:focus-visible { border-radius: var(--radius-pill); outline: 2px solid var(--brand-green); outline-offset: 1px; }
+      #undo-redo-panel button svg { width: 22px; height: 22px; }
       #undo-redo-panel button:disabled {
         opacity: 0.4;
       }
@@ -3012,7 +3026,6 @@
       }
       /* #3574: controls that cannot be used yet are left out, not greyed. */
       #paste-btn[hidden],
-      #redo-btn[hidden],
       #ungroup-item[hidden],
       #group-item[hidden],
       #mode-trim[hidden],
@@ -7269,6 +7282,10 @@
       }
       /* A real <button> (see its own click-handler comment, src/main.js),
          styled to read as the clickable land name it is. */
+      /* #3784: the lándlet's name in its chosen lettering inside the list link: the list's own size, no accent bar. */
+      .my-lands-open-link .bud-place-name { font-size: inherit; line-height: inherit; letter-spacing: inherit; font-weight: inherit; }
+      .my-lands-open-link .bud-place-name:not([data-wordmark]) { font-family: inherit; }
+      .my-lands-open-link .bud-place-name::after { display: none; }
       .my-lands-open-link {
         border: none;
         background: none;

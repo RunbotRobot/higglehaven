@@ -548,3 +548,27 @@ describe('orbSpawnPoint (#4198)', () => {
     expect(y).toBeCloseTo((Math.sqrt(1000) / 2) * 0.8, 6);
   });
 });
+
+// #4387: the list for one lándlet also names the orbs collected a moment ago, so an onlooker pops them too.
+describe('GET /api/credit-orbs collectedOrbIds (#4387)', () => {
+  it('names an orb collected a moment ago, not an old one or one still there, only when scoped to a lándlet', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const fresh = await seedOrb(landlet);
+    const recent = await seedOrb(landlet);
+    const old = await seedOrb(landlet);
+    const collector = await signupBuilder('orb-collected-ids');
+    const now = Date.now();
+    await env.DB.prepare('UPDATE credit_orbs SET collected_at = ?, collected_by_builder_id = ? WHERE orb_id = ?')
+      .bind(new Date(now - 3000).toISOString(), collector.builderId, recent).run();
+    await env.DB.prepare('UPDATE credit_orbs SET collected_at = ?, collected_by_builder_id = ? WHERE orb_id = ?')
+      .bind(new Date(now - 60000).toISOString(), collector.builderId, old).run();
+
+    const scoped = await api(`/credit-orbs?landletId=${landlet}`);
+    expect(scoped.body.orbs.map((orb) => orb.orbId)).toEqual([fresh]);
+    expect(scoped.body.collectedOrbIds).toEqual([recent]);
+    expect(JSON.stringify(scoped.body)).not.toContain(collector.builderId);
+
+    const unscoped = await api('/credit-orbs');
+    expect(unscoped.body.collectedOrbIds).toBeUndefined();
+  });
+});

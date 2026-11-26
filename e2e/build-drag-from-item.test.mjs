@@ -80,9 +80,7 @@ check(!(await page.evaluate(() => window.__testBodyDragActive())), 'and the drag
 
 // Undo takes the move back like any other.
 await budClick(page, '#undo-btn');
-await page.waitForTimeout(1000);
-await page.keyboard.press('Escape');
-await page.waitForTimeout(400);
+await page.waitForTimeout(1400); // #4411: a standing button, no bud to fold
 const sUndo = await state();
 check(sUndo && near(sUndo.x, s0.x) && near(sUndo.y, s0.y), `Undo takes the drag back (${JSON.stringify(sUndo && { x: sUndo.x, y: sUndo.y })})`);
 

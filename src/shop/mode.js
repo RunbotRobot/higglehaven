@@ -272,6 +272,25 @@ export function unloadShopLandletInstances(entry) {
     entry.arrivalRun.dispose();
     entry.arrivalRun = null;
   }
+  // #4391: the arrivals and departures of a change of version are released the same way. Whatever was still
+  // fading out leaves now, and what the diff showed (and the version it was) is forgotten with the load.
+  for (const run of entry.versionRuns ?? []) run.dispose();
+  entry.versionRuns = [];
+  // Whatever was still fading out leaves now: those already fading are handed back by dispose(); those still waiting
+  // for their turn in the budget are removed here.
+  if (entry.departureGroup) {
+    worldWorkQueue.dropGroup(entry.departureGroup);
+    entry.departureGroup = null;
+  }
+  for (const run of entry.departureRuns ?? []) run.dispose();
+  entry.departureRuns = [];
+  for (const object of entry.leavingObjects ?? []) {
+    entry.group.remove(object);
+    worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
+  }
+  entry.leavingObjects = new Set();
+  entry.shownInstances = null;
+  entry.shownVersionId = undefined;
   for (const object of entry.objects) {
     entry.group.remove(object);
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
@@ -348,6 +367,35 @@ export function unloadShopLandletInstances(entry) {
     if (burst.group !== entry.group) continue;
     disposeConfettiBurst(burst);
     confettiBursts.splice(confettiBursts.indexOf(burst), 1);
+  }
+}
+
+// #4391: takes placed items out of everything a shopper can interact with (their review sprites, and the product
+// card, hints and highlight if they were on one) while they are still drawn, so a change of version can let them fade
+// out instead of removing them in one frame. One pass over the reviews for the whole set. Their pictures are the
+// caller's to remove and dispose afterwards. Signs and calendars are not handled here: the caller does not let them
+// leave this way.
+export function unregisterShopObjects(entry, objects) {
+  const leaving = [];
+  const kept = [];
+  for (const review of shopReviews) {
+    if (review.group === entry.group && objects.has(review.mesh)) leaving.push(review);
+    else kept.push(review);
+  }
+  if (!leaving.length) return;
+  shopReviews.splice(0, shopReviews.length, ...kept);
+  for (const review of leaving) {
+    disposeReviewSprites(review);
+    if (shopTappedProduct === review) {
+      setShopTappedProduct(null);
+      setShopReviewHintsVisible(false);
+      setShopReviewHintsProduct(null);
+      closeProductCard();
+    }
+    if (shopHighlightedProduct === review) {
+      removeSelectionOutline(review.mesh);
+      setShopHighlightedProduct(null);
+    }
   }
 }
 

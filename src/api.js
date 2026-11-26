@@ -2116,9 +2116,11 @@ export async function reportPresence({ x, y, z, heading, landletId, flying, afk 
 // a time (never the caller's own row — the backend excludes it). #2269: the
 // landlet itself is derived server-side from the caller's own last-reported
 // presence row, not a client-supplied parameter — this takes no argument.
+// #4387: also names the orbs that someone else collected in the last half minute (ids only), so an onlooker can
+// show the same pop; an older answer without the field reads as none.
 export async function fetchNearbyPresence() {
-  const { avatars } = await requestJson('/presence');
-  return avatars;
+  const { avatars, collectedOrbs } = await requestJson('/presence');
+  return { avatars, collectedOrbs: collectedOrbs ?? [] };
 }
 
 // #1176: the caller's own last-reported position — unlike fetchNearbyPresence
@@ -2305,6 +2307,13 @@ export async function leaveFriendVoiceChannel(ownerBuilderId) {
 export async function fetchCreditOrbs(landletId) {
   const { orbs } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
   return orbs;
+}
+
+// #4387: the same list with the ids collected in the last few seconds, so an orb another person collected pops
+// for an onlooker too (docs/API.md "Credit orbs").
+export async function fetchCreditOrbsWithCollected(landletId) {
+  const { orbs, collectedOrbIds } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
+  return { orbs, collectedOrbIds: collectedOrbIds ?? [] };
 }
 
 // #3441: where the signed-in person stands against the orb collect limit

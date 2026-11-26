@@ -75,7 +75,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbsWithCollected, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence, fetchMyBuilder,
 } from '../api.js';
 import { creditOrbAboutText, creditOrbBalanceWord, creditOrbCollectedText } from './creditOrbInfo.js';
 import { noteOrbLoadFailed, orbLoadDue } from './orbLoadRetry.js';
@@ -108,7 +108,9 @@ import {
 // own enterShopMode in turn imports shopLandlets/pickShopSpawnLocation/etc.
 // from this module, same mutually-dependent shape flightMovement.js's own
 // header comment already documents for shop/avatar.js and itself.
-import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
+import { disposeObject3D, unloadShopLandletInstances, unregisterShopObjects, buildShopGroundMesh } from './mode.js';
+import { diffVersionInstances, instanceIdOf, planVersionChange } from './versionDiff.js'; // #4391
+import { createDepartureRun } from './departureRun.js'; // #4391
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
 import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
@@ -401,6 +403,10 @@ export function updateShopProximity() {
         loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
       } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
         unloadCreditOrbsForLandlet(entry);
+      } else if (entry.orbsLoaded && !document.hidden && performance.now() >= (entry.orbsRefreshAt ?? 0)) {
+        // #4387: an orb someone else collects while I am here is told to me, so I see the same pop.
+        entry.orbsRefreshAt = performance.now() + CREDIT_ORB_REFRESH_INTERVAL_MS;
+        refreshCreditOrbsForLandlet(entry, entry.orbLoadToken);
       }
     }
   }
@@ -570,11 +576,16 @@ const SHOP_SETS_SLICE_MS = 2;
 const NO_SETS = new Map();
 function lodSetsFor(entry) {
   const current = entry.lodSetsToken === entry.loadToken;
-  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion)) {
-    entry.lodSetsJob = null; // its load is gone (the members are disposed) or the e2e switch changed
+  // #4391: a change of the live version swaps items without always changing their count, so it bumps
+  // entry.lodSetsEpoch; a job that started before it worked from the old list and is dropped, and sets worked out
+  // before it are kept for the frames until the new ones are done (never reported as up to date).
+  const epoch = entry.lodSetsEpoch ?? 0;
+  if (entry.lodSetsJob && (entry.lodSetsJob.token !== entry.loadToken || entry.lodSetsJob.version !== implicitSetsVersion
+    || (entry.lodSetsJob.epoch ?? 0) !== epoch)) {
+    entry.lodSetsJob = null; // its load is gone (the members are disposed), the e2e switch changed, or the items did
   }
   const upToDate = entry.lodSets && current && entry.lodSetsObjectCount === entry.objects.length
-    && entry.lodSetsVersion === implicitSetsVersion;
+    && entry.lodSetsVersion === implicitSetsVersion && (entry.lodSetsEpochSeen ?? 0) === epoch;
   if (upToDate && !entry.lodSetsJob) return entry.lodSets;
   if (!entry.lodSetsJob) {
     entry.lodSetsFailed = false;
@@ -582,6 +593,7 @@ function lodSetsFor(entry) {
       token: entry.loadToken,
       count: entry.objects.length,
       version: implicitSetsVersion,
+      epoch,
       // #4115: the rule for which items are one set is shared with Build (src/shop/lodSets.js).
       job: startLodSetsJob(entry.objects, {
         hasTiers: hasLodTiers,
@@ -599,6 +611,7 @@ function lodSetsFor(entry) {
     entry.lodSets = sets;
     entry.lodSetsObjectCount = running.count;
     entry.lodSetsVersion = running.version;
+    entry.lodSetsEpochSeen = running.epoch;
     entry.lodSetsToken = running.token; // an unload and reload with the same count must not reuse stale members
     entry.lodSetsFailed = running.job.failed;
     entry.lodSetsJob = null;
@@ -1057,6 +1070,12 @@ export function refreshShopLandletRecordsNow() {
         // PATCH endpoint) with no extra per-child work.
         entry.group.position.set(freshRecord.center.x, freshRecord.center.y, freshRecord.elevationM ?? 0);
         entry.record = freshRecord;
+        // #4391: the builder switched which version is live while this shopper has the lándlet loaded: what is
+        // drawn follows it, in the same breath as the other fields above (the first line of a load already reads
+        // the live version, so a lándlet that is not loaded needs nothing).
+        if (entry.loaded && entry.shownVersionId !== undefined && (freshRecord.activeVersionId ?? null) !== entry.shownVersionId) {
+          applyShopVersionChange(entry).catch((error) => console.warn("version change failed", error));
+        }
         if (entry === shopCurrentLandletEntry) currentEntryChanged = true;
       }
       // updateShopLandletInfo only re-renders on an actual landlet
@@ -1204,7 +1223,9 @@ export async function pollNearbyPresenceIfNeeded(now) {
   if (now - shopLastPresencePollAt < SHOP_PRESENCE_POLL_INTERVAL_MS) return;
   shopLastPresencePollAt = now;
   const landletId = shopCurrentLandletEntry?.record.landletId;
-  if (!landletId) {
+  // #4387: off a claimed lándlet there is nobody to show, but orbs (which live on greenbelt ones) are told of through
+  // this same answer, so while one is loaded the poll still runs, at its usual pace. With none, nothing is asked.
+  if (!landletId && shopCreditOrbs.length === 0) {
     despawnOtherShopAvatars();
     return;
   }
@@ -1216,8 +1237,9 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // file already uses (friendsLoadToken, dmLoadToken, etc.).
   const myPresencePollToken = ++presencePollToken;
   let avatars;
+  let collectedOrbs;
   try {
-    avatars = await fetchNearbyPresence();
+    ({ avatars, collectedOrbs } = await fetchNearbyPresence());
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
@@ -1228,6 +1250,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // applied (a livelock; seen as the flaky background-tab despawn e2e).
   if (myPresencePollToken < presenceAppliedToken) return;
   presenceAppliedToken = myPresencePollToken;
+  for (const orbId of collectedOrbs) popCreditOrbCollectedByOther(orbId); // #4387
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
@@ -1781,6 +1804,7 @@ export function updateOtherShopAvatars(now) {
 // current load already added.
 async function loadShopLandletInstances(entry, myToken) {
   let instances;
+  let loadedVersionId = null; // #4391: the version this load draws, read once (the record refresh may replace entry.record meanwhile)
   try {
     // #1282: entry.record is a one-time snapshot taken when Shop mode was
     // entered (fetchAllLandlets, far above) and was never refreshed after
@@ -1792,15 +1816,16 @@ async function loadShopLandletInstances(entry, myToken) {
     // fresh on every load keeps this decision current, the same way a
     // fresh page load already would, without changing anything else
     // entry.record is used for.
-    entry.record.activeVersionId = (await fetchLandlet(entry.record.landletId)).activeVersionId;
+    loadedVersionId = (await fetchLandlet(entry.record.landletId)).activeVersionId ?? null;
+    entry.record.activeVersionId = loadedVersionId;
     // A landlet that's actually been published (see the Build settings
     // tab's "Publish"/Version History) shows shoppers a frozen snapshot,
     // not the builder's own live in-progress edits — the whole point of a
     // draft/publish split. A landlet with no activeVersionId has never
     // been published, so this falls back to the live draft (today's
     // behavior for every landlet that existed before this feature).
-    instances = entry.record.activeVersionId
-      ? (await fetchLandletVersion(entry.record.landletId, entry.record.activeVersionId)).instances
+    instances = loadedVersionId
+      ? (await fetchLandletVersion(entry.record.landletId, loadedVersionId)).instances
       : await fetchInstances(entry.record.landletId);
   } catch {
     if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
@@ -1810,6 +1835,10 @@ async function loadShopLandletInstances(entry, myToken) {
   // on: its group would replace the newer load's group below, cancelling that load's items, and its own items are
   // stale, so nothing would be drawn at all.
   if (myToken !== entry.loadToken) return;
+  // #4391: what this load draws, so a later change of the live version can be told apart from it (versionDiff.js).
+  // After the check above: a superseded load must not overwrite what the current one recorded.
+  entry.shownVersionId = loadedVersionId;
+  entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
   // #3396: moving, looking and drawing never wait on loading. Each item is its
   // own small unit of work, run inside the per-frame time budget (see
   // src/world/frameBudgetQueue.js), nearest and largest on screen first, so a
@@ -1851,6 +1880,121 @@ async function loadShopLandletInstances(entry, myToken) {
   }
 }
 
+// #4391 (leaf 1 of the version-change transition, docs/SPEC.md section 3): the live version of a lándlet a shopper
+// has loaded changed. What is in both versions, unchanged, is not touched at all; what is only in the old one fades
+// out where it stands (departureRun.js); what is only in the new one arrives through the same fog as any first load
+// (a second arrival run over just those, built by the same functions). Instances keep their id from the draft into
+// every version, so they are matched by id (versionDiff.js). Not everything can go this way, and then the lándlet
+// loads again plainly (unload now; the next proximity tick reads the live version and arrives through fog, as a
+// first visit does): a load or arrival still in progress, a diff too big to fade piece by piece, and anything that
+// touches a drawn-together batch (its meshes and enclosure books are one thing), a sign or a calendar.
+const VERSION_DIFF_MAX_CHANGES = 300;
+const DISPOSE_QUEUE_PRIORITY = 1e9; // behind any load, as in mode.js
+const VERSION_CHANGE_COUNTERS = { diffed: 0, plainReload: 0, leaving: 0, arriving: 0, unchanged: 0 };
+window.__shopVersionChange = VERSION_CHANGE_COUNTERS; // e2e and console only
+
+async function applyShopVersionChange(entry) {
+  if (entry.versionChangeInFlight) return;
+  entry.versionChangeInFlight = true;
+  try {
+    const token = entry.loadToken;
+    let landletRecord;
+    let instances;
+    try {
+      landletRecord = await fetchLandlet(entry.record.landletId);
+      const versionId = landletRecord.activeVersionId ?? null;
+      if (versionId === entry.shownVersionId) return;
+      instances = versionId
+        ? (await fetchLandletVersion(entry.record.landletId, versionId)).instances
+        : await fetchInstances(entry.record.landletId);
+    } catch {
+      return; // nothing changed here: the next record refresh asks again
+    }
+    // The load this was compared with is gone (an unload, or a reload that already reads the live version).
+    if (token !== entry.loadToken || !entry.loaded || !entry.shownInstances) return;
+    // A load or arrival still under way has not drawn everything it will: wait for the next refresh, which
+    // compares against the then-settled picture.
+    if (entry.loadGroup && worldWorkQueue.hasPending(entry.loadGroup)) return;
+    if (entry.arrivalRun && !entry.arrivalRun.settled()) return;
+    if (entry.versionRuns?.some((run) => !run.settled())) return;
+    const newVersionId = landletRecord.activeVersionId ?? null;
+    const diff = diffVersionInstances(entry.shownInstances, instances);
+    const byId = new Map();
+    for (const object of entry.objects) byId.set(object.userData.instanceId, object);
+    const plan = planVersionChange(diff, byId, VERSION_DIFF_MAX_CHANGES);
+    if (plan.plain) {
+      VERSION_CHANGE_COUNTERS.plainReload += 1;
+      unloadShopLandletInstances(entry); // the next proximity tick loads the live version, arriving through fog
+      return;
+    }
+    const { leaving, arriving } = plan;
+    VERSION_CHANGE_COUNTERS.diffed += 1;
+    VERSION_CHANGE_COUNTERS.leaving += leaving.length;
+    VERSION_CHANGE_COUNTERS.arriving += arriving.length;
+    VERSION_CHANGE_COUNTERS.unchanged += diff.unchanged;
+    entry.shownVersionId = newVersionId;
+    entry.record.activeVersionId = newVersionId;
+    entry.shownInstances = new Map(instances.map((instance) => [instanceIdOf(instance), instance]));
+    // Leaving: out of everything a shopper can touch now (collision, sit and lean search, reviews, the tap), still
+    // drawn while it fades; then removed and released a few at a time inside the frame budget.
+    if (leaving.length) {
+      const gone = new Set(leaving);
+      entry.objects = entry.objects.filter((object) => !gone.has(object));
+      unregisterShopObjects(entry, gone); // one pass over the reviews, not one per item
+      // Each item's fade is set up as its own small unit inside the frame budget (the dissolve clones its materials),
+      // so a change of several hundred does not land in one frame and the fades start a few at a time. Until its
+      // turn an item simply stays drawn, as it was.
+      const departure = createDepartureRun(); // reads reduced motion afresh for each change
+      departure.expect(leaving.length);
+      (entry.departureRuns ??= []).push(departure);
+      const departureGroup = entry.departureGroup ??= {};
+      entry.leavingObjects ??= new Set();
+      leaving.forEach((object, index) => {
+        entry.leavingObjects.add(object);
+        worldWorkQueue.enqueue(() => {
+          if (!entry.leavingObjects.has(object)) { departure.giveUp(); return; } // the lándlet was unloaded meanwhile
+          // A version cross-fade still running on it would put the plain materials back over this fade.
+          tierCrossfades.finish(object);
+          departure.add(object, (done) => {
+            entry.leavingObjects.delete(done);
+            entry.group.remove(done);
+            worldWorkQueue.enqueue(() => disposeObject3D(done), { priority: DISPOSE_QUEUE_PRIORITY });
+          });
+        }, { group: departureGroup, priority: index });
+      });
+    }
+    // The sets worked out for this load name the objects that just left, and a swap can keep the count: they are
+    // worked out again (kept meanwhile, so the rest of the lándlet does not lose its sets for a moment).
+    entry.lodSetsEpoch = (entry.lodSetsEpoch ?? 0) + 1;
+    // Arriving: a run over just these, so each cluster gets its fog and resolves out of it like a first visit.
+    if (arriving.length) {
+      const run = createArrivalRun({
+        parent: entry.group,
+        instances: arriving,
+        templateFor: findTemplate,
+        anchor: shopArrivalAnchor(entry),
+      });
+      (entry.versionRuns ??= []).push(run);
+      const group = entry.loadGroup ?? (entry.loadGroup = {});
+      const { batches, singles } = groupPlacements(arriving, findTemplate);
+      for (const members of batches.values()) {
+        worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, token, group, run, run), {
+          group,
+          priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
+        });
+      }
+      for (const instance of singles) {
+        worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, token, run, run), {
+          group,
+          priority: instanceLoadPriority(entry, instance),
+        });
+      }
+    }
+  } finally {
+    entry.versionChangeInFlight = false;
+  }
+}
+
 // #3402: one batch of identical placements. Each placement still gets its own
 // lightweight handle (createPlacementHandle) in entry.objects, so collision,
 // sit/lean search, attention and reviews see it like any placed item; only the
@@ -1875,7 +2019,7 @@ function initialBatchTiers(entry, handles, fullTriangles) {
   return budgetedTiers(items, undefined, undefined, fullTriangleCap);
 }
 
-async function buildAndAttachBatch(entry, members, myToken, group, run) {
+async function buildAndAttachBatch(entry, members, myToken, group, run, solidAfter = null) {
   const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
   if (myToken !== entry.loadToken) { // superseded while queued
     settleAll();
@@ -1885,7 +2029,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   const source = await loadBatchSource(template);
   if (!source) {
     for (const instance of members) {
-      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
+      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run, solidAfter), {
         group,
         priority: instanceLoadPriority(entry, instance),
       });
@@ -1955,6 +2099,7 @@ async function buildAndAttachBatch(entry, members, myToken, group, run) {
   let topZ = -Infinity;
   for (const handle of handles) {
     entry.objects.push(handle);
+    markPendingSolid(handle, solidAfter);
     topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
     registerShopReview(handle, entry);
   }
@@ -1983,7 +2128,7 @@ function instanceLoadPriority(entry, instance) {
 // One item of a landlet load (#3396): build it, attach it, register it. The
 // loop this came from checked its token before and after the build; those
 // checks are unchanged.
-async function buildAndAttachInstance(entry, instance, myToken, run) {
+async function buildAndAttachInstance(entry, instance, myToken, run, solidAfter = null) {
   if (myToken !== entry.loadToken) return; // superseded while queued
   const object = await createMeshForInstance(instance);
   if (!object) {
@@ -2009,6 +2154,7 @@ async function buildAndAttachInstance(entry, instance, myToken, run) {
   }
   entry.group.add(object);
   entry.objects.push(object);
+  markPendingSolid(object, solidAfter);
   growShopDomeIfNeeded(object);
   // #3416: the item starts on its full model. Its mid and far versions are
   // added the first time updateInstanceLodTiers asks for one (see
@@ -2037,11 +2183,33 @@ function shopArrivalAnchor(entry) {
   };
 }
 
+// #4391: an item that arrives through a change of version is not an obstacle until its arrival has finished and the
+// avatar is not standing where it is: it is invisible while its fog gathers, and one that appeared on top of a walking
+// shopper would hold them for good (flightMovement.js blocks any step from inside an overlap). movementWorld.js
+// skips an object with `pendingSolid`; flightMovement.js releases them each frame (releasePendingSolid).
+export const shopPendingSolid = new Set(); // { object, run }
+function markPendingSolid(object, run) {
+  if (!run) return;
+  object.userData.pendingSolid = true;
+  shopPendingSolid.add({ object, run });
+}
+
 // Drives every landlet's arrival effects (one cheap loop over the clusters
 // still arriving; a landlet at rest has none). Called once per frame from
 // updateShopWorldServices.
 export function updateShopArrivals() {
-  for (const entry of shopLandlets.values()) entry.arrivalRun?.update();
+  for (const entry of shopLandlets.values()) {
+    entry.arrivalRun?.update();
+    // #4391: the arrivals and departures of a change of version.
+    if (entry.versionRuns?.length) {
+      for (const run of entry.versionRuns) run.update();
+      entry.versionRuns = entry.versionRuns.filter((run) => !run.settled());
+    }
+    if (entry.departureRuns?.length) {
+      for (const run of entry.departureRuns) run.update();
+      entry.departureRuns = entry.departureRuns.filter((run) => !run.settled());
+    }
+  }
   // #3479: far models dissolving in (a no-op when none are).
   shopFarView?.tick();
   tierCrossfades.update(); // #3494
@@ -2087,6 +2255,36 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     const loadedOrb = { mesh, group: entry.group, orbId: orb.orbId, collecting: false };
     shopCreditOrbs.push(loadedOrb);
     creditOrbFades.arrive(loadedOrb); // #4174: resolves out of fog instead of popping in
+  }
+}
+
+// #4387 ("One event in the world looks the same to everyone who sees it"): how often a landlet whose orbs are
+// loaded asks again which of them are gone. One small unauthenticated read each time; no tighter than the
+// person-to-person presence poll's own cadence would justify, so an onlooker's pop can trail the collector's by
+// up to this long (stated on the issue), and nothing is polled faster to close that gap.
+const CREDIT_ORB_REFRESH_INTERVAL_MS = 4000;
+
+async function refreshCreditOrbsForLandlet(entry, myToken) {
+  let reply;
+  try {
+    reply = await fetchCreditOrbsWithCollected(entry.record.landletId);
+  } catch {
+    return; // best effort: asked again after the next interval
+  }
+  if (myToken !== entry.orbLoadToken) return; // the landlet was unloaded or reloaded meanwhile
+  const stillThere = new Set(reply.orbs.map((orb) => orb.orbId));
+  const collected = new Set(reply.collectedOrbIds);
+  for (const orb of [...shopCreditOrbs]) {
+    if (orb.group !== entry.group || orb.collecting || stillThere.has(orb.orbId)) continue; // mine, or still standing
+    if (collected.has(orb.orbId)) {
+      // Someone collected it: the pop the collector saw, at the orb's place; no balance text (that is theirs).
+      if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
+      removeCreditOrb(orb);
+    } else {
+      // Gone for another reason (the lándlet was claimed, it was removed): it leaves the way an orb leaving range does.
+      shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
+      creditOrbFades.depart(orb, () => { orb.group.remove(orb.mesh); disposeObject3D(orb.mesh); });
+    }
   }
 }
 
@@ -2144,7 +2342,12 @@ const CREDIT_ORB_RETURN_SCALE_IN_S = 0.25;
 const CREDIT_ORB_POP_END_SCALE = 2.5;
 const creditOrbPopEffects = [];
 
+// e2e only (#4387): how many pops have been spawned in all. The effect lives under half a second and a slow
+// frame can remove it before a sampler looks, so a test reads this instead of catching it playing.
+let creditOrbPopsSpawned = 0;
+window.__testCreditOrbPopsSpawned = () => creditOrbPopsSpawned;
 function spawnCreditOrbPopEffect(orb) {
+  creditOrbPopsSpawned += 1;
   const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
   mesh.material.transparent = true;
   mesh.position.copy(orb.mesh.position);
@@ -2381,6 +2584,18 @@ function markCreditOrbCollectFailedToReachServer() {
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
     sayCreditOrbOffline();
   }
+}
+
+// #4387 (owner: one event in the world looks the same to everyone who sees it): an orb that another person
+// collected pops for me too, where it floats, with the one pop effect the collector sees. No toast or credit word:
+// those belong to the person who collected it. Fog stays for coming into and going out of range. With reduced
+// motion the orb is simply gone. An orb I am collecting myself is left to that path.
+function popCreditOrbCollectedByOther(orbId) {
+  const orb = shopCreditOrbs.find((candidate) => candidate.orbId === orbId && !candidate.collecting);
+  if (!orb) return;
+  creditOrbFades.finish(orb);
+  if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
+  removeCreditOrb(orb);
 }
 
 function removeCreditOrb(orb) {

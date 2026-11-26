@@ -1,4 +1,4 @@
-// #3690 (Build in the bud, 3/6, part of #3654 and #3648): the Undo/Redo pair petal and the
+// #3690 (Build in the bud, 3/6, part of #3654 and #3648): the Undo/Redo pair (since #4411 a standing row) and the
 // Levels leaf, built on the bud contract (src/ui/bud.js, docs/DESIGN.md "The bud").
 //
 // What they replace, in this same change ("the old control goes in the same change"):
@@ -9,34 +9,27 @@
 // the same ids and handlers (src/build/scene.js owns what Undo, Redo, Up, Down, Build and
 // Dig do, and when they are enabled); this module only moves them into the bud and decides
 // when the petal is drawn. Other Build slices add their own petals with addBudPetals.
-import { addBudPetals, refreshBud, openLeaf, closeLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
+import { addBudPetals, openLeaf, closeLeaf, setBudWord, clearBudWord } from '../ui/bud.js';
+import { svgIcon } from '../ui/budIcons.js';
 import { isBrushInItemCard, syncBrushHost } from './itemCard.js';
 
 const byId = (id) => document.getElementById(id);
 
-// ---- Undo / Redo: one petal, two halves ------------------------------------------------
+// ---- Undo / Redo: a small standing row (#4411) ----------------------------------------------
 
-// "Drawn only when there is something to undo or redo": scene.js enables Undo while a
-// change can be undone, and shows Redo only while one can be redone.
-function somethingToUndoOrRedo() {
-  const undo = byId('undo-btn');
-  const redo = byId('redo-btn');
-  return Boolean(undo && !undo.disabled) || Boolean(redo && !redo.hidden && !redo.disabled);
-}
-
-function undoRedoPetal() {
-  const undo = byId('undo-btn');
-  const redo = byId('redo-btn');
-  const pair = document.createElement('div');
-  pair.id = 'bud-undo-redo';
-  pair.className = 'bud-pair';
-  pair.append(undo, redo);
-  // scene.js flips `disabled` and `hidden` on the two buttons as the history changes; follow
-  // them, so the petal appears and goes without scene.js knowing the bud exists.
-  const watcher = new MutationObserver(refreshBud);
-  watcher.observe(undo, { attributes: true, attributeFilter: ['disabled', 'hidden'] });
-  watcher.observe(redo, { attributes: true, attributeFilter: ['disabled', 'hidden'] });
-  return { id: 'undo-redo', element: pair, visible: somethingToUndoOrRedo };
+// The owner's own exception to "Nothing stands on the world but the head", for Build: Undo and Redo are reached many
+// times a minute while building, so they stand as two small icons in one fixed row at the upper right, always drawn,
+// greyed when there is nothing to undo or redo. They used to be a petal that was only drawn while the bud was open.
+// scene.js owns what they do and when they are enabled; this only gives each its picture.
+function dressUndoRedoRow() {
+  for (const [id, key, name] of [['undo-btn', 'undo', 'Undo'], ['redo-btn', 'redo', 'Redo']]) {
+    const button = byId(id);
+    if (!button || button.querySelector('svg')) continue;
+    button.textContent = '';
+    button.append(svgIcon(key));
+    button.setAttribute('aria-label', name);
+    button.title = name;
+  }
 }
 
 // ---- Levels: a leaf that says where you are, with Build above and Dig below ----------------
@@ -126,8 +119,8 @@ function wearToolNames() {
 }
 
 if (typeof document !== 'undefined') {
+  dressUndoRedoRow();
   addBudPetals('build', [
-    undoRedoPetal(),
     { id: 'levels', label: 'Levels', run: openLevelsLeaf },
     { id: 'tools', label: 'Tools', run: openToolsLeaf },
   ]);

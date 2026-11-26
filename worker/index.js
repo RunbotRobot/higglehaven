@@ -138,6 +138,7 @@ import {
   handleProductReviews, handleProductFlags, handleProductFlagsList,
   handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete, handleSellerFeedbackList,
 } from './lib/reputation.js';
+import { handleCounterfeitRefundBuyers } from './lib/counterfeit-refunds.js';
 // #2619 (leaf of #2536): seller-payout claim/resume, builder
 // higgles-redemption, W-9/W-8BEN tax-ID collection, and 1099
 // tax-reporting/e-filing handlers, extracted into
@@ -178,7 +179,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleLandlets } from './lib/land.js';
 import { handleFarPlacements, invalidateFarPlacementsForLandlets } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
-import { itemInsideLandletOutline } from '../shared/landlet-outline.js';
+import { itemInsideLandletOutline, turnedReach, footprintWithinSquare } from '../shared/landlet-outline.js';
 import { DEFAULT_WORDMARK_ID, isWordmarkStyleId, isWordmarkColorId } from '../shared/wordmark-set.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
@@ -901,6 +902,11 @@ async function handleApi(request, env, url, ctx) {
   // #3040: admin-initiated, insert-only NCMEC report records.
   if (route[0] === 'ncmec-reports') {
     return handleNcmecReports(request, env, route, url);
+  }
+
+  // #4376: Refund buyers, on an approved counterfeit flag.
+  if (route.length === 3 && route[0] === 'product-flags' && route[2] === 'refund-buyers') {
+    return handleCounterfeitRefundBuyers(request, env, route);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {
@@ -4600,10 +4606,14 @@ export async function assertInstanceXYWithinLandlet(db, instances) {
         halfDepth = ((instance.crop?.y ?? template.dimensions.depth) * instance.scale) / 2;
       }
     }
-    if (Math.abs(instance.x) + halfWidth > halfSpan || Math.abs(instance.y) + halfDepth > halfSpan) {
+    // #4403: the turned footprint's reach along x and y (shared/landlet-outline.js), not its unturned width and
+    // depth: a long item turned a quarter way round lies along the other axis, and Build's own stop measures it
+    // the same way through the same function, so the two agree.
+    const reach = turnedReach(halfWidth * 2, halfDepth * 2, instance.rotationZ ?? 0);
+    if (!footprintWithinSquare({ x: instance.x, y: instance.y, width: halfWidth * 2, depth: halfDepth * 2, rotationZ: instance.rotationZ ?? 0 }, halfSpan)) {
       throw new HttpError(
         `Instance at (${instance.x}, ${instance.y}) with its rendered footprint extends outside lándlet `
-        + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(halfWidth, halfDepth)).toFixed(2)} `
+        + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(reach.x, reach.y)).toFixed(2)} `
         + `given its current size/scale)`,
         400,
         { code: ERROR_CODES.OUTSIDE_LANDLET_OUTLINE },

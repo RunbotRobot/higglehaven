@@ -53,8 +53,7 @@ check(near(sR.x - s0.x, 0.3) && near(sR.y, s0.y), `Right three times slides it 0
 // Undo takes a nudge back like any move (the item stays selected across it).
 await budClick(page, '#undo-btn');
 await page.waitForTimeout(1000);
-await page.keyboard.press('Escape'); // fold the bud again so the next tap lands on the world
-await page.waitForTimeout(500);
+await page.waitForTimeout(500); // #4411: Undo is a standing button now, so there is no bud to fold (Escape would deselect)
 const sU = await state();
 check(sU && near(sU.x, sR.x - 0.1), `Undo takes the last nudge back (${sU?.x} vs ${sR.x - 0.1})`);
 if (!(await page.isVisible('#item-card-nudge'))) await page.click('#item-card-more-btn');

@@ -202,15 +202,12 @@ function itemCentreZRange() {
 // once per hit, not once per frame.
 let levelLimitHit = null;
 let levelLimitAnnounced = false; // #3689: whether announceLevelLimit said something this time
-// #4198: set when a move was stopped at the lándlet's outline; said once per hit like the level limits.
+// #4198: set when a move was stopped at the lándlet's outline. #4409 (owner): it says nothing, because the edge is on
+// screen and the item resting against it is the answer; a note is for a limit a person cannot see (the levels, the
+// size of a bundle, an item cap, a server refusal).
 let outlineLimitHit = false;
 function announceLevelLimit() {
-  const outlineHit = outlineLimitHit;
   outlineLimitHit = false;
-  if (outlineHit && !levelLimitHit) {
-    levelLimitAnnounced = true;
-    showSelectionActionStatus("That's the edge of this lándlet.");
-  }
   const hit = levelLimitHit;
   levelLimitHit = null;
   if (!hit) return;
@@ -520,6 +517,9 @@ let suppressDragCycleSideEffects = false;
 // since a normal drag already starts with the camera tens of meters from
 // the object (see EDGE_PAN_MAX_PAN_FROM_DRAG_START_M).
 let edgePanDragStartCameraPos = null;
+// #4403: the whole layout as it stood when the current drag began (the snapshot pushed for Undo), kept so that if the
+// server refuses part of a bundle's save, every member can be put back to this, not left half moved.
+let dragBeforeSnapshot = null;
 
 function wireDraggingBehavior(transformControls) {
   transformControls.addEventListener('dragging-changed', (event) => {
@@ -535,7 +535,12 @@ function wireDraggingBehavior(transformControls) {
       // proceeds either way — it only repositions the one mesh already
       // being dragged, not the productMeshes array's own membership, so
       // it isn't itself part of the race #402 is about.
-      if (!sceneMutationBusy) pushUndoSnapshot();
+      if (!sceneMutationBusy) {
+        pushUndoSnapshot();
+        dragBeforeSnapshot = undoStack.at(-1) ?? null;
+      } else {
+        dragBeforeSnapshot = null;
+      }
       return;
     }
     edgePanDragStartCameraPos = null;
@@ -552,7 +557,9 @@ function wireDraggingBehavior(transformControls) {
       groupMoveSet = null;
       groupMoveStartPositions = null;
       groupRotatePivot.quaternion.identity();
-      syncBatchUpdate(meshes);
+      const before = dragBeforeSnapshot;
+      dragBeforeSnapshot = null;
+      syncBatchUpdate(meshes, { before, editSeq: layoutEditSeq });
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
     }
@@ -966,8 +973,10 @@ function applyBundleRotation(delta) {
   // #4198: every member must also stand on the lándlet's real outline at its new place and angle, the same
   // rule the single-item move uses. A turn that would swing a member over the edge stops at the last angle
   // that was legal, with one line saying why.
+  // #4403: with or without a polygon, the Worker also holds every member inside the square by its turned footprint,
+  // so that is part of "legal" here (itemLegalAt), and a lándlet with no polygon is checked too.
   const outline = getBuildOutline();
-  if (outline) {
+  {
     const meshes = groupMoveMeshes ?? [];
     const probe = new THREE.Euler();
     for (let i = 0; i < meshes.length; i += 1) {
@@ -999,9 +1008,8 @@ rotateControls.addEventListener('objectChange', () => {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
     if (!bundleRotateLimitShown) {
       bundleRotateLimitShown = true;
-      showSelectionActionStatus(bundleRotateOutlineHit
-        ? "That's the edge of this lándlet."
-        : 'This bundle is too big to turn any further here.');
+      // #4409: a turn stopped by the lándlet's outline says nothing (the edge is on screen); the size limit is not visible.
+      if (!bundleRotateOutlineHit) showSelectionActionStatus('This bundle is too big to turn any further here.');
     }
   }
 });
@@ -1091,6 +1099,13 @@ window.__testRotateRingPoints = () => {
     out[picker.name.toLowerCase()] = points;
   }
   return out;
+};
+// e2e (#4413): where the rings are centred and where the selection's own centre is, so a test can see them stay together
+// when the selection moves.
+window.__testRotateRingCentre = () => {
+  const centre = bundlePivot([...selectedMeshes].map((mesh) => mesh.position));
+  const object = rotateControls.object;
+  return object ? { ring: { x: object.position.x, y: object.position.y, z: object.position.z }, selection: { x: centre.x, y: centre.y, z: centre.z } } : null;
 };
 window.__testRotateActiveAxis = () => rotateControls.axis; // e2e (#4118): the ring a press has picked (null when none)
 window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
@@ -2023,13 +2038,50 @@ async function applyStaleInstances(staleInstances, { gateHeld = false } = {}) {
   return true;
 }
 
+// #4403: puts the members of a refused bundle save back to the poses they had when the gesture began (`before` is the
+// layout snapshot taken then) and saves that, whichever chunks the server had already stored. Runs inside the update
+// chain, so it saves directly. False (nothing changed here) when another edit has started since, or the save of the
+// old poses fails: the caller then falls back to reading the server.
+async function restoreMembersToBefore(meshes, before, editSeq) {
+  if (editSeq !== null && editSeq !== layoutEditSeq) return false;
+  if (sceneMutationBusy || translateControls.dragging || rotateControls.dragging || trimControls.dragging) return false;
+  const beforeById = new Map(before.map((instance) => [instance.instanceId, instance]));
+  const members = meshes.filter((mesh) => productMeshes.includes(mesh) && beforeById.has(mesh.userData.instanceId));
+  if (members.length === 0) return false;
+  const moved = members.map((mesh) => ({ mesh, pose: { position: mesh.position.clone(), rotation: mesh.rotation.clone() } }));
+  for (const mesh of members) {
+    const old = beforeById.get(mesh.userData.instanceId);
+    mesh.position.set(old.x, old.y, old.z);
+    mesh.rotation.set(old.rotationX, old.rotationY, old.rotationZ);
+    mesh.userData.safePosition = mesh.position.clone();
+  }
+  try {
+    await upsertInstancesRemote(members.map(instanceForSave), { updateOnly: true, onChunkStored: (stored) => stored.forEach(adoptVersion) });
+  } catch (error) {
+    console.warn('Could not save the members back where they were:', error);
+    // Leave the scene as the gesture left it: the caller's fallback reads the server.
+    for (const { mesh, pose } of moved) {
+      mesh.position.copy(pose.position);
+      mesh.rotation.copy(pose.rotation);
+      mesh.userData.safePosition = mesh.position.clone();
+    }
+    return false;
+  }
+  // The Undo step for the refused gesture describes a move that did not happen.
+  if (undoStack.at(-1) === before) undoStack.pop();
+  updateUndoRedoButtons();
+  persistLayout();
+  updateSelectionUI();
+  return true;
+}
+
 function syncBatchUpdate(meshes, options) {
   if (meshes.length === 0) return Promise.resolve();
   syncsInFlight += 1; // counted from queueing, like syncUpdate (see inOrder)
   return inOrder(() => runBatchUpdate(meshes, options));
 }
 
-async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
+async function runBatchUpdate(meshes, { gateHeld = false, before = null, editSeq = null } = {}) {
   const attemptId = ++syncAttemptSeq;
   try {
     // #3101: updateOnly -- a mesh the server no longer has was deleted from
@@ -2089,7 +2141,12 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     // they are saved and say so, rather than leaving them somewhere that
     // "may not survive a reload".
     if (err.code === 'out_of_level_range' || err.code === 'outside_landlet_outline') {
-      const putBack = await revertSceneToServer();
+      // #4403: a bundle is saved in chunks, so by now earlier chunks may already hold the new poses. All or
+      // nothing: put every member back to where the gesture began and save that, so the server is never left with
+      // part of the bundle moved. Only when that cannot be done (another edit has started) does it fall back to
+      // reading whatever the server holds.
+      const allBack = before ? await restoreMembersToBefore(meshes, before, editSeq) : false;
+      const putBack = allBack || await revertSceneToServer();
       tellBuilder("Couldn't move those items", putBack
         ? `${err.message} They have been put back where they were.`
         : `${err.message} They may not stay where they are after a reload.`);
@@ -2595,9 +2652,7 @@ function endSceneMutation() {
 function updateUndoRedoButtons() {
   undoBtn.disabled = sceneMutationBusy || undoStack.length === 0;
   redoBtn.disabled = sceneMutationBusy || redoStack.length === 0;
-  // #3574 -- Redo has nothing to offer until something was undone; hide it
-  // on the stack alone (not the busy flag) so it doesn't flicker mid-save.
-  redoBtn.hidden = redoStack.length === 0;
+  // #4411: both stay drawn (greyed when there is nothing to do), as a standing row in Build.
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -3012,13 +3067,14 @@ export function nudgeSelectedItem(direction) {
   levelLimitAnnounced = false;
   runSyntheticDrag(translateControls, mesh, () => mesh.position.add(wanted));
   if (mesh.position.distanceTo(before) < step * 0.5 && !levelLimitAnnounced) {
-    // A press that does nothing must not do it silently, and says why: the lándlet's edge, the floor, or
-    // something solid in the way. (The level limits say their own piece, in announceLevelLimit.)
+    // A press that does nothing must not do it silently, and says why: the floor, or something solid in the way
+    // (the lándlet's edge needs no sentence, #4409). (The level limits say their own piece, in announceLevelLimit.)
     const target = before.clone().add(wanted);
     const clamped = clampToLandlet(mesh, target.x, target.y, target.z);
     levelLimitHit = null;
     const { height } = meshDimensions(mesh);
-    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) showSelectionActionStatus("That's the edge of this lándlet.");
+    // #4409: at the lándlet's edge it says nothing: the edge is on screen and the item resting at it is the answer.
+    if (Math.hypot(clamped.x - target.x, clamped.y - target.y) > 1e-6) { /* the edge: nothing to say */ }
     else if (direction === 'down' && heightAboveFloor(before.z, height, levelFloorZ(currentLevelIndex)) === 0) showSelectionActionStatus("It's already on the floor.");
     else showSelectionActionStatus('Something is in the way.');
   }
@@ -5172,6 +5228,18 @@ window.__testSyncBatchUpdate = (instanceIds) => syncBatchUpdate(
   productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId)),
 );
 
+// #4403: moves the named instances `dx` metres along x the way a bundle drag does (the Undo snapshot taken first,
+// then the move, then one batched save carrying that snapshot), so a test can have the server refuse part of the
+// save and see every member come back. Same "inert unless a test calls it" convention.
+window.__testMoveAndSyncBatch = (instanceIds, dx) => {
+  pushUndoSnapshot();
+  const before = undoStack.at(-1);
+  const meshes = productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId));
+  for (const mesh of meshes) mesh.position.x += dx;
+  return syncBatchUpdate(meshes, { before, editSeq: layoutEditSeq });
+};
+window.__testInstancePositions = () => Object.fromEntries(productMeshes.map((mesh) => [mesh.userData.instanceId, [mesh.position.x, mesh.position.y, mesh.position.z]]));
+
 // #1062: same convention, for the single-item save (what a one-item drag calls).
 window.__testSyncUpdate = (instanceId) => {
   const mesh = productMeshes.find((m) => m.userData.instanceId === instanceId);
@@ -5758,6 +5826,13 @@ export function buildModeFrameUpdate(now) {
     },
     ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
+  // #4413: a bundle's rings hang on a pivot (groupRotatePivot) that was placed at the bundle's centre when it was
+  // selected; a single item's rings hang on the item itself, so they follow it. When the bundle moves by a body drag,
+  // an undo or redo, a nudge or a paste, the pivot is put back on its centre here, every frame, except while a ring
+  // is held (then the pivot is the thing being turned and the turn moves the bundle round it).
+  if (rotateControls.object === groupRotatePivot && !rotateControls.dragging && selectedMeshes.size > 0) {
+    groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+  }
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   applyBuildKeyboardCamera(now);

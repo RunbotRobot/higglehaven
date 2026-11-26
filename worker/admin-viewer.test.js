@@ -217,6 +217,7 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     './lib/admin-video-jobs.js',
     './lib/admin-viewer-grant.js', // GET admin-role, which the dashboard page asks when it opens
     './lib/control-room.js', // the /admin/dashboard page gate only (the Control Room API and its page stay admin-only)
+    './lib/counterfeit-refunds.js', // #4376: GET only, what Refund buyers would do; the POST needs a full admin
     './lib/models.js', // GET models/storage only (the upload listing stays closed)
     './lib/tax-education.js', // the two GET reads (#4382)
     './lib/world-generation.js', // the land candidate and ring GET reads (#4382)
@@ -237,7 +238,7 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     const COUNTS = {
       './lib/account-moderation.js': 3, './lib/admin-delete-account.js': 1, './lib/admin-landlet-search.js': 1,
       './lib/admin-users-table.js': 1, './lib/admin-video-jobs.js': 1, './lib/models.js': 1, './lib/tax-education.js': 2,
-      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2,
+      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2, './lib/counterfeit-refunds.js': 1,
     };
     expect(Object.keys(COUNTS).sort()).toEqual(OPTED_IN);
     for (const path of OPTED_IN) {

@@ -135,7 +135,7 @@
 - **Item placement physics:** fully permissive (float, embed, rest — builder's discretion). Shopper collision still prevents walking through items.
 - **Bundles** (confirmed term; one feature, no separate "groups"): bundle items to move and rotate together as one item. Saving a bundle shares it to the community bundle tab by default (owner ruling 2026-11-09, #3323); the builder can make it private in the save dialog.
 - **Draft/publish + version history:** preview from shopper's perspective before publishing. Every save = a version snapshot; active version = a pointer. Toggle between saved versions **from within the live shopping interface**, with explicit confirmation before activating a different version.
-- **Version-change transition (shoppers present):** old items fade/shrink into ground, new version's items fade/grow up — ~2–4 second animated transition.
+- **Version-change transition (shoppers present):** old items fade/shrink into ground, new version's items fade/grow up — ~2–4 second animated transition. **Built so far (#4391 leaf 1):** a shopper who has the lándlet loaded sees the change when their next record refresh (every 20 s) learns the live version changed: items in both versions are not touched; items only in the old version fade out where they stand (about 2.5 s) and are no longer interactive from the start of the fade; items only in the new version (and any whose place, size, crop or label changed, which is the old leaving and the new arriving) arrive through the same fog as a first visit. A change that cannot go piece by piece (a drawn-together batch of identical placements, a community sign or calendar leaving, more than 300 changes, or a load or arrival still in progress) loads the lándlet again plainly instead. Not built: batched placements fading individually, and the switch from the live shopping interface (an owner question).
 
 **Performance budgets (starting hypothesis, validate empirically):**
 - ~10–25 MB total model+texture data per average lándlet; density cap ~1–2 MB per cubic meter concentrated.
@@ -216,7 +216,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 - Low-value disputes from established accounts: auto-resolved in buyer's favor.
 - Higher-value/new-account disputes: require actual evidence.
 - Reputation system as long-term economic deterrent.
-- **Counterfeit handling** uses the same framework: fast removal on credible flagging, automatic refund, strike/penalty scaled to isolated-error vs. deliberate-pattern.
+- **Counterfeit handling** uses the same framework: fast removal on credible flagging, strike/penalty scaled to isolated-error vs. deliberate-pattern. Buyers are refunded by an admin action on the approved flag ("Refund buyers"), confirmed first with the count and total, never automatically on approval (owner, 2026-11-26): it keeps a person's check on a potentially large payout. Orders whose seller was already paid out are not refunded by it.
 - **Participation/referral rewards capped by design:** fixed pre-funded pools per period, percentage-of-realized-revenue bonuses (never flat guaranteed amounts) — mathematically bounded.
 - **No review-incentive bonus (v20 reversal):** higgles are earnable only by making sales on your own land — leaving a review itself never pays out, regardless of how genuine or substantive it is. **Reviews require a verified purchase (v12 clarification):** standard marketplace practice — only a shopper who actually bought the product can review it.
 

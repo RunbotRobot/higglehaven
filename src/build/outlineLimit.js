@@ -7,7 +7,8 @@
 // then pulled back along the line to where it started, to the last legal point. An item that was already off the
 // lándlet (stored before this rule) has no legal start to pull back to: it stays where it is until the finger
 // reaches ground that is legal, and then it jumps there.
-import { footprintCorners, footprintInsideOutline, scaleOutline, parseOutline } from '../../shared/landlet-outline.js';
+import { footprintCorners, footprintInsideOutline, footprintWithinSquare, scaleOutline, parseOutline } from '../../shared/landlet-outline.js';
+import { LANDLET_SIDE_M } from '../world/state.js';
 
 const SEARCH_STEPS = 24;
 
@@ -21,8 +22,14 @@ export function getBuildOutline() {
   return activeOutline;
 }
 
+// #4403: an item is legal where the Worker will accept it: on the outline (when the lándlet has one) AND inside the
+// older square by its turned footprint (shared/landlet-outline.js), the two checks the Worker runs. Build used to
+// apply only the outline, so a turn or a push could rest at a place the square rule then refused for some members.
 function legal(outline, size, x, y, z, rotationZ, heightScale) {
-  const scaled = scaleOutline(outline, heightScale(z));
+  const scale = heightScale(z);
+  if (!footprintWithinSquare({ x, y, width: size.width, depth: size.depth, rotationZ }, (LANDLET_SIDE_M / 2) * scale)) return false;
+  if (!outline) return true;
+  const scaled = scaleOutline(outline, scale);
   return footprintInsideOutline(scaled, footprintCorners({ x, y, width: size.width, depth: size.depth, rotationZ }));
 }
 

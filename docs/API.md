@@ -6542,6 +6542,16 @@ seller_feedback. Without it, a landlet with many concurrent visitors would
 return every one of them in one response, and the client spawns a real
 avatar mesh group per entry on every poll tick.
 
+**`collectedOrbs` (#4387)**: the response also carries `"collectedOrbs": [orbId, ...]`, the credit orbs that
+*someone else* collected in the last 30 seconds within 100 m of where the caller last reported standing (at most
+20, newest first), so an onlooker can show the same pop the collector sees. Ids only: never who collected. The
+caller's own collects are left out (they popped it themselves), and so is everything older, farther or collected by
+no one. Orbs live only on greenbelt landlets, where a person's presence names no landlet, so this is answered by
+position and also when `avatars` is empty (the early `{ "avatars": [] }` answer reads `"collectedOrbs": []`
+for a caller with no fresh row of their own, whose position is older than 30 seconds). It rides in the same trip
+window as the other reads, adding no D1 round trip of its own when a landlet is named, and one when none is.
+The client asks while an orb is loaded even off a claimed landlet, at its usual one-second pace.
+
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
 Requires a session. Unlike `GET /api/presence` above, this returns the
@@ -9647,6 +9657,28 @@ requirements, the duplicate-flagger `409`, the auto-hide threshold firing
 approve/reject outcomes (including the strike-count increment and the
 un-hide on reject), and the admin-only list endpoint.
 
+### Refund buyers on an approved counterfeit flag (#4376)
+
+Approving a flag hides the listing and strikes the seller and refunds no one (owner decision, 2026-11-26, option A).
+Refunding the people who already bought it is a separate admin action.
+
+```
+GET  /api/product-flags/:templateId/refund-buyers   -> { refundBuyers: { templateId, productName, refundCount, refundCents, orderTotalCents, notRefundableCount, notRefundableCents } }
+POST /api/product-flags/:templateId/refund-buyers   { expectedCount, expectedRefundCents } -> { refunded, refundedCents, failed, firstError, refundBuyers }
+```
+
+- `409` until a flag on the listing is approved. GET takes a full admin or a look-only admin; POST a full admin only.
+- `refundCount` and `refundCents` are the orders not yet refunded and not yet paid out, and what goes back to the buyers
+  (99% of each order, `REFUND_PAYOUT_RATE`). `notRefundable*` counts the orders this action leaves alone: the seller was
+  already paid out (a reversal would pull money that backs other sales), or the order was partly refunded already. They
+  are listed so nobody is told they were refunded when they were not; covering them from platform funds is not decided.
+- POST refunds only if `expectedCount` and `expectedRefundCents` still match what a GET would say (the count and total
+  the admin confirmed); otherwise `409` and nothing moves. Each refund is the existing refund path (same Stripe
+  idempotency key, commission clawback and buyer notice, which says why), so pressing again never refunds anyone twice.
+  A call does at most 8 orders and returns what is left in `refundBuyers`; the page presses again until it is 0.
+- `GET /api/product-flags?status=approved` (full admin) lists approved flags whose listing still has orders this action can refund (`templateId`, `templateName`, `sellerId`, `flagCount`, `resolvedAt`, `openOrders`); a listing leaves it once none is left.
+- One `counterfeit_refund_buyers` row per call in the admin action log.
+
 ### Self-dealing flags (#2019, sub-issue of #1212)
 
 A lighter, non-fingerprinting self-dealing signal: every real purchase
@@ -12009,6 +12041,14 @@ builder-specific secret. Returns every currently-active (uncollected) orb:
 Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
+
+**#4387**: when scoped with `?landletId=`, the response also carries
+`collectedOrbIds`: the ids of that landlet's orbs collected within the last 15
+seconds, by anyone (never who). A client that holds an orb missing from `orbs`
+pops it if its id is listed (the pop the collector saw, so one event looks the
+same to everyone who sees it) and dissolves it otherwise (the landlet was
+claimed, the orb was removed). The Shop asks again every 4 seconds while a
+landlet's orbs are loaded and the tab is visible.
 
 ### `GET /api/credit-orbs/standing`
 
