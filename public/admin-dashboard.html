@@ -321,6 +321,21 @@
       </form>
     </dialog>
 
+    <!-- #4407: Rename account is confirmed in its own in-app dialog (old and new name shown), never a browser dialog. -->
+    <dialog id="renameAccountDialog" class="confirm-dialog" aria-labelledby="renameAccountTitle">
+      <form method="dialog" id="renameAccountForm">
+        <h3 id="renameAccountTitle">Rename account</h3>
+        <div id="renameAccountBody"></div>
+        <label>New name <input type="text" id="renameAccountInput" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" /></label>
+        <p id="renameAccountPreview" role="status"></p>
+        <p class="err" id="renameAccountErr" role="alert" hidden></p>
+        <div class="toolbar">
+          <button type="button" class="secondary" id="renameAccountCancel">Cancel</button>
+          <button type="submit" class="danger" id="renameAccountConfirm" disabled>Rename</button>
+        </div>
+      </form>
+    </dialog>
+
     <!-- #4175: giving or removing look-only admin access is confirmed in its own in-app dialog. -->
     <dialog id="viewerAccessDialog" class="confirm-dialog" aria-labelledby="viewerAccessTitle">
       <form method="dialog" id="viewerAccessForm">
@@ -449,6 +464,7 @@
 <script src="/admin-dashboard-8.js"></script>
 <script src="/admin-dashboard-9.js"></script>
 <script src="/admin-dashboard-10.js"></script>
+<script src="/admin-dashboard-11.js"></script>
 <script src="/admin-tables.js"></script>
 </body>
 </html>

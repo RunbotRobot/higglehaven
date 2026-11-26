@@ -92,6 +92,7 @@ import { handleAdminSetViewer, handleAdminRole } from './lib/admin-viewer-grant.
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
 import { handleAdminDeleteAccountPreview, handleAdminDeleteAccount } from './lib/admin-delete-account.js';
+import { handleAdminRenameAccount } from './lib/admin-rename-account.js';
 import { handleAdminLandletSearch } from './lib/admin-landlet-search.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
@@ -3259,6 +3260,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-delete-account') {
     return handleAdminDeleteAccount(request, db, env);
+  }
+  // #4407: the admin dashboard's Rename on a user (full admin only, logged, the person is told).
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-rename-account') {
+    return handleAdminRenameAccount(request, db);
   }
   // #4074: the admin dashboard's lándlet search by name, id or owner (capped, admin-only).
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-landlet-search') {

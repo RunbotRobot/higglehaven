@@ -169,6 +169,7 @@
           <div class="stat"><div class="n">${user.cardRefusal ? escapeHtml(user.cardRefusal.code + (user.cardRefusal.declineCode ? ' / ' + user.cardRefusal.declineCode : '') + ' x' + user.cardRefusal.count + ', last ' + user.cardRefusal.at) : '—'}</div><div class="l">Card refusals (Stripe)</div></div>
         </div>
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
+        <button class="secondary rename-account-btn" type="button">Rename</button>
         <button class="secondary delete-account-btn" type="button">Delete account</button>
         ${user.adminViewer || !user.adminViewerRefusal ? `<button class="secondary viewer-access-btn" type="button">${user.adminViewer ? 'Remove look-only access' : 'Give look-only access'}</button>` : ''}
         <h3 id="userLandletsHeading">Lándlets (${landlets.length})</h3>
@@ -184,6 +185,8 @@
       `;
       userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
       userDetailWrap.querySelector('.delete-account-btn').addEventListener('click', () => openDeleteAccount(user.userId));
+      // #4407: Rename (public/admin-dashboard-11.js holds the dialog).
+      userDetailWrap.querySelector('.rename-account-btn').addEventListener('click', () => window.__adminOpenRenameDialog(user));
       // #4175: the owner's switch for the look-only admin role (public/admin-dashboard-10.js holds the dialog).
       const viewerBtn = userDetailWrap.querySelector('.viewer-access-btn');
       if (viewerBtn) viewerBtn.addEventListener('click', () => window.__adminOpenViewerDialog(user));
