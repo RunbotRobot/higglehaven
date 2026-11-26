@@ -305,6 +305,7 @@
     },
     "didit_verification_sessions": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "end_reason": "TEXT|0||0",
       "processed_at": "TEXT|0||0",
       "session_id": "TEXT|0||1",
       "status": "TEXT|1|'pending'|0",

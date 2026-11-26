@@ -37,6 +37,7 @@ export const ERROR_CODES = Object.freeze({
   AUCTION_NOT_OWNER: 'auction_not_owner',
   SERVICE_UNAVAILABLE: 'service_unavailable',
   UPSTREAM_FAILED: 'upstream_failed',
+  VERIFICATION_UNAVAILABLE: 'verification_unavailable',
   STALE_REFERENCE: 'stale_reference',
   SELLER_SUSPENDED: 'seller_suspended',
   OUT_OF_LEVEL_RANGE: 'out_of_level_range', // #3372
