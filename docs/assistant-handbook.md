@@ -68,7 +68,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 **If something goes wrong:**
 - The app says "Account created, but the verification email failed to send": the account exists; in their account panel, "Resend verification email" sends it again.
-- The app says what is wrong with a field (a username or email already taken, a password under 8 characters): read it out and fix that field.
+- The app says what is wrong with a field: read it out and fix that field. The sentences are "Enter an email address like name@example.com.", "Use at least 8 characters for your password.", "Enter a name.", "A name can't have spaces. Try BenjaminChae or Benjamin_Chae." and, when a name or an email is already in use, that it is already taken or registered.
 - Signing up is enough for shopping. The first time they go into Build or Sell, a "Verify to continue" screen asks for more; the next entry covers it.
 - Nothing happens, or the screen looks different from this: ask what they see, and offer to pass it to the team.
 
@@ -274,8 +274,8 @@ everything else.
    is already open.
 
 **You will see:** a petal for another place turns green at once and the petals stay out while that
-place loads; when it is on screen they fold back into the bud. Tapping the place you are already in
-a menu is open below them: the one for the place you are in (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
+place loads; when it is on screen they fold back into the bud. With the petals out, the menu of the place
+you are in is open below them (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
 products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Friends", "My purchases", "Chat" and "Nearby"). Each place has its own menu, and it is the same every time. The row along the top
 (your name, Notices, Settings and "Help") is the same in all three places.
 
