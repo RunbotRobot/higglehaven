@@ -26,7 +26,7 @@
 // from this module the same way it already imports handleModelUpload etc.
 import { isNcmecEvidenceKey } from './ncmec-evidence.js';
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
-import { requireAdmin, requireSessionBuilder, assertOwner } from './auth.js';
+import { requireAdmin, requireAdminOrViewer, requireSessionBuilder, assertOwner } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, queryLimit, decodeCursor, encodeCursor, stringValue, positiveInteger } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -423,11 +423,12 @@ async function handleModelListing(request, env, url) {
   });
 }
 
-// Admin-only, same reasoning as handleModelListing above — live storage
+// Admin-only (a look-only admin may read this one, #4382: it is byte counts and
+// nothing personal; handleModelListing above stays admin-only) — live storage
 // utilization against the shared cap is operational data, not something a
 // shopper/builder/seller session has any business reading.
 async function handleModelStorage(request, env) {
-  await requireAdmin(request, env.DB);
+  await requireAdminOrViewer(request, env.DB); // #4382: byte counts against the cap, nothing personal; a look-only admin may read it
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const usage = await getStorageUsage(env.MODELS);
   return json({

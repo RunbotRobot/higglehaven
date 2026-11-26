@@ -41,6 +41,66 @@ describe('the read routes a look-only admin may open (#4175)', () => {
   });
 });
 
+// #4382: the dashboard's own read routes, decided one by one. A route is open to a look-only admin only when
+// nothing personal, financial, ID or evidence comes back (a payload with an email carries it masked, see below).
+// Moving a path between these two lists is a reviewed decision, and this is where a reviewer sees it.
+const VIEWER_OPEN_READS = [
+  '/auth/admins', // names and roles, emails masked
+  '/models/storage', // byte counts against the storage cap
+  '/land-candidates', // geometry only
+  '/land-candidate-rings', // geometry and counts only
+  '/tax-education', // authored text; the reviewing account's id is withheld
+];
+const VIEWER_CLOSED_READS = [
+  '/models', // lists every upload with the product, video job and Control Room card that references it
+  '/tax/admin-forms', // sellers' tax form detail
+  '/purchases?danglingSeller=1', // buyers' and sellers' orders
+  '/product-flags', // who flagged what
+  '/self-dealing-flags', // who is suspected of what
+  '/ncmec-reports', // evidence records
+  '/auth/suspension-status?email=nobody@example.com', // looks an account up by its email
+  '/admin-items-outside-landlets', // other builders' placed items
+  '/admin-action-log', // the admin log
+];
+
+describe('which dashboard reads a look-only admin gets (#4382)', () => {
+  it('opens exactly the listed reads and refuses exactly the listed ones, and an ordinary person gets neither', async () => {
+    for (const path of VIEWER_OPEN_READS) {
+      expect((await api(path, viewer.session())).response.status, `viewer on GET ${path}`).toBe(200);
+      expect((await api(path, admin.session())).response.status, `admin on GET ${path}`).toBe(200);
+      expect((await api(path, target.session())).response.status, `person on GET ${path}`).toBe(403);
+    }
+    for (const path of VIEWER_CLOSED_READS) {
+      expect((await api(path, viewer.session())).response.status, `viewer on GET ${path}`).toBe(403);
+      expect((await api(path, target.session())).response.status, `person on GET ${path}`).toBe(403);
+    }
+  });
+
+  it('masks an admin\'s email on the roster, and withholds the reviewer of a tax education entry', async () => {
+    const adminId = await userIdOf(admin.email);
+    const roster = (who) => api('/auth/admins', who.session()).then((r) => r.body.admins.find((a) => a.userId === adminId).email);
+    expect(await roster(admin)).toBe(admin.email);
+    expect(await roster(viewer)).toBe(maskEmail(admin.email));
+
+    await env.DB.prepare(`INSERT INTO tax_education_content (content_id, country_code, state_code, title, body, reviewed_at, reviewed_by)
+      VALUES ('tax-edu-viewer-test', 'US', NULL, 'Title', 'Body', '2026-11-01T00:00:00.000Z', ?)`).bind(adminId).run();
+    const entry = (who) => api('/tax-education/tax-edu-viewer-test', who.session()).then((r) => r.body.entry);
+    expect((await entry(admin)).reviewedBy).toBe(adminId);
+    const seen = await entry(viewer);
+    expect(seen.reviewedBy).toBeNull();
+    expect(seen.title).toBe('Title');
+    const listed = (await api('/tax-education', viewer.session())).body.entries.find((e) => e.id === 'tax-edu-viewer-test');
+    expect(listed.reviewedBy).toBeNull();
+  });
+
+  it('still refuses a look-only admin every write on the routes it may read', async () => {
+    for (const [method, path] of [['POST', '/tax-education'], ['PATCH', '/tax-education/x'], ['DELETE', '/tax-education/x'], ['POST', '/models/cleanup'], ['POST', '/world/expand'], ['PATCH', '/land-candidates/x'], ['DELETE', '/land-candidates/x'], ['POST', '/land-candidates/generate-ring'], ['POST', '/auth/revoke-admin']]) {
+      const attempt = await api(path, viewer.session({ method, body: '{}' }));
+      expect(attempt.response.status, `viewer on ${method} ${path}`).toBe(403);
+    }
+  });
+});
+
 describe('what a look-only admin does not see (#4175, slice b)', () => {
   it('masks an email so its shape reads and the address does not', () => {
     expect(maskEmail('jane.doe@gmail.com')).toBe('j***@g***.com');
@@ -157,6 +217,9 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     './lib/admin-video-jobs.js',
     './lib/admin-viewer-grant.js', // GET admin-role, which the dashboard page asks when it opens
     './lib/control-room.js', // the /admin/dashboard page gate only (the Control Room API and its page stay admin-only)
+    './lib/models.js', // GET models/storage only (the upload listing stays closed)
+    './lib/tax-education.js', // the two GET reads (#4382)
+    './lib/world-generation.js', // the land candidate and ring GET reads (#4382)
   ];
 
   it('only the listed files call requireAdminOrViewer', () => {
@@ -165,6 +228,21 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
       .map(([path]) => path)
       .sort();
     expect(callers).toEqual(OPTED_IN);
+  });
+
+  it('and each calls it exactly as many times as listed, so a new opt-in inside a listed file fails here too', () => {
+    // models.js holds handleModelListing, which lists the product, video job and Control Room card behind every upload
+    // and stays closed to a viewer; tax-education.js and world-generation.js hold writes. A second call in any of them
+    // is a new route a viewer can read, and is decided here, on purpose (#4382).
+    const COUNTS = {
+      './lib/account-moderation.js': 3, './lib/admin-delete-account.js': 1, './lib/admin-landlet-search.js': 1,
+      './lib/admin-users-table.js': 1, './lib/admin-video-jobs.js': 1, './lib/models.js': 1, './lib/tax-education.js': 2,
+      './lib/world-generation.js': 4, './lib/admin-viewer-grant.js': 1, './lib/control-room.js': 2,
+    };
+    expect(Object.keys(COUNTS).sort()).toEqual(OPTED_IN);
+    for (const path of OPTED_IN) {
+      expect(sources[path].match(/requireAdminOrViewer\(/g)?.length, path).toBe(COUNTS[path]);
+    }
   });
 
   it('every call site is in a handler that is reached by a GET route or guards its own writes', () => {

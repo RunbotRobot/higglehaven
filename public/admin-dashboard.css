@@ -208,4 +208,7 @@ dialog.confirm-dialog input[type="text"] { display: block; width: 100%; margin-t
 dialog.confirm-dialog .toolbar { justify-content: flex-end; }
 
 /* #4175: the look-only admin's banner (public/admin-dashboard-10.js). */
+.viewer-closed { color: #6a7a60; font-size: 13px; margin: 8px 0; }
+/* The error lines of the reads a look-only account is not shown: the note beside them already says so. */
+body.viewer-mode #modelsErr, body.viewer-mode #ncmecReportsListErr, body.viewer-mode #outsideItemsErr { display: none; }
 .viewer-banner { background: #fff6d6; border: 1px solid #e0cf8a; border-radius: 6px; color: #3d3410; font-size: 13px; margin: 0 0 16px; padding: 8px 12px; }
