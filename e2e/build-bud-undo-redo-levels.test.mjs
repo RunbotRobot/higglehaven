@@ -30,13 +30,16 @@ const drawn = (selector) => page.evaluate((sel) => {
 check(await page.evaluate(() => document.body.dataset.bud) === 'on', 'Build has the bud');
 check(!(await drawn('#mode-nav')), 'the old Shop/Build/Sell row is not drawn in Build');
 check((await page.locator('#level-menu-toggle').count()) === 0, 'the "Ground" pill is gone');
-check(!(await drawn('#undo-redo-panel #undo-btn')) && (await page.locator('#undo-redo-panel #undo-btn').count()) === 0, 'Undo is not in the old top-right row');
+// #4411: Undo and Redo stand as two small icons in one row at the upper right, always drawn, greyed when idle.
+check(await drawn('#undo-redo-panel #undo-btn') && await drawn('#undo-redo-panel #redo-btn'), 'Undo and Redo are both drawn in the standing row');
+check(await page.evaluate(() => document.getElementById('undo-btn').disabled && document.getElementById('redo-btn').disabled), 'both are greyed with nothing to undo or redo');
+check(await page.evaluate(() => document.getElementById('undo-btn').getAttribute('aria-label') === 'Undo' && document.getElementById('redo-btn').getAttribute('aria-label') === 'Redo'), 'each has its accessible name');
 
 // ---- Nothing to undo yet: no pair petal ----
 await openAccountMenu(page);
 await openBudMenuOf(page, 'build'); // #3760: Levels, Undo and Redo are in Build's own menu
 check(await drawn('#bud-petal-build-levels'), 'the bud has a Levels petal');
-check(!(await drawn('#bud-undo-redo')), 'no Undo/Redo petal while there is nothing to undo or redo');
+check((await page.locator('#bud-undo-redo').count()) === 0, 'Undo and Redo are not a petal of the bud any more');
 // Shop and Sell are petals of the bud in Build (the mode row is gone).
 check(await drawn('.mode-nav-btn[data-mode="shop"]') && await drawn('.mode-nav-btn[data-mode="sell"]'), 'Shop and Sell are petals of the bud');
 await page.click('#account-menu-toggle');
@@ -48,19 +51,16 @@ await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).cl
 await page.waitForTimeout(300);
 await page.mouse.click(200, 420);
 await page.waitForTimeout(1000);
-await ensureBudOpen(page);
-check(await drawn('#bud-undo-redo #undo-btn'), 'the pair petal shows Undo once something was placed');
-check(!(await drawn('#redo-btn')), 'Redo is not there before an Undo');
+check(await page.evaluate(() => !document.getElementById('undo-btn').disabled && document.getElementById('redo-btn').disabled), 'Undo is on and Redo stays greyed once something was placed');
 await page.click('#undo-btn');
 await page.waitForTimeout(1200);
-await ensureBudOpen(page);
-check(await drawn('#bud-undo-redo #redo-btn'), 'Redo appears next to it after an Undo');
+check(await page.evaluate(() => document.getElementById('undo-btn').disabled && !document.getElementById('redo-btn').disabled), 'Redo is on after an Undo');
 await page.click('#redo-btn');
 await page.waitForTimeout(1200);
 const afterRedo = await page.evaluate(() => window.__testProductScreenPositions().length);
 check(afterRedo === 1, `Redo puts the tree back (${afterRedo} items)`);
-const cornerBox = await page.evaluate(() => { const r = document.getElementById('bud-undo-redo').getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; });
-check(cornerBox.left >= 0 && cornerBox.right <= 390 && cornerBox.bottom <= 844, `the pair petal is inside the screen (${JSON.stringify(cornerBox)})`);
+const rowBox = await page.evaluate(() => { const r = document.getElementById('undo-redo-panel').getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, h: document.getElementById('undo-btn').getBoundingClientRect().height }; });
+check(rowBox.left >= 0 && rowBox.right <= 390 && rowBox.bottom <= 844 && rowBox.h >= 36, `the row is inside the screen and its icons are about 36 px (${JSON.stringify(rowBox)})`);
 
 // ---- Levels leaf ----
 await budClick(page, '#bud-petal-build-levels');
@@ -90,4 +90,4 @@ await budClick(page, '#bud-petal-build-levels');
 await page.waitForSelector('#bud-leaf-levels #level-menu-panel', { timeout: 5000 });
 check(await page.locator('#bud-leaf-levels #level-label').count() === 1, 'the leaf opens again with the label');
 
-await finish(browser, { pass: pass && errors.length === 0, label: '#3690: Undo/Redo is one petal and Levels is a leaf; the pills are gone', errors });
+await finish(browser, { pass: pass && errors.length === 0, label: '#3690: Undo and Redo stand in one small row and Levels is a leaf; the pills are gone', errors });

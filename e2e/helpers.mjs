@@ -388,7 +388,7 @@ const BUD_PETALS = new Set(['#add-item-btn', '#my-lands-btn']);
 // general menu, and a tap on the petal of the place you are in opens that place's stem. Which menu a
 // selector lives in: Build's, or Sell's, or (anything else) the general one.
 export function budMenuOf(selector) {
-  if (['#add-item-btn', '#my-lands-btn', '#undo-btn', '#redo-btn'].includes(selector) || selector.startsWith('#bud-petal-build-')) return 'build';
+  if (['#add-item-btn', '#my-lands-btn'].includes(selector) || selector.startsWith('#bud-petal-build-')) return 'build';
   if (selector.startsWith('#bud-petal-sell-')) return 'sell';
   if (selector.startsWith('#bud-petal-shop-')) return 'shop'; // Chat
   return null;
@@ -901,10 +901,11 @@ export async function openLevelMenu(page) {
   await page.waitForSelector('#bud-leaf-levels #level-menu-panel', { timeout: 5000 });
 }
 
-// #3690: Undo and Redo are two halves of one petal of the bud in Build, so they are only
-// there while the bud is open (and only drawn once there is something to undo or redo).
-// Opens the bud when it is closed, then clicks the control inside it.
+// #3690: Build's tools are in the bud, so they are only there while it is open. (#4411: Undo and Redo are the
+// exception: they stand in a row of their own, always drawn.) Opens the bud when it is closed, then clicks the control.
 export async function budClick(page, selector) {
+  // #4411: Undo and Redo stand in a small row of their own now, not in the bud.
+  if (selector === '#undo-btn' || selector === '#redo-btn') { await page.click(selector); return; }
   await settleBudFold(page);
   const open = await page.evaluate(() => document.getElementById('account-menu-panel')?.classList.contains('expanded'));
   if (!open) await openAccountMenu(page);

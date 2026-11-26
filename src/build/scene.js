@@ -2649,9 +2649,7 @@ function endSceneMutation() {
 function updateUndoRedoButtons() {
   undoBtn.disabled = sceneMutationBusy || undoStack.length === 0;
   redoBtn.disabled = sceneMutationBusy || redoStack.length === 0;
-  // #3574 -- Redo has nothing to offer until something was undone; hide it
-  // on the stack alone (not the busy flag) so it doesn't flicker mid-save.
-  redoBtn.hidden = redoStack.length === 0;
+  // #4411: both stay drawn (greyed when there is nothing to do), as a standing row in Build.
 }
 
 // Called right *before* any action that mutates the placed layout (place,

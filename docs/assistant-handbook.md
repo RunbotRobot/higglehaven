@@ -658,8 +658,7 @@ The message box starts one line tall and grows as you type, up to about five lin
 
 **You will see:** the sheet goes away and you are standing on your own lándlet. The
 top left is the small round bud with the higglehaven logo: tap it and it unfolds.
-"Add item", "Levels", "Tools" and, once you have done something, "Undo" and "Redo"
-are inside it: tap the Build petal to see them (the bud opens on the menu of the place you are in, and each place keeps its own tools in its own menu).
+"Add item", "Levels" and "Tools" are inside it: tap the Build petal to see them (the bud opens on the menu of the place you are in, and each place keeps its own tools in its own menu). "Undo" and "Redo" are two small arrows in a row at the top right of Build, always there, greyed until there is something to take back.
 
 **If something goes wrong:**
 - The line under the map says "No lándlets are ready to claim yet — check back
@@ -699,7 +698,7 @@ a small card beside it that has "Copy", "Delete" and "More", and a ring around i
 - Changed your mind before tapping the ground: the "Add item" petal in the bud
   now reads "Cancel placing". Tap the bud, then the Build petal, then that.
 - The item is not where you wanted. It is selected, so drag it (below), or tap
-  the round logo button at the top left, the Build petal, then "Undo" to take it back.
+  tap the "Undo" arrow at the top right to take it back.
 - Nothing seems to happen when tapping the ground: ask what the top of the screen
   says, and offer to pass it to the team if it does not explain.
 
@@ -759,7 +758,7 @@ go. It stops at the edge of how far you can go and never turns upside down.
 - You want to line it up with something nearby: tap "More" on the card beside the
   item, then "Snap" so it is yellow. A dragged item then lines its edges and
   middle up with items close to it.
-- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
+- Wrong spot: tap the "Undo" arrow at the top right.
 - You want to place it exactly: tap "More" on the card beside the item. "Nudge" has "Left", "Right",
   "Forward" and "Back", which slide it a small step along the item's own direction (a tenth of a metre,
   or a quarter of a foot), so sliding along a turned wall is one press; and "Up" and "Down", which raise
@@ -785,7 +784,7 @@ go. It stops at the edge of how far you can go and never turns upside down.
 **You will see:** the item turns as you drag, and the line on the card shows how far.
 
 **If something goes wrong:**
-- It turned the wrong way or too far: the round logo button at the top left, the Build petal, then "Undo".
+- It turned the wrong way or too far: tap the "Undo" arrow at the top right.
 - You want an exact angle: tap "More" on the card beside the item, and type the angle in degrees under
   "Angles": "Turn", "Tilt red" or "Tilt green" (the same three the line reads). An empty or invalid
   number is put back as it was.
@@ -813,7 +812,7 @@ go. It stops at the edge of how far you can go and never turns upside down.
 **If something goes wrong:**
 - Changed your mind about where to paste: the "Add item" petal in the bud now
   reads "Cancel placing". Tap the bud, then the Build petal, then that.
-- Wrong spot: the round logo button at the top left, the Build petal, then "Undo".
+- Wrong spot: tap the "Undo" arrow at the top right.
 
 ```controls build
 #copy-item | Copy
@@ -830,7 +829,7 @@ go. It stops at the edge of how far you can go and never turns upside down.
 single item.
 
 **If something goes wrong:**
-- It was a mistake: tap the round logo button at the top left, the Build petal, then "Undo", straight away and it comes back. On a keyboard, press Ctrl and Z (Cmd and Z on a Mac), and Ctrl, Shift and Z to redo.
+- It was a mistake: tap the "Undo" arrow at the top right, straight away and it comes back. On a keyboard, press Ctrl and Z (Cmd and Z on a Mac), and Ctrl, Shift and Z to redo.
 - It is gone and "Undo" no longer brings it back: items taken off by the world
   itself (for example because their seller was suspended) wait under "Removed items".
   Tap the round logo, the Build petal, then "Tools": "Removed items" is in that sheet, and it only shows
@@ -865,11 +864,10 @@ while they show. Only the builder sees them, never a shopper, and the choice is 
 
 ### How do I undo a mistake, or redo it?
 
-1. Tap the round higglehaven logo button at the top left (labelled Menu until it has been opened once),
-   then "Undo". It is there only once you have done something. The last thing you
-   did is taken back: a move, a turn, an add, a removal.
+1. In Build, tap the "Undo" arrow in the small row at the top right. It is always there and greyed
+   until you have done something. The last thing you did is taken back: a move, a turn, an add, a removal.
 2. Tap it again to go back further.
-3. If you went too far, "Redo" appears next to it. Tap it to put things back.
+3. If you went too far, tap the "Redo" arrow next to it to put things back. It is greyed until you have undone something.
 
 **You will see:** the item jumps back to how it was. "Redo" shows up only after an
 "Undo".
