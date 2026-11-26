@@ -2188,6 +2188,24 @@ export async function renderSellerFeedbackSummary(id) {
   }
 }
 
+// #4437: a product's thumbnail (and the 8x8 grid Prompt mode matches on) is stored only when its seller's own browser
+// sends it right after an upload, resize or duplicate; a call that was missed (a closed tab, a failed request) was
+// never made again, so the product could never be found by Prompt mode. Opening My products now sends the ones that
+// have none, a few per open (the server allows 20 uploads per window and each render is a model load) and each only
+// once a session, so a model that cannot render is not tried again and again.
+const THUMBNAIL_BACKFILL_PER_OPEN = 3;
+const thumbnailBackfillTried = new Set();
+function backfillMissingThumbnails() {
+  let started = 0;
+  for (const template of myProducts()) {
+    if (started >= THUMBNAIL_BACKFILL_PER_OPEN) break;
+    if (template.sellerId !== sellerId || template.imageUrl || !template.modelUrl || thumbnailBackfillTried.has(template.templateId)) continue;
+    thumbnailBackfillTried.add(template.templateId);
+    started += 1;
+    persistCatalogThumbnail(template);
+  }
+}
+
 export async function openSellerModal() {
   await bootstrapPromise;
   const id = await ensureSellerIdentity();
@@ -2204,6 +2222,7 @@ export async function openSellerModal() {
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
   openModalA11y(sellerModalEl, closeSellerModal);
+  backfillMissingThumbnails(); // #4437
 }
 // Exported for src/catalog/upload.js (#2557) -- its own closeUploadModal
 // needs this same handler to re-arm the Seller modal's focus trap.
