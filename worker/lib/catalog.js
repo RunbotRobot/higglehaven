@@ -38,7 +38,7 @@ import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { isValidStockQuantity, stockLimitMessage } from '../stockLimit.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
-import { assertOwner, requireSessionBuilder, requireAdminUnlessLocalWorker } from './auth.js';
+import { assertOwner, requireSessionBuilder, requireAdmin, requireAdminUnlessLocalWorker } from './auth.js';
 import { bytesToHex } from './crypto.js';
 import { fireNotifications } from './notifications.js';
 import {
@@ -1584,16 +1584,25 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // storage — an anonymous write path there is a real abuse surface an
     // unauthenticated metadata edit isn't — so a genuine owning seller is
     // required outright rather than falling open.
-    if (!existing.seller_id || !(await sellerExists(db, existing.seller_id))) {
-      throw new HttpError('This catalog template has no owning seller to authorize a thumbnail upload', 403);
+    // #4437: a seeded placeholder (brick, door, ...) has no seller at all, so no seller can ever
+    // give it a thumbnail and Prompt mode could never match it. An admin's own browser may write
+    // one for such a template (a real admin, never a look-only viewer: requireAdmin); a template
+    // that has an owner still needs that owner.
+    const unowned = !existing.seller_id || !(await sellerExists(db, existing.seller_id));
+    let limiterKey;
+    if (unowned) {
+      const admin = await requireAdmin(request, db);
+      limiterKey = `catalog-thumbnail:admin:${admin.user_id}`;
+    } else {
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+      limiterKey = `catalog-thumbnail:${sessionSeller.seller_id}`;
     }
-    const sessionSeller = await requireSessionSeller(request, db);
-    assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     // #775: this writes into the same MODELS bucket handleModelUpload's own
     // MAX_TOTAL_STORAGE_BYTES cap protects, and a re-rendered thumbnail
     // hashes differently each time (defeating the dedup below), so it needs
     // the same rate limit + reservation dance those paths use.
-    await checkRateLimit(db, `catalog-thumbnail:${sessionSeller.seller_id}`, THUMBNAIL_UPLOAD_RATE_LIMIT_MAX);
+    await checkRateLimit(db, limiterKey, THUMBNAIL_UPLOAD_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const bytes = decodeThumbnailDataUrl(input.imageDataUrl);
     const embedding = validateThumbnailEmbedding(input.embedding);
