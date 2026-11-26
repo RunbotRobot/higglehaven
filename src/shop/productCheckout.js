@@ -36,6 +36,8 @@ import {
   purchaseInstance, getPurchaseQuote, clearPurchaseIdempotencyKey, finalizePurchase,
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
+import { requireLogin, requireVerification, currentAuthUser, setCurrentAuthUser } from '../account/auth.js';
+import { buyTimeAccountRefusal } from './buyAccountRefusal.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure, canLeaveAfterCharge, CHARGED_CLOSED_MESSAGE, PAY_STAGES } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
@@ -361,6 +363,7 @@ export async function handleShopProductBuyClick() {
   if (isTestModel) return;
   productCardBuyButton().disabled = true;
   const instanceId = review.mesh.userData.instanceId;
+  let paymentStarted = false;
   try {
     // #3946: ask first what this purchase will do, without doing it. A purchase that takes a card
     // opens the one payment sheet (price, refund line, card field, Pay), so Pay is the one yes;
@@ -394,6 +397,7 @@ export async function handleShopProductBuyClick() {
     }
     const result = await purchaseInstance(instanceId, { expectedUnitPriceCents: priceCents });
     if (result.requiresPayment) {
+      paymentStarted = true; // from here a card can be charged, so "you were not charged" is no longer ours to say (#4461)
       const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });
       // #473: only clear the persisted idempotency key (see purchaseInstance
       // in src/api.js) once the purchase has genuinely finalized -- a
@@ -439,11 +443,16 @@ export async function handleShopProductBuyClick() {
       // The race the quote could not catch: the seller changed it between the quote and Buy. Nothing was charged.
       await showPriceChanged(review, err.body?.unitPriceCents);
     } else if (err.message !== 'Checkout cancelled.') {
+      // #4461: a refusal at Buy time that is about the person's own account says so, says nothing was charged
+      // (a 401 or a verification refusal comes from the quote or the purchase request, before any card is
+      // touched), and then offers the step that fixes it, instead of the server's bare "Not authenticated".
+      const accountRefusal = paymentStarted ? null : buyTimeAccountRefusal(err, { requireLogin, requireVerification, currentAuthUser: () => currentAuthUser, setCurrentAuthUser });
       await showNotice({
         title: err.chargedClosed ? 'Your payment went through' : "Purchase didn't go through",
-        message: err.message || 'Couldn\'t complete this purchase.',
+        message: accountRefusal?.message || err.message || 'Couldn\'t complete this purchase.',
         returnFocusEl: productCardBuyButton(),
       });
+      if (accountRefusal) await accountRefusal.fix().catch(() => {});
     }
   } finally {
     productCardBuyButton().disabled = false;

@@ -295,9 +295,58 @@ export function setApparentPx(set, fovDeg, viewportHeightPx) {
 // of them get one of the few cross-fades that can run at once, and who is
 // served before the tick's time slice runs out; the rest follow on later ticks.
 // `indices` are positions in `items` ({ px }); returns them, largest first, with
-// ties kept in their original order (the sort is stable). Sorts in place.
+// ties (every member of a set shares the set's size) are ordered by what the change is. #4113: a wall improves from the
+// front and degrades from the back, so among equal sizes an UPGRADE (`upgrade`: a better version than the one drawn)
+// goes before a downgrade, the NEARER upgrade first and the FARTHER downgrade first (`dist`; a missing one goes last in
+// its group); the rest keep their original order (the sort is stable). Without that a wall of loose bricks changed in the
+// order they were placed, so a brick a metre away could wait behind one ten metres away. Sorts in place.
 export function largestFirst(indices, items) {
-  return indices.sort((a, b) => items[b].px - items[a].px);
+  return indices.sort((a, b) => {
+    const bySize = items[b].px - items[a].px;
+    if (bySize !== 0) return bySize;
+    const ua = items[a].upgrade === true;
+    const ub = items[b].upgrade === true;
+    if (ua !== ub) return ua ? -1 : 1;
+    // A total order: an unknown distance is the farthest for an upgrade (last) and the nearest for a downgrade (last).
+    const missing = ua ? Infinity : -Infinity;
+    const da = Number.isFinite(items[a].dist) ? items[a].dist : missing;
+    const db = Number.isFinite(items[b].dist) ? items[b].dist : missing;
+    if (da === db) return 0;
+    return (da < db) === ua ? -1 : 1;
+  });
+}
+
+// #4113: whether a change is an upgrade (a better version than the one drawn): the order flips are served in, see largestFirst.
+// A gate that also HELD the upgrades behind a placement waiting for room (so the cheap far-to-mid changes of the back of a wall
+// could not take the room a far-to-full change at the front was waiting for) was built and measured against this order alone
+// (PR #4452): it made the order exact but starved the mid bricks behind the full ones until they passed 1.5x their size limit,
+// and then all of them changed in one frame (500 to 535 bricks, 2 runs of 5, against none in 8 without it): a pop, which is worse.
+// So the order is the rule and nothing holds a placement back.
+const TIER_RANK_ORDER = { [TIER_FAR]: 0, [TIER_MID]: 1, [TIER_FULL]: 2 };
+export function isTierUpgrade(currentTier, wantedTier) {
+  return (TIER_RANK_ORDER[wantedTier] ?? 2) > (TIER_RANK_ORDER[currentTier] ?? 2);
+}
+
+// #4113 (e2e measure): how many of `bricks` ({ d: distance from the avatar, rank: 0 far, 1 mid, 2 full }) show a worse
+// version than some brick strictly farther away. A wall improving from the front has none (in a settled wall); the
+// owner's band, the near bricks on far while the ones behind have mid, has many.
+export function orderViolations(bricks) {
+  const sorted = bricks.slice().sort((a, b) => b.d - a.d);
+  let violations = 0;
+  let bestFarther = -1;
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i;
+    let groupBest = bestFarther;
+    while (j < sorted.length && sorted[j].d === sorted[i].d) {
+      if (sorted[j].rank < bestFarther) violations++;
+      groupBest = Math.max(groupBest, sorted[j].rank);
+      j++;
+    }
+    bestFarther = groupBest;
+    i = j;
+  }
+  return violations;
 }
 
 // #3920 (moved here by #3929 so Build counts the same way): what a model costs to draw, in triangles.

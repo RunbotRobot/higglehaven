@@ -100,6 +100,9 @@ let verifyStripeSetup = null;
 // 2026-10-28): calling Stripe(...) fresh in both enterVerifyCardStep and
 // the click handler below hit exactly this.
 let verifyStripeInstance = null;
+// #4478: set when the card step failed to load, so Continue reads Try again and loads it again.
+let verifyRetryLoad = false;
+const CARD_FORM_LOAD_FAILED = "The card form couldn't load. You were not charged. Try again, or verify with an ID instead.";
 
 async function enterVerifyCardStep() {
   verifyAgeStepEl.hidden = true;
@@ -128,11 +131,19 @@ async function enterVerifyCardStep() {
     setVerifyStatus('');
     verifyContinueBtn.disabled = false;
   } catch (err) {
-    setVerifyStatus(err.message || 'Couldn\'t load card verification.', 'error');
+    // #4478: this modal has no Escape and Continue was left disabled, so a card form that failed to load (or a
+    // refused set-up) was a dead end. Say what happened in fixed words (never the loader's own text), and turn
+    // Continue into Try again; the ID route below stays offered.
+    setVerifyStatus((err && err.code && err.message) || CARD_FORM_LOAD_FAILED, 'error');
+    verifyCardFormEl.hidden = true;
+    verifyContinueBtn.textContent = 'Try again';
+    verifyContinueBtn.disabled = false;
+    verifyRetryLoad = true;
   }
 }
 
 function openVerifyModal(user) {
+  verifyRetryLoad = false;
   verifyStripeSetup = null;
   verifyStripeInstance = null;
   verifyAgeAttestInput.checked = false;
@@ -187,6 +198,12 @@ verifyContinueBtn.addEventListener('click', async () => {
       setVerifyStatus(err.message || 'Couldn\'t confirm age.', 'error');
       verifyContinueBtn.disabled = false;
     }
+    return;
+  }
+
+  if (verifyRetryLoad) {
+    verifyRetryLoad = false;
+    await enterVerifyCardStep();
     return;
   }
 
@@ -692,6 +709,11 @@ authForms.reset.addEventListener('submit', async (event) => {
     showAuthView('login');
     setAuthStatus('Password reset! You can log in with your new password now.', 'success');
   } catch (err) {
+    if (err.code === 'reset_link_invalid') {
+      // #4474: a link that no longer works leads straight to asking for a new one, not to a form that cannot.
+      pendingResetToken = null;
+      showAuthView('forgot');
+    }
     setAuthStatus(err.message || 'Couldn\'t reset the password.', 'error');
   }
 });
@@ -742,7 +764,7 @@ async function pollDiditVerificationStatus(setStatusFn = setAuthStatus, onApprov
   const tick = async () => {
     diditPollTimer = null;
     try {
-      const { status } = await fetchDiditVerificationStatus();
+      const { status, reason } = await fetchDiditVerificationStatus();
       if (status === 'approved') {
         await refreshCurrentUser();
         setStatusFn('Government-ID verification approved!', 'success');
@@ -750,7 +772,10 @@ async function pollDiditVerificationStatus(setStatusFn = setAuthStatus, onApprov
         return;
       }
       if (status === 'declined') {
-        setStatusFn('Government-ID verification was declined — you can try again.', 'error');
+        // #4477: closing the tab or running out of time is not being turned down.
+        setStatusFn(reason === 'unfinished'
+          ? "The ID check wasn't finished or timed out. Start it again when you're ready."
+          : "The ID check wasn't approved. You can try again, use a card instead, or contact support.", 'error');
         return;
       }
     } catch (err) {

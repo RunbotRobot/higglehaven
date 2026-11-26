@@ -147,6 +147,15 @@ async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = 
   if (template.stock_quantity === 0) {
     throw new HttpError('This product is sold out', 400, { code: ERROR_CODES.SOLD_OUT });
   }
+  // #4462: an avatar or an animation stays with its buyer for good, so a second purchase is never wanted.
+  // Only the card hid Buy before; a stale card or a second tab could still buy again. Refused here, for
+  // the quote and the purchase alike, before any charge. Physical goods can be bought again.
+  const ownershipTable = template.category === 'avatar' ? 'owned_avatars' : template.category === 'animation' ? 'owned_animations' : null;
+  if (ownershipTable && await db.prepare(
+    `SELECT 1 AS owned FROM ${ownershipTable} WHERE template_id = ? AND builder_id = (SELECT builder_id FROM builders WHERE user_id = ?)`,
+  ).bind(template.template_id, user.user_id).first()) {
+    throw new HttpError('You already own this product', 409, { code: ERROR_CODES.ALREADY_OWNED });
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     // #4289: the player copy for not_for_sale; the sentence here is for logs.
@@ -238,7 +247,8 @@ async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = 
   // required an unauthenticated real shopper reaching this exact path,
   // which is no longer possible.
   if (!user.is_admin) {
-    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
+    // #4462: player copy lives in src/errorCopy.js; the sentence here is for logs.
+    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403, { code: ERROR_CODES.SELLER_NOT_READY });
   }
   return { instance, template, landlet, seller, paysWithCard: false };
 }
@@ -458,6 +468,8 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
   // charged, even if the template's own price changes in the meantime,
   // rather than re-deriving amounts from a live template row that might
   // no longer match what Stripe billed the buyer.
+  // #4459: nothing has been charged when creating the payment fails, so the buyer is told so in plain words (the
+  // provider's own sentence stays in the log, never on the screen).
   const paymentIntent = await stripeRequest(env, 'POST', 'payment_intents', {
     amount: amounts.totalCents,
     currency: 'usd',
@@ -480,7 +492,14 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       isAvatarCategory: String(isAvatarCategory),
       isAnimationCategory: String(isAnimationCategory),
     },
-  }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey));
+  }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey))
+    .catch((err) => {
+      if (err instanceof HttpError && !err.code) {
+        console.error('payment creation failed', err.message);
+        throw new HttpError('Could not start the payment.', err.status, { code: ERROR_CODES.PAYMENT_NOT_STARTED });
+      }
+      throw err;
+    });
 
   // publishableKey is safe to hand to the browser by design (it's how
   // Stripe.js identifies which Stripe account to talk to) — the frontend
@@ -558,7 +577,16 @@ export async function handlePurchaseFinalize(request, env) {
     // says neither "not charged" nor "try again later", and points at My purchases.
     throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.PAYMENTS_UNAVAILABLE });
   }
-  const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`);
+  // #4459: if the payment cannot be looked up, the card may or may not have been charged; the buyer is told to check
+  // My purchases (the payment webhook records a charge that succeeded) instead of reading the provider's sentence.
+  const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`)
+    .catch((err) => {
+      if (err instanceof HttpError && !err.code) {
+        console.error('payment lookup failed', err.message);
+        throw new HttpError('Could not confirm the payment.', err.status, { code: ERROR_CODES.PAYMENT_UNCONFIRMED });
+      }
+      throw err;
+    });
   if (paymentIntent.status !== 'succeeded') {
     // #4289: a buyer reads the player copy (src/errorCopy.js), which says whether the card was charged; the Stripe
     // status stays in this log sentence. `processing` is the one state where money may be in flight.

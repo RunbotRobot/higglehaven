@@ -284,7 +284,7 @@ import {
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow, currentShopLandletId,
   shopOtherAvatars, assistantFromHit, assistantGroups, otherPersonGroups, personFromHit, personForBuilderId,
-  settleAllBatchCrossfades, batchCrossfadeStats,
+  settleAllBatchCrossfades, batchCrossfadeStats, batchOrderViolations,
   creditOrbMeshes, showCreditOrbAbout,
 } from './shop/presenceAndContent.js';
 // #3555: tapping another person in the Shop world offers friendship.
@@ -1382,6 +1382,8 @@ window.__testShopDrawStats = (options) => {
 };
 // #4062: e2e-only. Whether a batch version change has dissolved (a fade is running) and how many have.
 window.__testShopBatchCrossfades = () => batchCrossfadeStats();
+// #4113 (e2e): placements showing a worse version than one farther from the avatar (an order the wall should improve in).
+window.__testShopBatchOrderViolations = () => batchOrderViolations();
 // #4113: e2e-only. The books' count of batched placements on each version right now, summed over every loaded
 // landlet, without rendering a frame (window.__testShopDrawStats renders one), so a test can read it every frame
 // while the avatar walks.

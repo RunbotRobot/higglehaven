@@ -49,6 +49,16 @@ describe('Change password (#1181)', () => {
       expect(attempt.response.status).toBe(400);
     });
 
+    it('#4476: a too-short new password is reported at once, in plain words, even when the current password is wrong', async () => {
+      const account = await signupBuilder('change-password-short-first');
+      const attempt = await api('/auth/change-password', account.session({
+        method: 'POST',
+        body: JSON.stringify({ currentPassword: 'not the current one', newPassword: 'short' }),
+      }));
+      expect(attempt.response.status).toBe(400);
+      expect(attempt.body.error).toBe('Use at least 8 characters for your password.');
+    });
+
     it('changes the password, signs out other sessions, keeps the current one alive', async () => {
       const password = 'a fine long original password';
       const newPassword = 'a fine long replacement password';

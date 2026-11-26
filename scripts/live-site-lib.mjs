@@ -315,11 +315,12 @@ function parseStepWithoutBurst(token, command, args) {
     case 'stats':
     case 'lap':
     case 'cover':
+    case 'mem':
     case 'pos':
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, pos, marks)`);
   }
 }
 

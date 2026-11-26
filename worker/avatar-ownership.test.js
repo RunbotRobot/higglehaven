@@ -65,6 +65,22 @@ async function purchase(instanceId, buyer) {
   return api(`/instances/${instanceId}/purchase`, buyer.session({ method: 'POST' }));
 }
 
+// #4462: the server now refuses a second purchase of something already owned, but the state this file's
+// refund tests need (two purchases backing one ownership) is still reachable by a race between two
+// buyers' checkouts, so it is made here the way that race would: by writing the second purchase directly.
+async function purchaseRaced(instanceId, buyer) {
+  const instance = await env.DB.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+  const template = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
+  const landlet = await env.DB.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
+  const amounts = {
+    quantity: 1, buyerLabel: null, unitPriceCents: template.price_cents, totalCents: template.price_cents,
+    commissionCents: 0, builderShareCents: template.price_cents, platformShareCents: 0,
+  };
+  await grantAdminTo(buyer);
+  const response = await writePurchaseRow(env, instance, template, landlet, amounts, null, false, buyer.builderId);
+  return { response, body: await response.clone().json() };
+}
+
 describe('Avatar ownership (#680)', () => {
   it('does not grant ownership for an ordinary (non-avatar) purchase', async () => {
     const seller = await signupBuilder('avatar-ownership-ordinary-seller');
@@ -102,7 +118,7 @@ describe('Avatar ownership (#680)', () => {
     expect(listed.body.avatars.map((a) => a.templateId)).toContain('avatar-ownership-template');
   });
 
-  it('is idempotent across repeat purchases of the same avatar template', async () => {
+  it('refuses a repeat purchase of the same avatar template, and grants it once (#4462)', async () => {
     const seller = await signupBuilder('avatar-ownership-repeat-seller');
     await createGreenbeltLandlet('avatar-ownership-repeat-landlet');
     await claim('avatar-ownership-repeat-landlet', seller);
@@ -111,7 +127,9 @@ describe('Avatar ownership (#680)', () => {
     await placeInstance('avatar-ownership-repeat-instance-2', 'avatar-ownership-repeat-landlet', 'avatar-ownership-repeat-template', seller);
 
     expect((await purchase('avatar-ownership-repeat-instance-1', seller)).response.status).toBe(201);
-    expect((await purchase('avatar-ownership-repeat-instance-2', seller)).response.status).toBe(201);
+    const second = await purchase('avatar-ownership-repeat-instance-2', seller);
+    expect(second.response.status).toBe(409);
+    expect(second.body.code).toBe('already_owned');
 
     const owned = await env.DB.prepare(
       'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
@@ -398,7 +416,7 @@ describe('Refund revokes avatar ownership (#754)', () => {
 
     const firstPurchase = await purchase('avatar-refund-multi-instance-1', buyer);
     expect(firstPurchase.response.status).toBe(201);
-    const secondPurchase = await purchase('avatar-refund-multi-instance-2', buyer);
+    const secondPurchase = await purchaseRaced('avatar-refund-multi-instance-2', buyer);
     expect(secondPurchase.response.status).toBe(201);
 
     const equipped = await api('/builders/me/avatar', buyer.session({
@@ -493,7 +511,7 @@ describe('Refund revokes avatar ownership (#754)', () => {
         // hand-built row) so it goes through the exact same grant path
         // (ownedAvatarStatements) any other buyer's concurrent purchase
         // would.
-        secondPurchase = await purchase('avatar-refund-concurrent-grant-instance-2', buyer);
+        secondPurchase = await purchaseRaced('avatar-refund-concurrent-grant-instance-2', buyer);
       }
       return originalBatch(statements);
     };

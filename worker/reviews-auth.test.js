@@ -3015,7 +3015,7 @@ describe('Authentication', () => {
     `).bind(`sess-${crypto.randomUUID()}`, builder.email).run();
     const declined = await api('/auth/didit-verification-status', builder.session());
     expect(declined.response.status).toBe(200);
-    expect(declined.body).toEqual({ status: 'declined' });
+    expect(declined.body).toEqual({ status: 'declined', reason: 'not_approved' });
   });
 
   it('reports "pending" for a still-pending session when Didit is unconfigured, rather than attempting a reconciliation call', async () => {
@@ -3209,7 +3209,9 @@ describe('Authentication', () => {
     expect(me.body.user.emailVerified).toBe(true);
 
     const reused = await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
-    expect(reused.response.status).toBe(400);
+    // #4475: reusing a link for an address that is already verified is a success for the person.
+    expect(reused.response.status).toBe(200);
+    expect(reused.body.alreadyVerified).toBe(true);
   });
 
   it('does not double-consume the same verify-email token under a concurrent race', async () => {
@@ -3224,7 +3226,12 @@ describe('Authentication', () => {
       api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
       api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
     ]);
-    expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
+    // #4475: a request that arrives after the token is used, for an address that is now verified, is answered as
+    // "already verified" (a success for the person), so the loser is either a 400 or an alreadyVerified 200. What
+    // matters (#377) is unchanged: exactly one request consumes the token and reports a fresh verification.
+    const fresh = [first, second].filter((r) => r.response.status === 200 && !r.body.alreadyVerified);
+    expect(fresh).toHaveLength(1);
+    for (const r of [first, second]) expect([200, 400]).toContain(r.response.status);
   });
 
   // #1323: unlike handleResendVerification (the token-issuing side, #363),
