@@ -35,10 +35,20 @@ for (const axis of ['X', 'Y', 'Z']) {
   // the arrow farther from the item's middle on screen is the one aimed at
   mine.sort((a, b) => Math.hypot(b.x - core.x, b.y - core.y) - Math.hypot(a.x - core.x, a.y - core.y));
   // (a tree stands on the floor, so its height axis is tried upward: the arrow that is higher on screen)
-  const at = axis === 'Z' ? mine.sort((a, b) => a.y - b.y)[0] : mine[0];
+  const at = { ...(axis === 'Z' ? mine.sort((a, b) => a.y - b.y)[0] : mine[0]) };
   // only an arrow that stands clear of every ring is pressed: a spot under both goes to the nearer, tested below
-  const hit = await page.evaluate(([x, y]) => window.__testHandleAt(x, y), [Math.round(at.x), Math.round(at.y)]);
-  if (hit.arrow !== axis) { console.log(`skip ${axis}: arrow tip not pickable at ${JSON.stringify(at)} -> ${JSON.stringify(hit)}`); continue; }
+  // (walk outward from the arrow's middle until a point is the arrow's and no ring's, as a finger would find it)
+  let hit = null;
+  {
+    const ox = at.x - core.x, oy = at.y - core.y, ol = Math.hypot(ox, oy) || 1;
+    for (let k = -2; k <= 14 && !(hit?.arrow === axis && !hit.ring); k++) {
+      const px = at.x + (ox / ol) * k * 2, py = at.y + (oy / ol) * k * 2;
+      hit = await page.evaluate(([x, y]) => window.__testHandleAt(x, y), [Math.round(px), Math.round(py)]);
+      if (hit.arrow === axis && !hit.ring) { at.x = px; at.y = py; }
+    }
+  }
+  check(hit?.arrow === axis && !hit.ring, `a finger can find the ${axis} arrow clear of the rings (${JSON.stringify(hit)})`);
+  if (!(hit?.arrow === axis && !hit.ring)) continue;
   const before = await state();
     const dx = (at.x - core.x), dy = (at.y - core.y);
   const len = Math.hypot(dx, dy) || 1;

@@ -611,7 +611,8 @@ translateControls.space = 'local';
 translateControls.showXY = false;
 translateControls.showYZ = false;
 translateControls.showXZ = false;
-translateControls.size = 1.5;
+translateControls.size = 1.2;
+translateControls.showXYZ = false; // the centre handle (a free move on the screen plane) would take a press meant for the item's body
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 
@@ -3240,7 +3241,7 @@ window.addEventListener('pointerdown', (event) => {
   }
 }, { capture: true });
 // #4410: a ring and an arrow can lie under the same finger, and each TransformControls reads the press on its
-// own, so both would start a drag. One takes the press and the other gizmo is switched off for that one press
+// own, so both would start a drag. The nearer handle takes the press and the other gizmo is switched off for that one press
 // only (restored in the bubble phase, after both controls have read it).
 function nearestHandleHit(controlsOf, event) {
   raycaster.setFromCamera(ndcFromEvent(event), camera);
@@ -3256,9 +3257,8 @@ window.addEventListener('pointerdown', (event) => {
   const ring = nearestHandleHit(rotateControls, event);
   const arrow = nearestHandleHit(translateControls, event);
   if (!ring || !arrow) return;
-  // The arrow's pick area is small and the ring's is a long line a finger can find anywhere along it, so the
-  // arrow takes the press where they meet (the ring is still the ring's everywhere else).
-  handlePressLoser = rotateControls;
+  // The handle nearer the camera at that point is the one a person sees on top (a tie goes to the ring).
+  handlePressLoser = ring.distance <= arrow.distance ? translateControls : rotateControls;
   handlePressLoser.enabled = false;
 }, { capture: true });
 window.addEventListener('pointerdown', () => {
