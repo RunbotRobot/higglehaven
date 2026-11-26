@@ -34,6 +34,8 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   // #4456: refused before any card is touched: the price moved between the one the shopper saw and now.
   price_changed: 'The price changed. You were not charged. Review the new price and buy again.',
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
+  // #4458: raised while finishing a purchase, when the card may already have been charged, so it says to look before paying again.
+  payments_unavailable: "We can't confirm your payment right now. If your card was charged, the order will appear in My purchases. Check there before paying again.",
 });
 
 // The player-facing text for a server error: the mapped copy for a known code,
