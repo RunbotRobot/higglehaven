@@ -30,12 +30,37 @@ function say(message, { error = false } = {}) {
 // What is drawn right now: the saved choice, or the one just tapped while it is being stored.
 function current() { return state.pending ?? state.saved; }
 
+// Radio groups are one tab stop with the arrow keys moving between their options (the ARIA pattern): the chosen
+// option is the one in the tab order, and an arrow key moves focus; Enter or Space (the button's own click)
+// chooses, so walking along the row with the arrows never saves anything by itself.
+function roveFocus(groupEl) {
+  const buttons = [...groupEl.querySelectorAll('.wordmark-option')];
+  const checked = buttons.find((button) => button.getAttribute('aria-checked') === 'true') ?? buttons[0];
+  for (const button of buttons) button.tabIndex = button === checked ? 0 : -1;
+}
+function onArrowKey(event) {
+  const key = event.key;
+  const step = key === 'ArrowRight' || key === 'ArrowDown' ? 1 : key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : 0;
+  if (step === 0) return;
+  const buttons = [...event.currentTarget.querySelectorAll('.wordmark-option')];
+  const at = buttons.indexOf(document.activeElement);
+  if (at === -1) return;
+  event.preventDefault();
+  const next = buttons[(at + step + buttons.length) % buttons.length];
+  for (const button of buttons) button.tabIndex = button === next ? 0 : -1;
+  next.focus();
+}
+stylesEl.addEventListener('keydown', onArrowKey);
+coloursEl.addEventListener('keydown', onArrowKey);
+
 function paint() {
   const { styleId, colourId } = current();
   renderWordmark(previewNameEl, { name: state.name, styleId, colourId }, state.offered);
   for (const button of stylesEl.querySelectorAll('.wordmark-option')) button.setAttribute('aria-checked', String(button.dataset.id === styleId));
   for (const button of coloursEl.querySelectorAll('.wordmark-option')) button.setAttribute('aria-checked', String(button.dataset.id === colourId));
   defaultBtn.disabled = styleId === DEFAULT_WORDMARK_ID && colourId === DEFAULT_WORDMARK_ID;
+  // Keep the tab stop on the chosen option, unless focus is inside the group right now (an arrow walk in progress).
+  for (const groupEl of [stylesEl, coloursEl]) if (!groupEl.contains(document.activeElement)) roveFocus(groupEl);
 }
 
 async function choose(next) {

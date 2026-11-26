@@ -67,6 +67,20 @@ await page.evaluate(() => window.__release());
 await page.waitForFunction(() => !document.querySelector('#wordmark-preview .bud-place-name').dataset.wordmark);
 check(await page.evaluate(() => window.__saves.at(-1).styleId === 'default' && window.__saves.at(-1).colourId === 'default'), 'the default button saves the default look');
 
+// Keyboard: the lettering row is one tab stop and the arrow keys move along it without saving anything.
+await page.focus('#wordmark-styles .wordmark-option[tabindex="0"]');
+const savesBefore = await page.evaluate(() => window.__saves.length);
+await page.keyboard.press('ArrowRight');
+const walked = await page.evaluate(() => ({
+  focused: document.activeElement?.dataset?.id,
+  stops: [...document.querySelectorAll('#wordmark-styles .wordmark-option')].filter((b) => b.tabIndex === 0).length,
+  saves: window.__saves.length,
+}));
+check(walked.focused === 'round' && walked.stops === 1 && walked.saves === savesBefore, `an arrow key moves focus along the row and saves nothing (${JSON.stringify(walked)})`);
+await page.keyboard.press('ArrowLeft');
+await page.keyboard.press('ArrowLeft');
+check(await page.evaluate(() => document.activeElement?.dataset?.id) === 'hand', 'the arrow keys wrap around the row');
+
 // Close, at the upper right, resolves with the last saved choice.
 const box = await page.evaluate(() => { const r = document.getElementById('wordmark-modal-close-btn').getBoundingClientRect(); const m = document.getElementById('wordmark-modal-content').getBoundingClientRect(); return { right: m.right - r.right, top: r.top - m.top }; });
 check(box.right < 40 && box.top < 40, `the close button is in the upper-right corner (${JSON.stringify(box)})`);
