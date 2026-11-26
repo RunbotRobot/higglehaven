@@ -217,6 +217,7 @@ console.log('versions only step one way each direction (should be true):', monot
 console.log('version changes over the walk, fades started (fades should be at least the changes):', changes, fades);
 
 const hardSwaps = await page.evaluate(() => window.__testShopBatchCrossfades().hardSwaps);
+console.log('why any swapped in one frame (#4113 diagnostics):', JSON.stringify(await page.evaluate(() => window.__testShopBatchCrossfades().hardSwapReasons)));
 console.log('bricks that swapped in one frame because the fade caps were full (should be 0):', hardSwaps);
 
 const pass = !!landlet && created.status < 300 && loaded && uniform && monotone && changes >= 2 && fades >= changes && hardSwaps === 0 && errors.length === 0;

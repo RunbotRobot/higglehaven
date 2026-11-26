@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, batchTierCounts, BATCH_TIER_FULL, BATCH_TIER_MID, BATCH_TIER_FAR } from './batchTiers.js';
-import { createBatchCrossfades, BATCH_CROSSFADE_MS, BATCH_CROSSFADE_MAX_WAIT_MS, BATCH_WAITING } from './batchCrossfade.js';
+import { createBatchCrossfades, BATCH_CROSSFADE_MS, BATCH_CROSSFADE_MAX_WAIT_MS, BATCH_CROSSFADE_MIN_WAIT_FRAMES, BATCH_WAITING } from './batchCrossfade.js';
 
 function handleAt(i) {
   const handle = new THREE.Object3D();
@@ -396,13 +396,26 @@ describe('a placement the caps cannot take yet waits instead of swapping in one 
     const { fades, state } = makeFades({ maxTriangles: 300 });
     fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true });
     expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING);
-    // Keep the first fade busy for good by never calling update(): the room never comes back.
+    // The first fade stays busy (the clock does not move while the frames are drawn), then the time runs out.
+    for (let frame = 0; frame < BATCH_CROSSFADE_MIN_WAIT_FRAMES; frame++) fades.update();
     state.now += BATCH_CROSSFADE_MAX_WAIT_MS + 1;
     expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_TIER_MID);
     expect(handles[1].userData.batchTier).toBe(BATCH_TIER_MID);
     expect(handles[1].userData.batchFade).toBeUndefined(); // swapped, not faded
     expectRealMatrix(batch, handles[1]);
     expect(fades.hardSwapCount).toBe(1);
+  });
+
+  it('a stall is one frame: it does not run a wait out, however long it lasted (#4113)', () => {
+    const { batch, handles } = makeBatch(4);
+    const { fades, state } = makeFades({ maxTriangles: 300 });
+    fades.move(batch, handles[0], BATCH_TIER_MID, { canWait: true });
+    expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING);
+    fades.update(); // a frame is drawn, then the page stalls for ten times the wait limit with the fade still open
+    state.now += 10 * BATCH_CROSSFADE_MAX_WAIT_MS;
+    expect(fades.move(batch, handles[1], BATCH_TIER_MID, { canWait: true })).toBe(BATCH_WAITING); // not a hard swap
+    expect(fades.hardSwapCount).toBe(0);
+    expect(handles[1].userData.batchTier).toBe(BATCH_TIER_FULL);
   });
 
   it('never waits for what could not fit on its own, or when nothing is running to make room', () => {
