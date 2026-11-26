@@ -43,6 +43,8 @@ export const ERROR_CODES = Object.freeze({
   OUTSIDE_LANDLET_OUTLINE: 'outside_landlet_outline', // #4198
   SOLD_OUT: 'sold_out', // #3948
   NOT_FOR_SALE: 'not_for_sale', // #3948
+  SELLER_NOT_READY: 'seller_not_ready', // #4462
+  ALREADY_OWNED: 'already_owned', // #4462
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
