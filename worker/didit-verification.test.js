@@ -5,7 +5,7 @@ import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
 // why the suite is split by file) specifically so setting
-// env.DIDIT_WEBHOOK_SECRET here can't leak into worker/reviews-auth.test.js,
+// env.DIDIT_WEBHOOK_SECRET here can't leak into worker/auth.test.js,
 // which relies on it staying unset to exercise the 503-unconfigured path
 // for the same endpoint. DIDIT_API_KEY is deliberately left unset even in
 // this file — nothing here needs a real outbound call to Didit, only the

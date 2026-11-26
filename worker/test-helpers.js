@@ -80,7 +80,7 @@ export async function signup(email, password, extra = {}) {
   // takes, so the hundreds of existing builder/seller-action tests don't
   // each need their own bypass — a test that specifically exercises the
   // unverified-session gate itself signs up its own account and skips this
-  // (see worker/reviews-auth.test.js's "Authentication" describe block).
+  // (see worker/auth.test.js's "Authentication" describe block).
   if (result.response.ok) {
     await env.DB.prepare("UPDATE users SET trust_tier = 'credit_card' WHERE email = ?").bind(email).run();
   }

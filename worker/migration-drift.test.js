@@ -143,7 +143,7 @@ describe('checkMigrationDrift (#561)', () => {
   // whether the send itself actually succeeds — a transient Resend failure
   // left the guard permanently claimed for the rest of the drift episode,
   // with no further alert ever going out. RESEND_API_KEY must be
-  // temporarily configured (same approach as worker/reviews-auth.test.js's
+  // temporarily configured (same approach as worker/auth.test.js's
   // "still returns a session when the verification email's fetch rejects
   // outright") to make sendEmail actually attempt its fetch instead of
   // short-circuiting the way every other test in this file relies on.
