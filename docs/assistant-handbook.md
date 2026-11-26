@@ -739,8 +739,11 @@ go. It stops at the edge of how far you can go and never turns upside down.
 
 ### How do I move an item?
 
-1. Tap the item. It gets a ring around it and a small card beside it.
-2. Put a finger on the item and drag. It slides along the ground under your
+1. Tap the item. It gets three rings and three straight lines with an arrow at each end
+   (red, green and blue), and a small card beside it. The rings turn the item and the
+   arrows move it.
+2. To move it along one line only, drag one of the arrows: red and green slide it across the
+   ground, blue lifts and lowers it. Or put a finger in the middle of the item and drag. It slides along the ground under your
    finger, staying at the same height. If you start the drag on empty ground
    instead, the view turns and the item stays put.
 3. Let go where you want it. It saves by itself.
@@ -774,8 +777,8 @@ go. It stops at the edge of how far you can go and never turns upside down.
 
 ### How do I turn an item?
 
-1. Tap the item. Three rings appear around it, and a line on the card reads the
-   angles.
+1. Tap the item. Three rings appear around it (and three arrows, which move it instead),
+   and a line on the card reads the angles.
 2. Drag the blue ring to turn the item flat, like a record on a turntable. The line
    calls this "Turn".
 3. To tip it over instead, drag the red ring (tips it one way) or the green ring (tips it the
