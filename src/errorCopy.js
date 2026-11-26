@@ -33,6 +33,9 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   payment_incomplete: "Your payment didn't go through. You were not charged. Try again, or use another card.",
   // #4456: refused before any card is touched: the price moved between the one the shopper saw and now.
   price_changed: 'The price changed. You were not charged. Review the new price and buy again.',
+  // #4474 / #4475: an emailed link that no longer works says why and what to do next.
+  reset_link_invalid: 'That reset link has expired or was already used. Reset links last an hour and work once. Request a new one below.',
+  verify_link_invalid: "That link has expired or was already used. If you've already confirmed your email, just log in. Otherwise log in and choose Resend verification email.",
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
   // #4458: raised while finishing a purchase, when the card may already have been charged, so it says to look before paying again.
   payments_unavailable: "We can't confirm your payment right now. If your card was charged, the order will appear in My purchases. Check there before paying again.",

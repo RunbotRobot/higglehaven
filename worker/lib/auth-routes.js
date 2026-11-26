@@ -48,7 +48,7 @@
 // worker/lib/builder-profile.js's own comment documents for
 // D1_MAX_BOUND_PARAMETERS), so it's exported here as a getter,
 // dummyPasswordHash(), instead.
-import { HttpError, json, clientIp } from './http.js';
+import { HttpError, json, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
@@ -282,7 +282,14 @@ export async function handleLogin(request, db, url) {
   }
 
   if (row.locked_until && row.locked_until > new Date().toISOString()) {
-    throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
+    // #4473: the lock is a limit, so it says when it lifts (the time is on the row), and where to go meanwhile.
+    const retryAfterSeconds = Math.max(1, Math.ceil((Date.parse(row.locked_until) - Date.now()) / 1000));
+    const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+    throw new HttpError(
+      `Too many wrong passwords. You can try again in about ${minutes} minute${minutes === 1 ? '' : 's'}, or use Forgot password.`,
+      423,
+      { retryAfterSeconds },
+    );
   }
 
   const valid = await verifyPassword(password, row.password_hash);
@@ -469,13 +476,22 @@ export async function handleVerifyEmail(request, db) {
     SELECT * FROM email_verification_tokens
     WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
+  if (!row) {
+    // #4475: a link that was already used (a mail scanner opened it first, or it was tapped twice) for an address that is
+    // verified is a success for the person, not a refusal.
+    const used = await db.prepare(`
+      SELECT u.email_verified_at FROM email_verification_tokens t JOIN users u ON u.user_id = t.user_id
+      WHERE t.token_hash = ? AND t.consumed_at IS NOT NULL
+    `).bind(tokenHash).first();
+    if (used?.email_verified_at) return json({ verified: true, alreadyVerified: true });
+    throw new HttpError('Verification link is invalid or has expired', 400, { code: ERROR_CODES.VERIFY_LINK_INVALID });
+  }
 
   const result = await db.prepare(`
     UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE token_hash = ? AND consumed_at IS NULL
   `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400);
+  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400, { code: ERROR_CODES.VERIFY_LINK_INVALID });
 
   await db.prepare(`
     UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
@@ -527,13 +543,13 @@ export async function handleResetPassword(request, db) {
     SELECT * FROM password_reset_tokens
     WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
+  if (!row) throw new HttpError('Reset link is invalid or has expired', 400, { code: ERROR_CODES.RESET_LINK_INVALID });
 
   const result = await db.prepare(`
     UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE token_hash = ? AND consumed_at IS NULL
   `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400);
+  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400, { code: ERROR_CODES.RESET_LINK_INVALID });
 
   const passwordHash = await hashPassword(newPassword);
   await db.batch([
