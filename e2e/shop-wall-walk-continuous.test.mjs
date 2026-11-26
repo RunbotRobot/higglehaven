@@ -177,16 +177,21 @@ await page.evaluate(() => window.__testShopSetTiers()); // switch the read-out o
 const FAR_M = 60;
 const NEAR_M = 2;
 const RUN_M_S = 4.4704 * Number(process.env.WALK_SPEED_SCALE ?? 1); // a smaller scale walks the wall more slowly per frame (what a faster frame rate does)
-const walkRows = await page.evaluate(([x, y0, farM, nearM, speed]) => new Promise((resolve) => {
+// #4113: a walker takes at most this long a step per frame (a 30 fps device's). The runner's software GL draws this wall at
+// 10 to 25 fps, so a step of the real frame time walks 1.3 to 3 times as far per frame as the owner's phone; past
+// the pace where the wall can keep up with the walker, bricks go overdue and change at once (by design, see versionOverdue),
+// which says how slow the runner is, not whether the wall dissolves. A slow frame now walks the same step as a 30 fps one.
+const MAX_FRAME_S = Number(process.env.WALK_MAX_FRAME_S ?? 1 / 30);
+const walkRows = await page.evaluate(([x, y0, farM, nearM, speed, maxFrameS]) => new Promise((resolve) => {
   const rows = [];
   let d = farM;
   let direction = -1; // toward the wall
   let last = performance.now();
   let frame = 0;
-  let game = 0; // seconds walked: a frame longer than 0.1 s counts as 0.1 s (software GL frames are seconds long on a 2 M triangle wall)
+  let game = 0; // seconds walked: a frame longer than MAX_FRAME_S counts as MAX_FRAME_S (software GL frames are seconds long on a 2 M triangle wall)
   const hardSwapsStart = window.__testShopBatchCrossfades().hardSwaps;
   const tick = (now) => {
-    const dt = Math.min((now - last) / 1000, 0.1);
+    const dt = Math.min((now - last) / 1000, maxFrameS);
     last = now;
     d += direction * speed * dt;
     game += dt;
@@ -205,7 +210,7 @@ const walkRows = await page.evaluate(([x, y0, farM, nearM, speed]) => new Promis
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
-}), [wallWorldX, wallWorldY, FAR_M, NEAR_M, RUN_M_S]);
+}), [wallWorldX, wallWorldY, FAR_M, NEAR_M, RUN_M_S, MAX_FRAME_S]);
 
 const total = (r) => r.full + r.mid + r.far;
 const walkMs = walkRows.length ? walkRows[walkRows.length - 1].t - walkRows[0].t : 0;
@@ -218,6 +223,7 @@ const inRows = walkRows.slice(0, turn);
 const outRows = walkRows.slice(turn);
 const hardIn = inRows.length ? inRows[inRows.length - 1].hard : -1;
 const hardOut = walkRows.length ? walkRows[walkRows.length - 1].hard - Math.max(hardIn, 0) : -1;
+console.log('why those hard swaps happened:', JSON.stringify(await page.evaluate(() => window.__testShopBatchCrossfades().hardSwapReasons)));
 console.log('bricks that changed version in one frame because the fade caps were full, on the way in and out (bound 120 of 800, aim 0):', hardIn, hardOut);
 
 // The way in: from the first brick off the far version to the last one still on it. A wall changing look as one

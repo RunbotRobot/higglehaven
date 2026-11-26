@@ -1630,6 +1630,7 @@ window.__testFindShopIdleInteractionTarget = (x, y) => findShopIdleInteractionTa
 function landingSpotOccupiedByAvatar(x, y) {
   const clearanceM = shopAvatarCollisionHalfM() + SHOP_AVATAR_COLLISION_HALF_M;
   for (const entry of shopOtherAvatars.values()) {
+    if (entry.transitionKind === 'depart') continue; // #4508: someone leaving in the fog is not there
     if (Math.hypot(entry.group.position.x - x, entry.group.position.y - y) < clearanceM) return true;
   }
   return false;
@@ -1735,7 +1736,7 @@ function moveShopAvatarWithCollision(dx, dy) {
   if (shopFlightState === 'grounded' && shopOtherAvatars.size > 0) {
     const others = [];
     for (const entry of shopOtherAvatars.values()) {
-      if (entry.group.visible === false) continue;
+      if (entry.group.visible === false || entry.transitionKind === 'depart') continue; // #4508: nor does someone leaving in the fog resist a step
       others.push({ x: entry.group.position.x, y: entry.group.position.y });
     }
     ({ dx, dy } = crowdAdjustedStep(x, y, dx, dy, others));

@@ -66,6 +66,9 @@ describe('live-site steps (#3430)', () => {
     expect(() => parseStep('mode:moon')).toThrow(/mode must be one of/);
     expect(parseStep('dragitem:2:250:-10')).toEqual({ command: 'dragitem', args: [2, 250, -10] });
     expect(() => parseStep('dragitem:2:250')).toThrow(/dragitem needs|needs/);
+    expect(parseStep('drag:150:600:40:-30')).toEqual({ command: 'drag', args: [150, 600, 40, -30] });
+    expect(() => parseStep('drag:150:600:40')).toThrow(/needs 4 argument/);
+    expect(() => parseStep('drag:a:600:40:1')).toThrow(/drag needs a point/);
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
   });
 

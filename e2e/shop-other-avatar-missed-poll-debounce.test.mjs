@@ -61,6 +61,15 @@ await pageA.evaluate(() => window.__testToggleShopFlight());
 await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now grounded
 await pageA.waitForTimeout(2500); // past SHOP_PRESENCE_REPORT_INTERVAL_MS (1500) once
 
+// #4508: everyone arrives and leaves through fog, not only assistants. A sampler on A records what the
+// other-avatar list says about B at every tick, so the short arrival and departure can be told from a pop.
+await pageA.evaluate(() => {
+  window.__fogLog = [];
+  setInterval(() => {
+    for (const a of window.__shopOtherAvatars ?? []) window.__fogLog.push({ id: a.builderId, arriving: a.arriving, departing: a.departing });
+  }, 20);
+});
+
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
 // #2269: GET /api/presence derives the landlet to query from the caller's
@@ -143,14 +152,21 @@ while (missesServed < 2) {
 // an unhandled Playwright exception.
 await pageA
   .waitForFunction(
-    (builderId) => !(window.__shopOtherAvatars ?? []).some((a) => a.builderId === builderId),
+    // #4508: leaving in the fog (departing) counts as despawned; the entry is listed until the fog clears.
+    (builderId) => !(window.__shopOtherAvatars ?? []).some((a) => a.builderId === builderId && !a.departing),
     builderB.builderId,
     { timeout: 10000 },
   )
   .catch(() => {});
 const afterTwoMisses = await pageA.evaluate(() => window.__shopOtherAvatars);
-const bEntryAfterTwoMisses = afterTwoMisses?.find((a) => a.builderId === builderB.builderId);
+const bEntryAfterTwoMisses = afterTwoMisses?.find((a) => a.builderId === builderB.builderId && !a.departing);
 console.log('B as seen by A after TWO CONSECUTIVE missed polls (should now be despawned):', bEntryAfterTwoMisses);
+
+const fogLog = await pageA.evaluate(() => window.__fogLog);
+const bArrivedThroughFog = fogLog.some((row) => row.id === builderB.builderId && row.arriving === true);
+const bLeftThroughFog = fogLog.some((row) => row.id === builderB.builderId && row.departing === true);
+console.log('B was seen arriving through fog (should be true):', bArrivedThroughFog);
+console.log('B was seen leaving through fog after the two missed polls (should be true):', bLeftThroughFog);
 
 // Assembled here, after every interaction has happened, rather than at
 // launch time -- #2735: a spread copy taken right after launchPage() would
@@ -160,7 +176,9 @@ const pass =
   landletCreated.status === 201 &&
   !!bEntryBaseline &&
   !!bEntryAfterOneMiss &&
-  !bEntryAfterTwoMisses;
+  !bEntryAfterTwoMisses &&
+  bArrivedThroughFog &&
+  bLeftThroughFog;
 
 await sessionB.browser.close();
 await finish(sessionA.browser, {

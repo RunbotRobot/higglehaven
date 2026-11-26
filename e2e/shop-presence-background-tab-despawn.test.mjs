@@ -175,7 +175,8 @@ await pageA.evaluate(() => {
 await pageB.waitForTimeout(PRESENCE_STALE_AFTER_MS + 3000);
 
 const othersInB_duringBackgrounding = await pageB.evaluate(() => window.__shopOtherAvatars);
-const aSeenByB_during = othersInB_duringBackgrounding?.find((a) => a.builderId === builderA.builderId);
+// #4508: someone leaving in the fog (departing) is gone as far as this test is concerned.
+const aSeenByB_during = othersInB_duringBackgrounding?.find((a) => a.builderId === builderA.builderId && !a.departing);
 console.log('B sees A while A is "backgrounded" (should be gone):', othersInB_duringBackgrounding, aSeenByB_during);
 
 // Resume A's loop for real -- no page reload anywhere in this test, same
@@ -200,7 +201,7 @@ await pageA.evaluate(() => window.__bgSimResume());
 // resume landed late). Wait on the condition instead, with a long ceiling, so
 // a slow runner only makes this slower, never red.
 const seesBuilder = (page, id) => page.evaluate(
-  (builderId) => !!window.__shopOtherAvatars?.some((a) => a.builderId === builderId),
+  (builderId) => !!window.__shopOtherAvatars?.some((a) => a.builderId === builderId && !a.departing),
   id,
 );
 const waitUntilSeen = async (page, id, ceilingMs = 45000) => {
@@ -215,9 +216,9 @@ await waitUntilSeen(pageB, builderA.builderId);
 await waitUntilSeen(pageA, builderB.builderId);
 
 const othersInB_afterRecovery = await pageB.evaluate(() => window.__shopOtherAvatars);
-const aSeenByB_after = othersInB_afterRecovery?.find((a) => a.builderId === builderA.builderId);
+const aSeenByB_after = othersInB_afterRecovery?.find((a) => a.builderId === builderA.builderId && !a.departing);
 const othersInA_afterRecovery = await pageA.evaluate(() => window.__shopOtherAvatars);
-const bSeenByA_after = othersInA_afterRecovery?.find((a) => a.builderId === builderB.builderId);
+const bSeenByA_after = othersInA_afterRecovery?.find((a) => a.builderId === builderB.builderId && !a.departing);
 console.log('B sees A after A\'s loop resumes, no reload (should be back):', aSeenByB_after);
 console.log('A sees B after its own loop resumes, no reload (should be back):', bSeenByA_after);
 
