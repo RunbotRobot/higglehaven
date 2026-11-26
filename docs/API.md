@@ -1406,6 +1406,16 @@ account that still owns a lándlet, a fleet account or assistant unless `include
 money still owed (the cascade's own guards). `400` when `confirmUsername` is not the exact username.
 Recorded in the admin action log as `delete_account` (username, email, kind and the counts) after it succeeds.
 
+### `POST /api/auth/admin-rename-account` (#4407)
+
+Full admin only (`401` signed out, `403` non-admin or a look-only account). The dashboard's Rename on a user,
+the owner's tool for an existing name with a space. Takes `{ userId, newUsername }` and answers
+`{ renamed: true, userId, oldUsername, username }`. It applies sign-up's rules exactly (no spaces, the reserved
+names, the folded uniqueness) and sets the account's username and its builder label together. Refused with a
+reason: `404` unknown id, `409` a deleted account, a fleet account or assistant, a reserved name or one
+someone else holds, `400` a name with a space or one that is already this account's. The person gets a notice
+that their name changed and why; recorded in the admin action log as `rename_account` (old and new name).
+
 ### `GET /api/auth/admin-landlet-search?q=...` (#4074)
 
 The Admin Dashboard's lándlet search (Landlet overrides): one `requireAdmin`-gated read that finds a lándlet

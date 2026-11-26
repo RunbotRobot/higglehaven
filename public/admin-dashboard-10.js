@@ -18,7 +18,7 @@
     // Every control that can only be refused. A form's submit button, every danger button and the account actions
     // (#4175), and, by id or class, the buttons that change something outside a form (#4382). Reads stay on.
     const WRITE = [
-      'form button[type="submit"]', 'button.danger', '.delete-account-btn', '.use-for-suspend-btn', '.viewer-access-btn',
+      'form button[type="submit"]', 'button.danger', '.delete-account-btn', '.rename-account-btn', '.use-for-suspend-btn', '.viewer-access-btn',
       '#grantBtn', '#modelsDryRunBtn', '#worldExpandBtn', '#worldSaveBtn', '#mosaicGenerateBtn', '#ringGenerateBtn',
       '#batchSubmitBtn', '#candidateEditSaveBtn', '#landletForceCompleteBtn', '#landletGreenbeltBtn',
       '#landletGreenbeltConfirmBtn', '#landletReassignBtn', '#landletCancelAuctionReassignBtn', '#landletAuctionAbortBtn',
