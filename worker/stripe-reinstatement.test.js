@@ -94,6 +94,12 @@ describe('Stripe account flag (#1407)', () => {
     const row = await env.DB.prepare('SELECT * FROM stripe_account_flags WHERE flag_id = ?').bind(flagged.body.flagId).first();
     expect(row.stripe_account_id_at_flag_time).toBe('acct_flagged_seller');
     expect(row.flagged_by).toBe((await api('/auth/me', adminSession())).body.user.userId);
+    // #4515: an admin flag leaves an admin_action_log row, like the sibling admin mutations.
+    const logged = await env.DB.prepare(
+      "SELECT target_type, target_id, detail_json FROM admin_action_log WHERE action_type = 'stripe_account_flag' AND target_id = ?",
+    ).bind(seller.sellerId).first();
+    expect(logged.target_type).toBe('seller');
+    expect(JSON.parse(logged.detail_json)).toEqual({ flagId: flagged.body.flagId, disposition: 'suspected' });
 
     const builder = await signupBuilder('stripe-flag-builder');
     const flaggedBuilder = await api(`/builders/${builder.builderId}/stripe-account-flag`, adminSession({

@@ -56,6 +56,7 @@
 import { json, HttpError, ERROR_CODES } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
+import { adminActionLogStatement } from './admin-log.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireBuilder } from './builder-profile.js';
 import { requireSessionSeller, stripeAccountStatusJson } from '../index.js';
@@ -153,11 +154,16 @@ export async function handleStripeAccountFlag(request, db, subjectType, subjectI
   if (reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
 
   const flagId = `stripe-flag-${crypto.randomUUID()}`;
-  await db.prepare(`
-    INSERT INTO stripe_account_flags
-      (flag_id, subject_type, subject_id, disposition, reason, stripe_account_id_at_flag_time, flagged_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(flagId, subjectType, subjectId, disposition, reason, subject.stripe_account_id ?? null, admin.user_id).run();
+  // #4515: the flag steers a later automated reinstatement decision, so an admin acting here leaves
+  // an admin_action_log row like its sibling mutations, batched so neither lands without the other.
+  await db.batch([
+    db.prepare(`
+      INSERT INTO stripe_account_flags
+        (flag_id, subject_type, subject_id, disposition, reason, stripe_account_id_at_flag_time, flagged_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(flagId, subjectType, subjectId, disposition, reason, subject.stripe_account_id ?? null, admin.user_id),
+    adminActionLogStatement(db, admin.user_id, 'stripe_account_flag', subjectType, subjectId, { flagId, disposition }),
+  ]);
   return json({ flagId, subjectType, subjectId, disposition, reason }, 201);
 }
 
