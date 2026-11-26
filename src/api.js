@@ -703,6 +703,18 @@ export async function renameLandlet(landletId, name) {
   return landlet;
 }
 
+// #3783 (part of #3771): the lettering and colours a builder chose for their lándlet's name. PATCH merges onto
+// the stored record, so only these two fields are sent; the Worker refuses an id the shared set does not offer
+// (shared/wordmark-set.js) and a lándlet that is not the caller's, with its reason.
+export async function setLandletWordmark(landletId, { wordmarkStyle, wordmarkColors }) {
+  const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ wordmarkStyle, wordmarkColors }),
+  });
+  return landlet;
+}
+
 // builderId is never sent — the server derives "who's claiming" from the
 // session cookie, never from a client-supplied field.
 export async function claimLandlet(landletId) {

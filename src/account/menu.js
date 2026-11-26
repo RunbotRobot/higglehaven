@@ -15,6 +15,8 @@ import { builderId, currentMode, currentLandletId } from '../world/state.js';
 import { isSentByMe } from './dmSide.js';
 import { currentAuthUser } from './auth.js';
 import { showBudPlace, hideBudPlace } from '../ui/budPlace.js';
+import { openWordmarkPicker } from '../ui/wordmarkPicker.js';
+import { wordmarkChoiceAvailable } from '../ui/wordmark.js';
 import { setBudWord, clearBudWord } from '../ui/bud.js';
 import { formatArea } from '../settings.js';
 // formatHiggles/START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY stay owned by
@@ -63,6 +65,7 @@ import {
   fetchUnreadDirectMessageCount,
   fetchAllLandlets,
   renameLandlet,
+  setLandletWordmark,
   fetchFriendVoiceChannels,
 } from '../api.js';
 
@@ -1327,6 +1330,28 @@ async function renderMyLands() {
       }
     });
     actions.appendChild(renameBtn);
+    // #3783: Wordmark sits beside Rename and is drawn only when there is something to choose (a control is not
+    // drawn for a person it can only refuse): with the default alone on offer (shared/wordmark-set.js) it is absent.
+    if (wordmarkChoiceAvailable()) {
+      const wordmarkBtn = document.createElement('button');
+      wordmarkBtn.className = 'version-action-btn';
+      wordmarkBtn.type = 'button';
+      wordmarkBtn.textContent = 'Wordmark';
+      wordmarkBtn.addEventListener('click', async () => {
+        await openWordmarkPicker({
+          name: landlet.name,
+          styleId: landlet.wordmarkStyle,
+          colourId: landlet.wordmarkColors,
+          save: async ({ styleId, colourId }) => {
+            const updated = await setLandletWordmark(landlet.landletId, { wordmarkStyle: styleId, wordmarkColors: colourId });
+            landlet.wordmarkStyle = updated.wordmarkStyle;
+            landlet.wordmarkColors = updated.wordmarkColors;
+          },
+        });
+        refreshAccountMenuPlace();
+      });
+      actions.appendChild(wordmarkBtn);
+    }
     row.appendChild(actions);
     myLandsListEl.appendChild(row);
   }

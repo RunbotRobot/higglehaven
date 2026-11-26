@@ -51,6 +51,13 @@ export const CAPITAL_OK = new Set([
 // Exact labels that break the rule on purpose, each with a one-line reason. Keep this short.
 export const ALLOWED_LABELS = new Map([
   ['e.g. Brick', 'an example of what to type in a field, where the example is a name'],
+  ['WM Round', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Airy', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Serif', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Slab', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Script', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Stencil', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
+  ['WM Hand-drawn', 'a CSS font-family name for a wordmark face (src/ui/wordmark.js), never shown to a person'],
 ]);
 
 const LABEL_SPLIT = /[!?.…✓▾▴+·|\/()—–:;,]|\s-\s/;

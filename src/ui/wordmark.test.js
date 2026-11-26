@@ -100,3 +100,20 @@ describe('loading a face (#3782)', () => {
     expect(log).toEqual([]);
   });
 });
+
+describe('wordmark picker options (#3783)', () => {
+  it('offers only the default while the shared list holds only the default, so no picker is drawn', async () => {
+    const { wordmarkOptions, wordmarkChoiceAvailable } = await import('./wordmark.js');
+    expect(wordmarkChoiceAvailable()).toBe(false);
+    expect(wordmarkOptions().styles).toEqual([{ id: 'default', label: 'Default' }]);
+  });
+  it('lists the default first, then each offered id the renderer knows, with its label', async () => {
+    const { wordmarkOptions, wordmarkChoiceAvailable } = await import('./wordmark.js');
+    const offered = { styles: ['default', 'round', 'nope'], colours: ['default', 'berry'] };
+    expect(wordmarkChoiceAvailable(offered)).toBe(true);
+    expect(wordmarkOptions(offered)).toEqual({
+      styles: [{ id: 'default', label: 'Default' }, { id: 'round', label: 'Round' }],
+      colours: [{ id: 'default', label: 'Default' }, { id: 'berry', label: 'Berry' }],
+    });
+  });
+});
