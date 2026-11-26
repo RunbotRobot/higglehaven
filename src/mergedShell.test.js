@@ -124,3 +124,22 @@ describe('mergeMemberShell carries colour and shading (#4366 slice 2)', () => {
     expect(r.uvs.length).toBe(r.triangles * 6);
   });
 });
+
+describe('mergeMemberShell cost (#4380)', () => {
+  it('a model of thousands of triangles is merged in well under a second, not quadratic time', async () => {
+    const { SphereGeometry } = await import('three');
+    const g = new SphereGeometry(1, 64, 48); // about 6,000 triangles, like the real brick's mid
+    const members = [at(0, 0, 0), at(3, 0, 0), at(6, 0, 0), at(9, 0, 0)];
+    const start = performance.now();
+    const r = mergeMemberShell(g, members);
+    const ms = performance.now() - start;
+    expect(r.inputTriangles).toBe(g.index.count / 3 * 4);
+    expect(r.droppedTriangles).toBe(0); // spheres that do not touch lose nothing
+    expect(ms).toBeLessThan(1500);
+  });
+
+  it('a face cut into several pieces stays whole when its neighbour is cut the other way (the careful rule is kept)', () => {
+    const r = mergeMemberShell(new BoxGeometry(1, 1, 1, 2, 2, 2), [at(0, 0, 0), at(1, 0, 0)]);
+    expect(r.droppedTriangles).toBe(0); // an ambiguous patch without exact partners keeps every triangle
+  });
+});

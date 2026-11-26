@@ -81,14 +81,37 @@ export function mergeMemberShell(geometry, matrices) {
     }
     // Faces of this member: pair coplanar triangles that share exactly one edge and together have four
     // corners, when each has no other such candidate (an ambiguous patch stays as single triangles).
+    // #4380: found through the edges (each triangle's three corner pairs go into one table), not by testing every
+    // triangle against every other, which was quadratic and took 40 s on the real brick's mid version. Two
+    // triangles with the same facing share exactly one edge when exactly one of their edges is the same.
     const candidates = info.map(() => []);
+    const dirs = info.map((entry) => dirKey(entry.n));
+    const edgeOwners = new Map(); // sorted corner pair -> triangle indices that have it
     for (let i = 0; i < info.length; i++) {
-      for (let j = i + 1; j < info.length; j++) {
-        if (dirKey(info[i].n) !== dirKey(info[j].n)) continue;
-        const shared = info[i].keys.filter((k) => info[j].keys.includes(k));
-        if (shared.length === 2) { candidates[i].push(j); candidates[j].push(i); }
+      const [k0, k1, k2] = info[i].keys;
+      for (const [x, y] of [[k0, k1], [k1, k2], [k2, k0]]) {
+        if (x === y) continue; // a degenerate triangle has no edge to pair on
+        const edge = x < y ? `${x}|${y}` : `${y}|${x}`;
+        const list = edgeOwners.get(edge);
+        if (list) list.push(i); else edgeOwners.set(edge, [i]);
       }
     }
+    const sharedEdges = new Map(); // i * count + j (i < j) -> how many of their edges are the same
+    for (const list of edgeOwners.values()) {
+      for (let a = 0; a < list.length; a++) {
+        for (let b = a + 1; b < list.length; b++) {
+          const i = Math.min(list[a], list[b]);
+          const j = Math.max(list[a], list[b]);
+          if (i === j || dirs[i] !== dirs[j]) continue;
+          const key = i * info.length + j;
+          sharedEdges.set(key, (sharedEdges.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    // In the same order the pairwise test would have produced (ascending index on each side).
+    const pairs = [...sharedEdges.entries()].filter(([, n]) => n === 1).map(([key]) => [Math.floor(key / info.length), key % info.length]);
+    pairs.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    for (const [i, j] of pairs) { candidates[i].push(j); candidates[j].push(i); }
     const used = new Set();
     const faces = [];
     for (let i = 0; i < info.length; i++) {
