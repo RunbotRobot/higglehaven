@@ -2708,6 +2708,14 @@ function, so it refuses with the same status and code, and answers:
 It creates nothing, charges nothing and never calls Stripe. Rate-limited
 separately from the purchase itself.
 
+### Payment errors a buyer reads (#4459)
+
+The provider's own error text never reaches a buyer. When creating the payment fails, `POST /api/instances/:id/purchase`
+answers with the code `payment_not_started` (nothing was charged); when `POST /api/purchases/finalize` cannot look the
+payment up, `payment_unconfirmed` (the card may have been charged; the order appears in My purchases once the payment
+webhook records it). The status keeps the provider's class (400, or 502 for a provider outage), the English `error` is a
+log sentence, and `src/errorCopy.js` holds what the buyer reads.
+
 ### Mark purchase shipped
 
 `POST /api/purchases/:purchaseId/mark-shipped`

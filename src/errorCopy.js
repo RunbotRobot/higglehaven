@@ -31,6 +31,9 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   not_for_sale: "That product isn't for sale right now. You were not charged. Try another product.",
   // #4289: finalising a purchase before the card payment succeeded; the wording says whether the card was charged.
   payment_incomplete: "Your payment didn't go through. You were not charged. Try again, or use another card.",
+  // #4459: the provider's own sentence never reaches a buyer.
+  payment_not_started: "We couldn't start your payment. You were not charged. Try again in a moment.",
+  payment_unconfirmed: "We couldn't confirm your payment yet. If your card was charged, the order appears in My purchases shortly. Check there before paying again.",
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
 });
 

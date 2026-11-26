@@ -1135,6 +1135,34 @@ describe('Simulated purchases', () => {
       expect(fetched).toEqual([]);
     });
 
+    // #4459: creating the payment failed, so nothing was charged; the buyer reads that, not the provider's sentence.
+    it('answers a failed PaymentIntent creation with a code that says nothing was charged, not the provider text', async () => {
+      const seller = await signupSeller('pi-create-fail-seller');
+      const builder = await signupAdmin('pi-create-fail-builder');
+      await seedProduct('pi-create-fail', builder, seller);
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_pi_create_fail', stripe_onboarding_status = 'complete', stripe_updated_at = ? WHERE seller_id = ?
+      `).bind(new Date().toISOString(), seller.sellerId).run();
+      const originalFetch = globalThis.fetch;
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (String(url).startsWith('https://api.stripe.com/v1/payment_intents')) {
+          return new Response(JSON.stringify({ error: { message: 'Invalid account: raw provider text' } }), { status: 400 });
+        }
+        return originalFetch(input, init);
+      };
+      let result;
+      try {
+        result = await api('/instances/pi-create-fail-instance/purchase', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+      } finally {
+        globalThis.fetch = originalFetch;
+        env.STRIPE_SECRET_KEY = undefined;
+      }
+      expect(result.body.code).toBe('payment_not_started');
+      expect(JSON.stringify(result.body)).not.toContain('raw provider text');
+    });
+
     it('refuses what the purchase would refuse: sold out, a missing instance, a non-admin on the simulated path, no session', async () => {
       const seller = await signupSeller('quote-refuse-seller');
       const builder = await signupAdmin('quote-refuse-builder');
@@ -1255,6 +1283,30 @@ describe('Simulated purchases', () => {
         body: JSON.stringify({ paymentIntentId: 'pi_does_not_exist' }),
       });
       expect(notConfigured.response.status).toBe(503);
+    });
+
+    // #4459: a provider error while looking the payment up is not shown as the provider's sentence, and says the card
+    // may have been charged and where to check.
+    it('answers a failed PaymentIntent lookup with a code that says to check My purchases, not the provider text', async () => {
+      const originalFetch = globalThis.fetch;
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.startsWith('https://api.stripe.com/v1/payment_intents/')) {
+          return new Response(JSON.stringify({ error: { message: 'No such payment_intent: pi_4459 (raw provider text)' } }), { status: 404 });
+        }
+        return originalFetch(input, init);
+      };
+      let result;
+      try {
+        result = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({ paymentIntentId: 'pi_4459_lookup' }) });
+      } finally {
+        globalThis.fetch = originalFetch;
+        env.STRIPE_SECRET_KEY = undefined;
+      }
+      expect(result.response.status).toBe(400);
+      expect(result.body.code).toBe('payment_unconfirmed');
+      expect(JSON.stringify(result.body)).not.toContain('raw provider text');
     });
 
     // #4289: finalising before the card payment succeeded answers with player copy that says whether the card was

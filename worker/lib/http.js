@@ -45,6 +45,8 @@ export const ERROR_CODES = Object.freeze({
   NOT_FOR_SALE: 'not_for_sale', // #3948
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
+  PAYMENT_NOT_STARTED: 'payment_not_started', // #4459
+  PAYMENT_UNCONFIRMED: 'payment_unconfirmed', // #4459
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
 });
 
