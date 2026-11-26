@@ -3302,10 +3302,15 @@ window.addEventListener('pointerdown', (event) => {
   handlePressLoser = ring.distance <= arrow.distance ? translateControls : rotateControls;
   handlePressLoser.enabled = false;
 }, { capture: true });
-window.addEventListener('pointerdown', () => {
+function restoreHandlePressLoser() {
   if (handlePressLoser) handlePressLoser.enabled = true;
   handlePressLoser = null;
-});
+}
+window.addEventListener('pointerdown', restoreHandlePressLoser);
+// ...and if something between the canvas and the window stopped that event, the gizmo is still given back at the
+// release (or the cancel) of the same press, never left switched off.
+window.addEventListener('pointerup', restoreHandlePressLoser, { capture: true });
+window.addEventListener('pointercancel', restoreHandlePressLoser, { capture: true });
 window.__testAxisHandlePoints = () => { // e2e (#4410): the screen point of each arrow of the movement axes (two per axis)
   if (!translateControls.object) return [];
   const rect = renderer.domElement.getBoundingClientRect();
