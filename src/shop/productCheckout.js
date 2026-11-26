@@ -280,7 +280,9 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         }
       };
     }).catch((err) => {
-      checkoutStatusEl.textContent = err.message || 'Couldn\'t load Stripe.';
+      // #4458: the card form could not be built, before any payment was taken (Stripe.js did not load, or the key is missing).
+      // A fixed sentence, never the library's own text.
+      checkoutStatusEl.textContent = "Card payments can't load right now. You were not charged. Try again in a moment.";
       checkoutStatusEl.classList.add('error');
     });
   });
