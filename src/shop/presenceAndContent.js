@@ -67,7 +67,7 @@ import { buildInstancedBatch } from './instancedBatches.js';
 import { initBatchTiers, addBatchTier, partitionBatch, resolveBatchTier } from './batchTiers.js';
 import { advanceBatchEnclosure, MIN_ENCLOSURE_BATCH, ENCLOSURE_SLICE_MS } from './enclosedBatch.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, nextSetTier, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
+import { apparentSizePx, nextTier, nextSetTier, versionOverdue, budgetedTiers, isNearFullDetail, setApparentPx, TIER_FULL, largestFirst, MAX_FULL_DETAIL_TRIANGLES, trianglesOfGeometry, countModelTriangles } from './lodTier.js';
 import { startLodSetsJob, stepLodSetsJob, isHeldForSets } from './lodSets.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -817,7 +817,10 @@ function updateInstanceLodTiers() {
     // old version and is tried again next tick, biggest first, for a few seconds) instead of swapping in one frame: an
     // 829-brick wall used to have about nine in ten of its bricks swap at once, a hard-edged wedge across the wall.
     if (object.userData.batch) {
-      if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: true }) === BATCH_WAITING) {
+      // #4113: unless the version it has is already well past its size (versionOverdue), then no wait: it fades if a fade
+      // has room and otherwise changes at once.
+      const overdue = versionOverdue(appliedBefore, tier, lodItemsScratch[i].px, !!object.userData.lodSetId);
+      if (batchCrossfades.move(object.userData.batch, object, tier, { canWait: !overdue }) === BATCH_WAITING) {
         object.userData.lodApplied = appliedBefore;
         // A waiting placement is a comparison when nothing has changed, but a pass over thousands of them still
         // spends the slice like any other flip, so the ones behind them are reached on a later tick.

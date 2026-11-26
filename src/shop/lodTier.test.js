@@ -2,7 +2,7 @@
 // hysteresis, and the budget.
 import { describe, expect, it } from 'vitest';
 import {
-  apparentSizePx, nextTier, nextSetTier, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
+  apparentSizePx, nextTier, nextSetTier, versionOverdue, LOD_SET_FAR_ENTER_PX, LOD_SET_FAR_EXIT_PX, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
   TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst, holdBackUnready, MAX_FULL_DETAIL_TRIANGLES,
 } from './lodTier.js';
@@ -331,5 +331,27 @@ describe('the read-out says why each item ended where it did (#4113)', () => {
   it('leaves a call without a read-out untouched', () => {
     const items = [{ px: 50, wanted: TIER_MID, protected: false }];
     expect(budgetedTiers(items)).toEqual([TIER_MID]);
+  });
+});
+
+describe('versionOverdue (#4113)', () => {
+  it('a set member on far is overdue once it is 1.5x past the set far exit, not before', () => {
+    expect(versionOverdue('far', 'mid', LOD_SET_FAR_EXIT_PX * 1.5 - 1, true)).toBe(false);
+    expect(versionOverdue('far', 'mid', LOD_SET_FAR_EXIT_PX * 1.5, true)).toBe(true);
+    // the owner's recording: a far brick 60 to 80 px tall
+    expect(versionOverdue('far', 'full', 70, true)).toBe(true);
+  });
+  it('a lone item on far uses the plain far exit', () => {
+    expect(versionOverdue('far', 'mid', LOD_FAR_EXIT_PX * 1.5 - 1, false)).toBe(false);
+    expect(versionOverdue('far', 'mid', LOD_FAR_EXIT_PX * 1.5, false)).toBe(true);
+  });
+  it('a member on mid is overdue well past the mid exit', () => {
+    expect(versionOverdue('mid', 'full', LOD_MID_EXIT_PX * 1.5 - 1, true)).toBe(false);
+    expect(versionOverdue('mid', 'full', LOD_MID_EXIT_PX * 1.5, true)).toBe(true);
+  });
+  it('only an upgrade can be overdue: a better version than needed is never seen', () => {
+    expect(versionOverdue('full', 'mid', 1, true)).toBe(false);
+    expect(versionOverdue('mid', 'far', 1, true)).toBe(false);
+    expect(versionOverdue('far', 'far', 500, true)).toBe(false);
   });
 });
