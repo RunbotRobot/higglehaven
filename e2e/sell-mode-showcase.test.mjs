@@ -235,11 +235,15 @@ await page.route('**/uploads/**', async (route) => {
 // Next starts loading whichever page follows page 0 — its model fetch is
 // the first-ever request for that page's own (never-before-fetched) model,
 // so our artificial delay above reliably still has it in flight when...
-await page.click('#seller-showcase-next-btn');
 // ...Prev, clicked immediately after with no wait in between, bumps
 // sellerShowcaseLoadToken again before that delayed fetch has any chance
-// to resolve — exactly the supersede race #1427 describes.
-await page.click('#seller-showcase-prev-btn');
+// to resolve — exactly the supersede race #1427 describes. #4445: both clicks are made in one in-page call, because
+// two separate Playwright clicks each wait for the button to be stable (two frames), which on a slow frame can take
+// longer than the 600 ms fetch delay, so the page-2 load finished before Prev and nothing was ever superseded.
+await page.evaluate(() => {
+  document.getElementById('seller-showcase-next-btn').click();
+  document.getElementById('seller-showcase-prev-btn').click();
+});
 
 // Comfortably past the artificial delay on both of the resulting in-flight
 // loads, plus normal mesh-build margin.
