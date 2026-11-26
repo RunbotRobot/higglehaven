@@ -995,3 +995,7 @@ export function disposeObject(object) {
     disposeOwnedMeshResources(child, disposeMaterialTextures);
   });
 }
+
+// #4484: how many products' models this page is holding (the full model files and the reduced versions), read by
+// window.__shopMemoryNow (src/shop/mode.js). Read only.
+if (typeof window !== 'undefined') window.__modelCacheSizes = () => ({ modelsCached: modelGltfCache.size, tierSetsCached: tierScenesCache.size });
