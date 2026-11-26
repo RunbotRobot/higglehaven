@@ -46,11 +46,6 @@ for (const page of [alicePage, bobPage]) {
 }
 console.log('both see the orb (should be true): true');
 
-// Bob samples for the pop effect as it plays: it lives under half a second.
-await bobPage.evaluate(() => {
-  window.__sawOnlookerPop = false;
-  window.__onlookerPopSampler = setInterval(() => { if (window.__testActiveCreditOrbPopEffectCount() > 0) window.__sawOnlookerPop = true; }, 25);
-});
 // Give both presence reports a moment, so Bob's poll is already running on this lándlet.
 await bobPage.waitForTimeout(2500);
 
@@ -60,13 +55,14 @@ console.log("Alice's orb popped on contact (should be true): true");
 
 const goneForBob = await bobPage.waitForFunction((id) => !window.__testActiveCreditOrbIds().includes(id), orbId, { timeout: 30000 })
   .then(() => true, () => false);
-const sawPop = await bobPage.evaluate(() => window.__sawOnlookerPop);
+const popsForBob = await bobPage.evaluate(() => window.__testCreditOrbPopsSpawned());
+const sawPop = popsForBob === 1;
 const bobNote = await bobPage.evaluate(() => {
   const note = document.getElementById('bud-note');
   return !!note && !note.hidden && note.textContent.trim() !== '';
 });
 console.log("the orb is gone from Bob's world after Alice collected it (should be true):", goneForBob);
-console.log('Bob saw the pop effect play (should be true):', sawPop);
+console.log('Bob was shown exactly one pop (should be true):', sawPop, popsForBob);
 console.log('Bob got no credit word beside his head (should be false):', bobNote);
 
 const pass = goneForBob && sawPop && !bobNote;

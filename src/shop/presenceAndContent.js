@@ -2129,7 +2129,12 @@ const CREDIT_ORB_RETURN_SCALE_IN_S = 0.25;
 const CREDIT_ORB_POP_END_SCALE = 2.5;
 const creditOrbPopEffects = [];
 
+// e2e only (#4387): how many pops have been spawned in all. The effect lives under half a second and a slow
+// frame can remove it before a sampler looks, so a test reads this instead of catching it playing.
+let creditOrbPopsSpawned = 0;
+window.__testCreditOrbPopsSpawned = () => creditOrbPopsSpawned;
 function spawnCreditOrbPopEffect(orb) {
+  creditOrbPopsSpawned += 1;
   const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
   mesh.material.transparent = true;
   mesh.position.copy(orb.mesh.position);
