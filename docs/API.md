@@ -1002,6 +1002,31 @@ Rate-limited per account (5 attempts per 15 minutes, same bucket shape as
 `change-password`/`delete-account` above) so a logged-in user can't loop
 this indefinitely and burn the operator's Resend quota.
 
+### `POST /api/auth/change-email`
+
+Body `{ "password", "email" }`. Requires a valid session cookie (`401`
+without one). The current password is checked first (`401 Incorrect
+password`); `400` if the new address is the one already on the account,
+`409 Email is already registered` if another account has it (compared by
+canonical form, so Gmail dots and plus-tags do not slip past). On success
+the address is replaced, `email_verified_at` is cleared and a fresh
+verification email goes to the new address; the answer is
+`{ "user", "verificationEmailSent", "devVerifyUrl"? }`, the same shape
+signup and `resend-verification` use. Rate-limited per account (5 attempts
+per 15 minutes, the `change-password` bucket shape).
+
+### `POST /api/auth/card-refusal`
+
+Body `{ "code"?, "type"?, "declineCode"? }`. Requires a valid session cookie.
+The browser reports a refusal Stripe itself returned from
+`confirmCardSetup` (#3565), since the server never sees those. It is best
+effort and fail-open: the client ignores any failure here. Only Stripe's own
+short codes (`^[a-z0-9_]{1,64}$`) are kept; anything else becomes `unknown`
+(or `null` for the decline code), and no card data is ever stored. The
+last code, decline code, time and a running count are written to the
+`users` row (migration 0228) and show in the admin user detail. Answers
+`{ "ok": true }`; rate-limited per account with the Stripe bucket.
+
 ### Testing note
 
 `worker/reviews-auth.test.js`'s "Authentication" describe block owns the full
@@ -13392,7 +13417,7 @@ to introduce new request/response shapes:
   suspend, unsuspend, and look up an account's current suspension status
   (see "Account suspension" above).
 - **Test/Ops Fixtures** (#1826) — `POST /api/builders/:id/land-cap-grants`
-  and `/higgles-grants`, visually set apart with a "Test/Ops only — not a
+  and `POST /api/builders/:id/higgles-grants` (admin only, balance top-up, `201`, logged as `higgles_grant`), visually set apart with a "Test/Ops only — not a
   real transaction" badge so neither ever reads as a genuine income event.
 
 ## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
