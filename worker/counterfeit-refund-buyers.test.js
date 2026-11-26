@@ -95,8 +95,9 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     expect(rows.results.find((r) => r.purchase_id === 'cfr-c-p2').refunded_at).toBeNull();
     const after = await env.DB.prepare('SELECT higgles_balance_cents AS b FROM builders WHERE builder_id = ?').bind(host.builderId).first();
     expect(before.b - after.b).toBe(10);
-    const note = await env.DB.prepare("SELECT message FROM notifications WHERE builder_id = ? AND message LIKE '%was refunded%'").bind(buyer.builderId).first();
+    const note = await env.DB.prepare("SELECT message, kind FROM notifications WHERE builder_id = ? AND message LIKE '%was refunded%'").bind(buyer.builderId).first();
     expect(note.message).toContain('$10.00');
+    expect(note.kind).toBe('purchases'); // #4498: a refund notice opens My purchases
     expect(note.message).toContain('confirmed counterfeit report');
     const log = await env.DB.prepare("SELECT detail_json FROM admin_action_log WHERE action_type = 'counterfeit_refund_buyers' AND target_id = 'cfr-c'").first();
     expect(JSON.parse(log.detail_json)).toMatchObject({ refunded: 1, refundedCents: 990, remaining: 0, notRefundableCount: 1 });

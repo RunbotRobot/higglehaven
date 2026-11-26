@@ -5503,7 +5503,7 @@ Builder-facing notifications. The table is deliberately generic (a plain
 `message` string, not a typed event per notification kind) so new sources
 can be added without their own table or endpoints. A row also carries a nullable
 `kind` (#4498, migration 0240): where a tap on the notice goes in the app
-(`friends`, `messages` or `assistant` so far; `null` for older rows and for notices with nothing to open,
+(`friends`, `messages`, `purchases` or `assistant` so far; `null` for older rows and for notices with nothing to open,
 such as moderation and admin ones). `GET /api/notifications` returns it as `kind`. Current sources are:
 
 - A seller changing a placed template's real-world dimensions (see "Editing

@@ -162,6 +162,8 @@ const NOTICE_DESTINATIONS = {
   friends: () => friendsBtn.click(),
   // A new message is read from the friend's thread, which lives in the Friends panel.
   messages: () => friendsBtn.click(),
+  // Shipped and refunded notices are about an order the person made: it is read from My purchases.
+  purchases: () => myPurchasesBtn.click(),
   assistant: () => { import('../shop/assistantChat.js').then((m) => m.openAssistantQuestions()).catch((err) => console.warn('Could not open the assistant:', err)); },
 };
 

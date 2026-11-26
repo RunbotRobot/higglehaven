@@ -380,7 +380,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (purchase.buyer_builder_id) {
     const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     await fireNotification(db, purchase.buyer_builder_id,
-      `"${template?.name || 'A product'}" has shipped!`);
+      `"${template?.name || 'A product'}" has shipped!`, null, 'purchases'); // #4498: a tap opens My purchases
   }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
@@ -491,7 +491,7 @@ export async function notifyBuyerOfRefund(db, purchase, amountCents, { partial =
     const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     const name = template?.name || 'Your purchase';
     await fireNotification(db, purchase.buyer_builder_id,
-      `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.${reason ? ` ${reason}` : ''}`);
+      `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.${reason ? ` ${reason}` : ''}`, null, 'purchases'); // #4498
   } catch (err) {
     console.error('notifyBuyerOfRefund failed', purchase.purchase_id, err);
   }
