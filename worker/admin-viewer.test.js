@@ -157,6 +157,7 @@ describe('opting a route in is a deliberate, listed act (#4175)', () => {
     './lib/admin-video-jobs.js',
     './lib/admin-viewer-grant.js', // GET admin-role, which the dashboard page asks when it opens
     './lib/control-room.js', // the /admin/dashboard page gate only (the Control Room API and its page stay admin-only)
+    './lib/counterfeit-refunds.js', // #4376: GET only, what Refund buyers would do; the POST needs a full admin
   ];
 
   it('only the listed files call requireAdminOrViewer', () => {
