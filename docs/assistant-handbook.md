@@ -60,7 +60,7 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once). When nobody is signed in, the first picture along the top says "Log in / Sign up"; tap it.
 2. Tap the "Sign up" tab.
-3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
+3. Fill in "Username" (the name other people see; no spaces, so "Benjamin_Chae" or "BenjaminChae"), "Email" and "Password (8+ characters)".
 4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
 5. Tap "Sign up".
 

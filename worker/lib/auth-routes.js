@@ -126,8 +126,8 @@ function passwordValue(value) {
 }
 
 // #4136: one set of rules for every route that sets a username (worker/lib/username-rules.js).
-function usernameValue(value) {
-  return normalizeUsername(value);
+function usernameValue(value, request) {
+  return normalizeUsername(value, { allowSpaces: isLocalRequest(request) });
 }
 
 export async function createSession(db, userId) {
@@ -173,7 +173,7 @@ export async function handleSignup(request, env, db, url) {
   const input = await readJson(request);
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
-  const username = usernameValue(input.username);
+  const username = usernameValue(input.username, request);
   const usernameSkeletonValue = usernameSkeleton(username);
   // #3445: the assistants' agent names belong to the fleet; nobody else can
   // sign up as one. #4136: nor can they be matched by a look-alike, and the

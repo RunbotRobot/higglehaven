@@ -1523,7 +1523,7 @@ async function handleBuilders(request, env, db, route, url) {
     // function (spaces collapsed, unshowable characters refused, look-alikes
     // and the reserved names compared in folded form).
     // labelValue first: its 100-character bound runs before anything is normalised.
-    const label = normalizeUsername(labelValue(input.label, 'label'));
+    const label = normalizeUsername(labelValue(input.label, 'label'), { allowSpaces: isLocalRequest(request) });
     const labelSkeleton = usernameSkeleton(label);
     if (isReservedSkeleton(labelSkeleton, { allowSessionNames: isLocalRequest(request) })) {
       throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);

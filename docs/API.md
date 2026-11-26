@@ -375,8 +375,11 @@ other rejection on this endpoint — a cheap validation failure isn't a free
 way to probe past the limiter.
 
 `username` (#4136, `worker/lib/username-rules.js`; the same rules apply to a rename,
-`PUT`/`PATCH /api/builders/:id`): stored in NFC with odd spaces turned into a plain space
-and runs of white space collapsed; at most 40 characters; refused with `400` ("That name
+`PUT`/`PATCH /api/builders/:id`): stored in NFC; at most 40 characters; **no spaces** (#4407,
+owner 2026-11-26): a name with any space is refused with `400` ("A name can't have spaces. Try
+BenjaminChae or Benjamin_Chae."); every other showable character stays allowed, and a server on
+this machine (`wrangler dev`) still accepts spaces for the test suites. An existing name with a
+space keeps working until it is renamed. Refused with `400` ("That name
 contains a character we cannot show...") when it holds control, zero-width, direction-override
 or other format characters, private-use or unassigned characters, line separators or a lone
 surrogate. Uniqueness is on `users.username_skeleton`, a folded form (case, accents, spacing,
