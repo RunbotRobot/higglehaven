@@ -915,18 +915,10 @@
       <span id="edit-bundle-reason" hidden></span>
       <div id="item-card-more" hidden>
         <button id="toggle-snap" type="button">Snap</button>
-        <!-- #3689: precise placement and exact angles, for one item. Both go through the same path as a
-             drag on the item (limits, collision, undo, saving); text is selectable like any other. -->
+        <!-- #3689: the item's height and exact angles, for one item. (#4414: the nudge pad is gone; a tap on an arrow of the
+             movement axes is the nudge.) Text is selectable like any other. -->
         <div id="item-card-nudge" hidden>
-          <div class="item-card-block-title">Nudge <span id="nudge-height-readout" role="status" aria-live="polite"></span></div>
-          <div class="item-card-nudge-pad">
-            <button type="button" data-nudge="left">&#9664; Left</button>
-            <button type="button" data-nudge="right">Right &#9654;</button>
-            <button type="button" data-nudge="up">&#8679; Up</button>
-            <button type="button" data-nudge="forward">&#9650; Forward</button>
-            <button type="button" data-nudge="back">&#9660; Back</button>
-            <button type="button" data-nudge="down">&#8681; Down</button>
-          </div>
+          <div class="item-card-block-title">Height <span id="nudge-height-readout" role="status" aria-live="polite"></span></div>
         </div>
         <div id="item-card-angles" hidden>
           <div class="item-card-block-title">Angles</div>

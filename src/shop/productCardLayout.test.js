@@ -85,6 +85,19 @@ describe('placeProductCard (#3651)', () => {
     expect(low.side).toBe('above');
   });
 
+  it('keeps extra clear space above a thing whose handles reach farther up (#4410)', () => {
+    // A thing low on the screen: the card goes above it, and sits aboveExtra farther up than it would.
+    const plain = placeProductCard({ anchor: { x: 195, y: 700, radius: 122 }, card: CARD, viewport: PHONE });
+    const extra = placeProductCard({ anchor: { x: 195, y: 700, radius: 122, aboveExtra: 48 }, card: CARD, viewport: PHONE });
+    expect(plain.side).toBe('above');
+    expect(extra.side).toBe('above');
+    expect(extra.top).toBe(plain.top - 48);
+    // Below it the extra changes nothing.
+    const belowPlain = placeProductCard({ anchor: { x: 195, y: 250, radius: 122 }, card: CARD, viewport: PHONE });
+    const belowExtra = placeProductCard({ anchor: { x: 195, y: 250, radius: 122, aboveExtra: 48 }, card: CARD, viewport: PHONE });
+    expect(belowExtra.top).toBe(belowPlain.top);
+  });
+
   it('keeps the card on screen even when neither side has room', () => {
     const narrow = { width: 260, height: 600 };
     const place = placeProductCard({ anchor: { x: 130, y: 300, radius: 80 }, card: CARD, viewport: narrow });

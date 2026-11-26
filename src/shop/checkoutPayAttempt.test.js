@@ -2,7 +2,7 @@
 // without confirming the card a second time.
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createCheckoutPayState, runPayAttempt, describePayFailure, PAY_STAGES, CHARGED_RETRY_MESSAGE, CONNECTION_LOST_MESSAGE,
+  createCheckoutPayState, runPayAttempt, describePayFailure, PAY_STAGES, CHARGED_RETRY_MESSAGE, CONNECTION_LOST_MESSAGE, REFUSED_FALLBACK_MESSAGE,
   canLeaveAfterCharge, FINALIZE_FAILURES_BEFORE_CLOSE, CHARGED_CLOSED_MESSAGE,
   isAlreadySucceededConfirmError,
 } from './checkoutPayAttempt.js';
@@ -47,7 +47,8 @@ describe('runPayAttempt (#3116)', () => {
     const failure = await runPayAttempt(state, { confirm, finalize }).catch((e) => e);
     expect(failure.message).toBe('Your card was declined.');
     expect(state.paymentConfirmed).toBe(false);
-    expect(describePayFailure(state, failure)).toBe('Your card was declined.');
+    // #4460: the provider's words are never shown; Stripe's refusal means nothing was charged.
+    expect(describePayFailure(state, failure)).toBe(REFUSED_FALLBACK_MESSAGE);
     expect(finalize).not.toHaveBeenCalled();
 
     await runPayAttempt(state, { confirm, finalize });
@@ -126,6 +127,9 @@ describe('describePayFailure copy (#3948)', () => {
     ['incorrect_cvc', /security code.*not charged/i],
     ['incorrect_number', /card number.*not charged/i],
     ['processing_error', /not charged.*again/i],
+    ['payment_intent_authentication_failure', /extra verification.*not charged.*another card/i],
+    ['authentication_required', /extra verification.*not charged/i],
+    ['card_not_supported', /can't be used.*not charged/i],
   ])('says what to do for %s, and that nothing was charged', async (code, pattern) => {
     const { state, failure } = await failureFor({ code, message: 'raw provider words' });
     const text = describePayFailure(state, failure);
@@ -141,9 +145,17 @@ describe('describePayFailure copy (#3948)', () => {
     expect(CONNECTION_LOST_MESSAGE).toMatch(/if the order isn't there/);
   });
 
-  it('keeps the provider text for a failure it has no copy for', async () => {
+  it('never shows the provider text for a refusal it has no copy for, and says nothing was charged (#4460)', async () => {
     const { state, failure } = await failureFor({ code: 'some_new_code', message: 'Something specific.' });
-    expect(describePayFailure(state, failure)).toBe('Something specific.');
+    const text = describePayFailure(state, failure);
+    expect(text).toBe(REFUSED_FALLBACK_MESSAGE);
+    expect(text).toMatch(/not charged/i);
+    expect(text).not.toMatch(/Something specific/);
+  });
+
+  it('a thrown error with no answer from Stripe is not claimed to be a refusal (#4460)', () => {
+    const state = createCheckoutPayState();
+    expect(describePayFailure(state, new Error('boom'))).toBe(CONNECTION_LOST_MESSAGE);
   });
 });
 

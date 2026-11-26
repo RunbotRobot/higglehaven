@@ -296,6 +296,15 @@ export async function handleInstancePurchase(request, env, instanceId) {
     }
   });
 
+  // #4456: the shopper bought at the price on their screen. If the seller changed it since, refuse before any
+  // card is touched, with the live price, instead of charging a different amount than the one shown.
+  if (Number.isInteger(input.expectedUnitPriceCents) && input.expectedUnitPriceCents !== template.price_cents) {
+    throw new HttpError(
+      `The price changed to ${formatCents(template.price_cents)}. You were not charged. Review it and buy again.`,
+      409,
+      { code: ERROR_CODES.PRICE_CHANGED, unitPriceCents: template.price_cents },
+    );
+  }
   if (paysWithCard) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
@@ -545,7 +554,9 @@ export async function handlePurchaseFinalize(request, env) {
   await checkRateLimit(db, `purchase-finalize:${clientIp(request)}`, PURCHASE_FINALIZE_RATE_LIMIT_MAX);
 
   if (!stripeConfigured(env)) {
-    throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
+    // #4458: this is the finalize step, so a card may already have been charged; the buyer's copy (src/errorCopy.js)
+    // says neither "not charged" nor "try again later", and points at My purchases.
+    throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.PAYMENTS_UNAVAILABLE });
   }
   const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`);
   if (paymentIntent.status !== 'succeeded') {

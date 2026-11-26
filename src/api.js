@@ -1998,11 +1998,12 @@ export async function getPurchaseQuote(instanceId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
 }
 
-export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
+export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ quantity, buyerLabel, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
+    // #4456: the price the shopper saw; the server refuses, uncharged, if it has changed since.
+    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
   });
 }
 

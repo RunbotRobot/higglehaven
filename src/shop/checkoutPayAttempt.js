@@ -44,6 +44,9 @@ export async function runPayAttempt(state, { confirm, finalize, onStage = () => 
         // #3948: kept so describePayFailure can say what to do about this kind of failure.
         failure.stripeCode = result.error.code;
         failure.stripeType = result.error.type;
+        // #4460: Stripe answered, and its answer was no: the card was not charged. (A thrown error, with no
+        // answer from Stripe, is not known to be a refusal.)
+        failure.stripeRefused = true;
         throw failure;
       }
     }
@@ -85,7 +88,14 @@ const CARD_PROBLEM_COPY = Object.freeze({
   invalid_expiry_month: "That expiry date isn't right. You were not charged. Check it and try again.",
   invalid_expiry_year: "That expiry date isn't right. You were not charged. Check it and try again.",
   processing_error: "Your card company couldn't process that just now. You were not charged. Try again in a moment, or use another card.",
+  // #4460: the bank's extra verification (3-D Secure) was asked for and not completed.
+  payment_intent_authentication_failure: "Your bank asked for extra verification and it wasn't completed. You were not charged. Try again or use another card.",
+  authentication_required: "Your bank asked for extra verification and it wasn't completed. You were not charged. Try again or use another card.",
+  card_not_supported: "That card can't be used for this purchase. You were not charged. Try another card.",
 });
+// #4460: Stripe refused for a reason we have no sentence for. It is never echoed (it is the provider's wording,
+// and often not for a buyer to read); what the buyer needs is that nothing was charged and what to do.
+export const REFUSED_FALLBACK_MESSAGE = "Your payment didn't go through. You were not charged. Try again or use another card.";
 // The connection dropped while the card was being confirmed, so whether it went through is not known.
 export const CONNECTION_LOST_MESSAGE = "We couldn't confirm your payment because the connection dropped. Check My purchases before trying again: if the order isn't there, you weren't charged.";
 
@@ -100,5 +110,9 @@ export function describePayFailure(state, error) {
   }
   if (error?.stripeType === 'api_connection_error') return CONNECTION_LOST_MESSAGE;
   const copy = error?.stripeCode && Object.hasOwn(CARD_PROBLEM_COPY, error.stripeCode) && CARD_PROBLEM_COPY[error.stripeCode];
-  return copy || error?.message || 'Payment failed.';
+  if (copy) return copy;
+  // An answer from Stripe that is a refusal: say not charged. Anything else (a thrown error with no answer from
+  // Stripe) might have happened after the card was touched, so it is not claimed to be a refusal.
+  if (error?.stripeRefused) return REFUSED_FALLBACK_MESSAGE;
+  return CONNECTION_LOST_MESSAGE;
 }
