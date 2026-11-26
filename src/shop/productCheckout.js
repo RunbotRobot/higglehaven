@@ -37,7 +37,7 @@ import {
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
-import { createCheckoutPayState, runPayAttempt, describePayFailure, PAY_STAGES } from './checkoutPayAttempt.js';
+import { createCheckoutPayState, runPayAttempt, describePayFailure, canLeaveAfterCharge, CHARGED_CLOSED_MESSAGE, PAY_STAGES } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this product), for focus return after a notice.
 import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders, markProductJustBought } from './productCard.js';
@@ -206,6 +206,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutPayBtn.dataset.defaultLabel = `Pay ${formatPriceCents(totalCents)}`;
     checkoutPayBtn.textContent = checkoutPayBtn.dataset.defaultLabel;
     checkoutChargedAwaitingFinalize = false;
+    checkoutCancelBtn.textContent = 'Cancel';
     checkoutProgressEl.hidden = true;
     const payState = createCheckoutPayState();
     checkoutModalEl.classList.add('visible');
@@ -273,7 +274,21 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
             // disabled (as #841 did during confirmation) and the button
             // says what it now does.
             checkoutPayBtn.textContent = 'Finish purchase';
-            checkoutCancelBtn.disabled = true;
+            if (canLeaveAfterCharge(payState)) {
+              // #4457: after a few failed tries the buyer can leave; the order is recorded when the
+              // provider confirms the charge, and the notice says so.
+              checkoutCancelBtn.textContent = 'Close';
+              checkoutCancelBtn.disabled = false;
+              checkoutCancelBtn.onclick = () => {
+                checkoutChargedAwaitingFinalize = false;
+                const leave = rejectCheckoutFlow;
+                rejectCheckoutFlow = null; // so closing does not settle the flow as "cancelled" first
+                closeCheckoutModal();
+                if (leave) leave(Object.assign(new Error(CHARGED_CLOSED_MESSAGE), { chargedClosed: true }));
+              };
+            } else {
+              checkoutCancelBtn.disabled = true;
+            }
           } else {
             checkoutCancelBtn.disabled = false;
           }
@@ -425,7 +440,7 @@ export async function handleShopProductBuyClick() {
       await showPriceChanged(review, err.body?.unitPriceCents);
     } else if (err.message !== 'Checkout cancelled.') {
       await showNotice({
-        title: "Purchase didn't go through",
+        title: err.chargedClosed ? 'Your payment went through' : "Purchase didn't go through",
         message: err.message || 'Couldn\'t complete this purchase.',
         returnFocusEl: productCardBuyButton(),
       });

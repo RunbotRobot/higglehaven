@@ -43,14 +43,20 @@ export const ERROR_CODES = Object.freeze({
   OUTSIDE_LANDLET_OUTLINE: 'outside_landlet_outline', // #4198
   SOLD_OUT: 'sold_out', // #3948
   NOT_FOR_SALE: 'not_for_sale', // #3948
+  SELLER_NOT_READY: 'seller_not_ready', // #4462
+  ALREADY_OWNED: 'already_owned', // #4462
   PAYMENT_INCOMPLETE: 'payment_incomplete', // #4289
   PAYMENT_PROCESSING: 'payment_processing', // #4289
+  PAYMENT_NOT_STARTED: 'payment_not_started', // #4459
+  PAYMENT_UNCONFIRMED: 'payment_unconfirmed', // #4459
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
   PRICE_CHANGED: 'price_changed', // #4456
   CARD_CHECK_MISMATCH: 'card_check_mismatch', // #4478
   CARD_CHECK_INCOMPLETE: 'card_check_incomplete', // #4478
   ACCOUNT_NOT_FOUND: 'account_not_found', // #4478
+  RESET_LINK_INVALID: 'reset_link_invalid', // #4474
+  VERIFY_LINK_INVALID: 'verify_link_invalid', // #4475
 });
 
 export class HttpError extends Error {

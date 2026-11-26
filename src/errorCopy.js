@@ -28,11 +28,19 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   outside_landlet_outline: "That's past the edge of this lándlet.",
   // #3948: refused before any card is charged, so each says so and what to do next.
   sold_out: 'That sold out before you could buy it. You were not charged.',
+  seller_not_ready: "That product can't be bought yet: its seller is still getting set up to take payments. You were not charged.",
+  already_owned: 'You already own this, so it was not bought again. You were not charged.',
   not_for_sale: "That product isn't for sale right now. You were not charged. Try another product.",
   // #4289: finalising a purchase before the card payment succeeded; the wording says whether the card was charged.
   payment_incomplete: "Your payment didn't go through. You were not charged. Try again, or use another card.",
+  // #4459: the provider's own sentence never reaches a buyer.
+  payment_not_started: "We couldn't start your payment. You were not charged. Try again in a moment.",
+  payment_unconfirmed: "We couldn't confirm your payment yet. If your card was charged, the order appears in My purchases shortly. Check there before paying again.",
   // #4456: refused before any card is touched: the price moved between the one the shopper saw and now.
   price_changed: 'The price changed. You were not charged. Review the new price and buy again.',
+  // #4474 / #4475: an emailed link that no longer works says why and what to do next.
+  reset_link_invalid: 'That reset link has expired or was already used. Reset links last an hour and work once. Request a new one below.',
+  verify_link_invalid: "That link has expired or was already used. If you've already confirmed your email, just log in. Otherwise log in and choose Resend verification email.",
   payment_processing: 'Your payment is still being confirmed. This can take a moment. Check My purchases before paying again.',
   // #4458: raised while finishing a purchase, when the card may already have been charged, so it says to look before paying again.
   // #4478: the card check at sign-up. Nothing was charged (a card check never charges), and the ID route is always offered.

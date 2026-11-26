@@ -242,7 +242,8 @@ check(await cardOpen(), 'closing the Return policy leaves the card open');
 // (The refused quote is a 403 the browser logs; it is the expected answer here.)
 await page.click('#product-card-buy-btn');
 await page.waitForSelector('#notice-modal.visible', { timeout: 10000 });
-check(/not yet available for purchase/.test(await page.textContent('#notice-modal-message')), 'Buy says why it cannot go ahead, before any confirmation');
+// #4462: the refusal carries a code, so the shopper copy (src/errorCopy.js) is what shows, not the developer sentence.
+check(/can't be bought yet/.test(await page.textContent('#notice-modal-message')), 'Buy says why it cannot go ahead, before any confirmation');
 check((await page.locator('#confirm-modal.visible').count()) === 0, 'a refused purchase asks for no confirmation first');
 check((await page.locator('#checkout-modal.visible').count()) === 0, 'a refused purchase opens no payment sheet');
 await page.click('#notice-modal-close-btn');
