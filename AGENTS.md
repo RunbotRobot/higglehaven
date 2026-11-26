@@ -29,7 +29,18 @@
   education content authoring (§7, #2841) — each blocked on an
   `[owner judgment needed]` sub-issue; friend "follow"/"stay with"
   group movement (§2, #1044, owner-gated); and mandatory NCMEC
-  CyberTipline reporting (§6, #3031, owner/counsel-gated). See
+  CyberTipline reporting (§6, #3031, owner/counsel-gated). **Third pass
+  (2026-11-26, higglehaven8, #4283, SPEC §1-7 against the code):** also
+  not built, each filed with a card: the engaged signal to nearby avatars
+  (§2, #4390; the AFK half is settled by "A person's state is shown by the
+  avatar itself"), the shopper-side version toggle (§3, #4391 leaf 2, decided
+  to stay in Build), Draco/Basis compression and mesh-merge on save (§3,
+  tracked under #4063/#4366), 30% withholding without a W-8BEN (§7, #4392),
+  multi-currency higgles (§5, #4393), international shipping filter, zone
+  costs and combined shipping (§5, #4394, owner-gated), builder-chosen
+  ambient music (§6, #4395, owner-gated), and prompt mode built on an 8x8
+  colour grid rather than CLIP (§3, #4396). Avatar-avatar crowding (§2) is
+  now built (#4400). See
   "Proposing big feature work" below: build toward the unblocked ones the
   same way you'd pick up any other backlog item, broken into small
   pieces.
