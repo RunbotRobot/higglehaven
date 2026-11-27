@@ -208,6 +208,8 @@
 // shared module), so these are redefined locally rather than imported.
 (function () {
   const errLine = document.getElementById('worldErr');
+  // #4522: results of expand/generate/complete show here (selectable, stays until the next action), not in an alert().
+  const okLine = document.getElementById('worldOk');
 
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
@@ -218,11 +220,25 @@
   function clearError() {
     errLine.hidden = true;
     errLine.textContent = '';
+    okLine.hidden = true;
+    okLine.textContent = '';
   }
 
   function showError(message) {
+    okLine.hidden = true;
     errLine.hidden = false;
     errLine.textContent = message;
+  }
+
+  function clearErrorKeepResult() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  function showOk(message) {
+    errLine.hidden = true;
+    okLine.hidden = false;
+    okLine.textContent = message;
   }
 
   async function apiFetch(path, options) {
@@ -284,7 +300,7 @@
 
   async function loadWorld() {
     const myLoadToken = ++worldLoadToken;
-    clearError();
+    clearErrorKeepResult(); // a refresh must not wipe the result line an action just wrote (#4522)
     try {
       const body = await apiFetch('/api/world');
       if (myLoadToken !== worldLoadToken) return;
@@ -333,7 +349,7 @@
       if (myLoadToken !== worldLoadToken) return;
       renderWorld(body.world);
       const expansion = body.expansion;
-      alert(
+      showOk(
         'World expanded: ' + expansion.previousRadiusM + 'm → ' + expansion.newRadiusM + 'm.\n'
         + 'Promoted to greenbelt: ' + expansion.promotedLandletIds.length + '\n'
         + 'Started generating: ' + expansion.startedGeneratingLandletIds.length + '\n'
@@ -366,7 +382,7 @@
         method: 'POST',
         body: JSON.stringify({ prefix, count: 16 }),
       });
-      alert('Mosaic generated: ' + body.candidates.length + ' candidates, starter landlet ' + body.starterLandletId + '.');
+      showOk('Mosaic generated: ' + body.candidates.length + ' candidates, starter landlet ' + body.starterLandletId + '.');
       loadCandidates();
       loadWorld();
     } catch (error) {
@@ -396,7 +412,7 @@
     if (distribution) payload.distribution = distribution;
     try {
       const body = await apiFetch('/api/land-candidates/generate-ring', { method: 'POST', body: JSON.stringify(payload) });
-      alert('Ring generated: ' + body.candidates.length + ' candidates (' + body.innerRadiusM + 'm – ' + body.outerRadiusM + 'm).');
+      showOk('Ring generated: ' + body.candidates.length + ' candidates (' + body.innerRadiusM + 'm – ' + body.outerRadiusM + 'm).');
       loadRings();
       loadCandidates();
       loadWorld();
@@ -504,7 +520,7 @@
     clearError();
     try {
       const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId) + '/generation-complete', { method: 'POST' });
-      alert('Ring ' + ringId + ' marked complete: ' + body.landlets.length + ' landlet(s) completed.');
+      showOk('Ring ' + ringId + ' marked complete: ' + body.landlets.length + ' landlet(s) completed.');
       loadRings();
       loadWorld();
     } catch (error) {
@@ -572,7 +588,7 @@
 
   async function loadCandidates(append) {
     const myLoadToken = ++candidatesLoadToken;
-    clearError();
+    clearErrorKeepResult(); // a refresh must not wipe the result line an action just wrote (#4522)
     if (!append) {
       candidatesRows = [];
       candidatesTableWrap.innerHTML = '<p class="empty">Loading…</p>';
@@ -673,7 +689,7 @@
         method: 'POST',
         body: JSON.stringify({ candidates }),
       });
-      alert('Batch created: ' + body.candidates.length + ' candidate(s), ' + body.landlets.length + ' materialized immediately.');
+      showOk('Batch created: ' + body.candidates.length + ' candidate(s), ' + body.landlets.length + ' materialized immediately.');
       document.getElementById('batchInput').value = '';
       loadCandidates();
       loadWorld();
