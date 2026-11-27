@@ -303,6 +303,10 @@ export async function fetchDiditVerificationStatus() {
 // Paginated server-side (100 per request, same as instances/landlets) —
 // pages through everything rather than silently keeping only the first
 // 100 templates once the catalog grows past that.
+// #4541 (size note): the whole catalogue is fetched at Shop start, 100 templates per round trip, about 570 bytes each
+// (measured locally: 1,000 products = 10 trips and 0.57 MB; 5,000 = 50 trips and 2.9 MB; the server answers a page in
+// about 10 ms, so the cost on a phone is the trips and the bytes). Past roughly 2,000 products this wants to load by
+// region or on demand instead of whole; see the catalogue row of the audit on #4541.
 export async function fetchCatalog() {
   // #1757: a template renamed (or repriced) by its seller while this loop is
   // mid-fetch can move from after the cursor to before it and be skipped.
@@ -2039,10 +2043,12 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
   return { purchases, totalCount };
 }
 
-// #3704: every sale of the signed-in seller's own products (newest 100), for the Orders leaf.
-export async function fetchSellerOrders() {
-  const { purchases, totalCount } = await requestJson('/purchases?mine=seller');
-  return { purchases, totalCount };
+// #3704: every sale of the signed-in seller's own products, newest first, for the Orders leaf.
+// #4541: older orders arrive by cursor, one page (100) at a time.
+export async function fetchSellerOrders({ cursor } = {}) {
+  const query = cursor ? `&${new URLSearchParams({ cursor }).toString()}` : '';
+  const { purchases, totalCount, nextCursor } = await requestJson(`/purchases?mine=seller${query}`);
+  return { purchases, totalCount, nextCursor: nextCursor ?? null };
 }
 
 // #1949: every finite-stock template the session builder currently has

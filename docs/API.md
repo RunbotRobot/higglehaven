@@ -9087,8 +9087,11 @@ panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
 seller-less template stays open to unauthenticated reads.
 `GET /api/purchases?mine=seller` (#3704) lists every sale of every product the
-signed-in seller owns, newest first (at most 100, with the real `totalCount`),
-for the bud's Orders leaf. It needs a session logged in as a seller (`401`
+signed-in seller owns, newest first, for the bud's Orders leaf. It pages like
+`/api/purchases/mine`: `limit` (1 to 100, default 100) and `cursor`, answering
+`nextCursor` (`null` on the last page) with the real `totalCount` (#4541: it used
+to stop at the newest 100, which left older orders out of reach of Mark shipped
+and Refund). It needs a session logged in as a seller (`401`
 otherwise) and takes no id: the seller is the session's own, so one seller can
 never read another's sales. Each row is the same purchase object plus
 `productName`, taken from the order's own record first (#3776) and the live
