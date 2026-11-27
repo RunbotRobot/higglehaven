@@ -1,0 +1,99 @@
+# #4529: the set-up every e2e job shares (install, browser, .dev.vars), so the shards and the
+# changed-file stability job cannot drift apart. The caller checks out and sets up Node first.
+name: e2e set-up
+description: Install dependencies and Chromium, and write .dev.vars for e2e/run-all.mjs
+runs:
+  using: composite
+  steps:
+    # `shell: bash` is `bash --noprofile --norc -e -o pipefail`; the original job steps ran under the
+    # default `bash -e` without pipefail, so each step turns pipefail back off to behave identically
+    # (the grep | xargs step relies on it: grep finding no match must not fail the step).
+    - run: set +o pipefail && npm ci
+      shell: bash
+    # ubuntu-latest ships Google's own Chrome apt repo pre-registered
+    # (for a system Chrome install this workflow never uses) — but
+    # --with-deps chromium below only needs apt to resolve shared-library
+    # runtime deps (libnss3, libatk, etc.), never anything actually
+    # fetched *from* that repo. Any apt-get update still hits it anyway
+    # as long as its source is present, and confirmed via job logs
+    # (PR #611, runs 34384027836/34385033854/34385292940 — 12 shard
+    # failures across three separate pushes, all identical) that
+    # dl.google.com's own CDN can serve an inconsistent package index
+    # ("Hash Sum mismatch") for well over 30 minutes straight, outlasting
+    # a short in-job retry. Matching by content (dl.google.com), not a
+    # guessed filename -- guessing google-chrome.list here first (the
+    # classic name Google's own installer normally uses) didn't actually
+    # match whatever this runner image's own source file is really
+    # called, confirmed by the exact same fetch still happening after
+    # that rm. Dropping whichever file it actually is removes the
+    # dependency on that repo's health entirely, rather than betting the
+    # outage clears in time.
+    - run: set +o pipefail; sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | xargs -r sudo rm -f
+      shell: bash
+    # Retries once on failure too, same rationale/shape as the shard
+    # retry in the e2e-tests job, as a fallback for any other transient apt/network
+    # issue this step's install-deps step might still hit.
+    #
+    # #3488: on 2026-11-11 the runners' DNS could not resolve any Ubuntu
+    # apt mirror for over an hour (security.ubuntu.com, archive.ubuntu.com),
+    # so every shard on every branch died here before running a test, and
+    # no retry inside the job could outlast it. Only the --with-deps half
+    # needs apt; the browser itself comes from Playwright's own CDN. So
+    # after the two --with-deps attempts, fall back to installing the
+    # browser alone and prove it launches: if the runner image already has
+    # Chromium's shared libraries the shard carries on, and if it does not
+    # the launch check fails the job loudly, so this never turns a missing
+    # dependency into a confusing test failure later.
+    #
+    # Each --with-deps attempt is capped at four minutes: under that outage
+    # apt retried for about ten minutes per attempt, so a shard spent ~20
+    # minutes failing before the fallback even started (measured on the
+    # run for PR #3489). A healthy install takes one to two minutes; if a
+    # slow-but-working one is ever cut off, the browser-only fallback below
+    # (which that run proved on the real runners) takes over.
+    - shell: bash
+      run: |
+        set +o pipefail
+        for attempt in 1 2; do
+          if timeout 240 npx playwright install --with-deps chromium; then
+            exit 0
+          fi
+          echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
+          sleep 10
+        done
+        echo "playwright install --with-deps failed twice (apt mirrors unreachable?) — installing the browser alone from Playwright's own CDN and checking it launches." >&2
+        npx playwright install chromium
+        node --input-type=module -e "
+          import { chromium } from 'playwright';
+          try {
+            const browser = await chromium.launch();
+            await browser.close();
+          } catch (error) {
+            console.error('chromium does not launch without the apt-installed libraries:', error.message);
+            process.exit(1);
+          }
+        "
+        echo "Browser-only install launches; continuing without --with-deps (apt was unavailable)." >&2
+    # .dev.vars is gitignored (wrangler's standard local-only-override
+    # mechanism — see docs/API.md's own note on it), so CI recreates the
+    # one value e2e/run-all.mjs's own wrangler dev needs. Not a real
+    # secret: this exact value is already a well-known dev-only fixture,
+    # visible in plaintext in this repo's own code comments (see
+    # e2e/helpers.mjs's ADMIN_BOOTSTRAP_SECRET fallback) — nothing this
+    # unlocks exists outside each ephemeral CI run's own throwaway D1.
+    # 127.0.0.1, not localhost, to match e2e/run-all.mjs and
+    # e2e/helpers.mjs's own BASE_URL — see run-all.mjs's comment on the
+    # dual-stack DNS race a hostname would otherwise be exposed to.
+    # Mismatched origins here would also break auth.test.mjs's own
+    # verify/reset-link flow (the dev-mode link this embeds is a
+    # different origin's cookie jar if the two don't agree).
+    - shell: bash
+      run: |
+        set +o pipefail
+        echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
+        echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
+        # #1231: not a real secret -- a dev-only test seam flag (see
+        # worker/index.js's handleInstancePurchase, where this is read)
+        # that only ever does anything when STRIPE_SECRET_KEY is also
+        # unset, which is already always true in this job.
+        echo "E2E_SIMULATE_PAID_PURCHASES=true" >> .dev.vars
