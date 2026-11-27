@@ -1607,6 +1607,19 @@ most likely to come up again.
   amount go to the owner first. This sits with "Clean-up of live data is
   done by the owner's own tap" and replaces the automatic refund in
   docs/SPEC.md section 5.
+  **Where the platform itself would pay (2026-11-27, #4422):** buyers
+  whose seller had already been paid out could not be refunded by that
+  button, because reversing the transfer would take money backing the
+  seller's other sales. Offered leaving them to ask one by one (A), a
+  second line in the same dialog where higglehaven covers them from its
+  own balance after a separate confirmation showing the count and total
+  (B), or B plus recovery from the seller's future payouts (C), the owner
+  chose B. So the platform does cover people harmed on its own floor when
+  nobody else can be made to, and it does so only as its own separately
+  confirmed act with the amount in front of the owner; platform money is
+  never folded into another confirmation, and never spent by a rule. A
+  recovery mechanism against the seller is built only if the amounts turn
+  out to matter.
 
 - **One event in the world looks the same to everyone who sees it.**
   (2026-11-26, #4387.) An orb a person collects pops on contact; the same
