@@ -6081,7 +6081,7 @@ them as `communication.addresses`.
 
 ## Basket (#4611)
 
-The lines of a person's basket, kept on the account (`migrations/0248_basket_lines.sql`, keyed on `user_id`). This
+The lines of a person's basket, kept on the account (`migrations/0249_basket_lines.sql`, keyed on `user_id`). This
 piece only stores lines; pricing a basket and paying it come in later pieces (#4613, #4614). Every route needs a
 current (not suspended) session and reads and writes only the caller's own lines. A line is a **placed item**
 (`instanceId`), not a product, because the builder's commission follows the lándlet the item stands on; there is one
