@@ -39,6 +39,7 @@ function apiError(response, body, fallback) {
   }
   error.serverMessage = body.error;
   error.code = body.code;
+  error.field = body.field; // #4598: the field a validation refusal names
   error.status = response.status;
   // #3447: the whole body, for the few callers that act on a flag the server
   // sends beside the message (assistantBusy, conversationEnded, ...).
@@ -398,6 +399,29 @@ export async function renameBuilder(builderId, label) {
 export async function deleteBuilder(builderId) {
   const result = await requestJson(`/builders/${encodeURIComponent(builderId)}`, { method: 'DELETE' });
   return result.releasedLandletIds;
+}
+
+// #4598 (Shipping 1/8): a person's own addresses. The server decides every rule; the client shows its answers.
+export async function fetchAddresses() {
+  return requestJson('/addresses');
+}
+
+const JSON_HEADERS = { 'content-type': 'application/json' };
+
+export async function addAddress(address) {
+  return requestJson('/addresses', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(address) });
+}
+
+export async function editAddress(addressId, address) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(address) });
+}
+
+export async function removeAddress(addressId) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}`, { method: 'DELETE' });
+}
+
+export async function makeAddressDefault(addressId) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}/default`, { method: 'POST' });
 }
 
 // #2067 (leaf sub-issue of #1973, part of #1947): this account's opt-in

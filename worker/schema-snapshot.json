@@ -821,6 +821,21 @@
       "title": "TEXT|1||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0"
     },
+    "user_addresses": {
+      "address_id": "TEXT|0||1",
+      "city": "TEXT|1||0",
+      "country": "TEXT|1||0",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "is_default": "INTEGER|1|0|0",
+      "line1": "TEXT|1||0",
+      "line2": "TEXT|0||0",
+      "phone": "TEXT|0||0",
+      "postal_code": "TEXT|1||0",
+      "recipient_name": "TEXT|1||0",
+      "region": "TEXT|0||0",
+      "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "user_id": "TEXT|1||0"
+    },
     "user_blocks": {
       "blocked_user_id": "TEXT|1||2",
       "blocker_user_id": "TEXT|1||1",
@@ -1466,6 +1481,14 @@
     "index:idx_tax_education_content_jurisdiction": {
       "tbl": "tax_education_content",
       "sql": "CREATE INDEX idx_tax_education_content_jurisdiction ON tax_education_content(country_code, state_code)"
+    },
+    "index:idx_user_addresses_one_default": {
+      "tbl": "user_addresses",
+      "sql": "CREATE UNIQUE INDEX idx_user_addresses_one_default ON user_addresses(user_id) WHERE is_default = 1"
+    },
+    "index:idx_user_addresses_user": {
+      "tbl": "user_addresses",
+      "sql": "CREATE INDEX idx_user_addresses_user ON user_addresses(user_id)"
     },
     "index:idx_user_blocks_blocked": {
       "tbl": "user_blocks",
