@@ -4,6 +4,7 @@
 // reads colours from the file's own numbers, this reads what is drawn, textures included.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { buildModelTiers } from '../src/modelTiers.js';
 
 function parse(base64) {
   const binary = atob(base64);
@@ -15,9 +16,7 @@ function parse(base64) {
 const VIEWS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const UPS = [[0, 1, 0], [0, 1, 0], [0, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]];
 
-window.compareRendered = async (fullBase64, tierBase64, sizePx) => {
-  const full = await parse(fullBase64);
-  const tier = await parse(tierBase64);
+async function compareObjects(full, tier, sizePx, wantStills) {
   const box = new THREE.Box3().setFromObject(full);
   box.union(new THREE.Box3().setFromObject(tier));
   const centre = box.getCenter(new THREE.Vector3());
@@ -41,6 +40,15 @@ window.compareRendered = async (fullBase64, tierBase64, sizePx) => {
     gl.readPixels(0, 0, sizePx, sizePx, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     return pixels;
   };
+  const stills = [];
+  // A still is the full model on the left and its cheaper version on the right at the size they are swapped at,
+  // enlarged without smoothing so a person can read the pixels the shopper would get.
+  const STILL_SCALE = 6;
+  const copyTo = (sheet, slot) => {
+    const ctx = sheet.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(canvas, slot * sizePx * STILL_SCALE, 0, sizePx * STILL_SCALE, sizePx * STILL_SCALE);
+  };
   const views = [];
   let worstColour = 0;
   let worstPixels = 0;
@@ -49,8 +57,19 @@ window.compareRendered = async (fullBase64, tierBase64, sizePx) => {
     camera.up.set(...UPS[i]);
     camera.lookAt(centre);
     camera.updateProjectionMatrix();
+    let sheet = null;
+    if (wantStills) {
+      sheet = document.createElement('canvas');
+      sheet.width = sizePx * STILL_SCALE * 2;
+      sheet.height = sizePx * STILL_SCALE;
+      const bg = sheet.getContext('2d');
+      bg.fillStyle = '#cfd8c4';
+      bg.fillRect(0, 0, sheet.width, sheet.height);
+    }
     const a = read(full);
+    if (sheet) copyTo(sheet, 0);
     const b = read(tier);
+    if (sheet) { copyTo(sheet, 1); stills.push({ view: i, png: sheet.toDataURL('image/png') }); }
     let covered = 0;
     let diff = 0;
     const meanA = [0, 0, 0];
@@ -77,7 +96,24 @@ window.compareRendered = async (fullBase64, tierBase64, sizePx) => {
     views.push({ view: i, colourShift: +colourShift.toFixed(3), pixelDiff: +pixelDiff.toFixed(3), coveredA: countA, coveredB: countB });
   });
   renderer.dispose();
-  return { colourShift: +worstColour.toFixed(3), pixelDiff: +worstPixels.toFixed(3), views };
+  return { colourShift: +worstColour.toFixed(3), pixelDiff: +worstPixels.toFixed(3), views, stills };
+}
+
+window.compareRendered = async (fullBase64, tierBase64, sizePx, wantStills = false) => {
+  return compareObjects(await parse(fullBase64), await parse(tierBase64), sizePx, wantStills);
+};
+
+// --regenerate: the versions the current src/modelTiers.js would make from this full model (not the stored ones),
+// compared the same way, so a change to the generator can be looked at before anything is regenerated or stored.
+window.compareGenerated = async (fullBase64, sizes, wantStills = false) => {
+  const model = await parse(fullBase64);
+  const { mid, far } = await buildModelTiers(model);
+  const out = {};
+  for (const [tier, version] of [['mid', mid], ['far', far]]) {
+    if (!version || version.sharesFullModel) continue;
+    out[tier] = await compareObjects(await parse(fullBase64), version.object, sizes[tier], wantStills);
+  }
+  return out;
 };
 
 window.renderTiersReady = true;
