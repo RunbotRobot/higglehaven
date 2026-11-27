@@ -187,18 +187,32 @@ export async function handlePurchases(request, env, route, url) {
     // from the client; Mark shipped and Refund still go through their own routes unchanged.
     if (url.searchParams.get('mine') === 'seller') {
       const sessionSeller = await requireSessionSeller(request, db);
+      // #4541: a seller with more than a page of sales reaches the older ones by cursor (newest first, same shape as
+      // My purchases), so Mark shipped and Refund are never out of reach of an old order.
+      const limit = queryLimit(url.searchParams.get('limit'), 100);
+      const cursor = decodeCursor(url.searchParams.get('cursor'));
+      const conditions = ['p.seller_id = ?'];
+      const bindings = [sessionSeller.seller_id];
+      if (cursor) {
+        conditions.push('(p.created_at < ? OR (p.created_at = ? AND p.purchase_id < ?))');
+        bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      }
       const { results } = await db.prepare(`
         SELECT p.*, t.name AS live_name, t.metadata_json AS template_metadata_json
         FROM purchases p
         LEFT JOIN catalog_templates t ON t.template_id = p.template_id
-        WHERE p.seller_id = ?
-        ORDER BY p.created_at DESC, p.purchase_id DESC LIMIT 100
-      `).bind(sessionSeller.seller_id).all();
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY p.created_at DESC, p.purchase_id DESC LIMIT ?
+      `).bind(...bindings, limit + 1).all();
+      const hasMore = results.length > limit;
+      const page = results.slice(0, limit);
+      const last = page.at(-1);
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
       return json({
         // #3776: the order's own recorded name first, then the live product, so a delisted product
         // is still named on the seller's side too.
-        purchases: results.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        purchases: page.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,
         totalCount: total.count,
       });
     }
@@ -233,6 +247,8 @@ export async function handlePurchases(request, env, route, url) {
       const sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(id, sessionBuilder.builder_id, 'Not your purchases');
       const { results } = await db.prepare(`
+        -- #4541: still the newest 100 only, with totalCount beside it; past 100 hosted sales the older ones are not
+        -- listed here (the seller-side Orders leaf above pages, this commission view does not yet).
         SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       // The list above is capped at 100 rows (no pagination) — fine for the
@@ -261,6 +277,8 @@ export async function handlePurchases(request, env, route, url) {
         }
       }
       const { results } = await db.prepare(`
+        -- #4541: a product's Sales panel shows the newest 100 and says so; past 100 sales of one product the older
+        -- orders are reached from the Orders leaf (?mine=seller), which pages.
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
