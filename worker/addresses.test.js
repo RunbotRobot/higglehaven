@@ -127,3 +127,14 @@ describe('addresses (#4598)', () => {
     expect(stillThere.n).toBe(0);
   });
 });
+
+describe('addresses: what a client needs to draw the form (#4598)', () => {
+  it('says the cap, which countries need a region, and lists the countries by name', async () => {
+    const person = await signupBuilder('address-form-facts');
+    const list = await api('/addresses', person.session());
+    expect(list.body.maxAddresses).toBe(10);
+    expect(list.body.regionRequiredFor.sort()).toEqual(['AU', 'CA', 'US']);
+    expect(list.body.countries).toContainEqual({ code: 'US', name: 'United States' });
+    expect(list.body.countries.length).toBeGreaterThan(150);
+  });
+});

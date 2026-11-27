@@ -69,6 +69,14 @@ export function isKnownCountryCode(code) {
   return typeof code === 'string' && KNOWN_COUNTRY_CODES.has(code);
 }
 
+// #4598: every code the table knows with its English name, for a country picker (the server owns the list).
+export function countryChoices() {
+  const names = new Intl.DisplayNames(['en'], { type: 'region' });
+  return [...KNOWN_COUNTRY_CODES]
+    .map((code) => ({ code, name: names.of(code) || code }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function countryNameToCode(name) {
   if (typeof name !== 'string') return null;
   const normalized = name.trim().toLowerCase();

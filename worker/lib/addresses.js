@@ -5,7 +5,7 @@ import { json, HttpError } from './http.js';
 import { readJson } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireCurrentUser } from './auth.js';
-import { isKnownCountryCode } from './country-codes.js';
+import { isKnownCountryCode, countryChoices } from './country-codes.js';
 
 export const MAX_ADDRESSES_PER_ACCOUNT = 10;
 const ADDRESS_MUTATE_RATE_LIMIT_MAX = 30;
@@ -88,7 +88,7 @@ export async function handleAddresses(request, db, route) {
   const user = await requireCurrentUser(request, db);
 
   if (request.method === 'GET' && route.length === 1) {
-    return json({ addresses: await listFor(db, user.user_id), maxAddresses: MAX_ADDRESSES_PER_ACCOUNT });
+    return json({ addresses: await listFor(db, user.user_id), maxAddresses: MAX_ADDRESSES_PER_ACCOUNT, regionRequiredFor: [...REGION_REQUIRED], countries: countryChoices() });
   }
 
   if (request.method === 'POST' && route.length === 1) {

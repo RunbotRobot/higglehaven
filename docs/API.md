@@ -6042,7 +6042,9 @@ A refusal is `400 { error, field }` naming the field and saying why.
 ### `GET /api/addresses`
 
 `{ "addresses": [{ "addressId", "recipientName", "line1", "line2", "city", "region", "postalCode", "country",
-"phone", "isDefault", "createdAt", "updatedAt" }], "maxAddresses": 10 }`, the default first, then oldest first.
+"phone", "isDefault", "createdAt", "updatedAt" }], "maxAddresses": 10, "regionRequiredFor": ["US", "CA", "AU"],
+"countries": [{ "code": "US", "name": "United States" }, ...] }`, the default first, then oldest first. The last two
+let a client say what is needed and offer the countries without a second copy of either.
 
 ### `POST /api/addresses`
 
