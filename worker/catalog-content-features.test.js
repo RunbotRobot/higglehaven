@@ -803,6 +803,35 @@ describe('Shipping', () => {
     expect(fetched.body.template.metadata.domesticOnly).toBe(true);
   });
 
+  it('accepts metadata.shippingZones (#4601), keeps it through GET, and refuses what is not a list of zones', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-zones-template',
+        name: 'Zoned product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { shippingZones: ['us', 'ca'] },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect((await api('/catalog/shipping-zones-template')).body.template.metadata.shippingZones).toEqual(['us', 'ca']);
+    for (const bad of ['us', [], ['us', 'mars'], ['us', 'us']]) {
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `shipping-zones-bad-${JSON.stringify(bad).length}-${Array.isArray(bad) ? bad.length : 'x'}`,
+          name: 'Bad zoned product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          metadata: { shippingZones: bad },
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/shippingZones/);
+    }
+  });
+
   it('defaults to shipping internationally when metadata.domesticOnly is absent', async () => {
     const created = await api('/catalog', {
       method: 'POST',
