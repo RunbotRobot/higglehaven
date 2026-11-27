@@ -403,7 +403,9 @@ console.log('B still connected to A (should still be connected):', bStillConnect
 
 const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
-  !otherAvatarsSeenByA.some((a) => a.builderId === builderB.builderId) &&
+  // #4324: a person who has just moved out of range stays listed, flagged `departing`, while their fog
+  // plays (#4518); a departing avatar is on its way out, not one A can see nearby.
+  !otherAvatarsSeenByA.some((a) => a.builderId === builderB.builderId && !a.departing) &&
   bothTaggedWithChannelOwner &&
   aGainForB?.gainValue === 1 &&
   bGainForA?.gainValue === 1 &&
