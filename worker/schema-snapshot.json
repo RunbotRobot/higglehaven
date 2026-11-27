@@ -650,6 +650,11 @@
       "total_cents": "INTEGER|1||0",
       "unit_price_cents": "INTEGER|1||0"
     },
+    "rate_limit_counters": {
+      "bucket_key": "TEXT|0||1",
+      "count": "INTEGER|1||0",
+      "window_start": "INTEGER|1||0"
+    },
     "rate_limit_events": {
       "bucket_key": "TEXT|1||0",
       "created_at": "INTEGER|1||0",
@@ -1385,6 +1390,10 @@
     "index:idx_purchases_template_id": {
       "tbl": "purchases",
       "sql": "CREATE INDEX idx_purchases_template_id ON purchases(template_id, created_at)"
+    },
+    "index:idx_rate_limit_counters_window": {
+      "tbl": "rate_limit_counters",
+      "sql": "CREATE INDEX idx_rate_limit_counters_window ON rate_limit_counters (window_start)"
     },
     "index:idx_rate_limit_events_bucket_created": {
       "tbl": "rate_limit_events",

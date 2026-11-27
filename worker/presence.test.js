@@ -190,9 +190,9 @@ describe('Avatar presence (#1095)', () => {
       const viewer = await signupBuilder('presence-nearby-rate-limit');
       const bucketKey = `presence-nearby:${await userIdOf(viewer)}`;
       const now = Date.now();
-      await env.DB.batch(Array.from({ length: 599 }, () => env.DB.prepare(
-        'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
-      ).bind(bucketKey, now)));
+      await env.DB.prepare(
+        'INSERT INTO rate_limit_counters (bucket_key, window_start, count) VALUES (?, ?, 1499)',
+      ).bind(bucketKey, Math.floor(now / (15 * 60 * 1000)) * 15 * 60 * 1000).run();
 
       const atLimit = await api('/presence', viewer.session());
       expect(atLimit.response.status).toBe(200);

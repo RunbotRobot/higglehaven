@@ -200,9 +200,9 @@ describe('POST /api/presence', () => {
     const builder = await signupBuilder('presence-rate-limit');
     const bucketKey = `presence-report:${(await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id}`;
     const now = Date.now();
-    await env.DB.batch(Array.from({ length: 599 }, () => env.DB.prepare(
-      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
-    ).bind(bucketKey, now)));
+    await env.DB.prepare(
+      'INSERT INTO rate_limit_counters (bucket_key, window_start, count) VALUES (?, ?, 1499)',
+    ).bind(bucketKey, Math.floor(now / (15 * 60 * 1000)) * 15 * 60 * 1000).run();
 
     const atLimit = await api('/presence', builder.session({
       method: 'POST', body: JSON.stringify({ x: 1, y: 1, z: 1 }),
