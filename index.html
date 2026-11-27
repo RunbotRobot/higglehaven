@@ -302,6 +302,26 @@
         </div>
       </div>
     </div>
+    <!-- #4599 (shipping, 2/8): where a shipped product goes, asked before the purchase starts (the card, higgles and
+         no-card paths alike). The order keeps its own copy. Digital goods never open it. -->
+    <div id="shipping-address-modal" role="dialog" aria-modal="true" aria-labelledby="shipping-address-modal-title" tabindex="-1">
+      <form id="shipping-address-form" novalidate>
+        <button id="shipping-address-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="shipping-address-modal-title">Where should it go?</h2>
+        <label>Name <input id="shipping-address-name" name="name" type="text" maxlength="60" autocomplete="name" /></label>
+        <label>Street address <input id="shipping-address-line1" name="line1" type="text" maxlength="80" autocomplete="address-line1" /></label>
+        <label>Apartment, suite, etc. (optional) <input id="shipping-address-line2" name="line2" type="text" maxlength="60" autocomplete="address-line2" /></label>
+        <label>City <input id="shipping-address-city" name="city" type="text" maxlength="40" autocomplete="address-level2" /></label>
+        <label>State or region <input id="shipping-address-region" name="region" type="text" maxlength="40" autocomplete="address-level1" /></label>
+        <label>Postal code <input id="shipping-address-postal" name="postalCode" type="text" maxlength="20" autocomplete="postal-code" /></label>
+        <label>Country <select id="shipping-address-country" name="country" autocomplete="country"></select></label>
+        <p id="shipping-address-note" hidden></p>
+        <p id="shipping-address-error" role="alert" hidden></p>
+        <div id="shipping-address-actions">
+          <button id="shipping-address-continue-btn" type="submit">Continue</button>
+        </div>
+      </form>
+    </div>
     <!-- #3783 (part of #3771): a builder's choice of lettering and colours for their lándlet's name, opened from My lándlets
          beside Rename. The name is drawn in every option, so the choice is made by looking; it applies as it is tapped. -->
     <div id="wordmark-modal" role="dialog" aria-modal="true" aria-labelledby="wordmark-modal-title" tabindex="-1">

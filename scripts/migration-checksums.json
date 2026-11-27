@@ -228,5 +228,7 @@
   "0243_credit_orbs_landlet_index.sql": "1ad08f34ca87dedc75cb460970e47e5c3fbd6a561910ebb3416e29c74e1a2c79",
   "0244_user_addresses.sql": "d2ffae93ed7f9d11bf33c5bd5ebb6ac220a14d0667b97cddcfc527d9feea9e1f",
   "0245_purchases_tracking.sql": "76d0cdfa9c6627fea4b96cc1f7b596d5d39346eb4cfd70b76d36b1676220e962",
-  "0246_basket_lines.sql": "4309229429af93dfa4b85348da3024138ae483748e541f0884672eb1a3a29341"
+  "0246_purchases_shipping_address.sql": "375b07fad989269c9dd8c0d23386d985f1f3284df73f40e8a7297000ed47b52b",
+  "0247_users_shipping_destination.sql": "f0dccfc1974238c503b6cbe9064d3b6f6888dc73fa9b19ea1a97fc01129402dd",
+  "0248_basket_lines.sql": "4309229429af93dfa4b85348da3024138ae483748e541f0884672eb1a3a29341"
 }

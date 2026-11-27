@@ -6081,7 +6081,7 @@ them as `communication.addresses`.
 
 ## Basket (#4611)
 
-The lines of a person's basket, kept on the account (`migrations/0246_basket_lines.sql`, keyed on `user_id`). This
+The lines of a person's basket, kept on the account (`migrations/0248_basket_lines.sql`, keyed on `user_id`). This
 piece only stores lines; pricing a basket and paying it come in later pieces (#4613, #4614). Every route needs a
 current (not suspended) session and reads and writes only the caller's own lines. A line is a **placed item**
 (`instanceId`), not a product, because the builder's commission follows the lándlet the item stands on; there is one
@@ -6115,6 +6115,14 @@ Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when th
 
 Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
 them as `communication.basketLines`.
+
+## Shipping destination (#4602)
+
+`GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
+`country` is where "ships to me" is judged from: the country of the default address (`source: "address"`), else the
+country the person chose (`source: "chosen"`), else `null` (nothing is dimmed). `PUT /api/shipping-destination` takes
+`{ dimUnshippable?: boolean, country?: <ISO code> | null }` (at least one) and answers `{ destination }`; a bad country is
+`400 { error, field: "country" }`. Both are the caller's own account only and share the `address-mutate` rate limit.
 
 ## Blocks (#3140)
 
@@ -8857,6 +8865,23 @@ gated to admins per #653 above.
 POST /api/instances/:instanceId/purchase
 { "quantity": 2, "buyerLabel": "A Shopper" }   // both optional
 ```
+
+**Shipping address (#4599).** A product that ships (anything that is not a digital
+good, an avatar or an animation) is bought with a `shippingAddress`:
+`{ "name", "line1", "line2"?, "city", "region", "postalCode", "country" }`
+(`country` is an ISO 3166-1 alpha-2 code; `region` is required for `US`; field
+lengths are capped at 60/80/60/40/40/20). Without one, or with an incomplete one,
+the purchase is refused with `400` `shipping_address_required` or
+`shipping_address_invalid`; a product its seller ships only within the United
+States, bought for another country, is refused `409` `not_shippable_there`. All
+three are answered before any payment is created, and the message says nothing was
+charged. A digital good ignores the field. The order keeps its own copy
+(`purchases.shipping_address_json`), carried to the finalize step in the
+PaymentIntent's metadata on the card path, and `GET /api/purchases/mine` returns it
+to the buyer as `shippingAddress` (null for a digital good or an order made before
+this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`
+and `domesticOnly` so the client asks before it sends. Only the buyer reads it here;
+the seller's own view of it is #4600.
 
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one," not a 400, since a

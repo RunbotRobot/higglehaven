@@ -174,7 +174,7 @@ import {
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
-import { handleAddresses, addressFromRow } from './lib/addresses.js';
+import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
@@ -787,6 +787,10 @@ async function handleApi(request, env, url, ctx) {
   // #4598 (Shipping 1/8, part of #4394): a person's own addresses.
   if (route[0] === 'addresses') {
     return handleAddresses(request, env.DB, route);
+  }
+  // #4602: where "ships to me" is judged from, and the dim switch.
+  if (route[0] === 'shipping-destination' && route.length === 1) {
+    return handleShippingDestination(request, env.DB);
   }
 
   // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.

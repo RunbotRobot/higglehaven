@@ -30,7 +30,8 @@ import { camera } from '../world/scene.js';
 import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
-import { fetchSellerSummaries } from '../api.js';
+import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
+import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 import { loadUnratedOrders, hasUnratedOrder } from './unratedOrders.js';
 
@@ -111,10 +112,13 @@ let lastInRange = false;
 // Read once per page load (and again after a purchase); the card opens at once and
 // says "You already own this." when the answer arrives, never waiting on it.
 function refreshOwnedState(review, { force = false } = {}) {
-  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force })]).then(() => {
+  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force }), loadShippingDestination(fetchShippingDestination, { force })]).then(() => {
     if (review === openReview) syncProductCardActions(review, lastInRange);
   });
 }
+
+// #4602: the switch or the country changed in Settings; a card that is open says what is now true.
+onShippingDestinationChange(() => { if (openReview) syncProductCardActions(openReview, lastInRange); });
 
 // Called by the Buy flow once a purchase has finished, so a card that is still
 // open says so for what was just bought.
@@ -161,7 +165,7 @@ export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
   lastInRange = inRange;
   const template = review.mesh.userData.template;
-  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId) });
+  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId), unshippable: doesNotShipToMe(template) });
   buyBtn.classList.toggle('visible', state.canBuy);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
