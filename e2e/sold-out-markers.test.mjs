@@ -8,6 +8,7 @@
 // not DOM/pixel inspection, plus a real click through the Settings > Build
 // panel's per-marker Dismiss button and the Tools leaf's "Faded items" switch (#4201: it moved there from Settings).
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin, openBuildMoreFold } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const LABEL = 'Sold Out Marker Tester';
 const INSTANCE_ID = 'sold-out-marker-instance';
@@ -51,7 +52,7 @@ await fetchJson('/api/instances', {
 // separate one, so this purchase still lands against the landlet this
 // test already built up under this session's own cookie.
 await grantAdmin(emailForLabel(LABEL));
-const purchased = await fetchJson(`/api/instances/${INSTANCE_ID}/purchase`, { method: 'POST' });
+const purchased = await fetchJson(`/api/instances/${INSTANCE_ID}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) });
 console.log('purchase that sells out the template (should be 201):', purchased.status);
 
 // Reload so bootstrap() picks up Build mode fresh -- same reasoning

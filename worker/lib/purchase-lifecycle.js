@@ -13,6 +13,7 @@
 // the other way around): purchaseFromRow, handlePurchaseFinalize, and
 // every other helper exclusive to that leaf.
 import { purchaseProductName, ORPHANED_PRODUCT_NAME, ORPHANED_SELLER_NAME, refundAmountCents } from './purchase-record.js';
+import { shippingAddressFromRow } from './shipping-address.js'; // #4599
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
@@ -112,7 +113,7 @@ async function handleMyPurchases(request, env, url) {
   }
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
-           p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at,
+           p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
            p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
            p.template_id, t.name AS live_name, s.label AS live_seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text,
@@ -143,6 +144,8 @@ async function handleMyPurchases(request, env, url) {
         quantity: row.quantity,
         totalCents: row.total_cents,
         isDigitalGood: !!row.is_digital_good,
+        // #4599: the address this order was bought for, its own copy (null for a digital good or an older order).
+        shippingAddress: shippingAddressFromRow(row.shipping_address_json),
         shippedAt: row.shipped_at,
         shippingCarrier: row.shipping_carrier, // #4600
         trackingNumber: row.tracking_number,

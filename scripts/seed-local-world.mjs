@@ -33,6 +33,8 @@ import { SEED_PASSWORD, parseSeedArgs } from './seed-local-world-lib.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ADMIN_SECRET = process.env.SEED_ADMIN_BOOTSTRAP_SECRET || 'local-dev-admin-secret';
+// #4599: a shipped product is bought with an address.
+const SEED_SHIPPING_ADDRESS = { name: 'Looker', line1: '1 Seed Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 export async function seedLocalWorld(baseUrl, log = console.log) {
   async function call(method, route, cookie, body) {
@@ -200,7 +202,7 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
       await must('POST', `/landlets/${neighbor.landletId}/versions/${version.versionId}/activate`, neighbor.cookie);
     }
     await must('POST', '/auth/grant-admin', await adminCookie(), { email: 'looker@e2e.test' });
-    await must('POST', `/instances/${instance.instanceId}/purchase`, looker.cookie, { quantity: 1 });
+    await must('POST', `/instances/${instance.instanceId}/purchase`, looker.cookie, { quantity: 1, shippingAddress: SEED_SHIPPING_ADDRESS });
     log('looker bought a Terracotta Planter (an order not yet rated).');
   }
 
@@ -212,7 +214,7 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
     if (!instance) {
       instance = (await must('POST', '/instances', neighbor.cookie, { landletId: neighbor.landletId, templateId: theirs['Moss Walker'].templateId, x: 2, y: 1, z: 0 })).data.instance;
     }
-    await must('POST', `/instances/${instance.instanceId}/purchase`, looker.cookie, { quantity: 1 });
+    await must('POST', `/instances/${instance.instanceId}/purchase`, looker.cookie, { quantity: 1, shippingAddress: SEED_SHIPPING_ADDRESS });
     log('looker bought the avatar "Moss Walker".');
   }
 
