@@ -57,7 +57,8 @@ page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
 // window.confirm() blocks until handled -- auto-accept, same as launchPage's
 // own dialog handler does for window.prompt() elsewhere in this suite.
-page.on('dialog', (dialog) => dialog.accept());
+// #4522: confirmations are the page's own dialog; a native one is dismissed and fails the run.
+page.on('dialog', (dialog) => dialog.dismiss());
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -99,6 +100,8 @@ await page.waitForFunction(
   { timeout: 10000 },
 );
 await page.click(`.model-delete-btn[data-model-url="${uploadedForRowDelete.modelUrl}"]`);
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForFunction(
   (modelUrl) => !document.getElementById('modelsTableWrap').textContent.includes(modelUrl),
   uploadedForRowDelete.modelUrl,
@@ -145,6 +148,8 @@ await page.waitForFunction(
 
 // --- Real run: actually deletes, confirm() auto-accepted above. ---
 await page.click('#modelsRealRunBtn');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForFunction(
   () => document.getElementById('modelsCleanupResult').textContent.includes('Deleted'),
   null,

@@ -702,7 +702,7 @@ top left is the small round bud with the higglehaven logo: tap it and it unfolds
    item where the camera is looking, in the middle of the screen.
 
 **You will see:** the item stands where you tapped and is already selected, with a
-a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
+small card beside it that has "Copy", "Delete" and "More", and three rings and three arrows around it.
 
 **If something goes wrong:**
 - The search finds nothing: the list says No products match what they typed, and then: Try fewer letters, or clear the search to see everything.
@@ -963,8 +963,9 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 2. Tap "Build level above" to add a level over the one you are on, or "Dig Level
    Below" to add one underneath. The button shows in brackets how much space the
    new level uses.
-3. Use the up and down arrows ("Level up", "Level down") to move between levels.
-   The sheet says which level you are on.
+3. Once you have a level besides Ground, two small arrows ("Level up", "Level down") appear to move
+   between levels; with only Ground there is nowhere to go, so they are not drawn. The sheet says
+   which level you are on.
 4. On a level above or below the ground, "Remove this level" appears. It removes
    that level.
 5. The "×" at the top right of the sheet puts it away. It stays open while you move
@@ -976,9 +977,13 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 - The app says "That's as high as this lándlet goes. Use Build level above to
   build higher." or "That's as deep as this lándlet goes. Use Dig level below to
   go deeper." It means an item has hit the top or bottom level you have.
-- Adding a level is refused: the app says why in words. Read it out with the
-  person and do not promise more than it says. If money or allowances are
-  involved, use the runbook's hand-off.
+- "Build level above" or "Dig level below" is greyed out and the sheet says "A new level takes
+  ... and you have ... left. The cap grows as your products earn higgles.": a new level would take
+  more of the lándlet cap than is left. Nothing is sent when it is greyed. Read the sentence out with
+  the person and do not promise more than it says; if allowances are the question, use the runbook's
+  hand-off.
+- A level that is refused after a tap: the app says why in words. Read it out and do not promise more
+  than it says.
 - "Remove this level" takes the items on that level off your lándlet. Say so
   before the person taps it.
 
@@ -1199,7 +1204,7 @@ nobody owns and nothing uses is removed completely.
 2. Tap "Payouts". The leaf that opens says first what is owed to them so far (even when it is $0.00), then whether a payout account is set up.
 3. "Set up payouts" opens two short steps: "About you", then "Where you live" and "Your bank". Use "Next" and "Back" to move between them; the last step's button is "Set up payout account". If an account already exists, "Change payout details" (or "Continue setup", when the payment provider needs something more) opens the same steps.
 4. Once a payout account exists, a "Cash out" button appears whenever something is available. Under the amount owed the leaf says "Available to cash out", and "Held" and "Next eligible" when some sales are still clearing. Tapping "Cash out" says "Payout requested." beside the balance. The button is not there while nothing is available.
-5. Tax paperwork is not in Sell. It is in Settings, on the "General" tab, in the closed row "Account and tax": "Tax paperwork" shows its status (it says "Not needed yet" until combined earnings make it required), and "Submit tax paperwork" (or "Update tax paperwork" once one is on file) opens the form. An identity check, where one is asked for, is filled in on the screen that asks for it.
+5. Tax paperwork is not in Sell. It is in Settings, on the "General" tab, in the closed row "Account and tax": "Tax paperwork" shows its status (it says "Not needed yet" until combined earnings make it required), and "Show the tax form" opens the form (it opens by itself once earnings have crossed the reporting threshold and none is on file, and the status then says "Needed now"). They pick "W-9 (US person)" or "W-8BEN (non-US person)", fill every field (a blank one is refused by its name), and tap "Submit tax paperwork" (or "Update tax paperwork" once one is on file), which says "Submitted." beside the button. An identity check, where one is asked for, is filled in on the screen that asks for it.
 
 **You will see:** at the top of the "Payouts" leaf, how much is owed to them so far, then the payout account's status.
 

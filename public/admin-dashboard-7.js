@@ -253,8 +253,8 @@
     lookupInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') lookupLandlet(); });
     document.getElementById('landletForceCompleteBtn').addEventListener('click', forceComplete);
     document.getElementById('landletReassignBtn').addEventListener('click', () => reassign(false));
-    document.getElementById('landletCancelAuctionReassignBtn').addEventListener('click', () => {
-      if (!confirm('Cancel the active auction and reassign this landlet?')) return;
+    document.getElementById('landletCancelAuctionReassignBtn').addEventListener('click', async () => {
+      if (!(await window.adminConfirm({ title: 'Cancel auction', message: 'Cancel the active auction and reassign this landlet?', confirmLabel: 'Cancel auction' }))) return;
       reassign(true);
     });
     document.getElementById('landletAuctionAbortBtn').addEventListener('click', () => {

@@ -302,6 +302,9 @@ describe('server timing (#3464)', () => {
   it('reads the worker\'s Server-Timing value', () => {
     expect(parseServerTiming('d1;dur=42;desc="5 trips"')).toEqual({ d1Ms: 42, trips: 5 });
     expect(parseServerTiming('d1;dur=3.5;desc="1 trip"')).toEqual({ d1Ms: 3.5, trips: 1 });
+    // #4542: rows read, when the worker says them
+    expect(parseServerTiming('d1;dur=42;desc="5 trips", d1rows;dur=0;desc="130 rows read"')).toEqual({ d1Ms: 42, trips: 5, rowsRead: 130 });
+    expect(summariseServerTimings([{ d1Ms: 1, trips: 2, rowsRead: 10 }, { d1Ms: 1, trips: 2, rowsRead: 30 }, { d1Ms: 1, trips: 2, rowsRead: 20 }])).toEqual({ runs: 3, d1MsMedian: 1, tripsMedian: 2, rowsReadMedian: 20 });
     expect(parseServerTiming('cdn-cache;desc=HIT')).toBeNull();
     expect(parseServerTiming(undefined)).toBeNull();
   });

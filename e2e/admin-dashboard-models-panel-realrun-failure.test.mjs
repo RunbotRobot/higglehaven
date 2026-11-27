@@ -46,7 +46,7 @@ const [, token] = sessionCookie.split('=');
 const page = await browser.newPage();
 page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
-page.on('dialog', (dialog) => dialog.accept()); // window.confirm() before the real run
+page.on('dialog', (dialog) => dialog.dismiss()); // #4522: the confirm is the page's own dialog now
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -90,6 +90,8 @@ await page.route('**/api/models/cleanup', async (route) => {
 });
 
 await page.click('#modelsRealRunBtn');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForFunction(
   () => !document.getElementById('modelsCleanupErr').hidden,
   null,
@@ -108,6 +110,8 @@ console.log('model still listed -- nothing was actually deleted by the failed at
 // the button's own enabled/disabled reflection of it.
 await page.unroute('**/api/models/cleanup');
 await page.click('#modelsRealRunBtn');
+await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
 await page.waitForFunction(
   () => document.getElementById('modelsCleanupResult').textContent.includes('Deleted'),
   null,

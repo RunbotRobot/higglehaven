@@ -11,7 +11,16 @@
 const NATIVE = Symbol('native statement');
 
 export function createD1Timing() {
-  const stats = { ms: 0, trips: 0 };
+  const stats = { ms: 0, trips: 0, rowsRead: 0 };
+
+  // #4542: rows read is what the free tier counts and what grows with the world, so it is
+  // summed from the `meta.rows_read` D1 returns with each statement's answer (a batch answers
+  // with one result per statement).
+  function addRows(result) {
+    if (Array.isArray(result)) result.forEach(addRows);
+    else if (typeof result?.meta?.rows_read === 'number') stats.rowsRead += result.meta.rows_read;
+    return result;
+  }
 
   async function timed(run) {
     const started = Date.now();
@@ -28,7 +37,20 @@ export function createD1Timing() {
       get(target, prop) {
         if (prop === NATIVE) return target;
         if (prop === 'bind') return (...values) => wrapStatement(target.bind(...values));
-        if (prop === 'first' || prop === 'run' || prop === 'all' || prop === 'raw') {
+        if (prop === 'first') {
+          // first() carries no meta, so it is answered through all() (the same statement) to see the rows it read.
+          return (column) => timed(async () => {
+            const answer = addRows(await target.all());
+            const row = answer.results?.[0] ?? null;
+            if (column === undefined || row === null) return row;
+            if (!(column in row)) throw new Error(`D1_ERROR: No such column: ${column}`);
+            return row[column];
+          });
+        }
+        if (prop === 'run' || prop === 'all') {
+          return (...args) => timed(async () => addRows(await target[prop](...args)));
+        }
+        if (prop === 'raw') {
           return (...args) => timed(() => target[prop](...args));
         }
         const value = target[prop];
@@ -43,7 +65,7 @@ export function createD1Timing() {
         if (prop === 'prepare') return (sql) => wrapStatement(target.prepare(sql));
         if (prop === 'batch') {
           // D1 only accepts its own statements, so hand it the originals.
-          return (statements, ...rest) => timed(() => target.batch(statements.map((s) => s?.[NATIVE] ?? s), ...rest));
+          return (statements, ...rest) => timed(async () => addRows(await target.batch(statements.map((s) => s?.[NATIVE] ?? s), ...rest)));
         }
         if (prop === 'exec') return (...args) => timed(() => target.exec(...args));
         const value = target[prop];
@@ -55,7 +77,8 @@ export function createD1Timing() {
   return {
     wrap: wrapDatabase,
     header() {
-      return `d1;dur=${stats.ms};desc="${stats.trips} trip${stats.trips === 1 ? '' : 's'}"`;
+      // #4542: a second metric beside the first, so a reader of the older one is unchanged.
+      return `d1;dur=${stats.ms};desc="${stats.trips} trip${stats.trips === 1 ? '' : 's'}", d1rows;dur=0;desc="${stats.rowsRead} rows read"`;
     },
     stats,
   };

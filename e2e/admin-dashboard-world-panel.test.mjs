@@ -34,7 +34,8 @@ page.on('console', (msg) => {
 });
 // generate-mosaic/-ring, expand, and delete-candidate all surface their
 // result via alert()/confirm() -- auto-accept both like the shell test does.
-page.on('dialog', (dialog) => dialog.accept());
+let nativeDialogs = 0;
+page.on('dialog', (dialog) => { nativeDialogs += 1; dialog.accept(); }); // #4522: results are an in-page line now, so any native dialog is a regression
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -102,6 +103,8 @@ await page.click('#mosaicGenerateBtn');
 await page.waitForSelector(`#candidatesTableWrap td.mono:has-text("${mosaicPrefix}")`, { timeout: 15000 }).catch(() => {});
 const mosaicCandidateVisible = await page.locator('#candidatesTableWrap', { hasText: mosaicPrefix }).isVisible();
 console.log('generated mosaic candidates show up in the candidates table (should be true):', mosaicCandidateVisible);
+const mosaicResultShown = /Mosaic generated/.test((await page.locator('#worldOk').textContent()) || '');
+console.log('the mosaic result shows in the page, not a native alert (should be true):', mosaicResultShown);
 
 // --- Generate ring ---
 const ringPrefix = `e2e-ring-${crypto.randomUUID().slice(0, 8)}`;
@@ -174,6 +177,8 @@ if (farCandidateVisible) {
   console.log('editing the far candidate through the UI persists its new name (should be true):', renamedCandidateVisible);
 
   await renamedRow.locator('.candidate-delete-btn').click();
+  await page.waitForSelector('dialog.admin-confirm-dialog[open]', { timeout: 10000 });
+  await page.click('dialog.admin-confirm-dialog .admin-confirm-ok');
   await renamedRow.waitFor({ state: 'detached', timeout: 10000 });
   deletedCandidateGone = await page.locator('#candidatesTableWrap', { hasText: editedName }).count() === 0;
   console.log('deleting the far candidate through the UI removes it from the table (should be true):', deletedCandidateGone);
@@ -193,6 +198,8 @@ const pass = worldPanelVisible &&
   !!batchWorldRefresh &&
   renamedCandidateVisible &&
   deletedCandidateGone &&
+  mosaicResultShown &&
+  nativeDialogs === 0 &&
   errors.length === 0;
 await finish(browser, {
   pass,
