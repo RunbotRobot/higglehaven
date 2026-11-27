@@ -135,6 +135,7 @@ export function beginAvatarFogHold({
     },
     step(now) {
       if (released) return true;
+      if (!fog) return false; // #4579: reduced motion (or no fog): nothing to draw until resolve() releases the hold
       const rise = Math.max(0, (now - nowMs) / 1000);
       let level = smoothstep(rise / AVATAR_SWAP_FOG_RISE_S);
       if (resolvedAt !== null && rise >= AVATAR_SWAP_FOG_RISE_S) {

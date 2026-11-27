@@ -908,7 +908,8 @@
         animation: bud-unfold var(--motion-open-leaf) var(--ease-bloom) both;
       }
       /* #4199: a keyboard user sees which part of the flower has focus: an ink ring with a pale halo, drawn only for
-         keyboard focus (never after a tap), on the head, the petals, the row of icons and the leaves. */
+         keyboard focus (never after a tap), on the head, the petals, the row of icons and the leaves. (The Shop, Build and Sell petals are clipped to their leaf
+         shape, which would cut a ring off: they invert instead, #4581, below.) */
       body[data-bud="on"] #account-menu-toggle:focus-visible,
       body[data-bud="on"] #account-menu-panel button:focus-visible,
       body[data-bud="on"] #bud-row button:focus-visible,
@@ -1185,6 +1186,14 @@
         color: var(--ink);
         font-weight: 600;
       }
+      /* #4581: keyboard focus on a mode petal. Its leaf-shaped clip would cut a ring off, so the petal itself
+         inverts (ink with a pale word and picture), which cannot be mistaken for the lit current petal. */
+      body[data-bud="on"] #bud-modes .mode-nav-btn:focus-visible {
+        outline: none;
+        background: var(--ink);
+        color: rgb(var(--panel-rgb));
+      }
+      body[data-bud="on"] #bud-modes .mode-nav-btn:focus-visible .bud-icon { color: rgb(var(--panel-rgb)); }
       /* Held open while a mode loads: already out, so no motion on arrival. */
       body[data-bud-ring="held"] #bud-modes .mode-nav-btn,
       body[data-bud-ring="staged"] #bud-modes .mode-nav-btn { animation: none; }
