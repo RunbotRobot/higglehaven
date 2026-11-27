@@ -81,13 +81,13 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
       line.textContent = parts.length ? parts.join(' · ') : 'No carrier or tracking number given.';
       shipping.appendChild(line);
       const editBtn = document.createElement('button');
-      editBtn.className = 'product-sale-row-ship-btn';
+      editBtn.className = 'product-sale-row-tracking-btn';
       editBtn.type = 'button';
       editBtn.textContent = parts.length ? 'Edit tracking' : 'Add tracking';
       editBtn.addEventListener('click', () => {
         const { box, values } = buildTrackingBoxes(purchase.shippingCarrier, purchase.trackingNumber);
         const saveBtn = document.createElement('button');
-        saveBtn.className = 'product-sale-row-ship-btn';
+        saveBtn.className = 'product-sale-row-tracking-btn';
         saveBtn.type = 'button';
         saveBtn.textContent = 'Save tracking';
         saveBtn.addEventListener('click', async () => {

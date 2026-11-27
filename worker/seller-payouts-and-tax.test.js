@@ -211,6 +211,15 @@ describe('Seller payouts (#454)', () => {
 
   // #4600 (shipping 3/8): the seller may say who carried the order and under what number; the buyer reads it on their
   // order; nobody else does (not the lándlet host, not another seller).
+  it('still marks shipped on a JSON POST with no body, as the admin dashboard sends it (#4600)', async () => {
+    const builder = await signupBuilder('empty-body-buyer');
+    const seller = await createConnectedSeller('empty-body-seller');
+    const purchaseId = await makeRealMoneyPurchase(builder, seller);
+    const res = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+    expect(res.response.status).toBe(200);
+    expect(res.body.purchase.trackingNumber).toBeNull();
+  });
+
   it('carries a carrier and tracking number from Mark shipped to the buyer, and lets the seller correct them', async () => {
     const builder = await signupBuilder('tracking-buyer-builder');
     const seller = await createConnectedSeller('tracking-seller');

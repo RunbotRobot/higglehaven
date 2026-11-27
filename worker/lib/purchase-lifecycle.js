@@ -355,6 +355,8 @@ function optionalTrackingText(value, field, max) {
 // Mark shipped has always been a bare POST; the details are optional, so a request with no body at all still works.
 async function readShippingDetails(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) return { carrier: null, trackingNumber: null };
+  // A client that says JSON but sends nothing (the admin dashboard's bare POST) means no details.
+  if (!(await request.clone().text()).trim()) return { carrier: null, trackingNumber: null };
   const input = await readJson(request);
   return {
     carrier: optionalTrackingText(input?.carrier, 'carrier', SHIPPING_CARRIER_MAX_LENGTH),
