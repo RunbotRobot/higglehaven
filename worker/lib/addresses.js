@@ -84,6 +84,57 @@ async function listFor(db, userId) {
 }
 
 // GET/POST /api/addresses, PATCH/DELETE /api/addresses/:id, POST /api/addresses/:id/default.
+// #4602: where "ships to me" is judged from. The default address's country wins; a person with no address can choose a
+// country instead; with neither, nothing is dimmed. The switch is remembered on the account, off until turned on.
+export async function shippingDestinationFor(db, userId) {
+  const row = await db.prepare(`
+    SELECT u.shipping_country, u.dim_unshippable,
+      (SELECT a.country FROM user_addresses a WHERE a.user_id = u.user_id AND a.is_default = 1) AS default_country
+    FROM users u WHERE u.user_id = ?
+  `).bind(userId).first();
+  if (!row) return null;
+  const country = row.default_country || row.shipping_country || null;
+  return {
+    country,
+    source: row.default_country ? 'address' : row.shipping_country ? 'chosen' : null,
+    chosenCountry: row.shipping_country || null,
+    dimUnshippable: row.dim_unshippable === 1,
+  };
+}
+
+export async function handleShippingDestination(request, db) {
+  const user = await requireCurrentUser(request, db);
+  if (request.method === 'GET') {
+    const destination = await shippingDestinationFor(db, user.user_id);
+    if (!destination) throw new HttpError('Account not found', 404);
+    return json({ destination, countries: countryChoices() });
+  }
+  if (request.method !== 'PUT') throw new HttpError('Method not allowed', 405);
+  await checkRateLimit(db, `address-mutate:${user.user_id}`, ADDRESS_MUTATE_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const sets = [];
+  const binds = [];
+  if (input.dimUnshippable !== undefined) {
+    if (typeof input.dimUnshippable !== 'boolean') throw new HttpError('dimUnshippable must be true or false', 400, { field: 'dimUnshippable' });
+    sets.push('dim_unshippable = ?');
+    binds.push(input.dimUnshippable ? 1 : 0);
+  }
+  if (input.country !== undefined) {
+    if (input.country !== null) {
+      const code = typeof input.country === 'string' ? input.country.trim().toUpperCase() : '';
+      if (!isKnownCountryCode(code)) throw new HttpError('Choose a country from the list', 400, { field: 'country' });
+      sets.push('shipping_country = ?');
+      binds.push(code);
+    } else {
+      sets.push('shipping_country = NULL');
+    }
+  }
+  if (!sets.length) throw new HttpError('Nothing to change: send dimUnshippable and/or country', 400);
+  await db.prepare(`UPDATE users SET ${sets.join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?`)
+    .bind(...binds, user.user_id).run();
+  return json({ destination: await shippingDestinationFor(db, user.user_id) });
+}
+
 export async function handleAddresses(request, db, route) {
   const user = await requireCurrentUser(request, db);
 

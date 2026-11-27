@@ -6068,6 +6068,14 @@ Makes that address the one default (a unique partial index guarantees at most on
 Account deletion removes a person's addresses (gated like the rest of the deletion), and the data export lists
 them as `communication.addresses`.
 
+## Shipping destination (#4602)
+
+`GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
+`country` is where "ships to me" is judged from: the country of the default address (`source: "address"`), else the
+country the person chose (`source: "chosen"`), else `null` (nothing is dimmed). `PUT /api/shipping-destination` takes
+`{ dimUnshippable?: boolean, country?: <ISO code> | null }` (at least one) and answers `{ destination }`; a bad country is
+`400 { error, field: "country" }`. Both are the caller's own account only and share the `address-mutate` rate limit.
+
 ## Blocks (#3140)
 
 A durable, **silent** block between two people, keyed on the account

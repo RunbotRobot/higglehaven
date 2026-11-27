@@ -174,7 +174,7 @@ import {
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
-import { handleAddresses, addressFromRow } from './lib/addresses.js';
+import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -786,6 +786,10 @@ async function handleApi(request, env, url, ctx) {
   // #4598 (Shipping 1/8, part of #4394): a person's own addresses.
   if (route[0] === 'addresses') {
     return handleAddresses(request, env.DB, route);
+  }
+  // #4602: where "ships to me" is judged from, and the dim switch.
+  if (route[0] === 'shipping-destination' && route.length === 1) {
+    return handleShippingDestination(request, env.DB);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
