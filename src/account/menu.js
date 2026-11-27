@@ -166,6 +166,8 @@ const NOTICE_DESTINATIONS = {
   purchases: () => myPurchasesBtn.click(),
   // The payout-setup notice (a seller's account that stopped being able to take payouts) reads "Open Payouts to finish": it does, from any mode.
   payouts: () => { import('../sell/payoutsLeaf.js').then((m) => m.openPayoutsLeaf()).catch((err) => console.warn('Could not open Payouts:', err)); },
+  // The seller's own notices about a sale (delivery confirmed, refunded, disputed) are read from Orders, a leaf that opens from any mode.
+  orders: () => { import('../sell/ordersLeaf.js').then((m) => m.openOrdersLeaf()).catch((err) => console.warn('Could not open Orders:', err)); },
   assistant: () => { import('../shop/assistantChat.js').then((m) => m.openAssistantQuestions()).catch((err) => console.warn('Could not open the assistant:', err)); },
 };
 
