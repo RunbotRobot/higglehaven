@@ -459,6 +459,7 @@ const friendsModalEl = document.getElementById('friends-modal');
 const friendsCloseBtn = document.getElementById('friends-close-btn');
 const friendsAddBtn = document.getElementById('friends-add-btn');
 const friendsStatusEl = document.getElementById('friends-status');
+const friendsRetryBtn = document.getElementById('friends-retry-btn'); // #4578
 const friendsIncomingListEl = document.getElementById('friends-incoming-list');
 const friendsIncomingHeadingEl = document.getElementById('friends-incoming-heading');
 const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
@@ -812,6 +813,7 @@ async function renderFriends() {
   friendsIncomingListEl.innerHTML = '';
   friendsOutgoingListEl.innerHTML = '';
   friendsAcceptedListEl.innerHTML = '';
+  friendsRetryBtn.hidden = true; // #4578: a new load starts without the retry control
   // #4041: friends are the account's (user_id), not a builder's, so the list draws in Shop, which has no builder
   // identity of its own, exactly as the dot and the note on the head (refreshFriendsBadge) already read them there.
   // It used to stop here for a missing builder id and left the page's own "No friends yet" showing under a waiting request.
@@ -823,6 +825,9 @@ async function renderFriends() {
     if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
     friendsStatusEl.textContent = err.message || 'Couldn\'t load friends.';
     friendsStatusEl.classList.add('error');
+    // #4578: a list that could not be loaded is not an empty one: no "No friends yet", and a way to try again.
+    friendsPanelEmptyEl.hidden = true;
+    friendsRetryBtn.hidden = false;
     return;
   }
   if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
@@ -1521,6 +1526,11 @@ friendsBtn.addEventListener('click', () => {
   renderFriends();
 });
 friendsCloseBtn.addEventListener('click', closeFriendsModal);
+friendsRetryBtn.addEventListener('click', () => {
+  friendsStatusEl.textContent = '';
+  friendsStatusEl.classList.remove('error');
+  renderFriends();
+});
 friendsAddBtn.addEventListener('click', async () => {
   // #3359: the shared in-app name modal instead of window.prompt() (a browser
   // that suppresses native dialogs made Add friend do nothing). The title keeps

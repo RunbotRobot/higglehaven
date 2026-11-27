@@ -28,6 +28,8 @@
 //   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198).
 //                                         n counts EVERY item on screen, other sessions' too: look first (a shot), and move only your own (#4489)
 //   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
+//   nudge:<x|y|z>:<+|->                   Build, with an item selected: tap that arrowhead of the movement axes (the nudge, #4414) at the screen point the page
+//                                         reports for it, and say where the item stood before and after (the sign is the end of the axis in the gizmo's own frame)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
@@ -706,6 +708,21 @@ async function runStepAction(step, index) {
       const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
       return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
     }
+    case 'nudge': {
+      // #4570: a person taps the small arrowhead at the end of a movement axis; a script has no way to know where it is
+      // on screen, so it asks the page (the hook e2e/build-axis-arrow-tap-nudge uses). Changes where the selected item
+      // stands by one step: use it on the fleet's own lándlet or a local world, and Undo after.
+      const axis = String(step.args[0] ?? '').toUpperCase();
+      const sign = step.args[1] === '-' ? -1 : step.args[1] === '+' ? 1 : NaN;
+      if (!['X', 'Y', 'Z'].includes(axis) || !Number.isFinite(sign)) throw new Error('step "nudge:<x|y|z>:<+|->": an axis and a sign');
+      const point = await page.evaluate(([ax, sg]) => (window.__testAxisHandlePoints?.() ?? []).find((h) => h.axis === ax && h.sign === sg) ?? null, [axis, sign]);
+      if (!point) throw new Error(`step "nudge:${axis}:${step.args[1]}": no such arrowhead on screen (select an item in Build first)`);
+      const stateBefore = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      await (device.hasTouch ? page.touchscreen.tap(point.x, point.y) : page.mouse.click(point.x, point.y));
+      await page.waitForTimeout(700);
+      const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      return { from: stateBefore, to: stateAfter, at: { x: Math.round(point.x), y: Math.round(point.y) } };
+    }
     case 'drag': {
       // #4489: a real mouse press at (x, y), then a drag of (dx, dy) in 20 steps; the selected item's place before and
       // after is reported (lándlet-local metres) and the selection status line. Changes what it moves: use it on the
@@ -948,7 +965,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

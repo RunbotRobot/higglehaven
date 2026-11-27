@@ -88,6 +88,14 @@ describe('live-site steps (#3430)', () => {
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
   });
 
+  it('parses nudge:<axis>:<sign> and refuses a bad one (#4570)', () => {
+    expect(parseStep('nudge:x:+')).toEqual({ command: 'nudge', args: ['x', '+'] });
+    expect(parseStep('nudge:Z:-')).toEqual({ command: 'nudge', args: ['z', '-'] });
+    expect(() => parseStep('nudge:x')).toThrow(/needs 2 argument/);
+    expect(() => parseStep('nudge:w:+')).toThrow(/nudge needs an axis/);
+    expect(() => parseStep('nudge:x:up')).toThrow(/nudge needs an axis/);
+  });
+
   it('parses tp:<landlet> and pushpeer (#4491)', () => {
     expect(parseStep('tp:central-mosaic-012')).toEqual({ command: 'tp', args: ['central-mosaic-012'] });
     expect(() => parseStep('tp')).toThrow(/needs 1 argument/);
