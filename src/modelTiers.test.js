@@ -953,3 +953,28 @@ describe('far colour by facing (#4302)', () => {
     if (top && front) for (let c = 0; c < 3; c++) expect(Math.abs(top[c] - front[c])).toBeLessThan(1e-6);
   });
 });
+
+// #4111: a metalness map says where a model is metal; the far version darkens those regions as a scalar metalness does.
+describe('far colour of a model with a metalness map (#4111)', () => {
+  function metalBox(metalBlue) {
+    const geometry = new THREE.BoxGeometry(2, 1, 1, 10, 5, 5); // more than FAR_MAX_TRIANGLES triangles: the heavy reduction
+    const data = new Uint8Array([200, 200, 200, 255]);
+    const albedo = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    albedo.colorSpace = THREE.SRGBColorSpace;
+    albedo.needsUpdate = true;
+    const metal = new THREE.DataTexture(new Uint8Array([0, 128, metalBlue, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    metal.needsUpdate = true;
+    const material = new THREE.MeshStandardMaterial({ map: albedo, metalnessMap: metal, metalness: 1 });
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(geometry, material));
+    return group;
+  }
+
+  it('is darker where the metalness map says metal than where it says not', () => {
+    const matte = farAverageColor(buildModelTiersSync(metalBox(0)).far.object);
+    const metallic = farAverageColor(buildModelTiersSync(metalBox(255)).far.object);
+    // Fully metal keeps 35% of the colour (1 - FAR_METAL_DARKENING); not metal keeps all of it.
+    expect(metallic.r / matte.r).toBeGreaterThan(0.3);
+    expect(metallic.r / matte.r).toBeLessThan(0.4);
+  });
+});
