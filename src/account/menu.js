@@ -390,7 +390,9 @@ async function refreshAccountMenuPlace() {
   if (currentMode !== 'build' || !builderId) return;
   try {
     const [landlets, me] = await Promise.all([fetchAllLandlets(), fetchMyBuilder()]);
-    const mine = landlets.find((landlet) => landlet.landletId === currentLandletId);
+    // The lándlet being built is the person's own: a person with none yet (the Claim a lándlet sheet is open) still has the
+    // lándlet Shop last stood on as the current one, and naming that "by <me>" put their name on someone else's lot.
+    const mine = landlets.find((landlet) => landlet.landletId === currentLandletId && landlet.ownerBuilderId === builderId);
     if (!mine) {
       hideBudPlace();
       return;
