@@ -164,6 +164,8 @@ const NOTICE_DESTINATIONS = {
   messages: () => friendsBtn.click(),
   // Shipped and refunded notices are about an order the person made: it is read from My purchases.
   purchases: () => myPurchasesBtn.click(),
+  // The payout-setup notice (a seller's account that stopped being able to take payouts) reads "Open Payouts to finish": it does, from any mode.
+  payouts: () => { import('../sell/payoutsLeaf.js').then((m) => m.openPayoutsLeaf()).catch((err) => console.warn('Could not open Payouts:', err)); },
   assistant: () => { import('../shop/assistantChat.js').then((m) => m.openAssistantQuestions()).catch((err) => console.warn('Could not open the assistant:', err)); },
 };
 
