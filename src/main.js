@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { loadShippingDestination } from './shop/shippingDestination.js';
+import { shipDimLevels } from './shop/shipDim.js';
 import { movementWorld } from './shop/movementWorld.js'; // #4391 (test hook)
 import { batchTierCounts, batchHiddenCount } from './shop/batchTiers.js';
 import { hideLoadingScreen } from './ui/loadingScreen.js';
@@ -117,6 +119,7 @@ import {
   deleteSavedLayout,
   groupInstancesRemote,
   ungroupInstancesRemote,
+  fetchShippingDestination,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -1067,6 +1070,8 @@ export const shopLastLocationBtn = document.getElementById('shop-last-location-b
 // so do the e2e tests). #3769: the flying arrows are gone too (height follows the view).
 export function setShopControlsVisible(visible) {
   document.body.classList.toggle('shop-ready', visible);
+  // #4602: where "ships to me" is judged from, read once so the world can dim what does not ship (no-op when signed out).
+  if (visible && currentAuthUser) loadShippingDestination(fetchShippingDestination);
 }
 // #2624: wires up the world gestures (#3650)/the
 // last-location click -- deferred into a function call (rather than left
@@ -1461,6 +1466,7 @@ window.__testShopVersionState = (instanceId) => {
   }
   return found ? { ...found, copies } : { uuid: null, inObjects: false, inGroup: false, departing: 0, dissolving: false, copies, x: null, y: null, solid: false, obstacle: false };
 };
+window.__testShipDimLevels = () => shipDimLevels();
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;
   for (const entry of shopLandlets.values()) count += entry.objects.length;

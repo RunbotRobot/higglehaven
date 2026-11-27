@@ -110,7 +110,10 @@ await page.route('**/api/catalog/*', async (route) => {
 });
 await digitalRow().locator('button', { hasText: 'Edit shipping' }).click();
 await page.waitForTimeout(300);
-await digitalRow().locator('.seller-domestic-only-checkbox-label input').check();
+// #4601: shipping is one checkbox per zone now; leave only the United States ticked.
+for (const zoneId of ['ca', 'mx', 'gb', 'eu', 'anz', 'jpkr', 'rest']) {
+  await digitalRow().locator(`.seller-shipping-zone-label input[value="${zoneId}"]`).uncheck();
+}
 // "Edit digital good" is still open from earlier in this test (its own
 // toggle click above never closed it) — clicking the toggle again here
 // would close it instead of opening it, so just use the panel directly.
@@ -139,7 +142,7 @@ const afterRace = await page.evaluate(async () => {
   return res.json();
 });
 const raceTemplate = afterRace.templates.find((t) => t.name === DIGITAL_PRODUCT);
-console.log('after the cross-panel race, metadata.domesticOnly (should be true — not silently reverted):', raceTemplate?.metadata?.domesticOnly);
+console.log('after the cross-panel race, metadata.shippingZones (should be ["us"] — not silently reverted):', raceTemplate?.metadata?.shippingZones);
 console.log('after the cross-panel race, metadata.digitalGoodDisclaimer (should be "gift-card"):', raceTemplate?.metadata?.digitalGoodDisclaimer);
 
 const pass = !disclaimerLabelVisibleBeforeCheck &&
@@ -149,7 +152,7 @@ const pass = !disclaimerLabelVisibleBeforeCheck &&
   checkboxCheckedInPanel &&
   digitalGoodRowTextAfterClear.trim() === 'Not a digital good' &&
   digitalGoodSaveDisabledMidFlight &&
-  raceTemplate?.metadata?.domesticOnly === true &&
+  JSON.stringify(raceTemplate?.metadata?.shippingZones) === '["us"]' && raceTemplate?.metadata?.domesticOnly === undefined &&
   raceTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Digital-good upload/edit round-trip via the Seller modal', errors });
