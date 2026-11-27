@@ -11,7 +11,9 @@
 //   NODE_USE_ENV_PROXY=1 node scripts/render-model-tiers.mjs [--url http://127.0.0.1:8787] [--json] [--mid-px 80] [--far-px 24]
 //       [--views] prints the figures of each of the six views, not only the worst; [--stills <dir>] writes one PNG per
 //       model, version and view (the full model on the left, its version on the right, enlarged without smoothing)
-//       so the call "can they be told apart" is made by looking; [--only <text>] keeps the models whose name has <text>.
+//       so the call "can they be told apart" is made by looking; [--regenerate] builds mid and far in the browser from
+//       the full model with the current src/modelTiers.js and compares those, not the stored ones (nothing is stored:
+//       for looking at a generator change before anything is regenerated); [--only <text>] keeps the models whose name has <text>.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +26,7 @@ const asJson = args.includes('--json');
 const showViews = args.includes('--views');
 const stillsDir = valueOf('--stills', null);
 const only = valueOf('--only', null);
+const regenerate = args.includes('--regenerate'); // compare the versions today's generator would make, not the stored ones
 const SIZES = { mid: Number(valueOf('--mid-px', 80)), far: Number(valueOf('--far-px', 24)) };
 const LIMITS = { colourShift: 0.08, pixelDiff: 0.12 }; // a first reading of "cannot be told apart"; tune against the stills
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,11 +72,27 @@ try {
   for (const template of templates) {
     const key = `${template.modelUrl}|${template.modelMidUrl}|${template.modelFarUrl}`;
     if (only && !String(template.name).toLowerCase().includes(only.toLowerCase())) continue;
-    if (!template.modelUrl || seen.has(key) || (!template.modelMidUrl && !template.modelFarUrl)) continue;
+    if (!template.modelUrl || seen.has(key) || (!regenerate && !template.modelMidUrl && !template.modelFarUrl)) continue;
     seen.add(key);
     const row = { templateId: template.templateId, name: template.name, tiers: {} };
     try {
       const full = await loadBase64(template.modelUrl);
+      if (regenerate) {
+        const generated = await page.evaluate(([b, sizes, wantStills]) => window.compareGenerated(b, sizes, wantStills), [full, SIZES, Boolean(stillsDir)]);
+        for (const [tier, result] of Object.entries(generated)) {
+          if (stillsDir) {
+            await fs.mkdir(stillsDir, { recursive: true });
+            for (const still of result.stills) {
+              const file = path.join(stillsDir, `${template.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${tier}-view${still.view}-regen.png`);
+              await fs.writeFile(file, Buffer.from(still.png.split(',')[1], 'base64'));
+            }
+          }
+          row.tiers[tier] = { views: result.views, colourShift: result.colourShift, pixelDiff: result.pixelDiff, visible: result.colourShift > LIMITS.colourShift || result.pixelDiff > LIMITS.pixelDiff };
+        }
+        row.status = Object.values(row.tiers).some((t) => t.visible) ? 'DIFFERS' : 'ok';
+        rows.push(row);
+        continue;
+      }
       for (const [tier, url] of [['mid', template.modelMidUrl], ['far', template.modelFarUrl]]) {
         if (!url) continue;
         const result = await page.evaluate(([a, b, size, wantStills]) => window.compareRendered(a, b, size, wantStills), [full, await loadBase64(url), SIZES[tier], Boolean(stillsDir)]);

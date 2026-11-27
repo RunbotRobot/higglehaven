@@ -4,6 +4,7 @@
 // reads colours from the file's own numbers, this reads what is drawn, textures included.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { buildModelTiers } from '../src/modelTiers.js';
 
 function parse(base64) {
   const binary = atob(base64);
@@ -15,9 +16,7 @@ function parse(base64) {
 const VIEWS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const UPS = [[0, 1, 0], [0, 1, 0], [0, 0, 1], [0, 0, 1], [0, 1, 0], [0, 1, 0]];
 
-window.compareRendered = async (fullBase64, tierBase64, sizePx, wantStills = false) => {
-  const full = await parse(fullBase64);
-  const tier = await parse(tierBase64);
+async function compareObjects(full, tier, sizePx, wantStills) {
   const box = new THREE.Box3().setFromObject(full);
   box.union(new THREE.Box3().setFromObject(tier));
   const centre = box.getCenter(new THREE.Vector3());
@@ -98,6 +97,23 @@ window.compareRendered = async (fullBase64, tierBase64, sizePx, wantStills = fal
   });
   renderer.dispose();
   return { colourShift: +worstColour.toFixed(3), pixelDiff: +worstPixels.toFixed(3), views, stills };
+}
+
+window.compareRendered = async (fullBase64, tierBase64, sizePx, wantStills = false) => {
+  return compareObjects(await parse(fullBase64), await parse(tierBase64), sizePx, wantStills);
+};
+
+// --regenerate: the versions the current src/modelTiers.js would make from this full model (not the stored ones),
+// compared the same way, so a change to the generator can be looked at before anything is regenerated or stored.
+window.compareGenerated = async (fullBase64, sizes, wantStills = false) => {
+  const model = await parse(fullBase64);
+  const { mid, far } = await buildModelTiers(model);
+  const out = {};
+  for (const [tier, version] of [['mid', mid], ['far', far]]) {
+    if (!version || version.sharesFullModel) continue;
+    out[tier] = await compareObjects(await parse(fullBase64), version.object, sizes[tier], wantStills);
+  }
+  return out;
 };
 
 window.renderTiersReady = true;

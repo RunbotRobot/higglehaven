@@ -855,6 +855,136 @@ function fitBoundingBox(geometry, targetBox) {
   geometry.applyMatrix4(matrix);
 }
 
+// #4302 (#4111): a far version of a textured model took ONE colour for the whole mesh, the mean over its surface, so
+// a model whose faces differ read wrong from the side a person actually looks from: the live "Brick - Orange" has a
+// pale rim (top, bottom, ends) and dark front and back faces, its mean came out terracotta, and its far version drew
+// as a flat peach block against a dark brown brick (colour shift 0.27 from the front, 0.43 from the end). A person on
+// the ground sees the large dark faces. So the model's mean colour is also taken per facing: for each of six axis
+// directions, the area-weighted mean colour of the surface that faces that way (soft, so a curve blends instead of
+// stepping), and each triangle of the far version is coloured by its own normal's blend of them, as a ratio to the
+// overall mean so that a mesh's own hue and any other mesh's colour are kept. A model with no texture to read has one
+// colour per face already and is left as it is.
+const FACING_AXES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const FACING_MAX_TRIANGLES = 20000;
+const FACING_MIN_MEAN = 1e-4;
+
+function facingWeights(nx, ny, nz, out) {
+  let sum = 0;
+  for (let k = 0; k < 6; k++) {
+    const d = nx * FACING_AXES[k][0] + ny * FACING_AXES[k][1] + nz * FACING_AXES[k][2];
+    const w = d > 0 ? d * d : 0;
+    out[k] = w;
+    sum += w;
+  }
+  if (!(sum > 0)) { out.fill(0); return false; }
+  for (let k = 0; k < 6; k++) out[k] /= sum;
+  return true;
+}
+
+// -> { bins: [[r,g,b] | null] x 6, overall: [r,g,b] } in the same units the textures are sampled in (linear), or
+// null when no visible mesh has a texture to read.
+function facingColorTable(visible, getPixels, rootInverse) {
+  let textured = false;
+  const binSum = Array.from({ length: 6 }, () => [0, 0, 0]);
+  const binArea = new Array(6).fill(0);
+  const overall = [0, 0, 0];
+  let overallArea = 0;
+  const w = new Array(6).fill(0);
+  const pa = new Vector3(), pb = new Vector3(), pc = new Vector3(), n = new Vector3();
+  const tmp = new Color();
+  for (const mesh of visible) {
+    const material = materialForMesh(mesh);
+    const map = material && material.map ? material.map : null;
+    const pixels = map && getPixels ? getPixels(map) : null;
+    const geometry = mesh.geometry;
+    const position = geometry.attributes.position;
+    const uv = geometry.attributes.uv;
+    if (!position) continue;
+    const base = material && material.color ? material.color : new Color(FALLBACK_BASE_COLOR);
+    const vertexColor = !material || material.vertexColors ? geometry.attributes.color : null;
+    const useTexture = !!(pixels && uv);
+    if (useTexture) textured = true;
+    const matrix = new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
+    const index = geometry.index;
+    const count = index ? index.count : position.count;
+    const triangles = Math.floor(count / 3);
+    const stride = Math.max(1, Math.ceil(triangles / FACING_MAX_TRIANGLES));
+    for (let t = 0; t < triangles; t += stride) {
+      const ia = index ? index.getX(t * 3) : t * 3, ib = index ? index.getX(t * 3 + 1) : t * 3 + 1, ic = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      pa.fromBufferAttribute(position, ia).applyMatrix4(matrix);
+      pb.fromBufferAttribute(position, ib).applyMatrix4(matrix);
+      pc.fromBufferAttribute(position, ic).applyMatrix4(matrix);
+      n.subVectors(pb, pa).cross(pc.sub(pa));
+      const twice = n.length();
+      if (!(twice > 0)) continue;
+      const area = twice * 0.5;
+      n.divideScalar(twice);
+      let r = base.r, g = base.g, b = base.b;
+      if (vertexColor) {
+        r *= (vertexColor.getX(ia) + vertexColor.getX(ib) + vertexColor.getX(ic)) / 3;
+        g *= (vertexColor.getY(ia) + vertexColor.getY(ib) + vertexColor.getY(ic)) / 3;
+        b *= (vertexColor.getZ(ia) + vertexColor.getZ(ib) + vertexColor.getZ(ic)) / 3;
+      }
+      if (useTexture) {
+        let tr = 0, tg = 0, tb = 0;
+        for (const [wb, wc] of TEXTURE_AREA_SAMPLE_POINTS) {
+          const wa = 1 - wb - wc;
+          sampleTexture(map, pixels, wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic), wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic), tmp);
+          tr += tmp.r; tg += tmp.g; tb += tmp.b;
+        }
+        const samples = TEXTURE_AREA_SAMPLE_POINTS.length;
+        r *= tr / samples; g *= tg / samples; b *= tb / samples;
+      }
+      overall[0] += area * r; overall[1] += area * g; overall[2] += area * b;
+      overallArea += area;
+      if (!facingWeights(n.x, n.y, n.z, w)) continue;
+      for (let k = 0; k < 6; k++) {
+        if (!(w[k] > 0)) continue;
+        binSum[k][0] += area * w[k] * r; binSum[k][1] += area * w[k] * g; binSum[k][2] += area * w[k] * b;
+        binArea[k] += area * w[k];
+      }
+    }
+  }
+  if (!textured || !(overallArea > 0)) return null;
+  const mean = overall.map((v) => v / overallArea);
+  // A direction that hardly any surface faces has nothing of its own to say: it takes the overall mean.
+  const bins = binSum.map((sum, k) => (binArea[k] > overallArea * 0.02 ? sum.map((v) => v / binArea[k]) : null));
+  return { bins, overall: mean };
+}
+
+// Multiplies each triangle's vertex colours by (the blend of the facing means for its normal) / (the overall mean).
+// `geometry` is non-indexed (every triangle owns its three vertices) and in the space the table was taken in.
+function recolourByFacing(geometry, table) {
+  const position = geometry.attributes.position;
+  const color = geometry.attributes.color;
+  if (!position || !color || geometry.index) return;
+  const w = new Array(6).fill(0);
+  const pa = new Vector3(), pb = new Vector3(), pc = new Vector3(), n = new Vector3();
+  const { bins, overall } = table;
+  for (let t = 0; t + 2 < position.count; t += 3) {
+    pa.fromBufferAttribute(position, t); pb.fromBufferAttribute(position, t + 1); pc.fromBufferAttribute(position, t + 2);
+    n.subVectors(pb, pa).cross(pc.sub(pa));
+    const twice = n.length();
+    if (!(twice > 0) || !facingWeights(n.x / twice, n.y / twice, n.z / twice, w)) continue;
+    const blend = [0, 0, 0];
+    for (let k = 0; k < 6; k++) {
+      if (!(w[k] > 0)) continue;
+      const source = bins[k] || overall;
+      blend[0] += w[k] * source[0]; blend[1] += w[k] * source[1]; blend[2] += w[k] * source[2];
+    }
+    for (let c = 0; c < 3; c++) {
+      if (!(overall[c] > FACING_MIN_MEAN)) continue;
+      const ratio = blend[c] / overall[c];
+      for (let v = 0; v < 3; v++) {
+        const attribute = c === 0 ? 'setX' : (c === 1 ? 'setY' : 'setZ');
+        const read = c === 0 ? 'getX' : (c === 1 ? 'getY' : 'getZ');
+        color[attribute](t + v, color[read](t + v) * ratio);
+      }
+    }
+  }
+  color.needsUpdate = true;
+}
+
 function* buildFar(model, meshes, getPixels, fullBatches) {
   const visible = meshes.filter((mesh) => mesh.visible !== false);
   if (visible.length === 0) return sharedModel(model);
@@ -868,6 +998,8 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   // #4111: known before baking, from the meshes themselves: is this a heavy reduction (see bakeColoredGeometry)?
   const sourceTriangles = visible.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
   const flat = sourceTriangles > FAR_MAX_TRIANGLES;
+  // #4302: only a heavy reduction takes one colour per mesh, so only it needs the per-facing correction.
+  const facing = flat ? facingColorTable(visible, getPixels, rootInverse) : null;
   for (const mesh of visible) {
     const baked = bakeColoredGeometry(mesh, getPixels, { flat });
     baked.applyMatrix4(new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld));
@@ -906,6 +1038,7 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
 
   const joined = mergeGeometries(simplifiedParts, false);
   if (!joined || countTriangles(joined) === 0) return sharedModel(model);
+  if (facing) recolourByFacing(joined, facing);
   // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
   // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
   // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
@@ -925,6 +1058,7 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   const simplified = farObject(merged, unlit);
   if (tierIsFaithful(fullBatches, simplified.object, 'far', getPixels)) return simplified;
   const hull = buildHullFar(parts);
+  if (hull && facing) recolourByFacing(hull, facing);
   if (hull) {
     const outline = farObject(hull, unlit);
     if (tierIsFaithful(fullBatches, outline.object, 'far', getPixels)) return outline;
