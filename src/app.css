@@ -1542,7 +1542,8 @@
          lándlet's name, in every mode: the sign when there is one, then the dial. */
       body[data-bud="on"] #bud-head-row {
         position: absolute;
-        top: calc(-1 * (var(--bud-size) + 8px + 92px));
+        /* #4567: 12px lower than it stood, so the sign and compass clear the undo/redo row (y 52 to 92) in Build; the same in every mode so the sign never jumps. */
+        top: calc(-1 * (var(--bud-size) + 8px + 80px));
         left: calc(var(--bud-size) + 104px);
         display: flex;
         align-items: center;
@@ -1563,7 +1564,7 @@
         box-sizing: border-box;
         width: max-content;
         max-width: min(320px, calc(100vw - var(--bud-size) - 104px - 13px - 48px - var(--space-lg)));
-        max-height: calc(var(--bud-size) + 8px + 92px - var(--space-sm));
+        max-height: calc(var(--bud-size) + 8px + 80px - var(--space-sm)); /* #4567: 12px less, as the row starts 12px lower, so the bottom stays above the first leaf */
         overflow-y: auto;
         scrollbar-width: none;
         display: flex;
