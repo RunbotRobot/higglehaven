@@ -36,6 +36,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import {
@@ -304,6 +305,7 @@ async function renderNotifications() {
 notificationsLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
   notificationsLoadMoreBtn.disabled = true;
+  showInlineActionStatus(notificationsLoadMoreBtn.parentElement, '');
   try {
     const page = await fetchNotifications({ cursor: notificationsNextCursor });
     if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
@@ -312,6 +314,8 @@ notificationsLoadMoreBtn.addEventListener('click', async () => {
     notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
   } catch (err) {
     console.warn('Could not load more notifications:', err);
+    // #4562: said beside the button (it used to just come back, which read as a tap that did nothing).
+    showInlineActionStatus(notificationsLoadMoreBtn.parentElement, err.message || 'Couldn\'t load more notices. Try again.');
   } finally {
     notificationsLoadMoreBtn.disabled = false;
   }
@@ -331,12 +335,14 @@ notificationsCloseBtn.addEventListener('click', closeNotificationsModal);
 notificationsMarkAllBtn.addEventListener('click', async () => {
   if (!currentAuthUser) return;
   notificationsMarkAllBtn.disabled = true;
+  showInlineActionStatus(notificationsLoadMoreBtn.parentElement, '');
   try {
     await markAllNotificationsRead();
     await renderNotifications();
     await refreshNotificationsBadge();
   } catch (err) {
     console.warn('Could not mark all notifications read:', err);
+    showInlineActionStatus(notificationsLoadMoreBtn.parentElement, err.message || 'Couldn\'t mark your notices read. Try again.'); // #4562
   } finally {
     notificationsMarkAllBtn.disabled = false;
   }
@@ -568,6 +574,8 @@ async function renderDmThread() {
 dmLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = dmLoadToken; // this thread's current render — not a fresh reset
   dmLoadMoreBtn.disabled = true;
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
   try {
     const page = await fetchDirectMessages(dmOtherBuilderId, { cursor: dmNextCursor });
     if (myLoadToken !== dmLoadToken) return; // thread was closed/reopened against someone else while this page was loading
@@ -588,6 +596,11 @@ dmLoadMoreBtn.addEventListener('click', async () => {
     dmLoadMoreBtn.hidden = !dmNextCursor;
   } catch (err) {
     console.warn('Could not load more messages:', err);
+    // #4562: the thread's own status line, the same place its first load says it failed.
+    if (myLoadToken === dmLoadToken) { // not for a thread that was closed or swapped meanwhile
+      dmStatusEl.textContent = err.message || 'Couldn\'t load older messages. Try again.';
+      dmStatusEl.classList.add('error');
+    }
   } finally {
     dmLoadMoreBtn.disabled = false;
   }
@@ -1462,6 +1475,7 @@ async function renderMyPurchases() {
 myPurchasesLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = myPurchasesLoadToken;
   myPurchasesLoadMoreBtn.disabled = true;
+  showInlineActionStatus(myPurchasesLoadMoreBtn.parentElement, '');
   try {
     const page = await fetchMyPurchases({ cursor: myPurchasesNextCursor });
     if (myLoadToken !== myPurchasesLoadToken) return;
@@ -1470,6 +1484,7 @@ myPurchasesLoadMoreBtn.addEventListener('click', async () => {
     myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
   } catch (err) {
     console.warn('Could not load more purchases:', err);
+    showInlineActionStatus(myPurchasesLoadMoreBtn.parentElement, err.message || 'Couldn\'t load more purchases. Try again.'); // #4562
   } finally {
     myPurchasesLoadMoreBtn.disabled = false;
   }
