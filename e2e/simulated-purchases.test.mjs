@@ -12,6 +12,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openAddProductLeaf } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -81,7 +82,7 @@ await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ quantity: 2, buyerLabel: 'A Shopper' }),
+  body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS, quantity: 2, buyerLabel: 'A Shopper' }),
 });
 console.log('purchase response (status should be 201):', purchased.status, purchased.body.purchase);
 // $50 total (2 * $25), 2% commission = $1 (100 cents), 50/50 split = 50

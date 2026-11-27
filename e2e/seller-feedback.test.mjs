@@ -11,6 +11,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, goToMode, openAddProductLeaf } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -77,8 +78,8 @@ await fetchJson('/api/instances', {
 // both purchases below still land against the product/landlet this
 // test already built up under this session's own cookie.
 await grantAdmin(emailForLabel(LABEL));
-const purchase1 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' })).body.purchase;
-const purchase2 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' })).body.purchase;
+const purchase1 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) })).body.purchase;
+const purchase2 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) })).body.purchase;
 console.log('two distinct purchase ids created:', purchase1.purchaseId !== purchase2.purchaseId);
 
 // Leave feedback on each purchase directly via the API My
