@@ -176,6 +176,9 @@ async function issueEmailVerification(env, db, userId, email) {
   return { emailSent, devVerifyUrl: env.RESEND_API_KEY ? null : verifyUrl };
 }
 
+// #4472: sign-up attempts one connection may make in a rate-limit window, whatever the address.
+export const SIGNUP_CONNECTION_RATE_LIMIT_MAX = 20;
+
 export async function handleSignup(request, env, db, url) {
   const input = await readJson(request);
   const email = emailValue(input.email);
@@ -191,6 +194,11 @@ export async function handleSignup(request, env, db, url) {
   await ensureUsernameSkeletons(db);
 
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
+  // #4472: the limit above is per connection AND address, so one connection could still try any number of
+  // different addresses to find which are registered (a taken address answers 409). This one counts the
+  // connection alone, high enough that a household signing up a few people never meets it; the 429 it raises
+  // carries the limit and when it lifts like every other (src/errorCopy.js turns it into plain words).
+  await checkRateLimit(db, `signup-connection:${clientIp(request)}`, SIGNUP_CONNECTION_RATE_LIMIT_MAX);
 
   if (input.ageAttested !== true) {
     throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
