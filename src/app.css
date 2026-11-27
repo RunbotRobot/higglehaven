@@ -1777,12 +1777,17 @@
         display: none;
       }
       .shop-nearby-chat-message-actions button {
+        /* #4596: a quiet button is at least 44px to hit (docs/DESIGN.md); these are the chat's safety actions and
+           show for one line at a time, so the taller row costs space only there. */
+        min-height: 44px;
+        min-width: 44px;
         padding: var(--space-3xs) var(--space-xs);
+        padding-inline: var(--space-lg);
         border-radius: var(--radius-sm);
         border: none;
         background: rgb(var(--ink-rgb) / 0.12);
         color: var(--pill-text);
-        font: 10px/1.4 sans-serif;
+        font: 13px/1.2 sans-serif;
         cursor: pointer;
       }
       /* #2796: same minimal text+error-class shape #dm-status already
