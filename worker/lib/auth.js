@@ -45,12 +45,12 @@ export async function sha256Hex(text) {
 // active, un-escalated account_suspensions row), so a suspended account is
 // refused exactly as it was, one trip sooner. Returns { user, suspended },
 // or null when there is no valid session.
-async function sessionUserWithStanding(request, db) {
+async function sessionUserWithStanding(request, db, { withBuilder = false } = {}) {
   const cookies = parseCookies(request.headers.get('cookie'));
   const token = cookies[SESSION_COOKIE_NAME];
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
-  const row = await db.prepare(`
+  const userStatement = db.prepare(`
     SELECT users.*, EXISTS (
       SELECT 1 FROM account_suspensions
       WHERE account_suspensions.user_id = users.user_id
@@ -58,10 +58,29 @@ async function sessionUserWithStanding(request, db) {
     ) AS suspended_standing FROM sessions
     JOIN users ON users.user_id = sessions.user_id
     WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
+  `).bind(tokenHash);
+  let row;
+  let builder = null;
+  if (withBuilder) {
+    // #3464: the builder's own row rides in the same D1 round trip (a batch is one trip), so a request that needs the
+    // account and its builder profile pays one trip, not two. null when the session is invalid or no profile exists
+    // yet (the caller then provisions it, as before).
+    const [userResult, builderResult] = await db.batch([
+      userStatement,
+      db.prepare(`
+        SELECT builders.* FROM sessions
+        JOIN builders ON builders.user_id = sessions.user_id
+        WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      `).bind(tokenHash),
+    ]);
+    row = userResult.results?.[0] ?? null;
+    builder = builderResult.results?.[0] ?? null;
+  } else {
+    row = await userStatement.first();
+  }
   if (!row) return null;
   const { suspended_standing: suspendedStanding, ...user } = row;
-  return { user, suspended: suspendedStanding === 1 };
+  return { user, suspended: suspendedStanding === 1, builder };
 }
 
 export async function currentUser(request, db) {
@@ -70,7 +89,12 @@ export async function currentUser(request, db) {
 }
 
 export async function requireCurrentUser(request, db) {
-  const found = await sessionUserWithStanding(request, db);
+  return (await requireCurrentUserAndBuilder(request, db, { withBuilder: false })).user;
+}
+
+// #3464: requireCurrentUser, plus (with withBuilder) the account's builder row read in the same D1 trip.
+export async function requireCurrentUserAndBuilder(request, db, { withBuilder = true } = {}) {
+  const found = await sessionUserWithStanding(request, db, { withBuilder });
   if (!found) throw new HttpError('Not authenticated', 401);
   // #2030 (sub-issue of #1201): the single join point every authenticated
   // request goes through -- enforcing the check here, rather than in
@@ -83,7 +107,7 @@ export async function requireCurrentUser(request, db) {
   // this -- only the CALLING admin's own session goes through this check,
   // the same as any other authenticated action.
   if (found.suspended) throw new HttpError('Your account is suspended', 403, { suspended: true });
-  return found.user;
+  return { user: found.user, builder: found.builder };
 }
 
 // #3088: the admin "override" branches of the moderation-delete endpoints
@@ -179,11 +203,11 @@ export function assertVerified(user) {
 // before this pass, see the audit that prompted it) so a handler can
 // compare it against whatever it's about to modify.
 export async function requireSessionBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
+  const { user, builder } = await requireCurrentUserAndBuilder(request, db);
   assertVerified(user);
   // last_active_at is kept fresh inside getOrCreateBuilderForUser itself,
-  // not here -- see that function's own comment.
-  return getOrCreateBuilderForUser(db, user);
+  // not here -- see that function's own comment. #3464: the builder row came with the session in one trip.
+  return getOrCreateBuilderForUser(db, user, builder);
 }
 
 // N44 (owner, 2026-09-12): shopping/purchasing now requires the same

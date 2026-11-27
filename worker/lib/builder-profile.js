@@ -29,7 +29,7 @@
 import { json, HttpError } from './http.js';
 import { readJson, labelValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser } from './auth.js';
+import { requireCurrentUser, requireCurrentUserAndBuilder } from './auth.js';
 import { templateFromRow, recomputeLandCap } from '../index.js';
 
 // #1978 (worker/index.js's own copy, which can't be exported from there --
@@ -111,7 +111,7 @@ function builderFromRow(row) {
 // session (requireCurrentUser); never a 404 either way.
 const LAST_ACTIVE_WRITE_INTERVAL_MS = 60 * 1000;
 
-export async function getOrCreateBuilderForUser(db, user) {
+export async function getOrCreateBuilderForUser(db, user, knownRow = null) {
   // #946: INSERT OR IGNORE + unconditional re-read (mirroring
   // ownedAvatarStatement below) rather than SELECT-then-conditionally-
   // INSERT — the latter raced two concurrent requests for the same
@@ -123,7 +123,8 @@ export async function getOrCreateBuilderForUser(db, user) {
   // request paid those three D1 round trips. The INSERT OR IGNORE + re-read
   // above still runs when the row is missing, so the #946 race stays
   // idempotent.
-  let row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  // #3464: a caller that already read the row in the session's own trip passes it in.
+  let row = knownRow ?? await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
   if (!row) {
     const builderId = `builder-${crypto.randomUUID()}`;
     await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
@@ -162,8 +163,8 @@ export async function getOrCreateBuilderForUser(db, user) {
 // #4076: `videoGenerationAvailable` says whether the provider is connected on this Worker, so Build can
 // say video-to-model is off before a person records anything (the create route answers 503 without it).
 export async function handleMyBuilder(request, db, videoGenerationAvailable = true) {
-  const user = await requireCurrentUser(request, db);
-  const row = await getOrCreateBuilderForUser(db, user);
+  const { user, builder } = await requireCurrentUserAndBuilder(request, db);
+  const row = await getOrCreateBuilderForUser(db, user, builder);
   const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id, row); // #3873: the row just read, not read again
   row.land_cap_m2 = nextCap;
   row.owned_area_m2 = ownedAreaM2;

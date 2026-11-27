@@ -12,6 +12,7 @@ beforeAll(async () => {
 
 function recordingDb(real) {
   const sqls = [];
+  const batches = []; // #3464: how many batched trips, and how many statements each carried
   const wrap = (stmt, sql) => new Proxy(stmt, {
     get(target, prop) {
       if (prop === 'bind') return (...args) => wrap(target.bind(...args), sql);
@@ -20,20 +21,21 @@ function recordingDb(real) {
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  return { db: { prepare: (sql) => wrap(real.prepare(sql), sql), batch: (...args) => real.batch(...args) }, sqls };
+  return { db: { prepare: (sql) => wrap(real.prepare(sql), sql), batch: (statements) => { batches.push(statements.length); return real.batch(statements); } }, sqls, batches };
 }
 
 describe('GET /api/builders/me round trips (#3873)', () => {
   it('reads the builder row once, not again for the land cap, and answers as before', async () => {
     const builder = await signupBuilder('builders-me-trips');
-    const { db, sqls } = recordingDb(env.DB);
+    const { db, sqls, batches } = recordingDb(env.DB);
     const request = new Request('https://higglehaven.test/api/builders/me', builder.session());
     const response = await handleMyBuilder(request, db);
     expect(response.status).toBe(200);
     const body = await response.json();
     const viaRoute = await api('/builders/me', builder.session());
     expect(body.builder).toMatchObject({ builderId: builder.builderId, landCapM2: viaRoute.body.builder.landCapM2, ownedAreaM2: 0 });
-    expect(sqls.filter((sql) => /SELECT \* FROM builders WHERE user_id/.test(sql))).toHaveLength(1);
-    expect(sqls.filter((sql) => /SELECT \* FROM builders WHERE builder_id/.test(sql))).toHaveLength(0);
+    // #3464: the session, the account and the builder row are one batched trip; no separate builder read follows it.
+    expect(batches).toEqual([2]);
+    expect(sqls.filter((sql) => /FROM builders/.test(sql))).toHaveLength(0);
   });
 });
