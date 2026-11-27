@@ -11,6 +11,14 @@ import {
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
+// #4599: the address an order was bought for, on one line, in the order it is read aloud. Null for a digital good or an
+// order made before addresses were asked for.
+export function shippingAddressLine(address) {
+  if (!address) return null;
+  const place = [address.city, [address.region, address.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [address.name, address.line1, address.line2, place, address.country].filter(Boolean).join(', ');
+}
+
 export function purchaseStatusText(purchase) {
   if (purchase.refundedAt) return 'Refunded';
   if (isDigitalPurchase(purchase)) return 'Digital: ready';
@@ -58,6 +66,14 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
   };
   renderMeta();
   row.append(name, meta);
+  // #4599: where it was sent, from the order's own copy.
+  const addressText = shippingAddressLine(purchase.shippingAddress);
+  if (addressText) {
+    const ship = document.createElement('div');
+    ship.className = 'my-purchase-meta my-purchase-ship-to';
+    ship.textContent = `Ships to ${addressText}`;
+    row.appendChild(ship);
+  }
 
   const feedbackArea = document.createElement('div');
   feedbackArea.className = 'my-purchase-feedback';

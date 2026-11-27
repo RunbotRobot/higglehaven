@@ -53,6 +53,9 @@ export const ERROR_CODES = Object.freeze({
   PAYMENTS_UNAVAILABLE: 'payments_unavailable', // #4458
   UNREADABLE_REQUEST: 'unreadable_request', // #4442
   PRICE_CHANGED: 'price_changed', // #4456
+  SHIPPING_ADDRESS_REQUIRED: 'shipping_address_required', // #4599
+  SHIPPING_ADDRESS_INVALID: 'shipping_address_invalid', // #4599
+  NOT_SHIPPABLE_THERE: 'not_shippable_there', // #4599
   CARD_CHECK_MISMATCH: 'card_check_mismatch', // #4478
   CARD_CHECK_INCOMPLETE: 'card_check_incomplete', // #4478
   ACCOUNT_NOT_FOUND: 'account_not_found', // #4478

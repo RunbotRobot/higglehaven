@@ -63,6 +63,15 @@ const COUNTRY_NAME_TO_CODE = {
   'vietnam': 'VN', 'yemen': 'YE', 'zambia': 'ZM', 'zimbabwe': 'ZW',
 };
 
+// #4599: whether a two-letter code is a real country in the table above (the shipping address check).
+const KNOWN_COUNTRY_CODES = new Set(Object.values(COUNTRY_NAME_TO_CODE));
+export function listKnownCountryCodes() {
+  return [...KNOWN_COUNTRY_CODES].sort();
+}
+export function isKnownCountryCode(code) {
+  return typeof code === 'string' && KNOWN_COUNTRY_CODES.has(code);
+}
+
 export function countryNameToCode(name) {
   if (typeof name !== 'string') return null;
   const normalized = name.trim().toLowerCase();

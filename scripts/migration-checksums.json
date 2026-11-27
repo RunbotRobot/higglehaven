@@ -225,5 +225,6 @@
   "0240_notifications_kind.sql": "ebbe24eb46604dad20211cbee2693b033509f2b6713cd5d205b44d2b9da012a3",
   "0241_purchases_platform_refund.sql": "8a0e700f024cae374f631bd975e0d4d81a5529d6a46240731fd70dfeee847319",
   "0242_rate_limit_counters.sql": "0892d52c9a4dad597bb016a67dd9a8df0e0cd9cc2c469c0dd2a678246435bdfd",
-  "0243_credit_orbs_landlet_index.sql": "1ad08f34ca87dedc75cb460970e47e5c3fbd6a561910ebb3416e29c74e1a2c79"
+  "0243_credit_orbs_landlet_index.sql": "1ad08f34ca87dedc75cb460970e47e5c3fbd6a561910ebb3416e29c74e1a2c79",
+  "0244_purchases_shipping_address.sql": "375b07fad989269c9dd8c0d23386d985f1f3284df73f40e8a7297000ed47b52b"
 }

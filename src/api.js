@@ -2025,12 +2025,13 @@ export async function getPurchaseQuote(instanceId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
 }
 
-export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents } = {}) {
+export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents, shippingAddress } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     // #4456: the price the shopper saw; the server refuses, uncharged, if it has changed since.
-    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
+    // #4599: where a shipped product goes (left out for a digital good); the server checks it and keeps a copy on the order.
+    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, shippingAddress, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
   });
 }
 

@@ -15,6 +15,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openAddProductLeaf } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -79,7 +80,7 @@ await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ buyerLabel: 'A Refund Shopper' }),
+  body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS, buyerLabel: 'A Refund Shopper' }),
 });
 console.log('purchase created (status should be 201):', purchased.status);
 const balanceAfterSale = (await fetchJson('/api/builders/me')).body.builder.higglesBalanceCents;

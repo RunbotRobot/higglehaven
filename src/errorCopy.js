@@ -38,6 +38,10 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   payment_unconfirmed: "We couldn't confirm your payment yet. If your card was charged, the order appears in My purchases shortly. Check there before paying again.",
   // #4456: refused before any card is touched: the price moved between the one the shopper saw and now.
   price_changed: 'The price changed. You were not charged. Review the new price and buy again.',
+  // #4599: a shipped product needs an address; all three are refused before any card is touched.
+  shipping_address_required: 'This product is shipped, so it needs an address to send it to. You were not charged.',
+  shipping_address_invalid: "That address isn't complete. Check each line and try again. You were not charged.",
+  not_shippable_there: 'The seller sends this product within the United States only, so it cannot be sent to that country. You were not charged.',
   // #4474 / #4475: an emailed link that no longer works says why and what to do next.
   reset_link_invalid: 'That reset link has expired or was already used. Reset links last an hour and work once. Request a new one below.',
   verify_link_invalid: "That link has expired or was already used. If you've already confirmed your email, just log in. Otherwise log in and choose Resend verification email.",
