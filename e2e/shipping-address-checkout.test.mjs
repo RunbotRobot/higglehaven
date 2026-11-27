@@ -118,7 +118,8 @@ await page.fill('#shipping-address-postal', '97201');
 await page.click('#shipping-address-continue-btn');
 await page.waitForSelector('#confirm-modal.visible', { timeout: 10000 });
 await page.click('#confirm-modal-confirm-btn');
-await page.waitForSelector('#notice-modal.visible', { timeout: 15000 });
+// The no-card path ends in a celebration, not a notice; the order is the thing to wait for.
+await page.waitForFunction(async () => (await (await fetch('/api/purchases/mine')).json()).purchases?.length === 1, null, { timeout: 15000 });
 
 const mine = (await pageFetchJson('/api/purchases/mine')).body?.purchases || [];
 check(mine.length === 1, 'one order was made');
