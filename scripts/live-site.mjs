@@ -23,6 +23,7 @@
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
 //                                         `tap:text=Orders` works on a label too)
+//   type:<selector>:<text>                 tap a text box and type into it (the selector holds no ":"; send with a tap step) (#4572)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198).
 //                                         n counts EVERY item on screen, other sessions' too: look first (a shot), and move only your own (#4489)
@@ -797,6 +798,15 @@ async function runStepAction(step, index) {
       if (failHandler) await page.unroute('**/api/**', failHandler);
       failHandler = null;
       return null;
+    case 'type': {
+      // #4572: a tap on the box (a finger, so the page sees focus the way it does for a person), then the text
+      // typed one key at a time, which fires the page's own input events. Press Send with a tap step after it.
+      const box = await controlOrFail(a, `"${a}"`);
+      await press(box);
+      await page.keyboard.type(String(b), { delay: 20 });
+      await page.waitForTimeout(300);
+      return null;
+    }
     case 'key':
       // A real key press (a Playwright key name: KeyN, Escape, Shift+KeyN), for the keyboard ways
       // in (#3824). The page's own handlers see an ordinary keydown.

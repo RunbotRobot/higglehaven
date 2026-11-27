@@ -39,6 +39,13 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
   });
 
+  it('parses type: a selector, then the text with its colons kept (#4572)', () => {
+    expect(parseStep('type:#dm-input:hello')).toEqual({ command: 'type', args: ['#dm-input', 'hello'] });
+    expect(parseStep('type:.box:see you at 5:30')).toEqual({ command: 'type', args: ['.box', 'see you at 5:30'] });
+    expect(() => parseStep('type:#dm-input')).toThrow();
+    expect(() => parseStep('type::text')).toThrow(/selector/);
+  });
+
   it('parses fail and unfail, which answer /api calls with a failure for a walk of what goes wrong (#4576)', () => {
     expect(parseStep('fail:500')).toEqual({ command: 'fail', args: ['500'] });
     expect(parseStep('fail:429:/friends')).toEqual({ command: 'fail', args: ['429', '/friends'] });
