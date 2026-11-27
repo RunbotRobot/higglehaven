@@ -403,6 +403,7 @@ const settle = async (page = mainPage) => {
 // (#3749: the half it lands on decides, so each works alone); a fly is two quick taps.
 let touchSession = null;
 let animationSession = null;
+let failHandler = null; // #4576: the route handler `fail:` installed, so `unfail` can take it off
 async function sendTouch(type, points) {
   touchSession ||= await page.context().newCDPSession(page);
   await touchSession.send('Input.dispatchTouchEvent', { type, touchPoints: points });
@@ -756,6 +757,29 @@ async function runStepAction(step, index) {
       await animationSession.send('Animation.setPlaybackRate', { playbackRate: a });
       return null;
     }
+    case 'fail': {
+      // #4576: answer /api calls with a failure from here on (see parseStep), to read what a person sees.
+      if (failHandler) await page.unroute('**/api/**', failHandler);
+      const kind = String(a);
+      const only = b ? String(b) : null;
+      failHandler = async (route) => {
+        if (only && !route.request().url().includes(only)) return route.continue();
+        if (kind === 'offline') return route.abort('connectionfailed');
+        const status = Number(kind);
+        const body = status === 429
+          ? { error: 'Too many attempts. Wait a while and try again.', limit: 20, windowSeconds: 900, retryAfterSeconds: 420 }
+          : status === 401 ? { error: 'Not authenticated' }
+            : status === 500 ? { error: 'Internal server error', code: 'internal_error' }
+              : { error: 'Internal server error' };
+        return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      };
+      await page.route('**/api/**', failHandler);
+      return null;
+    }
+    case 'unfail':
+      if (failHandler) await page.unroute('**/api/**', failHandler);
+      failHandler = null;
+      return null;
     case 'key':
       // A real key press (a Playwright key name: KeyN, Escape, Shift+KeyN), for the keyboard ways
       // in (#3824). The page's own handlers see an ordinary keydown.

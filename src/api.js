@@ -12,8 +12,31 @@ const API_BASE = '/api';
 // may see: player copy for a known stable `code` (src/errorCopy.js), else the
 // server's own text, else `fallback`. The server's original text stays on
 // `serverMessage` for logs and diagnostics, with `code` and the HTTP `status`.
+// #4577: a session that ended while the page was open answered every call with the worker's
+// "Not authenticated", which each leaf then showed word for word. One place now says it in player words and
+// tells the account code once, so it can offer sign-in (src/account/auth.js); the account code does nothing
+// for a visitor who was never signed in. The /auth/* routes answer their own 401s (a wrong password).
+const SESSION_ENDED_MESSAGE = 'Your session ended. Sign in again to keep going.';
+let sessionEndedHandler = null;
+export function setSessionEndedHandler(handler) {
+  sessionEndedHandler = handler;
+}
+function isEndedSession(response, body) {
+  if (response.status !== 401 || body.error !== 'Not authenticated') return false;
+  try {
+    return !new URL(response.url, 'https://x.invalid').pathname.startsWith('/api/auth/');
+  } catch {
+    return false;
+  }
+}
+
 function apiError(response, body, fallback) {
-  const error = new Error(playerErrorMessage(body.code, body.error || fallback));
+  const endedSession = isEndedSession(response, body);
+  const error = new Error(endedSession ? SESSION_ENDED_MESSAGE : playerErrorMessage(body.code, body.error || fallback));
+  if (endedSession) {
+    error.sessionEnded = true;
+    try { sessionEndedHandler?.(); } catch (handlerError) { console.warn('Session-ended handler failed:', handlerError); }
+  }
   error.serverMessage = body.error;
   error.code = body.code;
   error.status = response.status;

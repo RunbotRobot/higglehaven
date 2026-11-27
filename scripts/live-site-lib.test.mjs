@@ -39,6 +39,15 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
   });
 
+  it('parses fail and unfail, which answer /api calls with a failure for a walk of what goes wrong (#4576)', () => {
+    expect(parseStep('fail:500')).toEqual({ command: 'fail', args: ['500'] });
+    expect(parseStep('fail:429:/friends')).toEqual({ command: 'fail', args: ['429', '/friends'] });
+    expect(parseStep('fail:offline')).toEqual({ command: 'fail', args: ['offline'] });
+    expect(parseStep('unfail')).toEqual({ command: 'unfail', args: [] });
+    expect(() => parseStep('fail:418')).toThrow(/fail must be one of/);
+    expect(() => parseStep('fail')).toThrow(/needs 1 argument/);
+  });
+
   it('parses slow, which runs the page\'s animations at a fraction of their speed (#3876)', () => {
     expect(parseStep('slow:0.1')).toEqual({ command: 'slow', args: [0.1] });
     expect(parseStep('slow:1')).toEqual({ command: 'slow', args: [1] });

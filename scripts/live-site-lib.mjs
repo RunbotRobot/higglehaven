@@ -18,6 +18,7 @@ export function touchDeviceForSize(text) {
 }
 
 export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
+export const FAIL_KINDS = ['401', '403', '429', '500', '503', 'offline'];
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
 // #3817: steps named for what a person does with the flower, so a look does not depend on
@@ -270,6 +271,16 @@ function parseStepWithoutBurst(token, command, args) {
       if (!(Number(args[0]) >= 0.02 && Number(args[0]) <= 1)) throw new Error(`step "${token}": slow needs a rate from 0.02 to 1 (slow:0.1 is ten times slower, slow:1 is normal)`);
       return { command, args: [Number(args[0])] };
     }
+    case 'fail': {
+      // fail:<401|403|429|500|503|offline>[:<route text>] (#4576): from now on every /api call (or only those whose
+      // path contains the route text) is answered with that failure, so a walk can see what a person reads when
+      // things go wrong; `unfail` stops. The 429 carries the numbers a real one does.
+      need(1);
+      if (!FAIL_KINDS.includes(args[0])) throw new Error(`step "${token}": fail must be one of ${FAIL_KINDS.join(', ')}`);
+      return { command, args: args[1] ? [args[0], args.slice(1).join(':')] : [args[0]] };
+    }
+    case 'unfail':
+      return { command, args: [] };
     case 'key':
       // key:KeyN, key:Escape, key:Shift+KeyN: one Playwright key name.
       need(1);
@@ -331,7 +342,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
   }
 }
 
