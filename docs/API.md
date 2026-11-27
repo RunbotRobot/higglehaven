@@ -414,7 +414,10 @@ not a retroactive merge — accounts already registered before this existed
 (under the old lowercase-only normalization) are untouched and keep
 logging in/resetting exactly as before, matched by the same literal
 address they always have been. `429` after 5 attempts against the same
-email within 15 minutes (see "Rate limiting" above). `password` must be
+email within 15 minutes (see "Rate limiting" above), and (#4472) after 20
+attempts from one connection within 15 minutes whatever the address, so one
+connection cannot test many addresses against the `409` below; the `429`
+carries the limit and when it lifts, as every other. `password` must be
 8–200 characters.
 `username` is required (how
 users identify each other, not a cosmetic label), at most 40 characters,
