@@ -9724,21 +9724,30 @@ Approving a flag hides the listing and strikes the seller and refunds no one (ow
 Refunding the people who already bought it is a separate admin action.
 
 ```
-GET  /api/product-flags/:templateId/refund-buyers   -> { refundBuyers: { templateId, productName, refundCount, refundCents, orderTotalCents, notRefundableCount, notRefundableCents } }
-POST /api/product-flags/:templateId/refund-buyers   { expectedCount, expectedRefundCents } -> { refunded, refundedCents, failed, firstError, refundBuyers }
+GET  /api/product-flags/:templateId/refund-buyers   -> { refundBuyers: { templateId, productName, refundCount, refundCents, orderTotalCents, platformCount, platformRefundCents, platformOrderTotalCents, notRefundableCount, notRefundableCents } }
+POST /api/product-flags/:templateId/refund-buyers   { line?: "seller"|"platform", expectedCount, expectedRefundCents } -> { refunded, refundedCents, failed, firstError, refundBuyers }
 ```
 
 - `409` until a flag on the listing is approved. GET takes a full admin or a look-only admin; POST a full admin only.
 - `refundCount` and `refundCents` are the orders not yet refunded and not yet paid out, and what goes back to the buyers
-  (99% of each order, `REFUND_PAYOUT_RATE`). `notRefundable*` counts the orders this action leaves alone: the seller was
-  already paid out (a reversal would pull money that backs other sales), or the order was partly refunded already. They
-  are listed so nobody is told they were refunded when they were not; covering them from platform funds is not decided.
-- POST refunds only if `expectedCount` and `expectedRefundCents` still match what a GET would say (the count and total
-  the admin confirmed); otherwise `409` and nothing moves. Each refund is the existing refund path (same Stripe
+  (99% of each order, `REFUND_PAYOUT_RATE`): the first line. `platform*` (#4422, owner chose B, 2026-11-27) is the second
+  line: orders whose seller was already paid out (a reversal would pull money that backs other sales), what higglehaven
+  would refund from its own balance and the total paid. `notRefundable*` counts the orders neither line touches: the
+  order was partly refunded already (a full refund on top would exceed the charge). They are listed so nobody is told
+  they were refunded when they were not.
+- POST refunds only if `expectedCount` and `expectedRefundCents` still match what a GET would say for the line named
+  (`line` defaults to `seller`; `platform` is confirmed separately, with `platformCount` and `platformRefundCents`); otherwise `409` and nothing moves. Each refund is the existing refund path (same Stripe
   idempotency key, commission clawback and buyer notice, which says why), so pressing again never refunds anyone twice.
   A call does at most 8 orders and returns what is left in `refundBuyers`; the page presses again until it is 0.
 - `GET /api/product-flags?status=approved` (full admin) lists approved flags whose listing still has orders this action can refund (`templateId`, `templateName`, `sellerId`, `flagCount`, `resolvedAt`, `openOrders`); a listing leaves it once none is left.
-- One `counterfeit_refund_buyers` row per call in the admin action log.
+- The platform line refunds each order from higglehaven's own Stripe balance (a refund with no `reverse_transfer`, its own
+  idempotency key `refund-platform:<purchaseId>`), sets `refunded_at` and `purchases.platform_refund_cents` together,
+  claws back the host builder's commission like any refund, and leaves the seller's earnings as paid (the seller is not
+  told they were reduced, and the 1099-K gross still counts the order). It stops at the first refusal from Stripe (for
+  example not enough balance) and returns it in `firstError`; nothing is half-refunded and pressing again carries on.
+  Recovering the money from the seller's later payouts (option C) is not built.
+- One `counterfeit_refund_buyers` row per call in the admin action log; the platform line writes `counterfeit_refund_platform`
+  with `platformFundedCents`, so what higglehaven covered can be totalled.
 
 ### Self-dealing flags (#2019, sub-issue of #1212)
 

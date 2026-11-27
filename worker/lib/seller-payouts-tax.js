@@ -957,6 +957,8 @@ async function annualGrossIncome(db, { builderId, sellerId }, year) {
       WHERE builder_id = ? AND created_at >= ? AND created_at < ?
     `).bind(builderId, yearStart, yearEnd).first(),
     sellerId
+      // #4422: a purchase the platform repaid from its own balance (platform_refund_cents) still counts: the seller
+      // was paid and keeps it.
       // #2247: refunded_amount_cents (migrations/0166, defaults 0) reduces
       // this purchase's own gross contribution by exactly what's been
       // refunded so far -- refunded_at IS NULL already excludes a FULLY
@@ -964,7 +966,7 @@ async function annualGrossIncome(db, { builderId, sellerId }, year) {
       // still mid-way through a partial refund.
       ? db.prepare(`
           SELECT COALESCE(SUM(total_cents - refunded_amount_cents), 0) AS total FROM purchases
-          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
+          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND (refunded_at IS NULL OR platform_refund_cents IS NOT NULL)
             AND created_at >= ? AND created_at < ?
         `).bind(sellerId, yearStart, yearEnd).first()
       : Promise.resolve({ total: 0 }),
@@ -1040,7 +1042,7 @@ async function generateTax1099Drafts(db, year) {
       -- sellers join only covers rows written before that column existed.
       SELECT COALESCE(p.seller_user_id, s.user_id) AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
       FROM purchases p LEFT JOIN sellers s ON s.seller_id = p.seller_id
-      WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+      WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND (p.refunded_at IS NULL OR p.platform_refund_cents IS NOT NULL)
         AND p.created_at >= ? AND p.created_at < ?
       GROUP BY COALESCE(p.seller_user_id, s.user_id) HAVING total >= ?
     `).bind(yearStart, yearEnd, TAX_REPORTING_THRESHOLD_CENTS).all(),
@@ -1093,7 +1095,7 @@ async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
       LEFT JOIN (
         SELECT COALESCE(p.seller_user_id, s.user_id) AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
         FROM purchases p LEFT JOIN sellers s ON s.seller_id = p.seller_id
-        WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+        WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND (p.refunded_at IS NULL OR p.platform_refund_cents IS NOT NULL)
           AND p.created_at >= ? AND p.created_at < ?
         GROUP BY COALESCE(p.seller_user_id, s.user_id)
       ) live ON live.user_id = f.user_id

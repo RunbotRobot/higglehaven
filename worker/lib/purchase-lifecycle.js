@@ -521,7 +521,9 @@ export function sellerReversalNotice(purchase) {
 // its own refund-path test.
 // #4376: `buyerReason` is one plain sentence added to the buyer's refund notice (why it happened), for a refund the
 // buyer did not ask for.
-export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '', buyerRefundCents = null } = {}) {
+// #4422: `sellerKeepsEarnings` is the platform-covered refund of a counterfeit order whose seller was already paid: the
+// seller's earnings stay as paid, so they are not told they were reduced.
+export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '', buyerRefundCents = null, sellerKeepsEarnings = false } = {}) {
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
@@ -608,7 +610,7 @@ export async function clawBackPurchaseCommission(db, purchase, templateName, { b
     { reason: buyerReason });
 
   // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
-  const sellerNotice = sellerReversalNotice(purchase);
+  const sellerNotice = sellerKeepsEarnings ? null : sellerReversalNotice(purchase);
   if (sellerNotice) await notifySellerOfSaleChange(db, purchase, sellerNotice);
 
   // #754: without this, a refunded avatar purchase left the buyer holding
@@ -752,6 +754,43 @@ export async function finalizeRefundReversal(env, purchase) {
       }, refundIdempotencyKey(purchase.purchase_id));
     } catch (err) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+      throw err;
+    }
+  }
+  return true;
+}
+
+// #4422 (owner chose B, 2026-11-27): the refund of a counterfeit order whose seller was already paid out, funded by
+// higglehaven's own balance. A Stripe refund WITHOUT reverse_transfer, so nothing is pulled from the seller's
+// connected account (their earnings stay as paid, and the money that backs their other sales is untouched: #1061);
+// the application fee stays with the platform, which is paying the buyer the whole 99% (#651) itself. The guard is the
+// atomic one: refunded_at and platform_refund_cents are set together on a paid-out purchase with no earlier refund,
+// so a purchase is repaid once, and both are released if Stripe refuses so the press can be repeated. Its own
+// idempotency key keeps a lost-response retry from refunding twice. Returns false if something else won the race.
+export function platformRefundIdempotencyKey(purchaseId) {
+  return `refund-platform:${purchaseId}`;
+}
+export async function finalizePlatformRefund(env, purchase) {
+  const db = env.DB;
+  const refundCents = refundAmountCents(purchase.total_cents);
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), platform_refund_cents = ?
+     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NOT NULL AND refunded_amount_cents = 0`,
+  ).bind(refundCents, purchase.purchase_id).run();
+  if (guard.meta.changes === 0) return false;
+  const release = () => db.prepare('UPDATE purchases SET refunded_at = NULL, platform_refund_cents = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      await release();
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
+    }
+    try {
+      await stripeRequest(env, 'POST', 'refunds', {
+        payment_intent: purchase.payment_intent_id,
+        amount: refundCents,
+      }, platformRefundIdempotencyKey(purchase.purchase_id));
+    } catch (err) {
+      await release();
       throw err;
     }
   }
