@@ -921,7 +921,7 @@ export function renderShopSettingsSection() {
   settingsSectionEl.appendChild(field);
 
   // #4602: the filter that dims what cannot ship to this person (shown only when signed in).
-  renderShippingFilterField(settingsSectionEl);
+  if (currentAuthUser) renderShippingFilterField(settingsSectionEl);
 
   // #1588: opt-in free-look-recenters-on-facing. Off by default — the
   // existing free-look/facing independence (see updateShopMovement's own

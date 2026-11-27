@@ -1071,7 +1071,7 @@ export const shopLastLocationBtn = document.getElementById('shop-last-location-b
 export function setShopControlsVisible(visible) {
   document.body.classList.toggle('shop-ready', visible);
   // #4602: where "ships to me" is judged from, read once so the world can dim what does not ship (no-op when signed out).
-  if (visible) loadShippingDestination(fetchShippingDestination);
+  if (visible && currentAuthUser) loadShippingDestination(fetchShippingDestination);
 }
 // #2624: wires up the world gestures (#3650)/the
 // last-location click -- deferred into a function call (rather than left

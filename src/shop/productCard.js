@@ -30,6 +30,7 @@ import { camera } from '../world/scene.js';
 import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
+import { currentAuthUser } from '../account/auth.js';
 import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
 import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -112,7 +113,7 @@ let lastInRange = false;
 // Read once per page load (and again after a purchase); the card opens at once and
 // says "You already own this." when the answer arrives, never waiting on it.
 function refreshOwnedState(review, { force = false } = {}) {
-  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force }), loadShippingDestination(fetchShippingDestination, { force })]).then(() => {
+  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force }), (currentAuthUser ? loadShippingDestination(fetchShippingDestination, { force }) : null)]).then(() => {
     if (review === openReview) syncProductCardActions(review, lastInRange);
   });
 }
