@@ -3666,6 +3666,16 @@
       #shipping-address-error { color: var(--danger-text); }
       #shipping-address-note[hidden], #shipping-address-error[hidden] { display: none; }
       #shipping-address-actions { display: flex; justify-content: flex-end; }
+      /* #4573 walk: the button wore the browser's own look; it is the same primary pill as the confirm sheet's. */
+      #shipping-address-continue-btn {
+        padding: var(--space-sm) var(--space-2xl);
+        border-radius: var(--radius-pill);
+        border: none;
+        background: var(--brand-green);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        min-height: 44px;
+      }
       /* #3783: the wordmark picker (My lándlets > Wordmark). Same shell as the name modal; the name is drawn in
          every option so the choice is made by looking at it. */
       #wordmark-modal {
