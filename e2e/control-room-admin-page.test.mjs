@@ -458,6 +458,21 @@ await trackingCard.locator('.pill-waiting-subtasks').waitFor({ timeout: 10000 })
 const waitingSubtasksPillText = (await trackingCard.locator('.pill-waiting-subtasks').textContent()).trim();
 console.log('tracking task shows the "Waiting on: Subtasks" pill after clicking its button (actual):', waitingSubtasksPillText);
 
+// #4522: "Waiting on: Owner…" asks for its required reason in the page's own dialog, never window.prompt().
+let nativeDialogs = 0;
+page.on('dialog', (dialog) => { nativeDialogs += 1; dialog.dismiss(); });
+const trackingOwnerBtn = trackingCard.locator('button[data-action="waitingOwner"]');
+await trackingOwnerBtn.click();
+await page.waitForSelector('dialog.reason-dialog[open]', { timeout: 10000 });
+await page.click('dialog.reason-dialog .reason-cancel');
+const cancelledReasonLeftNoOwnerPill = !(await trackingCard.locator('[class*="pill-waiting-owner"]').count());
+await trackingOwnerBtn.click();
+await page.waitForSelector('dialog.reason-dialog[open]', { timeout: 10000 });
+await page.fill('dialog.reason-dialog .reason-input', 'E2E needs a decision');
+await page.click('dialog.reason-dialog .reason-ok');
+await trackingCard.locator('[class*="pill-waiting-owner"]').waitFor({ timeout: 10000 });
+console.log('the reason dialog cancels cleanly and saves a typed reason, with no native dialog (should be true):', cancelledReasonLeftNoOwnerPill && nativeDialogs === 0);
+
 // #1269: AGENTS.md documents an unanswered question (kind: 'question',
 // status still 'queued') rendering an inline "Needs your answer" badge,
 // but that behavior only ever existed on the old, decommissioned
@@ -724,6 +739,8 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   subChipVisible &&
   subTaskCardIsOpen &&
   waitingSubtasksPillText === 'Waiting on: Subtasks' &&
+  cancelledReasonLeftNoOwnerPill &&
+  nativeDialogs === 0 &&
   needsAnswerPillVisible &&
   !needsAnswerPillGoneOnceDone &&
   cardThumbSrc === taskImageUrl &&
