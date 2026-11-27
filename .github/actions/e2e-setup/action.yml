@@ -31,7 +31,7 @@ runs:
     - run: set +o pipefail; sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | xargs -r sudo rm -f
       shell: bash
     # Retries once on failure too, same rationale/shape as the shard
-    # retry below, as a fallback for any other transient apt/network
+    # retry in the e2e-tests job, as a fallback for any other transient apt/network
     # issue this step's install-deps step might still hit.
     #
     # #3488: on 2026-11-11 the runners' DNS could not resolve any Ubuntu

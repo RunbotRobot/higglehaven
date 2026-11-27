@@ -61,7 +61,7 @@ export function parseRuns(log) {
   return runs;
 }
 
-export function summarizeRuns(log, { repeats = REPEATS, total = null, capped = false, max = MAX_FILES } = {}) {
+export function summarizeRuns(log, { repeats = REPEATS, total = null, capped = false, max = MAX_FILES, selected = [] } = {}) {
   const runs = parseRuns(log);
   const byFile = new Map();
   for (const run of runs) {
@@ -79,17 +79,22 @@ export function summarizeRuns(log, { repeats = REPEATS, total = null, capped = f
     };
   });
   const lines = [`### e2e stability: files this branch adds or changes, run ${repeats} times each`, ''];
-  if (rows.length === 0) {
+  // Files that were picked but never started (the job was cut off before them).
+  const notRun = selected.filter((file) => !byFile.has(file));
+  if (rows.length === 0 && notRun.length === 0) {
     lines.push('No run lines found in the log (the job stopped before any file ran).');
     return lines.join('\n');
   }
   lines.push('| file | passed | seconds per run | verdict |', '| --- | --- | --- | --- |');
   for (const row of rows) {
     let verdict = 'stable';
-    if (row.passed < row.ran) verdict = 'FLAKY: failed in some runs';
+    // 0 of N is a test that is broken, not flaky; flaky is some runs failing and some passing.
+    if (row.passed === 0) verdict = `FAILS: failed all ${row.ran} runs`;
+    else if (row.passed < row.ran) verdict = 'FLAKY: failed in some runs';
     else if (row.ran < repeats) verdict = 'incomplete (job stopped early)';
     lines.push(`| ${row.file} | ${row.passed}/${row.ran} | ${row.seconds.join(', ')} | ${verdict} |`);
   }
+  for (const file of notRun) lines.push(`| ${file} | 0/0 | - | not run (job stopped before it) |`);
   if (capped) {
     lines.push('', `This branch changes ${total} e2e files; only the first ${max} (alphabetically) were run ${repeats} times here. The rest ran once in the ordinary shards.`);
   }
@@ -141,7 +146,7 @@ async function main(argv) {
       return 0;
     }
     const total = process.env.E2E_STABILITY_TOTAL ? Number(process.env.E2E_STABILITY_TOTAL) : null;
-    console.log(summarizeRuns(readFileSync(arg, 'utf8'), { total, capped: process.env.E2E_STABILITY_CAPPED === 'true' }));
+    console.log(summarizeRuns(readFileSync(arg, 'utf8'), { total, capped: process.env.E2E_STABILITY_CAPPED === 'true', selected: (process.env.E2E_STABILITY_SELECTED || '').split(/\s+/).filter(Boolean) }));
     return 0;
   }
   console.error('Usage: changed-e2e-files.mjs select | summary <log-file>');

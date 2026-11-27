@@ -281,7 +281,8 @@ jobs:
     needs: already-tested
     if: needs.already-tested.outputs.skip != 'true' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Worst case: 6 files x ~280 s x 3 runs is ~84 min, plus build, migrations and set-up.
+    timeout-minutes: 120
     env:
       E2E_STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
       E2E_STRIPE_PUBLISHABLE_KEY: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
@@ -315,6 +316,7 @@ jobs:
         env:
           E2E_STABILITY_TOTAL: ${{ steps.select.outputs.total }}
           E2E_STABILITY_CAPPED: ${{ steps.select.outputs.capped }}
+          E2E_STABILITY_SELECTED: ${{ steps.select.outputs.files }}
         run: node scripts/changed-e2e-files.mjs summary "$RUNNER_TEMP/e2e-stability.log" >> "$GITHUB_STEP_SUMMARY"
 
   # #3727: when the run on `main` goes red, say so with the failing files named (one open issue,

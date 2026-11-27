@@ -107,6 +107,21 @@ describe('parseRuns / summarizeRuns (#4529)', () => {
   });
 });
 
+describe('summarizeRuns verdicts for broken and unstarted files (#4529)', () => {
+  it('calls 0 of 3 FAILS, not FLAKY', () => {
+    const text = summarizeRuns('FAIL: bad.test.mjs (1000ms) (x)\nFAIL: bad.test.mjs (1000ms) (x)\nFAIL: bad.test.mjs (1000ms) (x)\n');
+    expect(text).toContain('| bad.test.mjs | 0/3 | 1, 1, 1 | FAILS: failed all 3 runs |');
+    expect(text).not.toContain('FLAKY');
+  });
+
+  it('lists a selected file that never started as not run', () => {
+    const text = summarizeRuns(GOOD, { selected: ['shop-a.test.mjs', 'shop-b.test.mjs', 'zzz.test.mjs'] });
+    expect(text).toContain('| zzz.test.mjs | 0/0 | - | not run (job stopped before it) |');
+    expect(text).not.toContain('shop-a.test.mjs | 0/0');
+    expect(summarizeRuns('npm ERR!', { selected: ['a.test.mjs'] })).toContain('not run');
+  });
+});
+
 describe('runSelect, the select step with its outside effects passed in (#4529)', () => {
   it('uses the git diff when there is no override, and reports the step outputs', () => {
     const result = runSelect({ gitNames: () => ['e2e/shop-a.test.mjs', 'src/main.js'] });
