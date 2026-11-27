@@ -738,6 +738,8 @@
           <button id="friends-map-btn" type="button">Show map</button>
         </div>
         <div id="friends-status" role="status" aria-live="polite"></div>
+        <!-- #4578: shown only when the list could not be loaded; a failed load never reads as "No friends yet". -->
+        <button id="friends-retry-btn" type="button" hidden>Try again</button>
         <!-- #2781 (sub-issue of #2777): "Group voice channels for friends
              regardless of proximity" (docs/SPEC.md §2) -- renders the
              caller's own current friend-channel membership (owned by them
