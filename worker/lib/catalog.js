@@ -40,6 +40,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
 import { assertOwner, requireSessionBuilder, requireAdmin, requireAdminUnlessLocalWorker } from './auth.js';
 import { bytesToHex } from './crypto.js';
+import { shippingZonesProblem } from '../../shared/shipping-zones.js';
 import { fireNotifications } from './notifications.js';
 import {
   templateFromRow, sellerExists, requireSessionSeller, assertReferenceExists,
@@ -122,6 +123,14 @@ function assertValidDomesticOnly(metadata) {
   if (typeof metadata.domesticOnly !== 'boolean') {
     throw new HttpError('metadata.domesticOnly must be a boolean', 400);
   }
+}
+
+// #4601 (part of #4394): where a product ships, as zone ids from shared/shipping-zones.js, replacing the
+// single boolean above. Both are accepted while products carry the old flag; shippingZonesOf reads either.
+function assertValidShippingZones(metadata) {
+  if (metadata.shippingZones === undefined) return;
+  const problem = shippingZonesProblem(metadata.shippingZones);
+  if (problem) throw new HttpError(problem, 400);
 }
 
 // Per-axis crop-floor declaration for extensible (croppable) templates
@@ -275,6 +284,7 @@ function validateTemplate(input, fallbackId) {
   assertValidDigitalGoodDisclaimer(template.metadata, template.modelUrl);
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
+  assertValidShippingZones(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
   assertValidSitTarget(template.metadata, template.dimensions);
   assertValidLeanTarget(template.metadata, template.dimensions);

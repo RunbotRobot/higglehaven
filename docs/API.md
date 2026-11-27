@@ -12491,6 +12491,15 @@ is restricted to domestic-only exactly when `metadata.domesticOnly` is
 "Refunds" above) already uses. `assertValidDomesticOnly` (also called from
 inside `validateTemplate`) rejects any non-boolean value with `400`.
 
+**Zones (#4601, part of #4394).** `metadata.shippingZones`, a list of zone ids, is the replacement for the
+single flag: `us`, `ca`, `mx`, `gb`, `eu`, `anz`, `jpkr` and `rest` (everywhere else), with every ISO 3166-1
+country code in exactly one zone, defined once in `shared/shipping-zones.js` and read by the Worker and the
+client. `validateTemplate` refuses anything but a non-empty list of known ids without repeats (`400`, naming the
+key). Both keys are accepted while products still carry the old flag; `shippingZonesOf(metadata)` is the one
+reader (`domesticOnly: true` is `["us"]`, absent or false is every zone), so nothing changes for a product until
+its seller edits shipping. The Sell panel, the card's note and the purchase check move to the zones in the
+following pieces.
+
 A seller opts a product into domestic-only shipping via its own row's
 "Edit Shipping" panel (checkbox + Save, same collapsed-panel idiom as that
 row's "Edit Returns Policy" panel) — `.seller-domestic-only-toggle`/
