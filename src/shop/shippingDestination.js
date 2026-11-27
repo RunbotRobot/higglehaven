@@ -25,7 +25,7 @@ export function setShippingDestination(next) {
 
 // Digital goods are never judged: an avatar or an animation has nothing to ship, and a product with a digital-goods
 // notice is one too.
-function isPhysical(template) {
+export function isPhysicalProduct(template) {
   if (!template) return false;
   if (template.category === 'avatar' || template.category === 'animation') return false;
   return !template.metadata?.digitalGoodDisclaimer;
@@ -34,7 +34,7 @@ function isPhysical(template) {
 // True when the switch is on, the shopper has a destination, and this physical product does not ship there.
 export function doesNotShipToMe(template, dest = destination) {
   if (!dest.dimUnshippable || !dest.country) return false;
-  if (!isPhysical(template)) return false;
+  if (!isPhysicalProduct(template)) return false;
   return !shipsToCountry(template.metadata, dest.country);
 }
 
