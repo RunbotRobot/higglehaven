@@ -53,6 +53,20 @@ for (const mode of ['shop', 'build', 'sell']) {
   const tiny = await tapTargetsUnder44();
   check(tiny.length === 0, `${mode}: every control in the menu is at least 44px (${JSON.stringify(tiny)})`);
 
+  // #4581: keyboard focus on a mode petal is drawn. The petal is clipped to its leaf shape, which cuts a ring
+  // off, so focus inverts it: its fill must differ from what it was unfocused (it was the browser's invisible 1px ring).
+  for (const target of ['shop', 'build', 'sell']) {
+    const petal = `#bud-modes [data-mode="${target}"]`;
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    const before = await page.$eval(petal, (el) => getComputedStyle(el).backgroundColor);
+    await page.focus(petal);
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab'); // arriving by keyboard: :focus-visible
+    const after = await page.$eval(petal, (el) => ({ fv: el.matches(':focus-visible'), bg: getComputedStyle(el).backgroundColor }));
+    check(after.fv && after.bg !== before, `${mode}: keyboard focus on the ${target} petal changes its fill (${before} -> ${after.bg})`);
+  }
+  await page.focus('#account-menu-toggle');
+
   // Escape closes the menu and gives focus back to the head.
   await page.keyboard.press('Escape');
   await page.waitForTimeout(500);
