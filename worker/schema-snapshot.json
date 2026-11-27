@@ -1123,6 +1123,10 @@
       "tbl": "credit_orbs",
       "sql": "CREATE INDEX idx_credit_orbs_collected_at ON credit_orbs(collected_at)"
     },
+    "index:idx_credit_orbs_landlet_collected": {
+      "tbl": "credit_orbs",
+      "sql": "CREATE INDEX idx_credit_orbs_landlet_collected ON credit_orbs (landlet_id, collected_at)"
+    },
     "index:idx_credit_orbs_spawned_at": {
       "tbl": "credit_orbs",
       "sql": "CREATE INDEX idx_credit_orbs_spawned_at ON credit_orbs(spawned_at)"

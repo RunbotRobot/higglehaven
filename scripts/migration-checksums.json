@@ -224,5 +224,6 @@
   "0239_didit_end_reason.sql": "9e8c66954c0a5e15d4ef6226ae55a0a0d6e09ef53ac21e47185f5ec962c255f0",
   "0240_notifications_kind.sql": "ebbe24eb46604dad20211cbee2693b033509f2b6713cd5d205b44d2b9da012a3",
   "0241_purchases_platform_refund.sql": "8a0e700f024cae374f631bd975e0d4d81a5529d6a46240731fd70dfeee847319",
-  "0242_rate_limit_counters.sql": "0892d52c9a4dad597bb016a67dd9a8df0e0cd9cc2c469c0dd2a678246435bdfd"
+  "0242_rate_limit_counters.sql": "0892d52c9a4dad597bb016a67dd9a8df0e0cd9cc2c469c0dd2a678246435bdfd",
+  "0243_credit_orbs_landlet_index.sql": "1ad08f34ca87dedc75cb460970e47e5c3fbd6a561910ebb3416e29c74e1a2c79"
 }
