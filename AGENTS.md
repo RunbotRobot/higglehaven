@@ -37,7 +37,8 @@
   to stay in Build), Draco/Basis compression and mesh-merge on save (§3,
   tracked under #4063/#4366), 30% withholding without a W-8BEN (§7, #4392),
   multi-currency higgles (§5, #4393), international shipping filter, zone
-  costs and combined shipping (§5, #4394, owner-gated), builder-chosen
+  costs and combined shipping (§5, #4394: decided 2026-11-27, the full plan is
+  being built, leaves #4598 to #4605), builder-chosen
   ambient music (§6, #4395, owner-gated), and prompt mode built on an 8x8
   colour grid rather than CLIP (§3, #4396). Avatar-avatar crowding (§2) is
   now built (#4400). See
@@ -1700,6 +1701,32 @@ most likely to come up again.
   what cannot be shown (a name when asked for, words they say). Before
   adding a label to something in the world, look for the animation, pose
   or effect that says it.
+
+- **Physical shipping is built now, the whole plan and not a first slice;
+  and an address is read only by its owner and by the buyer and seller of
+  the order it was used for.** (2026-11-27, #4394.) Reading the code for an
+  old gap against docs/SPEC.md, higglehaven1 found that a physical product
+  could be bought and the seller had a Mark shipped button, yet nothing ever
+  asked the buyer where to send it. Offered an address step for the United
+  States only (A, recommended), the full plan of docs/SPEC.md section 5 (B)
+  or waiting until real sellers were close (C), the owner: "Let's jump in
+  with the full shipping plan (B). Better to keep the push going." So:
+  addresses kept on the account; an address step when a physical product is
+  bought, with the order keeping its own copy; the seller's ship-to and a
+  tracking number on Mark shipped; zones in place of the single United
+  States only switch; the shopper's filter that dims what cannot be sent to
+  them; a cost per zone; and a basket across sellers with combined shipping,
+  designed before it is built (#4598 to #4605). The principles. When a gap
+  is found in something already being sold and the spec already says what
+  the whole thing is, the owner would rather the whole thing be built while
+  the fleet has the capacity than be asked again slice by slice; a
+  recommendation for the smaller option is only a recommendation. And
+  personal data of a new kind is taken in only for the job it does: an
+  address belongs to its owner, is copied onto the order it ships, and is
+  read by that order's buyer and seller and by nothing else without a
+  decision of its own (the look-only admin role sees it masked). Still the
+  owner's: how a zone's cost shows in the price a shopper sees (#4603), and
+  sales tax (#1402). Customs and duties are not handled.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
