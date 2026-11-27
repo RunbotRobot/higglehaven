@@ -6,14 +6,14 @@ import {
   createProductReview, editProductReview, deleteProductReview,
 } from '../api.js';
 import {
-  DISPUTE_PROMPT_TEXT, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
+  disputePromptText, isDigitalPurchase, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
 } from './disputeOutcome.js';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
 export function purchaseStatusText(purchase) {
   if (purchase.refundedAt) return 'Refunded';
-  if (purchase.isDigitalGood) return 'Digital: ready';
+  if (isDigitalPurchase(purchase)) return 'Digital: ready';
   if (purchase.shippedAt) return 'Shipped';
   return 'Order placed';
 }
@@ -285,7 +285,7 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     const confirmBox = document.createElement('div');
     confirmBox.className = 'my-purchase-confirm';
     const prompt = document.createElement('span');
-    prompt.textContent = DISPUTE_PROMPT_TEXT;
+    prompt.textContent = disputePromptText(purchase);
     const yesBtn = button('Yes, report it', () => sendDispute(yesBtn, noBtn));
     yesBtn.classList.add('my-purchase-dispute-confirm-btn');
     const noBtn = button('Never mind', () => showDisputeIdle());
