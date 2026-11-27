@@ -916,7 +916,9 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // refund) — extracted into clawBackPurchaseCommission so the webhook
   // path handling the latter two can reuse the exact same logic rather
   // than drifting out of sync with it over time.
-  await clawBackPurchaseCommission(db, purchase, templateName);
+  // #4573 (the buying walk): a card order's refund sends 99% of the total (#651), so the buyer's notice names that
+  // figure, not the full price the order row shows; an order with no card payment has nothing sent and keeps the total.
+  await clawBackPurchaseCommission(db, purchase, templateName, { buyerRefundCents: purchase.payment_intent_id ? refundAmountCents(purchase.total_cents) : null });
 
   // Logged last, only once every step above (including the real Stripe
   // reversal) has actually completed — not batched with any of them, since
@@ -1025,7 +1027,9 @@ async function handlePurchaseDispute(request, env, purchaseId) {
     const current = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     return json({ autoResolved: false, purchase: purchaseFromRow(current) });
   }
-  await clawBackPurchaseCommission(db, purchase, templateName);
+  // #4573 (the buying walk): a card order's refund sends 99% of the total (#651), so the buyer's notice names that
+  // figure, not the full price the order row shows; an order with no card payment has nothing sent and keeps the total.
+  await clawBackPurchaseCommission(db, purchase, templateName, { buyerRefundCents: purchase.payment_intent_id ? refundAmountCents(purchase.total_cents) : null });
   // null adminUserId, same convention adminActionLogStatement's own video-
   // generation-sweep caller uses for a system/automated action with no
   // human admin in the loop — this is exactly that: nobody reviewed it.
