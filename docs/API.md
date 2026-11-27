@@ -2782,6 +2782,17 @@ user id (see "Rate limiting" above).
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
 ```
 
+**Carrier and tracking number (#4600, shipping 3/8).** The body is optional JSON `{ "carrier": "Royal Mail",
+"trackingNumber": "RM123456789GB" }`; both fields are optional free text, trimmed, `carrier` at most 40 characters
+and `trackingNumber` at most 64, with control characters and non-text values refused (`400`); an empty string leaves
+one unset. They are stored in `purchases.shipping_carrier` / `tracking_number` (migration 0245) and returned as
+`shippingCarrier` / `trackingNumber` (null when not given) by exactly four reads: this route's own response, the
+seller's `GET /api/purchases?mine=seller` and `GET /api/purchases?templateId=`, the buyer's `GET /api/purchases/mine`,
+and the buyer's account export. They are deliberately not part of the purchase shape the lándlet host's
+`GET /api/purchases?builderId=` returns. `PATCH /api/purchases/:purchaseId/tracking` with the same body corrects them
+afterwards: the order's own seller (or the admin fallback above, logged as `tracking_override`), `409` before the order
+is marked shipped, `400` once refunded, same rate limit as Mark shipped; it sends no second notice.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`
