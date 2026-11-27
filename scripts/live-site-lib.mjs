@@ -286,6 +286,14 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!/^[A-Za-z0-9+]+$/.test(args[0])) throw new Error(`step "${token}": key needs a key name such as KeyN, Escape or Shift+KeyN`);
       return { command, args: [args[0]] };
+    case 'type': {
+      // #4572: type:<selector>:<text>: put real key presses into a text box (a message, a search). The selector
+      // is the first argument and holds no ":" (an id or a class is enough); everything after it is the text,
+      // colons included.
+      need(2);
+      if (!args[0]) throw new Error(`step "${token}": type needs a selector, then the text (type:#dm-input:hello)`);
+      return { command, args: [args[0], args.slice(1).join(':')] };
+    }
     case 'shot':
       return { command, args: [args[0] || ''] };
     case 'burst': {
@@ -342,7 +350,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
   }
 }
 
