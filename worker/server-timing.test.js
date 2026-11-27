@@ -12,7 +12,7 @@ describe('Server-Timing for D1 (#3464)', () => {
     const account = await signupBuilder('server-timing-account');
     const asked = await api('/auth/me', account.session({ headers: { 'x-server-timing': '1' } }));
     expect(asked.response.status).toBe(200);
-    expect(asked.response.headers.get('server-timing')).toMatch(/^d1;dur=\d+;desc="[1-9]\d* trips?"$/);
+    expect(asked.response.headers.get('server-timing')).toMatch(/^d1;dur=\d+;desc="[1-9]\d* trips?", d1rows;dur=0;desc="\d+ rows read"$/);
     expect(asked.body.user).toBeTruthy(); // the wrapper changes nothing about the answer
 
     const plain = await api('/auth/me', account.session());
@@ -22,6 +22,6 @@ describe('Server-Timing for D1 (#3464)', () => {
 
   it('also answers for a request the server refuses', async () => {
     const missing = await api('/instances/no-such-instance/purchase-quote', { headers: { 'x-server-timing': '1' } });
-    expect(missing.response.headers.get('server-timing')).toMatch(/^d1;dur=\d+;desc="\d+ trips?"$/);
+    expect(missing.response.headers.get('server-timing')).toMatch(/^d1;dur=\d+;desc="\d+ trips?", d1rows;dur=0;desc="\d+ rows read"$/);
   });
 });

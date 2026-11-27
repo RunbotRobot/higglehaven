@@ -469,7 +469,10 @@ export function parseArgs(argv, env = {}) {
 // #3464: a `Server-Timing` value from the worker ('d1;dur=42;desc="5 trips"') as numbers, or null.
 export function parseServerTiming(value) {
   const match = /d1;dur=(\d+(?:\.\d+)?);desc="(\d+) trips?"/.exec(value || '');
-  return match ? { d1Ms: Number(match[1]), trips: Number(match[2]) } : null;
+  if (!match) return null;
+  // #4542: the rows D1 read, when the worker says (a second metric, `d1rows`).
+  const rows = /d1rows;dur=\d+(?:\.\d+)?;desc="(\d+) rows read"/.exec(value);
+  return { d1Ms: Number(match[1]), trips: Number(match[2]), ...(rows ? { rowsRead: Number(rows[1]) } : {}) };
 }
 
 // One line per timed route: how many D1 trips and how long they took, as medians over the runs seen.
@@ -479,5 +482,11 @@ export function summariseServerTimings(samples) {
     const mid = Math.floor(sorted.length / 2);
     return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   };
-  return { runs: samples.length, d1MsMedian: median(samples.map((s) => s.d1Ms)), tripsMedian: median(samples.map((s) => s.trips)) };
+  const withRows = samples.filter((s) => typeof s.rowsRead === 'number');
+  return {
+    runs: samples.length,
+    d1MsMedian: median(samples.map((s) => s.d1Ms)),
+    tripsMedian: median(samples.map((s) => s.trips)),
+    ...(withRows.length ? { rowsReadMedian: median(withRows.map((s) => s.rowsRead)) } : {}),
+  };
 }
