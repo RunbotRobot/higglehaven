@@ -4,11 +4,32 @@
 // routes, the same rules for when each action is offered, nothing about money changes.
 // `onChanged` redraws the list after an action succeeds; `showProduct` adds the product's name
 // (the leaf lists every product's sales together).
-import { markPurchaseShipped, refundPurchase } from '../api.js';
+import { markPurchaseShipped, setPurchaseTracking, refundPurchase } from '../api.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { formatPriceCents } from '../main.js';
 import { sellerKeepsCents } from './saleEarnings.js';
+
+// #4600: the two optional boxes a seller can fill when they ship an order (and later correct): who carried it and the
+// number the buyer can follow it by. Both start empty, with their words in the box and as the accessible name.
+function buildTrackingBoxes(carrier, trackingNumber) {
+  const box = document.createElement('div');
+  box.className = 'product-sale-row-tracking';
+  const make = (label, value, max) => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'product-sale-row-tracking-input';
+    input.maxLength = max;
+    input.placeholder = label;
+    input.setAttribute('aria-label', label);
+    input.value = value || '';
+    return input;
+  };
+  const carrierInput = make('Carrier (optional)', carrier, 40);
+  const numberInput = make('Tracking number (optional)', trackingNumber, 64);
+  box.append(carrierInput, numberInput);
+  return { box, values: () => ({ carrier: carrierInput.value, trackingNumber: numberInput.value }) };
+}
 
 export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
   const saleRow = document.createElement('div');
@@ -53,7 +74,39 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
       shipping.textContent = 'Delivery confirmed — available to cash out.';
     } else if (purchase.shippedAt) {
       shipping.textContent = `Shipped ${new Date(purchase.shippedAt).toLocaleDateString()} — available 7 days after shipping if not confirmed sooner.`;
+      // #4600: the carrier and tracking number the buyer reads, with a way to add or correct them.
+      const line = document.createElement('div');
+      line.className = 'product-sale-row-tracking-line';
+      const parts = [purchase.shippingCarrier, purchase.trackingNumber ? `Tracking ${purchase.trackingNumber}` : ''].filter(Boolean);
+      line.textContent = parts.length ? parts.join(' · ') : 'No carrier or tracking number given.';
+      shipping.appendChild(line);
+      const editBtn = document.createElement('button');
+      editBtn.className = 'product-sale-row-tracking-btn';
+      editBtn.type = 'button';
+      editBtn.textContent = parts.length ? 'Edit tracking' : 'Add tracking';
+      editBtn.addEventListener('click', () => {
+        const { box, values } = buildTrackingBoxes(purchase.shippingCarrier, purchase.trackingNumber);
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'product-sale-row-tracking-btn';
+        saveBtn.type = 'button';
+        saveBtn.textContent = 'Save tracking';
+        saveBtn.addEventListener('click', async () => {
+          saveBtn.disabled = true;
+          showInlineActionStatus(shipping, '');
+          try {
+            await setPurchaseTracking(purchase.purchaseId, values());
+            await onChanged();
+          } catch (err) {
+            showInlineActionStatus(shipping, err.message || 'Couldn\'t save the tracking details.');
+            saveBtn.disabled = false;
+          }
+        });
+        editBtn.replaceWith(box, saveBtn);
+      });
+      shipping.appendChild(editBtn);
     } else {
+      const trackingBoxes = buildTrackingBoxes('', '');
+      shipping.appendChild(trackingBoxes.box);
       const shipBtn = document.createElement('button');
       shipBtn.className = 'product-sale-row-ship-btn';
       shipBtn.type = 'button';
@@ -62,7 +115,7 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
         shipBtn.disabled = true;
         showInlineActionStatus(shipping, '');
         try {
-          await markPurchaseShipped(purchase.purchaseId);
+          await markPurchaseShipped(purchase.purchaseId, trackingBoxes.values());
           await onChanged();
         } catch (err) {
           // #3249: in the row, not alert() (a suppressed dialog is silent).

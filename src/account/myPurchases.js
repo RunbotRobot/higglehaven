@@ -26,6 +26,12 @@ export function purchaseStatusText(purchase) {
   return 'Order placed';
 }
 
+// #4600: "Royal Mail · Tracking RM123456789GB" for a shipped order that has either; empty otherwise.
+export function purchaseTrackingText(purchase) {
+  if (!purchase.shippedAt || purchase.refundedAt) return '';
+  return [purchase.shippingCarrier, purchase.trackingNumber ? `Tracking ${purchase.trackingNumber}` : ''].filter(Boolean).join(' · ');
+}
+
 const stars = (rating) => '★'.repeat(rating) + '☆'.repeat(5 - rating);
 
 // Plain words for the failures a buyer can actually hit; anything else shows
@@ -73,6 +79,14 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     ship.className = 'my-purchase-meta my-purchase-ship-to';
     ship.textContent = `Ships to ${addressText}`;
     row.appendChild(ship);
+  }
+  // #4600: once shipped, the carrier and tracking number the seller gave, as plain selectable text.
+  const trackingText = purchaseTrackingText(purchase);
+  if (trackingText) {
+    const tracking = document.createElement('div');
+    tracking.className = 'my-purchase-meta my-purchase-tracking';
+    tracking.textContent = trackingText;
+    row.appendChild(tracking);
   }
 
   const feedbackArea = document.createElement('div');

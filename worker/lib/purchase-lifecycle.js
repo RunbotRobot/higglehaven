@@ -24,7 +24,7 @@ import {
 } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
-import { handlePurchaseFinalize, purchaseFromRow } from './purchase-creation.js';
+import { handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './purchase-creation.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { sessionIsPurchaseBuyer, BUYER_PURCHASES_MATCH_SQL } from './purchase-buyer.js';
 import { handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete } from './reputation.js';
@@ -113,7 +113,7 @@ async function handleMyPurchases(request, env, url) {
   }
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
-           p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
+           p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
            p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
            p.template_id, t.name AS live_name, s.label AS live_seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text,
@@ -147,6 +147,8 @@ async function handleMyPurchases(request, env, url) {
         // #4599: the address this order was bought for, its own copy (null for a digital good or an older order).
         shippingAddress: shippingAddressFromRow(row.shipping_address_json),
         shippedAt: row.shipped_at,
+        shippingCarrier: row.shipping_carrier, // #4600
+        trackingNumber: row.tracking_number,
         refundedAt: row.refunded_at,
         refundedAmountCents: row.refunded_amount_cents,
         // Same rules handleSellerFeedbackCreate / handlePurchaseDispute apply:
@@ -214,7 +216,7 @@ export async function handlePurchases(request, env, route, url) {
       return json({
         // #3776: the order's own recorded name first, then the live product, so a delisted product
         // is still named on the seller's side too.
-        purchases: page.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        purchases: page.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
         nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,
         totalCount: total.count,
       });
@@ -285,7 +287,7 @@ export async function handlePurchases(request, env, route, url) {
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
-      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
+      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
     }
     throw new HttpError('builderId, templateId, mine=seller, or danglingSeller is required', 400);
   }
@@ -300,6 +302,10 @@ export async function handlePurchases(request, env, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'mark-shipped') {
     return handleMarkShipped(request, env, route[1]);
+  }
+
+  if (request.method === 'PATCH' && route.length === 3 && route[2] === 'tracking') {
+    return handleTrackingCorrection(request, env, route[1]);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'feedback') {
@@ -332,6 +338,36 @@ export async function handlePurchases(request, env, route, url) {
 // digital good or a simulated (higgles) purchase has nothing to ship.
 const MARK_SHIPPED_RATE_LIMIT_MAX = 20;
 
+// #4600: the carrier and tracking number a seller may give when marking an order shipped (and correct afterwards).
+// Both are optional free text, trimmed; an empty one clears it. The caps are generous for any real carrier name and
+// tracking number, and control characters are refused so the value is safe to show as plain text.
+const SHIPPING_CARRIER_MAX_LENGTH = 40;
+const TRACKING_NUMBER_MAX_LENGTH = 64;
+
+function optionalTrackingText(value, field, max) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new HttpError(`${field} must be text`, 400);
+  const text = value.trim();
+  if (text === '') return null;
+  if (text.length > max) throw new HttpError(`${field} can be at most ${max} characters`, 400);
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(text)) throw new HttpError(`${field} cannot contain line breaks or control characters`, 400);
+  return text;
+}
+
+// Mark shipped has always been a bare POST; the details are optional, so a request with no body at all still works.
+async function readShippingDetails(request) {
+  if (!request.headers.get('content-type')?.includes('application/json')) return { carrier: null, trackingNumber: null };
+  // A client that says JSON but sends nothing (the admin dashboard's bare POST) means no details.
+  if (!(await request.clone().text()).trim()) return { carrier: null, trackingNumber: null };
+  const input = await readJson(request);
+  return {
+    carrier: optionalTrackingText(input?.carrier, 'carrier', SHIPPING_CARRIER_MAX_LENGTH),
+    trackingNumber: optionalTrackingText(input?.trackingNumber, 'trackingNumber', TRACKING_NUMBER_MAX_LENGTH),
+  };
+}
+
+
 async function handleMarkShipped(request, env, purchaseId) {
   const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -350,6 +386,7 @@ async function handleMarkShipped(request, env, purchaseId) {
     admin = await requireAdmin(request, db);
   }
   await checkRateLimit(db, `mark-shipped:${admin ? admin.user_id : purchase.seller_id}`, MARK_SHIPPED_RATE_LIMIT_MAX);
+  const { carrier, trackingNumber } = await readShippingDetails(request); // #4600
   if (!purchase.payment_intent_id) {
     throw new HttpError('Only real-money purchases can be marked shipped', 400);
   }
@@ -375,8 +412,8 @@ async function handleMarkShipped(request, env, purchaseId) {
   // shipped_at get set (and the "it shipped!" notification fire) on a
   // purchase that was, by the time this actually committed, refunded.
   const result = await db.prepare(
-    'UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND shipped_at IS NULL AND refunded_at IS NULL',
-  ).bind(purchaseId).run();
+    'UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\'), shipping_carrier = ?, tracking_number = ? WHERE purchase_id = ? AND shipped_at IS NULL AND refunded_at IS NULL',
+  ).bind(carrier, trackingNumber, purchaseId).run();
   if (result.meta.changes === 0) {
     const current = await db.prepare('SELECT shipped_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     if (current.refunded_at) throw new HttpError('This purchase has been refunded', 400);
@@ -404,7 +441,32 @@ async function handleMarkShipped(request, env, purchaseId) {
       `"${template?.name || 'A product'}" has shipped!`, null, 'purchases'); // #4498: a tap opens My purchases
   }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  return json({ purchase: purchaseFromRow(updated) });
+  return json({ purchase: { ...purchaseFromRow(updated), ...trackingFromRow(updated) } });
+}
+
+// #4600: the seller corrects the carrier and tracking number of an order already marked shipped (a typo, a number that
+// came later). Same ownership rule as Mark shipped (the admin fallback for a dangling seller included); the buyer is
+// not notified again, they simply read the corrected line on their order.
+async function handleTrackingCorrection(request, env, purchaseId) {
+  const db = env.DB;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  let admin;
+  if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  } else {
+    admin = await requireAdmin(request, db);
+  }
+  await checkRateLimit(db, `mark-shipped:${admin ? admin.user_id : purchase.seller_id}`, MARK_SHIPPED_RATE_LIMIT_MAX);
+  const { carrier, trackingNumber } = await readShippingDetails(request);
+  if (!purchase.shipped_at) throw new HttpError('Mark this order shipped first', 409);
+  if (purchase.refunded_at) throw new HttpError('This purchase has been refunded', 400);
+  await db.prepare('UPDATE purchases SET shipping_carrier = ?, tracking_number = ? WHERE purchase_id = ?')
+    .bind(carrier, trackingNumber, purchaseId).run();
+  if (admin) await adminActionLogStatement(db, admin.user_id, 'tracking_override', 'purchase', purchaseId).run();
+  const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: { ...purchaseFromRow(updated), ...trackingFromRow(updated) } });
 }
 
 async function handlePurchaseConfirmDelivery(request, env) {
