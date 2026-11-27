@@ -5,6 +5,22 @@
 // threshold, a seller's return policy).
 export const DISPUTE_PROMPT_TEXT = 'Report a problem with this order?';
 
+// #4573 (the buying walk): "Yes, report it" can refund the order on the spot, which for a digital good also takes it
+// out of what the buyer owns and wears. The confirmation used to say only "Report a problem with this order?", so a
+// person with a small complaint could press it and lose the item without having been told that was possible. It now
+// says what may happen, never the rule that decides it (who counts as established, the dollar threshold).
+// A digital purchase: the seller marked it a digital good, or it is an avatar or an animation (those are granted to the
+// buyer's owned list, with nothing to ship). The disclaimer flag alone missed every avatar.
+export function isDigitalPurchase(purchase) {
+  return !!purchase?.isDigitalGood || purchase?.productKind === 'avatar' || purchase?.productKind === 'animation';
+}
+
+export function disputePromptText(purchase) {
+  return isDigitalPurchase(purchase)
+    ? `${DISPUTE_PROMPT_TEXT} If it can be refunded right away, you'll get your money back and the item leaves what you own.`
+    : `${DISPUTE_PROMPT_TEXT} If it can be refunded right away, you'll get your money back.`;
+}
+
 export function disputeSuccessText(result) {
   if (result?.autoResolved) return 'Your refund has been issued.';
   // The endpoint leaves the order untouched in this case and nothing else in
