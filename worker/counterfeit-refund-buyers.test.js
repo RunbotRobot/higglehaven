@@ -65,7 +65,9 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
 
     const looked = await api('/product-flags/cfr-b/refund-buyers', admin.session());
     expect(looked.body.refundBuyers).toMatchObject({
-      refundCount: 2, orderTotalCents: 1500, refundCents: 990 + 495, notRefundableCount: 2, notRefundableCents: 1500, productName: 'Fake cfr-b',
+      refundCount: 2, orderTotalCents: 1500, refundCents: 990 + 495, productName: 'Fake cfr-b',
+      // #4422: the paid-out order is the second line; only the part-refunded one is left to neither.
+      platformCount: 1, platformOrderTotalCents: 700, platformRefundCents: 693, notRefundableCount: 1, notRefundableCents: 800,
     });
 
     const missing = await post('cfr-b', {});
@@ -88,7 +90,7 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     const done = await post('cfr-c', { expectedCount: 1, expectedRefundCents: 990 });
     expect(done.response.status).toBe(200);
     expect(done.body).toMatchObject({ refunded: 1, refundedCents: 990, failed: 0 });
-    expect(done.body.refundBuyers).toMatchObject({ refundCount: 0, notRefundableCount: 1, notRefundableCents: 600 });
+    expect(done.body.refundBuyers).toMatchObject({ refundCount: 0, platformCount: 1, platformRefundCents: 594, notRefundableCount: 0 });
 
     const rows = await env.DB.prepare('SELECT purchase_id, refunded_at FROM purchases WHERE template_id = ?').bind('cfr-c').all();
     expect(rows.results.find((r) => r.purchase_id === 'cfr-c-p1').refunded_at).toBeTruthy();
@@ -100,7 +102,7 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     expect(note.kind).toBe('purchases'); // #4498: a refund notice opens My purchases
     expect(note.message).toContain('confirmed counterfeit report');
     const log = await env.DB.prepare("SELECT detail_json FROM admin_action_log WHERE action_type = 'counterfeit_refund_buyers' AND target_id = 'cfr-c'").first();
-    expect(JSON.parse(log.detail_json)).toMatchObject({ refunded: 1, refundedCents: 990, remaining: 0, notRefundableCount: 1 });
+    expect(JSON.parse(log.detail_json)).toMatchObject({ refunded: 1, refundedCents: 990, remaining: 0, notRefundableCount: 0 });
 
     // Pressing it again changes nothing: nothing is left to refund and nobody is refunded twice.
     const again = await post('cfr-c', { expectedCount: 0, expectedRefundCents: 0 });
@@ -132,10 +134,14 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     await approveFlag('cfr-f-none');
     const listed = await api('/product-flags?status=approved', admin.session());
     const row = listed.body.listings.find((l) => l.templateId === 'cfr-f');
-    expect(row).toMatchObject({ templateName: 'Fake cfr-f', flagCount: 1, openOrders: 1 });
+    expect(row).toMatchObject({ templateName: 'Fake cfr-f', flagCount: 1, openOrders: 2 });
     expect(listed.body.listings.find((l) => l.templateId === 'cfr-f-none')).toBeUndefined();
     expect((await api('/product-flags?status=approved', viewer.session())).response.status).toBe(403);
     await post('cfr-f', { expectedCount: 1, expectedRefundCents: 990 });
+    // The paid-out order is still to cover on the second line, so the listing stays.
+    const mid = await api('/product-flags?status=approved', admin.session());
+    expect(mid.body.listings.find((l) => l.templateId === 'cfr-f').openOrders).toBe(1);
+    await post('cfr-f', { line: 'platform', expectedCount: 1, expectedRefundCents: 396 });
     const after = await api('/product-flags?status=approved', admin.session());
     expect(after.body.listings.find((l) => l.templateId === 'cfr-f')).toBeUndefined();
   });
@@ -148,5 +154,116 @@ describe('Refund buyers on an approved counterfeit flag (#4376)', () => {
     }, 'Card thing', { buyerRefundCents: 990 });
     const note = await env.DB.prepare("SELECT message FROM notifications WHERE builder_id = ? AND message LIKE '%was refunded%'").bind(buyer.builderId).first();
     expect(note.message).toContain('$9.90');
+  });
+});
+
+describe('higglehaven covers buyers whose seller was already paid (#4422, owner chose B)', () => {
+  async function withStripe(fn) {
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    const calls = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(typeof input === 'string' ? input : input.url);
+      if (url.includes('stripe.com')) {
+        calls.push({ url, body: String(init?.body || ''), key: new Headers(init?.headers).get('idempotency-key') });
+        if (globalThis.__stripeRefuse) return new Response(JSON.stringify({ error: { message: 'Insufficient funds in your Stripe account.' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ id: 're_test' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    };
+    try { return await fn(calls); } finally { globalThis.fetch = originalFetch; env.STRIPE_SECRET_KEY = undefined; delete globalThis.__stripeRefuse; }
+  }
+  async function paidOutCard(id, n, totalCents) {
+    await buy(id, n, { totalCents, paidOut: true });
+    await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?').bind(`pi_${id}_${n}`, `${id}-p${n}`).run();
+  }
+
+  it('is its own confirmation: the first line never touches a paid-out order, and a stale count is refused', async () => {
+    const seller = await signupSeller('cfr-seller-g');
+    await makeListing('cfr-g', seller);
+    await buy('cfr-g', 1, { totalCents: 1000 });
+    await buy('cfr-g', 2, { totalCents: 700, paidOut: true });
+    await approveFlag('cfr-g');
+    await post('cfr-g', { expectedCount: 1, expectedRefundCents: 990 });
+    const row = await env.DB.prepare("SELECT refunded_at, platform_refund_cents FROM purchases WHERE purchase_id = 'cfr-g-p2'").first();
+    expect(row).toEqual({ refunded_at: null, platform_refund_cents: null });
+    expect((await post('cfr-g', { line: 'platform', expectedCount: 2, expectedRefundCents: 693 })).response.status).toBe(409);
+    expect((await post('cfr-g', { line: 'platform', expectedCount: 1, expectedRefundCents: 1 })).response.status).toBe(409);
+    expect((await post('cfr-g', { line: 'nope', expectedCount: 1, expectedRefundCents: 693 })).response.status).toBe(400);
+    const person = await signupBuilder('cfr-person-g');
+    expect((await post('cfr-g', { line: 'platform', expectedCount: 1, expectedRefundCents: 693 }, person)).response.status).toBe(403);
+    expect((await post('cfr-g', { line: 'platform', expectedCount: 1, expectedRefundCents: 693 }, viewer)).response.status).toBe(403);
+  });
+
+  it('refunds from the platform balance with no reverse_transfer, leaves the seller as paid, tells the buyer, and logs it as platform money', async () => {
+    const seller = await signupSeller('cfr-seller-h');
+    await makeListing('cfr-h', seller);
+    const buyer = await signupBuilder('cfr-buyer-h');
+    await buy('cfr-h', 1, { buyer, totalCents: 1000, paidOut: true });
+    await env.DB.prepare("UPDATE purchases SET payment_intent_id = 'pi_h1', seller_id = ? WHERE purchase_id = 'cfr-h-p1'").bind(seller.sellerId).run();
+    await approveFlag('cfr-h');
+    const before = await env.DB.prepare('SELECT higgles_balance_cents AS b FROM builders WHERE builder_id = ?').bind(host.builderId).first();
+    await withStripe(async (calls) => {
+      const done = await post('cfr-h', { line: 'platform', expectedCount: 1, expectedRefundCents: 990 });
+      expect(done.response.status).toBe(200);
+      expect(done.body).toMatchObject({ refunded: 1, refundedCents: 990, failed: 0 });
+      expect(done.body.refundBuyers).toMatchObject({ platformCount: 0, notRefundableCount: 0 });
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain('/refunds');
+      expect(calls[0].body).toContain('payment_intent=pi_h1');
+      expect(calls[0].body).toContain('amount=990');
+      expect(calls[0].body).not.toContain('reverse_transfer');
+      expect(calls[0].body).not.toContain('refund_application_fee');
+      // Again: nothing left, no second Stripe call.
+      const again = await post('cfr-h', { line: 'platform', expectedCount: 0, expectedRefundCents: 0 });
+      expect(again.body).toMatchObject({ refunded: 0, failed: 0 });
+      expect(calls).toHaveLength(1);
+    });
+    const row = await env.DB.prepare("SELECT refunded_at, platform_refund_cents, paid_out_at FROM purchases WHERE purchase_id = 'cfr-h-p1'").first();
+    expect(row.refunded_at).toBeTruthy();
+    expect(row.platform_refund_cents).toBe(990);
+    expect(row.paid_out_at).toBeTruthy();
+    const after = await env.DB.prepare('SELECT higgles_balance_cents AS b FROM builders WHERE builder_id = ?').bind(host.builderId).first();
+    expect(before.b - after.b).toBe(10);
+    const note = await env.DB.prepare("SELECT message FROM notifications WHERE builder_id = ? AND message LIKE '%was refunded%'").bind(buyer.builderId).first();
+    expect(note.message).toContain('$9.90');
+    expect(note.message).toContain('confirmed counterfeit report');
+    // The seller's earnings stay as paid, so the seller is not told they were reduced.
+    const sellerNote = await env.DB.prepare("SELECT COUNT(*) AS n FROM notifications WHERE message LIKE '%no longer be part of your earnings%' AND message LIKE '%Fake cfr-h%'").first();
+    expect(sellerNote.n).toBe(0);
+    const log = await env.DB.prepare("SELECT detail_json FROM admin_action_log WHERE action_type = 'counterfeit_refund_platform' AND target_id = 'cfr-h'").first();
+    expect(JSON.parse(log.detail_json)).toMatchObject({ refunded: 1, platformFundedCents: 990, remaining: 0 });
+  });
+
+  it('stops at the first refusal, says why, refunds no one it could not, and can be pressed again', async () => {
+    const seller = await signupSeller('cfr-seller-i');
+    await makeListing('cfr-i', seller);
+    await paidOutCard('cfr-i', 1, 1000);
+    await paidOutCard('cfr-i', 2, 500);
+    await approveFlag('cfr-i');
+    await withStripe(async (calls) => {
+      globalThis.__stripeRefuse = true;
+      const failed = await post('cfr-i', { line: 'platform', expectedCount: 2, expectedRefundCents: 1485 });
+      expect(failed.response.status).toBe(200);
+      expect(failed.body).toMatchObject({ refunded: 0, failed: 1 });
+      expect(failed.body.firstError).toContain("higglehaven's balance");
+      expect(calls).toHaveLength(1); // stopped after the first refusal
+      expect(failed.body.refundBuyers).toMatchObject({ platformCount: 2, platformRefundCents: 1485 });
+      const rows = await env.DB.prepare("SELECT refunded_at, platform_refund_cents FROM purchases WHERE template_id = 'cfr-i'").all();
+      expect(rows.results.every((r) => r.refunded_at === null && r.platform_refund_cents === null)).toBe(true);
+      delete globalThis.__stripeRefuse;
+      const ok = await post('cfr-i', { line: 'platform', expectedCount: 2, expectedRefundCents: 1485 });
+      expect(ok.body).toMatchObject({ refunded: 2, refundedCents: 1485, failed: 0 });
+      expect(calls.map((c) => c.key)).toEqual(expect.arrayContaining(['refund-platform:cfr-i-p1', 'refund-platform:cfr-i-p2']));
+    });
+  });
+
+  it('leaves a part-refunded order alone on both lines and still counts it', async () => {
+    const seller = await signupSeller('cfr-seller-j');
+    await makeListing('cfr-j', seller);
+    await buy('cfr-j', 1, { totalCents: 800, paidOut: true, refundedPart: 100 });
+    await approveFlag('cfr-j');
+    const looked = await api('/product-flags/cfr-j/refund-buyers', admin.session());
+    expect(looked.body.refundBuyers).toMatchObject({ refundCount: 0, platformCount: 0, notRefundableCount: 1, notRefundableCents: 800 });
   });
 });

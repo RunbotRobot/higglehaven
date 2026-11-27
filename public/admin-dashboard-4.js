@@ -130,7 +130,7 @@
       rbTableWrap.innerHTML = '<p class="empty">No approved flag has orders left to refund.</p>';
       return;
     }
-    rbTableWrap.innerHTML = '<table><thead><tr><th>Listing</th><th>Seller id</th><th>Approved</th><th>Orders to refund</th><th>Action</th></tr></thead><tbody>'
+    rbTableWrap.innerHTML = '<table><thead><tr><th>Listing</th><th>Seller id</th><th>Approved</th><th>Orders to repay</th><th>Action</th></tr></thead><tbody>'
       + listings.map((l) => `<tr data-template-id="${escapeHtml(l.templateId)}"><td>${escapeHtml(l.templateName)}<br><small>${escapeHtml(l.templateId)}</small></td><td>${escapeHtml(l.sellerId)}</td><td>${escapeHtml(l.resolvedAt)}</td><td>${l.openOrders}</td><td><button class="danger action-refund-buyers">Refund buyers…</button></td></tr>`).join('')
       + '</tbody></table>';
     rbTableWrap.querySelectorAll('tr[data-template-id]').forEach((row) => {
@@ -139,14 +139,40 @@
   }
 
   function describePlan(plan) {
-    const notRefundable = plan.notRefundableCount
-      ? `<p><strong>${orders(plan.notRefundableCount)} (${dollars(plan.notRefundableCents)}) cannot be refunded here</strong>: the seller was already paid out, or the order was refunded in part. Nothing is taken from the seller's other earnings, and the platform is not covering them. They stay as they are; their count and total go in the admin log.</p>`
+    const partRefunded = plan.notRefundableCount
+      ? `<p><strong>${orders(plan.notRefundableCount)} (${dollars(plan.notRefundableCents)}) cannot be refunded here</strong>: the order was already refunded in part. It stays as it is; its count and total go in the admin log.</p>`
+      : '';
+    // #4422: buyers whose seller was already paid out are a second line of their own, covered from higglehaven's balance.
+    const platform = plan.platformCount
+      ? `<hr><p><strong>higglehaven would cover ${dollars(plan.platformRefundCents)} for ${plan.platformCount} ${plan.platformCount === 1 ? 'buyer' : 'buyers'}</strong> whose seller was already paid out (99% of ${dollars(plan.platformOrderTotalCents)} paid). It comes from higglehaven's own balance; the sellers keep what they were paid. This is confirmed separately from the refunds above.</p>
+        <p><button type="button" class="danger" id="refundBuyersPlatformBtn">Cover ${dollars(plan.platformRefundCents)} from higglehaven's balance…</button></p>`
       : '';
     return `<p>This repays the buyers of <strong>${escapeHtml(plan.productName)}</strong>, a listing removed after a confirmed counterfeit report.</p>
       <ul>
         <li><strong>${plan.refundCount}</strong> ${plan.refundCount === 1 ? 'buyer' : 'buyers'} will be refunded</li>
         <li><strong>${dollars(plan.refundCents)}</strong> goes back to them (99% of ${dollars(plan.orderTotalCents)} paid)</li>
-      </ul>${notRefundable}`;
+      </ul>${platform}${partRefunded}`;
+  }
+
+  function showPlan() {
+    rbBody.innerHTML = describePlan(rbPlan);
+    rbConfirm.hidden = false;
+    rbConfirm.disabled = rbPlan.refundCount === 0;
+    rbConfirm.textContent = 'Refund ' + dollars(rbPlan.refundCents);
+    rbCancel.textContent = 'Cancel';
+    const platformBtn = document.getElementById('refundBuyersPlatformBtn');
+    if (platformBtn) platformBtn.addEventListener('click', askPlatform);
+  }
+
+  // The second line's own confirmation: what higglehaven pays, to how many, and that it cannot be taken back.
+  function askPlatform() {
+    rbDialogErr.hidden = true;
+    rbBody.innerHTML = `<p><strong>higglehaven pays ${dollars(rbPlan.platformRefundCents)} from its own balance to ${rbPlan.platformCount} ${rbPlan.platformCount === 1 ? 'buyer' : 'buyers'}</strong> of ${escapeHtml(rbPlan.productName)}.</p>
+      <p>Their sellers were already paid and keep it, so this money is higglehaven's loss. Each buyer is told why. A refund cannot be taken back.</p>
+      <p><button type="button" class="secondary" id="refundBuyersPlatformBack">Back</button> <button type="button" class="danger" id="refundBuyersPlatformGo">Pay ${dollars(rbPlan.platformRefundCents)}</button></p>`;
+    rbConfirm.hidden = true;
+    document.getElementById('refundBuyersPlatformBack').addEventListener('click', showPlan);
+    document.getElementById('refundBuyersPlatformGo').addEventListener('click', () => runRefund('platform'));
   }
 
   async function openRefundBuyers(templateId) {
@@ -161,32 +187,34 @@
       return;
     }
     rbPlan = body.refundBuyers;
-    rbBody.innerHTML = describePlan(rbPlan);
-    rbConfirm.disabled = rbPlan.refundCount === 0;
-    rbConfirm.textContent = 'Refund ' + dollars(rbPlan.refundCents);
-    rbCancel.textContent = 'Cancel';
+    showPlan();
     rbDialog.showModal();
     rbCancel.focus();
   }
 
   rbCancel.addEventListener('click', () => { if (!rbBusy) rbDialog.close(); });
   rbDialog.addEventListener('cancel', (e) => { if (rbBusy) e.preventDefault(); });
-  document.getElementById('refundBuyersForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
+  document.getElementById('refundBuyersForm').addEventListener('submit', (e) => { e.preventDefault(); runRefund('seller'); });
+
+  // One press does a few orders and the server says what is left, so this loops. `line` is "seller" (refunds that
+  // reverse the seller's transfer) or "platform" (#4422: higglehaven covers buyers whose seller was already paid).
+  async function runRefund(line) {
     if (rbBusy || !rbPlan) return;
+    const platform = line === 'platform';
+    const countOf = (p) => (platform ? p.platformCount : p.refundCount);
+    const centsOf = (p) => (platform ? p.platformRefundCents : p.refundCents);
     rbBusy = true;
     rbConfirm.disabled = true;
     rbDialogErr.hidden = true;
     let refunded = 0; let refundedCents = 0; let failed = 0; let firstError = null;
-    // The server does a few orders per press and says what is left; the count and total it is sent are the ones the
-    // admin confirmed (first press) or the ones the last answer said remained (later presses).
+    // The count and total sent are the ones the admin confirmed (first press) or the ones the last answer said remained.
     let expect = rbPlan;
     try {
-      for (let guard = 0; guard < 200 && expect.refundCount > 0; guard += 1) {
-        rbBody.innerHTML = `<p>Refunding… ${refunded} done, ${expect.refundCount} to go.</p>`;
+      for (let guard = 0; guard < 200 && countOf(expect) > 0; guard += 1) {
+        rbBody.innerHTML = `<p>Refunding… ${refunded} done, ${countOf(expect)} to go.</p>`;
         const result = await apiFetch('/api/product-flags/' + encodeURIComponent(rbPlan.templateId) + '/refund-buyers', {
           method: 'POST',
-          body: JSON.stringify({ expectedCount: expect.refundCount, expectedRefundCents: expect.refundCents }),
+          body: JSON.stringify({ line, expectedCount: countOf(expect), expectedRefundCents: centsOf(expect) }),
         });
         refunded += result.refunded; refundedCents += result.refundedCents; failed += result.failed;
         firstError = firstError || result.firstError;
@@ -198,13 +226,15 @@
       rbDialogErr.textContent = error.message;
     }
     rbBusy = false;
-    rbBody.innerHTML = `<p><strong>${orders(refunded)} refunded, ${dollars(refundedCents)} on its way back to buyers.</strong> Each was told why.</p>`
-      + (expect && expect.refundCount ? `<p>${orders(expect.refundCount)} still to refund${failed ? ` (${failed} failed${firstError ? ': ' + escapeHtml(firstError) : ''})` : ''}. Open Refund buyers again to carry on.</p>` : '')
+    const left = expect ? countOf(expect) : 0;
+    rbBody.innerHTML = `<p><strong>${orders(refunded)} refunded, ${dollars(refundedCents)} ${platform ? "paid from higglehaven's balance" : 'on its way back to buyers'}.</strong> Each was told why.</p>`
+      + (left ? `<p>${orders(left)} still to refund${failed ? ` (${failed} failed${firstError ? ': ' + escapeHtml(firstError) : ''})` : ''}. Open Refund buyers again to carry on.</p>` : '')
       + (expect && expect.notRefundableCount ? `<p>${orders(expect.notRefundableCount)} (${dollars(expect.notRefundableCents)}) could not be refunded here.</p>` : '');
+    rbConfirm.hidden = false;
     rbConfirm.disabled = true;
     rbCancel.textContent = 'Close';
     await loadRefundBuyers();
-  });
+  }
 
   // --- Self-dealing flags (#2019) ---
   const sdErr = document.getElementById('selfDealingFlagsErr');

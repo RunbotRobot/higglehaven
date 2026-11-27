@@ -632,6 +632,7 @@
       "last_dispute_event_at": "INTEGER|0||0",
       "paid_out_at": "TEXT|0||0",
       "payment_intent_id": "TEXT|0||0",
+      "platform_refund_cents": "INTEGER|0||0",
       "platform_share_cents": "INTEGER|1||0",
       "pre_dispute_refunded_amount_cents": "INTEGER|0||0",
       "product_kind": "TEXT|0||0",
