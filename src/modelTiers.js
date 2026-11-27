@@ -497,7 +497,7 @@ function litColorOf(mesh, getPixels) {
   // A texture whose pixels cannot be read gives no colour to compare, not a wrong one.
   if (map && !pixels) return null;
   if (pixels) {
-    const mean = textureMeanOverSurface(mesh.geometry, map, pixels);
+    const mean = textureMeanOverSurface(mesh.geometry, map, pixels, metalShadeOf(material, getPixels, map));
     base.r *= mean.r; base.g *= mean.g; base.b *= mean.b;
   }
   const { diffuseScale, emissive } = shadingOf(material);
@@ -687,7 +687,7 @@ function meanTextureColor(texture, pixels) {
 // a mesh has more than TEXTURE_AREA_MEAN_MAX_TRIANGLES. A mesh with no UVs falls back to the whole-texture mean.
 const TEXTURE_AREA_MEAN_MAX_TRIANGLES = 20000;
 const TEXTURE_AREA_SAMPLE_POINTS = [[1 / 3, 1 / 3], [0.8, 0.1], [0.1, 0.8], [0.1, 0.1]];
-export function textureMeanOverSurface(geometry, texture, pixels) {
+export function textureMeanOverSurface(geometry, texture, pixels, shade = null) {
   const uv = geometry.attributes.uv;
   const position = geometry.attributes.position;
   if (!uv || !position) return meanTextureColor(texture, pixels);
@@ -709,7 +709,8 @@ export function textureMeanOverSurface(geometry, texture, pixels) {
       const u = wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic);
       const v = wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic);
       sampleTexture(texture, pixels, u, v, tmp);
-      tr += tmp.r; tg += tmp.g; tb += tmp.b;
+      const k = metalDarkening(shade, u, v);
+      tr += tmp.r * k; tg += tmp.g * k; tb += tmp.b * k;
     }
     const n = TEXTURE_AREA_SAMPLE_POINTS.length;
     total += area;
@@ -734,12 +735,35 @@ function sampleTexture(texture, pixels, u, v, target) {
   return toLinear(texture, data[i], data[i + 1], data[i + 2], target);
 }
 
+// #4111: a metalness map says WHERE a model is metal. The far material is not metal, so a metal region it draws from
+// its base colour comes out much lighter than the full model, which (no environment light here) draws metal from the
+// sun and sky only: the owner's "Toilet - Very Dirty" is metallic 1 with a metal/roughness texture, dark and grimy in
+// full and pale beige in its far version (colour shift 0.39). The map is read at the same texture coordinates as the
+// base colour map (three reads metalness from the blue channel, times the factor), and the colour sampled there is
+// darkened as a scalar metalness is (FAR_METAL_DARKENING). null when there is no readable metalness map beside a
+// base colour map that uses the same UV set: a scalar alone is handled by shadingOf as before.
+function metalShadeOf(material, getPixels, albedoMap) {
+  const metalMap = material && material.metalnessMap;
+  if (!metalMap || !getPixels || !albedoMap) return null;
+  if ((metalMap.channel || 0) !== (albedoMap.channel || 0)) return null;
+  const pixels = getPixels(metalMap);
+  if (!pixels) return null;
+  const factor = typeof material.metalness === 'number' ? clamp(material.metalness, 0, 1) : 1;
+  return { map: metalMap, pixels, factor };
+}
+const METAL_SAMPLE = new Color();
+function metalDarkening(shade, u, v) {
+  if (!shade) return 1;
+  sampleTexture(shade.map, shade.pixels, u, v, METAL_SAMPLE);
+  return 1 - FAR_METAL_DARKENING * clamp(shade.factor * METAL_SAMPLE.b, 0, 1);
+}
+
 // #4111: the far colour is what the full model looks like lit, not its raw base colour. This world has
 // no environment light, so a metal surface is drawn from its sun and sky light only, much darker than
 // its base colour, while the far material (metalness 0) drew that same base colour at full strength: a
 // metal fixture turned white at mid distance. A metal keeps a floor of its colour for the highlights a
-// flat far surface cannot show. A metalness map is not read (a scalar of 1 beside a map says nothing
-// about where the metal is). Emission is added, since the far material is not emissive.
+// flat far surface cannot show. A metalness map is read where there is a base colour map beside it (metalShadeOf);
+// without one, a scalar of 1 beside a map says nothing about where the metal is. Emission is added, since the far material is not emissive.
 const FAR_METAL_DARKENING = 0.65;
 const FAR_CREASE_ANGLE = (75 * Math.PI) / 180; // a coarse far mesh turns 50 to 70 degrees between faces on a curve; a box edge (90) stays sharp
 function shadingOf(material) {
@@ -770,7 +794,8 @@ function bakeColoredGeometry(mesh, getPixels, { flat = false } = {}) {
   // between a light and a dark corner is a gradient the model does not have. When the version is a heavy
   // reduction (`flat`), each mesh takes the mean of its texture over the surface it shows instead.
   const sampled = !flat && !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
-  const mean = pixels && !sampled ? (flat ? textureMeanOverSurface(source, map, pixels) : meanTextureColor(map, pixels)) : null;
+  const metalShade = pixels ? metalShadeOf(material, getPixels, map) : null;
+  const mean = pixels && !sampled ? (flat ? textureMeanOverSurface(source, map, pixels, metalShade) : meanTextureColor(map, pixels)) : null;
   const { diffuseScale, emissive } = shadingOf(material);
 
   const positions = new Float32Array(count * 3);
@@ -790,9 +815,10 @@ function bakeColoredGeometry(mesh, getPixels, { flat = false } = {}) {
     }
     if (sampled) {
       sampleTexture(map, pixels, uv.getX(i), uv.getY(i), tmp);
-      r *= tmp.r;
-      g *= tmp.g;
-      b *= tmp.b;
+      const k = metalDarkening(metalShade, uv.getX(i), uv.getY(i));
+      r *= tmp.r * k;
+      g *= tmp.g * k;
+      b *= tmp.b * k;
     } else if (mean) {
       r *= mean.r;
       g *= mean.g;
@@ -904,6 +930,7 @@ function facingColorTable(visible, getPixels, rootInverse) {
     const vertexColor = !material || material.vertexColors ? geometry.attributes.color : null;
     const useTexture = !!(pixels && uv);
     if (useTexture) textured = true;
+    const metalShade = useTexture ? metalShadeOf(material, getPixels, map) : null;
     const matrix = new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
     const index = geometry.index;
     const count = index ? index.count : position.count;
@@ -929,8 +956,11 @@ function facingColorTable(visible, getPixels, rootInverse) {
         let tr = 0, tg = 0, tb = 0;
         for (const [wb, wc] of TEXTURE_AREA_SAMPLE_POINTS) {
           const wa = 1 - wb - wc;
-          sampleTexture(map, pixels, wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic), wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic), tmp);
-          tr += tmp.r; tg += tmp.g; tb += tmp.b;
+          const u = wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic);
+          const v = wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic);
+          sampleTexture(map, pixels, u, v, tmp);
+          const k = metalDarkening(metalShade, u, v);
+          tr += tmp.r * k; tg += tmp.g * k; tb += tmp.b * k;
         }
         const samples = TEXTURE_AREA_SAMPLE_POINTS.length;
         r *= tr / samples; g *= tg / samples; b *= tb / samples;
