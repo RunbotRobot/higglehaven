@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  COUNTRY_CODES, SHIPPING_ZONE_IDS, shipsToCountry, shippingNote, shippingZoneOfCountry, shippingZonesOf, shippingZonesProblem,
+  COUNTRY_CODES, SHIPPING_ZONE_IDS, shipsToCountry, shippingNote, shippingPlaces, shippingZoneOfCountry, shippingZonesOf, shippingZonesProblem,
 } from '../../shared/shipping-zones.js';
 
 describe('the country list and the zones (#4601)', () => {
@@ -63,6 +63,12 @@ describe('what a product ships to (#4601)', () => {
     expect(shippingNote({ shippingZones: ['us', 'ca'] })).toBe('ships to United States and Canada');
     expect(shippingNote({ shippingZones: ['us', 'ca', 'gb'] })).toBe('ships to United States, Canada and United Kingdom');
     expect(shippingNote({ shippingZones: [] })).toBe('does not ship');
+  });
+
+  it('names the places a product ships to', () => {
+    expect(shippingPlaces({})).toBe('worldwide');
+    expect(shippingPlaces({ domesticOnly: true })).toBe('United States only');
+    expect(shippingPlaces({ shippingZones: ['us', 'eu'] })).toBe('United States and European Union');
   });
 
   it('checks what a seller sends', () => {
