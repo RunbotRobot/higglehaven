@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,7 +85,7 @@ console.log('seeded three placements:', batch);
 // The simulated purchase path is admin-only on a seller without Stripe Connect:
 // grant it to this same account (same as e2e/avatar-equip-refreshes-animations-list.test.mjs).
 await grantAdmin(emailForLabel(LABEL));
-const bought = await pageFetchJson(`/api/instances/${BOUGHT_ID}/purchase`, { method: 'POST' });
+const bought = await pageFetchJson(`/api/instances/${BOUGHT_ID}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) });
 console.log('bought one avatar placement (should be 201):', bought.status);
 
 // The page's catalog was fetched before these products existed.

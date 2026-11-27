@@ -40,6 +40,7 @@ import { requireLogin, requireVerification, currentAuthUser, setCurrentAuthUser 
 import { buyTimeAccountRefusal } from './buyAccountRefusal.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure, canLeaveAfterCharge, CHARGED_CLOSED_MESSAGE, PAY_STAGES } from './checkoutPayAttempt.js';
+import { promptShippingAddress } from './shippingAddressModal.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, invalidateProductReviews } from './worldSprites.js';
 // #3651: the card's own buttons (Buy, Rate this product), for focus return after a notice.
 import { productCardBuyButton, productCardReviewButton, refreshOwnedAfterPurchase, refreshRatedOrders, markProductJustBought } from './productCard.js';
@@ -375,6 +376,15 @@ export async function handleShopProductBuyClick() {
       await showPriceChanged(review, quote.unitPriceCents);
       return;
     }
+    // #4599: a shipped product asks where it goes before anything starts, for every way of paying; the server checks the
+    // address again, and the order keeps its own copy. A digital good never asks.
+    let shippingAddress;
+    if (quote.requiresShippingAddress) {
+      productCardBuyButton().disabled = false;
+      shippingAddress = await promptShippingAddress({ domesticOnly: !!quote.domesticOnly });
+      if (!shippingAddress) return;
+      productCardBuyButton().disabled = true;
+    }
     if (!quote.paysWithCard) {
       // #659: a one-line mention right at the moment of buying, alongside the
       // full Return policy button this same tapped product already surfaces
@@ -395,7 +405,7 @@ export async function handleShopProductBuyClick() {
       if (!confirmed) return;
       productCardBuyButton().disabled = true;
     }
-    const result = await purchaseInstance(instanceId, { expectedUnitPriceCents: priceCents });
+    const result = await purchaseInstance(instanceId, { expectedUnitPriceCents: priceCents, shippingAddress });
     if (result.requiresPayment) {
       paymentStarted = true; // from here a card can be charged, so "you were not charged" is no longer ours to say (#4461)
       const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });

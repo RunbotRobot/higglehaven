@@ -143,11 +143,11 @@ describe('GET /api/presence round trips (#3464)', () => {
 
     const sqls = singles();
     // exactly one batch carries the rate-limit insert and the caller's own row...
-    const carrying = batches().filter((group) => group.some((sql) => /INSERT INTO rate_limit_events/.test(sql)));
+    const carrying = batches().filter((group) => group.some((sql) => /INSERT INTO rate_limit_counters/.test(sql)));
     expect(carrying).toHaveLength(1);
     expect(carrying[0].some((sql) => /FROM avatar_presence WHERE user_id = \?/.test(sql))).toBe(true);
     // ...so neither is a trip of its own any more
-    expect(count(sqls, /INSERT INTO rate_limit_events/)).toBe(0);
+    expect(count(sqls, /INSERT INTO rate_limit_counters/)).toBe(0);
     expect(count(sqls, /^\s*SELECT landlet_id, updated_at FROM avatar_presence/)).toBe(0);
 
     // the on-shift read is sent before the nearby read has come back (one
@@ -165,7 +165,7 @@ describe('GET /api/presence round trips (#3464)', () => {
     const { db } = recordingDb(env.DB);
     const response = await callPresence(db, stranger.session());
     expect((await response.json()).avatars).toEqual([]);
-    const spent = await env.DB.prepare('SELECT COUNT(*) AS n FROM rate_limit_events WHERE bucket_key = ?').bind(bucket).first();
+    const spent = await env.DB.prepare('SELECT count AS n FROM rate_limit_counters WHERE bucket_key = ?').bind(bucket).first();
     expect(spent.n).toBe(1);
   });
 
@@ -176,14 +176,15 @@ describe('GET /api/presence round trips (#3464)', () => {
     await api('/presence', postInit(capped, { x: 0, y: 0, z: 0, landletId }));
     const bucket = `presence-nearby:${await userIdOf(capped)}`;
     const now = Date.now();
-    // the whole window's budget (PRESENCE_NEARBY_RATE_LIMIT_MAX = 600), spent
-    await env.DB.batch(Array.from({ length: 600 }, () => env.DB
-      .prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)').bind(bucket, now)));
+    // the whole window's budget (PRESENCE_NEARBY_RATE_LIMIT_MAX = 1500), spent
+    await env.DB
+      .prepare('INSERT INTO rate_limit_counters (bucket_key, window_start, count) VALUES (?, ?, 1500)')
+      .bind(bucket, Math.floor(now / (15 * 60 * 1000)) * 15 * 60 * 1000).run();
 
     const { db, singles } = recordingDb(env.DB);
     await expect(callPresence(db, capped.session())).rejects.toMatchObject({ status: 429 });
     expect(count(singles(), /JOIN builders ON builders\.user_id = avatar_presence\.user_id/)).toBe(0);
-    const stillOnly = await env.DB.prepare('SELECT COUNT(*) AS n FROM rate_limit_events WHERE bucket_key = ?').bind(bucket).first();
-    expect(stillOnly.n).toBe(600);
+    const stillOnly = await env.DB.prepare('SELECT count AS n FROM rate_limit_counters WHERE bucket_key = ?').bind(bucket).first();
+    expect(stillOnly.n).toBe(1500);
   });
 });

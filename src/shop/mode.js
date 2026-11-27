@@ -44,6 +44,7 @@
 // in main.js. (#3502: the ground disc/wall/dome, with SHOP_WALL_MARGIN_M, the
 // horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
 // Sell mounts the same enclosure.)
+import { renderShippingFilterField } from './shippingFilterField.js';
 import { sayAvatarDidNotLoad } from './avatarLoadNotice.js';
 import { disposeBatchTiers } from './batchTiers.js';
 import * as THREE from 'three';
@@ -918,6 +919,9 @@ export function renderShopSettingsSection() {
   keys.appendChild(keysList);
   field.appendChild(keys);
   settingsSectionEl.appendChild(field);
+
+  // #4602: the filter that dims what cannot ship to this person (shown only when signed in).
+  if (currentAuthUser) renderShippingFilterField(settingsSectionEl);
 
   // #1588: opt-in free-look-recenters-on-facing. Off by default — the
   // existing free-look/facing independence (see updateShopMovement's own

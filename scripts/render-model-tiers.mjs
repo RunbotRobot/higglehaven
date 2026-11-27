@@ -9,6 +9,12 @@
 // it is a diagnostic to point at the models worth a still, not a gate, and nothing stored or generated reads it.
 //
 //   NODE_USE_ENV_PROXY=1 node scripts/render-model-tiers.mjs [--url http://127.0.0.1:8787] [--json] [--mid-px 80] [--far-px 24]
+//       [--views] prints the figures of each of the six views, not only the worst; [--stills <dir>] writes one PNG per
+//       model, version and view (the full model on the left, its version on the right, enlarged without smoothing)
+//       so the call "can they be told apart" is made by looking; [--regenerate] builds mid and far in the browser from
+//       the full model with the current src/modelTiers.js and compares those, not the stored ones (nothing is stored:
+//       for looking at a generator change before anything is regenerated); [--only <text>] keeps the models whose name has <text>.
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +23,10 @@ const args = process.argv.slice(2);
 const valueOf = (flag, fallback) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback);
 const base = valueOf('--url', 'https://higglehaven.com').replace(/\/$/, '');
 const asJson = args.includes('--json');
+const showViews = args.includes('--views');
+const stillsDir = valueOf('--stills', null);
+const only = valueOf('--only', null);
+const regenerate = args.includes('--regenerate'); // compare the versions today's generator would make, not the stored ones
 const SIZES = { mid: Number(valueOf('--mid-px', 80)), far: Number(valueOf('--far-px', 24)) };
 const LIMITS = { colourShift: 0.08, pixelDiff: 0.12 }; // a first reading of "cannot be told apart"; tune against the stills
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,7 +59,9 @@ const { createServer } = await import('vite');
 const { chromium } = await import('playwright');
 const server = await createServer({ root, configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
 await server.listen();
-const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const launchOptions = { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] };
+if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH; // as scripts/live-site.mjs does
+const browser = await chromium.launch(launchOptions);
 try {
   const page = await browser.newPage();
   page.on('pageerror', (err) => console.warn(`page error: ${err.message}`));
@@ -59,15 +71,42 @@ try {
   const rows = [];
   for (const template of templates) {
     const key = `${template.modelUrl}|${template.modelMidUrl}|${template.modelFarUrl}`;
-    if (!template.modelUrl || seen.has(key) || (!template.modelMidUrl && !template.modelFarUrl)) continue;
+    if (only && !String(template.name).toLowerCase().includes(only.toLowerCase())) continue;
+    if (!template.modelUrl || seen.has(key) || (!regenerate && !template.modelMidUrl && !template.modelFarUrl)) continue;
     seen.add(key);
     const row = { templateId: template.templateId, name: template.name, tiers: {} };
     try {
       const full = await loadBase64(template.modelUrl);
+      if (regenerate) {
+        const generated = await page.evaluate(([b, sizes, wantStills]) => window.compareGenerated(b, sizes, wantStills), [full, SIZES, Boolean(stillsDir)]);
+        row.stats = generated.stats;
+        for (const [tier, result] of Object.entries(generated)) {
+          if (tier === 'stats') continue;
+          if (result.sharesFullModel) { row.tiers[tier] = { views: [], colourShift: 0, pixelDiff: 0, visible: false, sharesFullModel: true }; continue; }
+          if (stillsDir) {
+            await fs.mkdir(stillsDir, { recursive: true });
+            for (const still of result.stills) {
+              const file = path.join(stillsDir, `${template.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${tier}-view${still.view}-regen.png`);
+              await fs.writeFile(file, Buffer.from(still.png.split(',')[1], 'base64'));
+            }
+          }
+          row.tiers[tier] = { views: result.views, colourShift: result.colourShift, pixelDiff: result.pixelDiff, visible: result.colourShift > LIMITS.colourShift || result.pixelDiff > LIMITS.pixelDiff };
+        }
+        row.status = Object.values(row.tiers).some((t) => t.visible) ? 'DIFFERS' : 'ok';
+        rows.push(row);
+        continue;
+      }
       for (const [tier, url] of [['mid', template.modelMidUrl], ['far', template.modelFarUrl]]) {
         if (!url) continue;
-        const result = await page.evaluate(([a, b, size]) => window.compareRendered(a, b, size), [full, await loadBase64(url), SIZES[tier]]);
-        row.tiers[tier] = { colourShift: result.colourShift, pixelDiff: result.pixelDiff, visible: result.colourShift > LIMITS.colourShift || result.pixelDiff > LIMITS.pixelDiff };
+        const result = await page.evaluate(([a, b, size, wantStills]) => window.compareRendered(a, b, size, wantStills), [full, await loadBase64(url), SIZES[tier], Boolean(stillsDir)]);
+        if (stillsDir) {
+          await fs.mkdir(stillsDir, { recursive: true });
+          for (const still of result.stills) {
+            const file = path.join(stillsDir, `${template.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${tier}-view${still.view}.png`);
+            await fs.writeFile(file, Buffer.from(still.png.split(',')[1], 'base64'));
+          }
+        }
+        row.tiers[tier] = { views: result.views, colourShift: result.colourShift, pixelDiff: result.pixelDiff, visible: result.colourShift > LIMITS.colourShift || result.pixelDiff > LIMITS.pixelDiff };
       }
       row.status = Object.values(row.tiers).some((t) => t.visible) ? 'DIFFERS' : 'ok';
     } catch (error) {
@@ -79,7 +118,9 @@ try {
   else {
     for (const row of rows) {
       console.log(`${row.status.padEnd(10)} ${row.name} (${row.templateId.slice(0, 8)})`);
-      for (const [tier, t] of Object.entries(row.tiers)) console.log(`    ${tier} at ${SIZES[tier]} px: colour shift ${t.colourShift}, pixel difference ${t.pixelDiff}${t.visible ? '  <-- visible' : ''}`);
+      if (row.stats) console.log(`    triangles made: ${JSON.stringify(row.stats)}`);
+      for (const [tier, t] of Object.entries(row.tiers)) console.log(t.sharesFullModel ? `    ${tier}: the full model itself (no cheaper version passed)` : `    ${tier} at ${SIZES[tier]} px: colour shift ${t.colourShift}, pixel difference ${t.pixelDiff}${t.visible ? '  <-- visible' : ''}`);
+      if (showViews) for (const [tier, t] of Object.entries(row.tiers)) for (const v of t.views) console.log(`      ${tier} view ${v.view} (${['+x', '-x', '+y', '-y', '+z', '-z'][v.view]}): colour shift ${v.colourShift}, pixel difference ${v.pixelDiff}`);
     }
   }
 } finally {

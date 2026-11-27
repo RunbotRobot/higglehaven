@@ -39,6 +39,22 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
   });
 
+  it('parses type: a selector, then the text with its colons kept (#4572)', () => {
+    expect(parseStep('type:#dm-input:hello')).toEqual({ command: 'type', args: ['#dm-input', 'hello'] });
+    expect(parseStep('type:.box:see you at 5:30')).toEqual({ command: 'type', args: ['.box', 'see you at 5:30'] });
+    expect(() => parseStep('type:#dm-input')).toThrow();
+    expect(() => parseStep('type::text')).toThrow(/selector/);
+  });
+
+  it('parses fail and unfail, which answer /api calls with a failure for a walk of what goes wrong (#4576)', () => {
+    expect(parseStep('fail:500')).toEqual({ command: 'fail', args: ['500'] });
+    expect(parseStep('fail:429:/friends')).toEqual({ command: 'fail', args: ['429', '/friends'] });
+    expect(parseStep('fail:offline')).toEqual({ command: 'fail', args: ['offline'] });
+    expect(parseStep('unfail')).toEqual({ command: 'unfail', args: [] });
+    expect(() => parseStep('fail:418')).toThrow(/fail must be one of/);
+    expect(() => parseStep('fail')).toThrow(/needs 1 argument/);
+  });
+
   it('parses slow, which runs the page\'s animations at a fraction of their speed (#3876)', () => {
     expect(parseStep('slow:0.1')).toEqual({ command: 'slow', args: [0.1] });
     expect(parseStep('slow:1')).toEqual({ command: 'slow', args: [1] });
@@ -70,6 +86,14 @@ describe('live-site steps (#3430)', () => {
     expect(() => parseStep('drag:150:600:40')).toThrow(/needs 4 argument/);
     expect(() => parseStep('drag:a:600:40:1')).toThrow(/drag needs a point/);
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
+  });
+
+  it('parses nudge:<axis>:<sign> and refuses a bad one (#4570)', () => {
+    expect(parseStep('nudge:x:+')).toEqual({ command: 'nudge', args: ['x', '+'] });
+    expect(parseStep('nudge:Z:-')).toEqual({ command: 'nudge', args: ['z', '-'] });
+    expect(() => parseStep('nudge:x')).toThrow(/needs 2 argument/);
+    expect(() => parseStep('nudge:w:+')).toThrow(/nudge needs an axis/);
+    expect(() => parseStep('nudge:x:up')).toThrow(/nudge needs an axis/);
   });
 
   it('parses tp:<landlet> and pushpeer (#4491)', () => {

@@ -9,6 +9,8 @@ import { placementUserData } from '../shop/instanceBatching.js';
 import { TIER_FULL, TIER_MID, TIER_FAR } from '../shop/lodTier.js';
 import { buildModelTiers } from '../modelTiers.js';
 export { createPlacementHandle } from './placementHandle.js';
+import { applyShipDim, setShipDim } from '../shop/shipDim.js';
+import { isPhysicalProduct, doesNotShipToMe, onShippingDestinationChange } from '../shop/shippingDestination.js';
 import { markSharedModelResources, markSharedModelTextures, disposeOwnedMeshResources } from '../sharedModelResources.js';
 
 // #2553 (part of #2504/#2500's src/main.js module split, see #2503's design
@@ -209,6 +211,25 @@ function loadModelScene(url) {
   return loadModelGltf(url).then((gltf) => gltf.scene);
 }
 
+// #4602: a placement of a physical product carries the ship dim of its own template (an avatar, an animation or a
+// digital good never does). Keyed by template, not by model file: a duplicated product shares its file and may ship
+// to different places. The numbers are brought up to date when the catalog array is replaced.
+let syncedFor = null;
+function dimmable(template) {
+  if (syncedFor !== activeCatalog) {
+    syncedFor = activeCatalog;
+    syncShipDim();
+  }
+  return !!template && isPhysicalProduct(template);
+}
+
+// One number per product: whether it is dimmed for this shopper (shipDim.js). Run when the catalog is replaced and
+// whenever the destination or the switch changes; a material made later finds its product's number already right.
+function syncShipDim() {
+  setShipDim(activeCatalog.filter(isPhysicalProduct).map((template) => ({ key: template.templateId, dim: doesNotShipToMe(template) })));
+}
+onShippingDestinationChange(syncShipDim);
+
 // #682 (sub-issue of #679/#680/#681): the named animation clips (if any)
 // an uploaded model carries — idle/walk/fly, per the convention documented
 // in docs/SPEC.md's "Avatar rig/animation clip convention" — for
@@ -285,7 +306,7 @@ export async function loadModelInstance(url, options) {
 // clone with its own materials, stood up into the Z-up scene and recentered on
 // its own origin. Also how a placement gets its mid and far versions (#3416),
 // whether they were loaded from storage or built in the browser.
-function instantiateScene(cachedScene, { skeletonSafe = false } = {}) {
+function instantiateScene(cachedScene, { skeletonSafe = false, template = null } = {}) {
   const model = skeletonSafe ? cloneSkinned(cachedScene) : cachedScene.clone();
   // Object3D.clone() shares materials/geometries by reference. Geometry
   // being shared is fine (read-only), but materials need independent
@@ -301,6 +322,7 @@ function instantiateScene(cachedScene, { skeletonSafe = false } = {}) {
         : child.material.clone();
     }
   });
+  if (!skeletonSafe && dimmable(template)) applyShipDim(model, template.templateId);
   model.rotation.x = Math.PI / 2;
 
   // Every placeholder model in this file is deliberately authored centered
@@ -475,10 +497,11 @@ export function setLodChildHitTestable(child, hitTestable) {
 // version at all (both null) is left as it was: it stays on its full model at
 // every distance.
 export function attachInstanceTiers(object, scenes) {
+  const template = object.userData?.template ?? null;
   const tiers = {};
   for (const name of [TIER_MID, TIER_FAR]) {
     if (!scenes[name]) continue;
-    const container = instantiateScene(scenes[name]);
+    const container = instantiateScene(scenes[name], { template });
     container.visible = false;
     setLodChildHitTestable(container, false);
     object.add(container);
@@ -589,7 +612,7 @@ function averageTextureColor(texture) {
 // extensible template still renders exactly like a normal one, model
 // and all.
 async function loadCroppedModelInstance(template, instance) {
-  const container = await loadModelInstance(template.modelUrl);
+  const container = await loadModelInstance(template.modelUrl, { template });
   const extensible = extensibleAxes(template);
   if (!extensible) return container;
 
@@ -816,7 +839,7 @@ export async function createMeshForInstance(instance, knownTemplate = null) {
   let object;
   const loadModel = () => (extensibleAxes(template)
     ? loadCroppedModelInstance(template, instance)
-    : loadModelInstance(template.modelUrl));
+    : loadModelInstance(template.modelUrl, { template }));
   let modelFailed = false;
   if (template.modelUrl) {
     try {
@@ -883,7 +906,7 @@ export async function createMeshForInstance(instance, knownTemplate = null) {
 export async function loadBatchSource(template) {
   let container;
   try {
-    container = await withOneModelLoadRetry(() => loadModelInstance(template.modelUrl), template.templateId);
+    container = await withOneModelLoadRetry(() => loadModelInstance(template.modelUrl, { template }), template.templateId);
   } catch (err) {
     console.warn(`Failed to load model for batch "${template.templateId}" (${template.modelUrl}):`, err);
     return null;
@@ -915,7 +938,7 @@ export async function loadFarViewSource(template) {
   const scenes = await loadTierScenes(template);
   const cached = scenes.far || scenes.mid;
   if (!cached) return loadBatchSource(template);
-  const container = instantiateScene(cached);
+  const container = instantiateScene(cached, { template });
   container.updateMatrixWorld(true);
   const parts = [];
   let drawable = true;
@@ -942,7 +965,7 @@ export async function loadBatchTierSources(template) {
   for (const name of ['mid', 'far']) {
     const cached = scenes[name];
     if (!cached) continue;
-    const container = instantiateScene(cached);
+    const container = instantiateScene(cached, { template });
     container.updateMatrixWorld(true);
     const parts = [];
     let drawable = true;

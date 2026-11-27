@@ -30,7 +30,9 @@ import { camera } from '../world/scene.js';
 import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
-import { fetchSellerSummaries } from '../api.js';
+import { currentAuthUser } from '../account/auth.js';
+import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
+import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 import { loadUnratedOrders, hasUnratedOrder } from './unratedOrders.js';
 
@@ -111,10 +113,13 @@ let lastInRange = false;
 // Read once per page load (and again after a purchase); the card opens at once and
 // says "You already own this." when the answer arrives, never waiting on it.
 function refreshOwnedState(review, { force = false } = {}) {
-  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force })]).then(() => {
+  Promise.all([loadOwnedProducts({ force }), loadUnratedOrders({ force }), (currentAuthUser ? loadShippingDestination(fetchShippingDestination, { force }) : null)]).then(() => {
     if (review === openReview) syncProductCardActions(review, lastInRange);
   });
 }
+
+// #4602: the switch or the country changed in Settings; a card that is open says what is now true.
+onShippingDestinationChange(() => { if (openReview) syncProductCardActions(openReview, lastInRange); });
 
 // Called by the Buy flow once a purchase has finished, so a card that is still
 // open says so for what was just bought.
@@ -161,7 +166,7 @@ export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
   lastInRange = inRange;
   const template = review.mesh.userData.template;
-  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId) });
+  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId), unshippable: doesNotShipToMe(template) });
   buyBtn.classList.toggle('visible', state.canBuy);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
@@ -255,8 +260,13 @@ export function nearbyProductChoices() {
 // A shopper folding the card away themselves (the close button, Escape): the
 // tapped product is forgotten too, so its highlight and its Rate/Buy gating go.
 function dismissProductCard() {
-  // #3824: focus on the card goes back to the page with it, not to nothing.
-  if (cardEl.contains(document.activeElement)) document.activeElement.blur();
+  // #3824: focus on the card goes back to the page with it, not to nothing. #4594: blur() leaves it on the body, so the
+  // next Tab started at the top of the page; the world is the place a person was, and the canvas is a tab stop.
+  if (cardEl.contains(document.activeElement)) {
+    const world = document.getElementById('app');
+    if (world) world.focus({ preventScroll: true });
+    else document.activeElement.blur();
+  }
   setShopTappedProduct(null);
   closeProductCard();
 }

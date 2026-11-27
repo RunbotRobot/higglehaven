@@ -115,7 +115,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // instead (the lifecycle actions and sold-out-marker/self-dealing-review
 // siblings this leaf doesn't own).
 import { createD1Timing } from './lib/d1-timing.js';
-import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from './lib/purchase-creation.js';
+import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './lib/purchase-creation.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
 // /api/purchases dispatcher itself, extracted into
@@ -174,6 +174,8 @@ import {
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
+import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
+import { handleBasket, basketLineFromRow } from './lib/basket.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -780,6 +782,20 @@ async function handleApi(request, env, url, ctx) {
   // #3140 (sub-issue 1/2 of #3124): durable, silent blocks keyed on user_id.
   if (route[0] === 'blocks') {
     return handleBlocks(request, env.DB, route);
+  }
+
+  // #4598 (Shipping 1/8, part of #4394): a person's own addresses.
+  if (route[0] === 'addresses') {
+    return handleAddresses(request, env.DB, route);
+  }
+  // #4602: where "ships to me" is judged from, and the dim switch.
+  if (route[0] === 'shipping-destination' && route.length === 1) {
+    return handleShippingDestination(request, env.DB);
+  }
+
+  // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.
+  if (route[0] === 'basket') {
+    return handleBasket(request, env.DB, route);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -1663,13 +1679,16 @@ async function handleBuilders(request, env, db, route, url) {
     // self-deleted since requireBuilder's stale read above), so run it
     // standalone and only log once that's confirmed, instead of #816's
     // original unconditional db.batch().
+    // #4555: the new balance comes back from the same UPDATE (RETURNING). It used to be read again after the log row
+    // was written, so a builder deleting themselves in that gap answered 404 for a grant that had landed and been
+    // logged: the log row and the answer disagreed, and the #1667 race test failed about one run in four.
     const result = await db.prepare(`
       UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-    `).bind(amountCents, route[1]).run();
-    if (result.meta.changes === 0) throw new HttpError('Builder not found', 404);
+      RETURNING higgles_balance_cents
+    `).bind(amountCents, route[1]).all();
+    if (!result.results?.length) throw new HttpError('Builder not found', 404);
     await adminActionLogStatement(db, admin.user_id, 'higgles_grant', 'builder', route[1], { amountCents }).run();
-    const builder = await requireBuilder(db, route[1]);
-    return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
+    return json({ higglesBalanceCents: result.results[0].higgles_balance_cents }, 201);
   }
 
   // #1065 (sub-issue of #1404): mechanical plumbing only. Once Stripe
@@ -2675,6 +2694,8 @@ async function pruneExpiredAuthState(db) {
   const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
   await db.batch([
     db.prepare('DELETE FROM rate_limit_events WHERE created_at < ?').bind(cutoff),
+    // #4542: a counter whose window has passed is dead weight.
+    db.prepare('DELETE FROM rate_limit_counters WHERE window_start < ?').bind(cutoff),
     db.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM email_verification_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM password_reset_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
@@ -3501,6 +3522,14 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
       DELETE FROM user_blocks WHERE (blocker_user_id = ? OR blocked_user_id = ?)
         AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, userId, ...guardBinds),
+    // #4598: the addresses a person ships to go with them (gated like the rest).
+    db.prepare(`
+      DELETE FROM user_addresses WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
+    // #4611: and so do the lines of their basket.
+    db.prepare(`
+      DELETE FROM basket_lines WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
   );
 
   const batchResults = await db.batch(statements);
@@ -3810,6 +3839,18 @@ async function exportCommunicationData(db, userId) {
     SELECT status, text, answer_text, answered_at, created_at, closed_at FROM assistant_questions
     WHERE shopper_user_id = ? ORDER BY created_at ASC
   `).bind(userId).all();
+  // #4598: the addresses the person keeps for shipping (their own data, listed as they entered it).
+  const addresses = await db.prepare(
+    'SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, address_id',
+  ).bind(userId).all();
+  // #4611: the lines of the person's basket (an item and how many; the price is never stored on a line).
+  const basketLines = await db.prepare(`
+    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name
+    FROM basket_lines b
+    LEFT JOIN placed_instances pi ON pi.instance_id = b.instance_id
+    LEFT JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    WHERE b.user_id = ? ORDER BY b.added_at ASC, b.instance_id
+  `).bind(userId).all();
   const blocks = await db.prepare(`
     SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
     LEFT JOIN users u ON u.user_id = b.blocked_user_id
@@ -3851,6 +3892,8 @@ async function exportCommunicationData(db, userId) {
       closedAt: row.closed_at,
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    addresses: addresses.results.map(addressFromRow),
+    basketLines: basketLines.results.map(basketLineFromRow),
     contentEditHistory: editHistory.results.map((row) => {
       let snapshot = null;
       try { snapshot = JSON.parse(row.snapshot_json); } catch { snapshot = row.snapshot_json; }
@@ -4075,7 +4118,7 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
   `).bind(builderId).all();
 
   return {
-    purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
+    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row) })), // #4600: the buyer's own order reads its tracking
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     videoGenerationJobs: videoGenerationJobs.results.map((row) => ({

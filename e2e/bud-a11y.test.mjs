@@ -28,6 +28,10 @@ for (const mode of ['shop', 'build', 'sell']) {
   if (mode === 'build') { await claimLandlet(page); await page.waitForTimeout(800); }
   await page.waitForSelector(`body[data-mode="${mode}"][data-bud="on"]`, { timeout: 30000 });
 
+  // #4591: the world canvas is named for the mode it is in (it carried the Build wording in every mode).
+  const worldName = await page.getAttribute('canvas#app', 'aria-label');
+  check(mode === 'build' ? /Build view/.test(worldName) : !/Build|place it/.test(worldName), `${mode}: the world canvas is named for this mode (got ${JSON.stringify(worldName)})`);
+
   // The head: linked to its menu, closed.
   check((await page.getAttribute('#account-menu-toggle', 'aria-controls')) === 'account-menu-panel', `${mode}: the head names the menu it opens (aria-controls)`);
   check((await page.getAttribute('#account-menu-toggle', 'aria-expanded')) === 'false', `${mode}: the head says the menu is closed`);
@@ -52,6 +56,20 @@ for (const mode of ['shop', 'build', 'sell']) {
   check(small.length === 0, `${mode}: no text under 12px in the menu (${JSON.stringify(small)})`);
   const tiny = await tapTargetsUnder44();
   check(tiny.length === 0, `${mode}: every control in the menu is at least 44px (${JSON.stringify(tiny)})`);
+
+  // #4581: keyboard focus on a mode petal is drawn. The petal is clipped to its leaf shape, which cuts a ring
+  // off, so focus inverts it: its fill must differ from what it was unfocused (it was the browser's invisible 1px ring).
+  for (const target of ['shop', 'build', 'sell']) {
+    const petal = `#bud-modes [data-mode="${target}"]`;
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    const before = await page.$eval(petal, (el) => getComputedStyle(el).backgroundColor);
+    await page.focus(petal);
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab'); // arriving by keyboard: :focus-visible
+    const after = await page.$eval(petal, (el) => ({ fv: el.matches(':focus-visible'), bg: getComputedStyle(el).backgroundColor }));
+    check(after.fv && after.bg !== before, `${mode}: keyboard focus on the ${target} petal changes its fill (${before} -> ${after.bg})`);
+  }
+  await page.focus('#account-menu-toggle');
 
   // Escape closes the menu and gives focus back to the head.
   await page.keyboard.press('Escape');

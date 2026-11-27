@@ -3,6 +3,7 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { describe, expect, it } from 'vitest';
 import {
   FAR_BBOX_TOLERANCE,
+  FAR_BUDGET_STEPS,
   FAR_MAX_TRIANGLES,
   MID_MAX_TRIANGLES,
   MID_MIN_TRIANGLES,
@@ -14,7 +15,7 @@ import {
 } from './modelTiers.js';
 import { boundaryEdgeCountSteps, countTriangles } from './geometrySimplify.js';
 import { fidelityBatches } from './modelTiers.js';
-import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, FAR_HEAVIER_LIMITS } from './tierFidelity.js';
 
 // ---- Fixtures: procedural stand-ins for real uploads ----
 
@@ -270,7 +271,9 @@ describe('every simpler version still reads as the model (#4062)', () => {
     const { mid, far, stats } = buildModelTiersSync(model);
     const full = fidelityBatches(model);
     expect(isFaithful(silhouetteFidelity(full, fidelityBatches(mid.object)), 'mid')).toBe(true);
-    expect(isFaithful(silhouetteFidelity(full, fidelityBatches(far.object)), 'far')).toBe(true);
+    // #4111: a far version passes the usual limits, or (only after those failed) the heavier version's own.
+    const farReport = silhouetteFidelity(full, fidelityBatches(far.object));
+    expect(isFaithful(farReport, 'far') || isFaithful(farReport, FAR_HEAVIER_LIMITS)).toBe(true);
     expect(stats.far).toBeGreaterThan(0);
   });
 
@@ -628,7 +631,9 @@ describe('buildModelTiersSync', () => {
   it('keeps every part of a multi-mesh model in the far version, merged into one mesh', () => {
     const { far, stats } = buildModelTiersSync(multiMesh());
     expect(meshesOf(far.object)).toHaveLength(1);
-    expect(stats.far).toBeLessThanOrEqual(FAR_MAX_TRIANGLES);
+    // #4111: three smooth parts do not stand for themselves in 200 triangles (the usual far budget covered 61%); the
+    // heavier version, three times the budget, is the most a far version ever has.
+    expect(stats.far).toBeLessThanOrEqual(FAR_MAX_TRIANGLES * Math.max(1, ...FAR_BUDGET_STEPS));
     // All three colours survive in the baked vertex colours.
     const color = meshesOf(far.object)[0].geometry.attributes.color;
     let hasRed = false;
@@ -876,14 +881,105 @@ describe('far colour of a textured model (#4111)', () => {
     expect(bare.r).toBeLessThan(0.8);
   });
 
-  it('a heavily reduced textured model has one colour on every vertex of its far version, with no gradient', () => {
+  it('a heavily reduced textured model whose faces look alike has one colour on every vertex of its far version, with no gradient', () => {
     const { far } = buildModelTiersSync(denseScan(), { midTextureMaxSize: 16 });
     const color = meshesOf(far.object)[0].geometry.attributes.color;
     const first = [color.getX(0), color.getY(0), color.getZ(0)];
+    // #4302: the far colour is now taken per facing, so two faces of a model that looks the same all round differ by
+    // the noise of sampling its texture (a tenth of a percent here), not by anything a person could see: 0.02 is far
+    // below the pale-rim-against-dark-face gap the facing colour exists for (see 'far colour by facing').
     for (let i = 1; i < color.count; i++) {
-      expect(color.getX(i)).toBeCloseTo(first[0], 5);
-      expect(color.getY(i)).toBeCloseTo(first[1], 5);
-      expect(color.getZ(i)).toBeCloseTo(first[2], 5);
+      expect(Math.abs(color.getX(i) - first[0])).toBeLessThan(0.02);
+      expect(Math.abs(color.getY(i) - first[1])).toBeLessThan(0.02);
+      expect(Math.abs(color.getZ(i) - first[2])).toBeLessThan(0.02);
     }
+  });
+});
+
+// #4302 (#4111): the far version of a textured model took one colour for the whole mesh, so a brick with a pale rim and
+// dark faces came out terracotta. Each far triangle is coloured by what faces its way.
+describe('far colour by facing (#4302)', () => {
+  // A 2 x 1 texture (pale, dark) on a box finely cut enough to need the heavy reduction (more than FAR_MAX_TRIANGLES
+  // triangles): the top face (+y) reads the pale texel and every other face the dark one.
+  function paleTopBox() {
+    const geometry = new THREE.BoxGeometry(2, 1, 1, 10, 5, 5);
+    const normal = geometry.attributes.normal;
+    const uv = geometry.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, normal.getY(i) > 0.5 ? 0.25 : 0.75, 0.5);
+    const data = new Uint8Array([230, 190, 150, 255, 60, 50, 40, 255]);
+    const texture = new THREE.DataTexture(data, 2, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.magFilter = THREE.NearestFilter;
+    texture.needsUpdate = true;
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map: texture })));
+    return group;
+  }
+
+  // The mean vertex colour of the far version's triangles whose normal points along `axis` (0 x, 1 y, 2 z, positive).
+  function farColourFacing(far, axis) {
+    const sum = [0, 0, 0];
+    let weight = 0;
+    for (const mesh of meshesOf(far)) {
+      const position = mesh.geometry.attributes.position;
+      const color = mesh.geometry.attributes.color;
+      const pa = new THREE.Vector3(), pb = new THREE.Vector3(), pc = new THREE.Vector3(), n = new THREE.Vector3();
+      for (let t = 0; t + 2 < position.count; t += 3) {
+        pa.fromBufferAttribute(position, t); pb.fromBufferAttribute(position, t + 1); pc.fromBufferAttribute(position, t + 2);
+        n.subVectors(pb, pa).cross(pc.sub(pa));
+        const area = n.length() / 2;
+        n.normalize();
+        if (n.getComponent(axis) < 0.9) continue;
+        for (let v = 0; v < 3; v++) { sum[0] += area * color.getX(t + v); sum[1] += area * color.getY(t + v); sum[2] += area * color.getZ(t + v); }
+        weight += area * 3;
+      }
+    }
+    return weight > 0 ? sum.map((v) => v / weight) : null;
+  }
+
+  it('colours the far version dark on its dark faces and pale on its pale one, not one mean everywhere', () => {
+    const { far } = buildModelTiersSync(paleTopBox());
+    const top = farColourFacing(far.object, 1);
+    const front = farColourFacing(far.object, 2);
+    expect(top).not.toBeNull();
+    expect(front).not.toBeNull();
+    // Linear light: the pale texel is about 0.8 / 0.5 / 0.3, the dark one about 0.05 / 0.03 / 0.02.
+    expect(top[0]).toBeGreaterThan(0.5);
+    expect(front[0]).toBeLessThan(0.12);
+    expect(top[0] / front[0]).toBeGreaterThan(4);
+  });
+
+  it('leaves a model with no texture exactly as it was (one colour per face already)', () => {
+    const { far } = buildModelTiersSync(brick());
+    const top = farColourFacing(far.object, 1);
+    const front = farColourFacing(far.object, 2);
+    if (top && front) for (let c = 0; c < 3; c++) expect(Math.abs(top[c] - front[c])).toBeLessThan(1e-6);
+  });
+});
+
+// #4111: a metalness map says where a model is metal; the far version darkens those regions as a scalar metalness does.
+describe('far colour of a model with a metalness map (#4111)', () => {
+  function metalBox(metalBlue) {
+    const geometry = new THREE.BoxGeometry(2, 1, 1, 10, 5, 5); // more than FAR_MAX_TRIANGLES triangles: the heavy reduction
+    const data = new Uint8Array([200, 200, 200, 255]);
+    const albedo = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    albedo.colorSpace = THREE.SRGBColorSpace;
+    albedo.needsUpdate = true;
+    const metal = new THREE.DataTexture(new Uint8Array([0, 128, metalBlue, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    metal.needsUpdate = true;
+    const material = new THREE.MeshStandardMaterial({ map: albedo, metalnessMap: metal, metalness: 1 });
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(geometry, material));
+    return group;
+  }
+
+  it('is darker where the metalness map says metal than where it says not', () => {
+    const matte = farAverageColor(buildModelTiersSync(metalBox(0)).far.object);
+    const metallic = farAverageColor(buildModelTiersSync(metalBox(255)).far.object);
+    // Fully metal keeps 35% of the colour (1 - FAR_METAL_DARKENING); not metal keeps all of it.
+    expect(metallic.r / matte.r).toBeGreaterThan(0.3);
+    expect(metallic.r / matte.r).toBeLessThan(0.4);
   });
 });

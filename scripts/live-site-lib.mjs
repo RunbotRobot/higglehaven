@@ -18,6 +18,7 @@ export function touchDeviceForSize(text) {
 }
 
 export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
+export const FAIL_KINDS = ['401', '403', '429', '500', '503', 'offline'];
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
 // #3817: steps named for what a person does with the flower, so a look does not depend on
@@ -254,6 +255,15 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [x, y, dx, dy] };
     }
+    case 'nudge': {
+      // #4570: nudge:<x|y|z>:<+|->: with an item selected in Build, tap that arrowhead of the movement axes.
+      need(2);
+      const axis = String(args[0]).toLowerCase();
+      if (args.length !== 2 || !['x', 'y', 'z'].includes(axis) || !['+', '-'].includes(args[1])) {
+        throw new Error(`step "${token}": nudge needs an axis and a sign (nudge:x:+)`);
+      }
+      return { command, args: [axis, args[1]] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -270,11 +280,29 @@ function parseStepWithoutBurst(token, command, args) {
       if (!(Number(args[0]) >= 0.02 && Number(args[0]) <= 1)) throw new Error(`step "${token}": slow needs a rate from 0.02 to 1 (slow:0.1 is ten times slower, slow:1 is normal)`);
       return { command, args: [Number(args[0])] };
     }
+    case 'fail': {
+      // fail:<401|403|429|500|503|offline>[:<route text>] (#4576): from now on every /api call (or only those whose
+      // path contains the route text) is answered with that failure, so a walk can see what a person reads when
+      // things go wrong; `unfail` stops. The 429 carries the numbers a real one does.
+      need(1);
+      if (!FAIL_KINDS.includes(args[0])) throw new Error(`step "${token}": fail must be one of ${FAIL_KINDS.join(', ')}`);
+      return { command, args: args[1] ? [args[0], args.slice(1).join(':')] : [args[0]] };
+    }
+    case 'unfail':
+      return { command, args: [] };
     case 'key':
       // key:KeyN, key:Escape, key:Shift+KeyN: one Playwright key name.
       need(1);
       if (!/^[A-Za-z0-9+]+$/.test(args[0])) throw new Error(`step "${token}": key needs a key name such as KeyN, Escape or Shift+KeyN`);
       return { command, args: [args[0]] };
+    case 'type': {
+      // #4572: type:<selector>:<text>: put real key presses into a text box (a message, a search). The selector
+      // is the first argument and holds no ":" (an id or a class is enough); everything after it is the text,
+      // colons included.
+      need(2);
+      if (!args[0]) throw new Error(`step "${token}": type needs a selector, then the text (type:#dm-input:hello)`);
+      return { command, args: [args[0], args.slice(1).join(':')] };
+    }
     case 'shot':
       return { command, args: [args[0] || ''] };
     case 'burst': {
@@ -331,7 +359,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
   }
 }
 

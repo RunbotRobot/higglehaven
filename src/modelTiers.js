@@ -50,7 +50,7 @@ import {
 } from 'three';
 import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
-import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, FAR_HEAVIER_LIMITS } from './tierFidelity.js';
 import {
   boundaryEdgeCountSteps, countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps,
   MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION,
@@ -99,6 +99,9 @@ const HULL_DIRECTIONS = (() => {
 export const FAR_TRIANGLE_FRACTION = 0.01;
 export const FAR_MIN_TRIANGLES = 24;
 export const FAR_MAX_TRIANGLES = 200;
+// #4111: the far budget a model that fails at FAR_MAX_TRIANGLES and as an outline may be tried at, as multiples of it
+// (one step: nothing heavier than three times the usual far budget is ever a far version).
+export const FAR_BUDGET_STEPS = [3];
 // Fewest triangles one part keeps in the far model. When a model has more
 // parts than the budget can give this to, the smallest parts (by bounding
 // volume) are left out of the far model; the bounding-box fit below keeps
@@ -497,7 +500,7 @@ function litColorOf(mesh, getPixels) {
   // A texture whose pixels cannot be read gives no colour to compare, not a wrong one.
   if (map && !pixels) return null;
   if (pixels) {
-    const mean = textureMeanOverSurface(mesh.geometry, map, pixels);
+    const mean = textureMeanOverSurface(mesh.geometry, map, pixels, metalShadeOf(material, getPixels, map));
     base.r *= mean.r; base.g *= mean.g; base.b *= mean.b;
   }
   const { diffuseScale, emissive } = shadingOf(material);
@@ -687,7 +690,7 @@ function meanTextureColor(texture, pixels) {
 // a mesh has more than TEXTURE_AREA_MEAN_MAX_TRIANGLES. A mesh with no UVs falls back to the whole-texture mean.
 const TEXTURE_AREA_MEAN_MAX_TRIANGLES = 20000;
 const TEXTURE_AREA_SAMPLE_POINTS = [[1 / 3, 1 / 3], [0.8, 0.1], [0.1, 0.8], [0.1, 0.1]];
-export function textureMeanOverSurface(geometry, texture, pixels) {
+export function textureMeanOverSurface(geometry, texture, pixels, shade = null) {
   const uv = geometry.attributes.uv;
   const position = geometry.attributes.position;
   if (!uv || !position) return meanTextureColor(texture, pixels);
@@ -709,7 +712,8 @@ export function textureMeanOverSurface(geometry, texture, pixels) {
       const u = wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic);
       const v = wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic);
       sampleTexture(texture, pixels, u, v, tmp);
-      tr += tmp.r; tg += tmp.g; tb += tmp.b;
+      const k = metalDarkening(shade, u, v);
+      tr += tmp.r * k; tg += tmp.g * k; tb += tmp.b * k;
     }
     const n = TEXTURE_AREA_SAMPLE_POINTS.length;
     total += area;
@@ -734,12 +738,35 @@ function sampleTexture(texture, pixels, u, v, target) {
   return toLinear(texture, data[i], data[i + 1], data[i + 2], target);
 }
 
+// #4111: a metalness map says WHERE a model is metal. The far material is not metal, so a metal region it draws from
+// its base colour comes out much lighter than the full model, which (no environment light here) draws metal from the
+// sun and sky only: the owner's "Toilet - Very Dirty" is metallic 1 with a metal/roughness texture, dark and grimy in
+// full and pale beige in its far version (colour shift 0.39). The map is read at the same texture coordinates as the
+// base colour map (three reads metalness from the blue channel, times the factor), and the colour sampled there is
+// darkened as a scalar metalness is (FAR_METAL_DARKENING). null when there is no readable metalness map beside a
+// base colour map that uses the same UV set: a scalar alone is handled by shadingOf as before.
+function metalShadeOf(material, getPixels, albedoMap) {
+  const metalMap = material && material.metalnessMap;
+  if (!metalMap || !getPixels || !albedoMap) return null;
+  if ((metalMap.channel || 0) !== (albedoMap.channel || 0)) return null;
+  const pixels = getPixels(metalMap);
+  if (!pixels) return null;
+  const factor = typeof material.metalness === 'number' ? clamp(material.metalness, 0, 1) : 1;
+  return { map: metalMap, pixels, factor };
+}
+const METAL_SAMPLE = new Color();
+function metalDarkening(shade, u, v) {
+  if (!shade) return 1;
+  sampleTexture(shade.map, shade.pixels, u, v, METAL_SAMPLE);
+  return 1 - FAR_METAL_DARKENING * clamp(shade.factor * METAL_SAMPLE.b, 0, 1);
+}
+
 // #4111: the far colour is what the full model looks like lit, not its raw base colour. This world has
 // no environment light, so a metal surface is drawn from its sun and sky light only, much darker than
 // its base colour, while the far material (metalness 0) drew that same base colour at full strength: a
 // metal fixture turned white at mid distance. A metal keeps a floor of its colour for the highlights a
-// flat far surface cannot show. A metalness map is not read (a scalar of 1 beside a map says nothing
-// about where the metal is). Emission is added, since the far material is not emissive.
+// flat far surface cannot show. A metalness map is read where there is a base colour map beside it (metalShadeOf);
+// without one, a scalar of 1 beside a map says nothing about where the metal is. Emission is added, since the far material is not emissive.
 const FAR_METAL_DARKENING = 0.65;
 const FAR_CREASE_ANGLE = (75 * Math.PI) / 180; // a coarse far mesh turns 50 to 70 degrees between faces on a curve; a box edge (90) stays sharp
 function shadingOf(material) {
@@ -770,7 +797,8 @@ function bakeColoredGeometry(mesh, getPixels, { flat = false } = {}) {
   // between a light and a dark corner is a gradient the model does not have. When the version is a heavy
   // reduction (`flat`), each mesh takes the mean of its texture over the surface it shows instead.
   const sampled = !flat && !!(pixels && uv && count >= TEXTURE_SAMPLE_MIN_VERTICES);
-  const mean = pixels && !sampled ? (flat ? textureMeanOverSurface(source, map, pixels) : meanTextureColor(map, pixels)) : null;
+  const metalShade = pixels ? metalShadeOf(material, getPixels, map) : null;
+  const mean = pixels && !sampled ? (flat ? textureMeanOverSurface(source, map, pixels, metalShade) : meanTextureColor(map, pixels)) : null;
   const { diffuseScale, emissive } = shadingOf(material);
 
   const positions = new Float32Array(count * 3);
@@ -790,9 +818,10 @@ function bakeColoredGeometry(mesh, getPixels, { flat = false } = {}) {
     }
     if (sampled) {
       sampleTexture(map, pixels, uv.getX(i), uv.getY(i), tmp);
-      r *= tmp.r;
-      g *= tmp.g;
-      b *= tmp.b;
+      const k = metalDarkening(metalShade, uv.getX(i), uv.getY(i));
+      r *= tmp.r * k;
+      g *= tmp.g * k;
+      b *= tmp.b * k;
     } else if (mean) {
       r *= mean.r;
       g *= mean.g;
@@ -855,6 +884,140 @@ function fitBoundingBox(geometry, targetBox) {
   geometry.applyMatrix4(matrix);
 }
 
+// #4302 (#4111): a far version of a textured model took ONE colour for the whole mesh, the mean over its surface, so
+// a model whose faces differ read wrong from the side a person actually looks from: the live "Brick - Orange" has a
+// pale rim (top, bottom, ends) and dark front and back faces, its mean came out terracotta, and its far version drew
+// as a flat peach block against a dark brown brick (colour shift 0.27 from the front, 0.43 from the end). A person on
+// the ground sees the large dark faces. So the model's mean colour is also taken per facing: for each of six axis
+// directions, the area-weighted mean colour of the surface that faces that way (soft, so a curve blends instead of
+// stepping), and each triangle of the far version is coloured by its own normal's blend of them, as a ratio to the
+// overall mean so that a mesh's own hue and any other mesh's colour are kept. A model with no texture to read has one
+// colour per face already and is left as it is.
+const FACING_AXES = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const FACING_MAX_TRIANGLES = 20000;
+const FACING_MIN_MEAN = 1e-4;
+
+function facingWeights(nx, ny, nz, out) {
+  let sum = 0;
+  for (let k = 0; k < 6; k++) {
+    const d = nx * FACING_AXES[k][0] + ny * FACING_AXES[k][1] + nz * FACING_AXES[k][2];
+    const w = d > 0 ? d * d : 0;
+    out[k] = w;
+    sum += w;
+  }
+  if (!(sum > 0)) { out.fill(0); return false; }
+  for (let k = 0; k < 6; k++) out[k] /= sum;
+  return true;
+}
+
+// -> { bins: [[r,g,b] | null] x 6, overall: [r,g,b] } in the same units the textures are sampled in (linear), or
+// null when no visible mesh has a texture to read.
+function facingColorTable(visible, getPixels, rootInverse) {
+  let textured = false;
+  const binSum = Array.from({ length: 6 }, () => [0, 0, 0]);
+  const binArea = new Array(6).fill(0);
+  const overall = [0, 0, 0];
+  let overallArea = 0;
+  const w = new Array(6).fill(0);
+  const pa = new Vector3(), pb = new Vector3(), pc = new Vector3(), n = new Vector3();
+  const tmp = new Color();
+  for (const mesh of visible) {
+    const material = materialForMesh(mesh);
+    const map = material && material.map ? material.map : null;
+    const pixels = map && getPixels ? getPixels(map) : null;
+    const geometry = mesh.geometry;
+    const position = geometry.attributes.position;
+    const uv = geometry.attributes.uv;
+    if (!position) continue;
+    const base = material && material.color ? material.color : new Color(FALLBACK_BASE_COLOR);
+    const vertexColor = !material || material.vertexColors ? geometry.attributes.color : null;
+    const useTexture = !!(pixels && uv);
+    if (useTexture) textured = true;
+    const metalShade = useTexture ? metalShadeOf(material, getPixels, map) : null;
+    const matrix = new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
+    const index = geometry.index;
+    const count = index ? index.count : position.count;
+    const triangles = Math.floor(count / 3);
+    const stride = Math.max(1, Math.ceil(triangles / FACING_MAX_TRIANGLES));
+    for (let t = 0; t < triangles; t += stride) {
+      const ia = index ? index.getX(t * 3) : t * 3, ib = index ? index.getX(t * 3 + 1) : t * 3 + 1, ic = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      pa.fromBufferAttribute(position, ia).applyMatrix4(matrix);
+      pb.fromBufferAttribute(position, ib).applyMatrix4(matrix);
+      pc.fromBufferAttribute(position, ic).applyMatrix4(matrix);
+      n.subVectors(pb, pa).cross(pc.sub(pa));
+      const twice = n.length();
+      if (!(twice > 0)) continue;
+      const area = twice * 0.5;
+      n.divideScalar(twice);
+      let r = base.r, g = base.g, b = base.b;
+      if (vertexColor) {
+        r *= (vertexColor.getX(ia) + vertexColor.getX(ib) + vertexColor.getX(ic)) / 3;
+        g *= (vertexColor.getY(ia) + vertexColor.getY(ib) + vertexColor.getY(ic)) / 3;
+        b *= (vertexColor.getZ(ia) + vertexColor.getZ(ib) + vertexColor.getZ(ic)) / 3;
+      }
+      if (useTexture) {
+        let tr = 0, tg = 0, tb = 0;
+        for (const [wb, wc] of TEXTURE_AREA_SAMPLE_POINTS) {
+          const wa = 1 - wb - wc;
+          const u = wa * uv.getX(ia) + wb * uv.getX(ib) + wc * uv.getX(ic);
+          const v = wa * uv.getY(ia) + wb * uv.getY(ib) + wc * uv.getY(ic);
+          sampleTexture(map, pixels, u, v, tmp);
+          const k = metalDarkening(metalShade, u, v);
+          tr += tmp.r * k; tg += tmp.g * k; tb += tmp.b * k;
+        }
+        const samples = TEXTURE_AREA_SAMPLE_POINTS.length;
+        r *= tr / samples; g *= tg / samples; b *= tb / samples;
+      }
+      overall[0] += area * r; overall[1] += area * g; overall[2] += area * b;
+      overallArea += area;
+      if (!facingWeights(n.x, n.y, n.z, w)) continue;
+      for (let k = 0; k < 6; k++) {
+        if (!(w[k] > 0)) continue;
+        binSum[k][0] += area * w[k] * r; binSum[k][1] += area * w[k] * g; binSum[k][2] += area * w[k] * b;
+        binArea[k] += area * w[k];
+      }
+    }
+  }
+  if (!textured || !(overallArea > 0)) return null;
+  const mean = overall.map((v) => v / overallArea);
+  // A direction that hardly any surface faces has nothing of its own to say: it takes the overall mean.
+  const bins = binSum.map((sum, k) => (binArea[k] > overallArea * 0.02 ? sum.map((v) => v / binArea[k]) : null));
+  return { bins, overall: mean };
+}
+
+// Multiplies each triangle's vertex colours by (the blend of the facing means for its normal) / (the overall mean).
+// `geometry` is non-indexed (every triangle owns its three vertices) and in the space the table was taken in.
+function recolourByFacing(geometry, table) {
+  const position = geometry.attributes.position;
+  const color = geometry.attributes.color;
+  if (!position || !color || geometry.index) return;
+  const w = new Array(6).fill(0);
+  const pa = new Vector3(), pb = new Vector3(), pc = new Vector3(), n = new Vector3();
+  const { bins, overall } = table;
+  for (let t = 0; t + 2 < position.count; t += 3) {
+    pa.fromBufferAttribute(position, t); pb.fromBufferAttribute(position, t + 1); pc.fromBufferAttribute(position, t + 2);
+    n.subVectors(pb, pa).cross(pc.sub(pa));
+    const twice = n.length();
+    if (!(twice > 0) || !facingWeights(n.x / twice, n.y / twice, n.z / twice, w)) continue;
+    const blend = [0, 0, 0];
+    for (let k = 0; k < 6; k++) {
+      if (!(w[k] > 0)) continue;
+      const source = bins[k] || overall;
+      blend[0] += w[k] * source[0]; blend[1] += w[k] * source[1]; blend[2] += w[k] * source[2];
+    }
+    for (let c = 0; c < 3; c++) {
+      if (!(overall[c] > FACING_MIN_MEAN)) continue;
+      const ratio = blend[c] / overall[c];
+      for (let v = 0; v < 3; v++) {
+        const attribute = c === 0 ? 'setX' : (c === 1 ? 'setY' : 'setZ');
+        const read = c === 0 ? 'getX' : (c === 1 ? 'getY' : 'getZ');
+        color[attribute](t + v, color[read](t + v) * ratio);
+      }
+    }
+  }
+  color.needsUpdate = true;
+}
+
 function* buildFar(model, meshes, getPixels, fullBatches) {
   const visible = meshes.filter((mesh) => mesh.visible !== false);
   if (visible.length === 0) return sharedModel(model);
@@ -868,6 +1031,8 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   // #4111: known before baking, from the meshes themselves: is this a heavy reduction (see bakeColoredGeometry)?
   const sourceTriangles = visible.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
   const flat = sourceTriangles > FAR_MAX_TRIANGLES;
+  // #4302: only a heavy reduction takes one colour per mesh, so only it needs the per-facing correction.
+  const facing = flat ? facingColorTable(visible, getPixels, rootInverse) : null;
   for (const mesh of visible) {
     const baked = bakeColoredGeometry(mesh, getPixels, { flat });
     baked.applyMatrix4(new Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld));
@@ -878,56 +1043,76 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   const total = parts.reduce((sum, part) => sum + part.triangles, 0);
   if (total === 0) return sharedModel(model);
 
-  // A model already within budget keeps its own geometry (merged, coloured).
-  const target = total <= FAR_MAX_TRIANGLES ? total : clamp(Math.round(total * FAR_TRIANGLE_FRACTION), FAR_MIN_TRIANGLES, FAR_MAX_TRIANGLES);
-
-  // Too many parts to give each its minimum: keep the biggest ones.
-  let kept = parts;
-  if (total > target && parts.length * FAR_MIN_TRIANGLES_PER_MESH > target) {
-    const limit = Math.max(1, Math.floor(target / FAR_MIN_TRIANGLES_PER_MESH));
-    kept = parts
-      .map((part, index) => ({ part, index }))
-      .sort((a, b) => b.part.volume - a.part.volume || a.index - b.index)
-      .slice(0, limit)
-      .sort((a, b) => a.index - b.index)
-      .map((entry) => entry.part);
-  }
-  const keptTotal = kept.reduce((sum, part) => sum + part.triangles, 0);
-
-  const simplifiedParts = [];
-  for (const part of kept) {
-    let geometry = part.geometry;
-    if (total > target) {
-      const partTarget = Math.max(FAR_MIN_TRIANGLES_PER_MESH, Math.round((target * part.triangles) / keptTotal));
-      geometry = yield* simplifyToTarget(part.geometry, partTarget);
-    }
-    simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
-  }
-
-  const joined = mergeGeometries(simplifiedParts, false);
-  if (!joined || countTriangles(joined) === 0) return sharedModel(model);
-  // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
-  // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
-  // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
-  const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
-  fitBoundingBox(merged, fullBox);
-  merged.computeBoundingBox();
-  merged.computeBoundingSphere();
-
-  // #4062: a far version must still read as the model from every side. Single-sided drawing hid whatever
-  // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
-  // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
-  // by the model's own outline. null means not even that held: the caller uses a more detailed version.
   const unlit = visible.every((mesh) => {
     const material = materialForMesh(mesh);
     return !!(material && material.isMeshBasicMaterial);
   });
-  const simplified = farObject(merged, unlit);
-  if (tierIsFaithful(fullBatches, simplified.object, 'far', getPixels)) return simplified;
+
+  // One attempt at the model's own simplified far version at a given triangle budget: null when it is not faithful.
+  // A model already within the budget keeps its own geometry (merged, coloured).
+  const attempt = function* (budget) {
+    // The usual budget takes a hundredth of the model (within FAR_MIN_TRIANGLES..FAR_MAX_TRIANGLES); a larger one, tried
+    // only after that failed, takes the whole of it.
+    const target = total <= budget ? total : (budget === FAR_MAX_TRIANGLES ? clamp(Math.round(total * FAR_TRIANGLE_FRACTION), FAR_MIN_TRIANGLES, budget) : budget);
+
+    // Too many parts to give each its minimum: keep the biggest ones.
+    let kept = parts;
+    if (total > target && parts.length * FAR_MIN_TRIANGLES_PER_MESH > target) {
+      const limit = Math.max(1, Math.floor(target / FAR_MIN_TRIANGLES_PER_MESH));
+      kept = parts
+        .map((part, index) => ({ part, index }))
+        .sort((a, b) => b.part.volume - a.part.volume || a.index - b.index)
+        .slice(0, limit)
+        .sort((a, b) => a.index - b.index)
+        .map((entry) => entry.part);
+    }
+    const keptTotal = kept.reduce((sum, part) => sum + part.triangles, 0);
+
+    const simplifiedParts = [];
+    for (const part of kept) {
+      let geometry = part.geometry;
+      if (total > target) {
+        const partTarget = Math.max(FAR_MIN_TRIANGLES_PER_MESH, Math.round((target * part.triangles) / keptTotal));
+        geometry = yield* simplifyToTarget(part.geometry, partTarget);
+      }
+      simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
+    }
+
+    const joined = mergeGeometries(simplifiedParts, false);
+    if (!joined || countTriangles(joined) === 0) return null;
+    if (facing) recolourByFacing(joined, facing);
+    // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
+    // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
+    // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
+    const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
+    fitBoundingBox(merged, fullBox);
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+
+    // #4062: a far version must still read as the model from every side. Single-sided drawing hid whatever
+    // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
+    // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
+    // by the model's own outline.
+    const simplified = farObject(merged, unlit);
+    return tierIsFaithful(fullBatches, simplified.object, budget === FAR_MAX_TRIANGLES ? 'far' : FAR_HEAVIER_LIMITS, getPixels) ? simplified : null;
+  };
+
+  // #4111 (a person must not see the version change): the order is the cost order. The usual budget first; then the
+  // model's own outline (a few dozen triangles); then more triangles, three times the usual budget,
+  // spent only on a model the cheaper ones could not stand for (a toilet's tank and bowl, which an outline fills in).
+  // null means not even that held: the caller uses a more detailed version.
+  const first = yield* attempt(FAR_MAX_TRIANGLES);
+  if (first) return first;
   const hull = buildHullFar(parts);
+  if (hull && facing) recolourByFacing(hull, facing);
   if (hull) {
     const outline = farObject(hull, unlit);
     if (tierIsFaithful(fullBatches, outline.object, 'far', getPixels)) return outline;
+  }
+  for (const step of FAR_BUDGET_STEPS) {
+    if (total <= FAR_MAX_TRIANGLES) break; // the first attempt already held the whole model
+    const heavier = yield* attempt(FAR_MAX_TRIANGLES * step);
+    if (heavier) return heavier;
   }
   return null;
 }

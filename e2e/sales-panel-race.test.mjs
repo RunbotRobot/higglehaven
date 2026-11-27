@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openAddProductLeaf } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -100,7 +101,7 @@ await row().locator('.seller-sales-toggle').click(); // fires the slow, still-em
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ buyerLabel: 'A Race Shopper' }),
+  body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS, buyerLabel: 'A Race Shopper' }),
 });
 console.log('purchase created while the first Sales fetch was still in flight (status should be 201):', purchased.status);
 

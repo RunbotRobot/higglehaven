@@ -151,6 +151,13 @@
       "y": "REAL|1||0",
       "z": "REAL|1||0"
     },
+    "basket_lines": {
+      "added_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "instance_id": "TEXT|1||2",
+      "quantity": "INTEGER|1||0",
+      "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "user_id": "TEXT|1||1"
+    },
     "bug_reports": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "description": "TEXT|0||0",
@@ -645,10 +652,18 @@
       "seller_name": "TEXT|0||0",
       "seller_user_id": "TEXT|0||0",
       "shipped_at": "TEXT|0||0",
+      "shipping_address_json": "TEXT|0||0",
+      "shipping_carrier": "TEXT|0||0",
       "stripe_payout_id": "TEXT|0||0",
       "template_id": "TEXT|1||0",
       "total_cents": "INTEGER|1||0",
+      "tracking_number": "TEXT|0||0",
       "unit_price_cents": "INTEGER|1||0"
+    },
+    "rate_limit_counters": {
+      "bucket_key": "TEXT|0||1",
+      "count": "INTEGER|1||0",
+      "window_start": "INTEGER|1||0"
     },
     "rate_limit_events": {
       "bucket_key": "TEXT|1||0",
@@ -816,6 +831,21 @@
       "title": "TEXT|1||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0"
     },
+    "user_addresses": {
+      "address_id": "TEXT|0||1",
+      "city": "TEXT|1||0",
+      "country": "TEXT|1||0",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "is_default": "INTEGER|1|0|0",
+      "line1": "TEXT|1||0",
+      "line2": "TEXT|0||0",
+      "phone": "TEXT|0||0",
+      "postal_code": "TEXT|1||0",
+      "recipient_name": "TEXT|1||0",
+      "region": "TEXT|0||0",
+      "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "user_id": "TEXT|1||0"
+    },
     "user_blocks": {
       "blocked_user_id": "TEXT|1||2",
       "blocker_user_id": "TEXT|1||1",
@@ -840,6 +870,7 @@
       "card_refusal_decline_code": "TEXT|0||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "deleted_at": "TEXT|0||0",
+      "dim_unshippable": "INTEGER|0||0",
       "email": "TEXT|1||0",
       "email_canonical": "TEXT|0||0",
       "email_verified_at": "TEXT|0||0",
@@ -851,6 +882,7 @@
       "loading_tips_off": "INTEGER|0||0",
       "locked_until": "TEXT|0||0",
       "password_hash": "TEXT|1||0",
+      "shipping_country": "TEXT|0||0",
       "tax_form_completed_at": "TEXT|0||0",
       "tax_form_type": "TEXT|0||0",
       "tax_id_encrypted": "TEXT|0||0",
@@ -1117,6 +1149,10 @@
     "index:idx_credit_orbs_collected_at": {
       "tbl": "credit_orbs",
       "sql": "CREATE INDEX idx_credit_orbs_collected_at ON credit_orbs(collected_at)"
+    },
+    "index:idx_credit_orbs_landlet_collected": {
+      "tbl": "credit_orbs",
+      "sql": "CREATE INDEX idx_credit_orbs_landlet_collected ON credit_orbs (landlet_id, collected_at)"
     },
     "index:idx_credit_orbs_spawned_at": {
       "tbl": "credit_orbs",
@@ -1386,6 +1422,10 @@
       "tbl": "purchases",
       "sql": "CREATE INDEX idx_purchases_template_id ON purchases(template_id, created_at)"
     },
+    "index:idx_rate_limit_counters_window": {
+      "tbl": "rate_limit_counters",
+      "sql": "CREATE INDEX idx_rate_limit_counters_window ON rate_limit_counters (window_start)"
+    },
     "index:idx_rate_limit_events_bucket_created": {
       "tbl": "rate_limit_events",
       "sql": "CREATE INDEX idx_rate_limit_events_bucket_created ON rate_limit_events (bucket_key, created_at)"
@@ -1453,6 +1493,14 @@
     "index:idx_tax_education_content_jurisdiction": {
       "tbl": "tax_education_content",
       "sql": "CREATE INDEX idx_tax_education_content_jurisdiction ON tax_education_content(country_code, state_code)"
+    },
+    "index:idx_user_addresses_one_default": {
+      "tbl": "user_addresses",
+      "sql": "CREATE UNIQUE INDEX idx_user_addresses_one_default ON user_addresses(user_id) WHERE is_default = 1"
+    },
+    "index:idx_user_addresses_user": {
+      "tbl": "user_addresses",
+      "sql": "CREATE INDEX idx_user_addresses_user ON user_addresses(user_id)"
     },
     "index:idx_user_blocks_blocked": {
       "tbl": "user_blocks",

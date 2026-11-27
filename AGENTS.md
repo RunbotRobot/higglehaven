@@ -37,7 +37,8 @@
   to stay in Build), Draco/Basis compression and mesh-merge on save (§3,
   tracked under #4063/#4366), 30% withholding without a W-8BEN (§7, #4392),
   multi-currency higgles (§5, #4393), international shipping filter, zone
-  costs and combined shipping (§5, #4394, owner-gated), builder-chosen
+  costs and combined shipping (§5, #4394: decided 2026-11-27, the full plan is
+  being built, leaves #4598 to #4605), builder-chosen
   ambient music (§6, #4395, owner-gated), and prompt mode built on an 8x8
   colour grid rather than CLIP (§3, #4396). Avatar-avatar crowding (§2) is
   now built (#4400). See
@@ -76,7 +77,7 @@ Steps: `walk:<forward|back|left|right>[:ms]`,
 `aim:<up|down|left|right>[:ms]` (holds the look joystick, which is what steers
 the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
 looks at the sky (flight is level, so it does not climb: height is the right-edge slide, #4105); `look` drags the page and does not turn the camera in Shop),
-`rise:<up|down>[:ms]` (a finger sliding along the right edge while flying: up rises, down sinks, #4105), `look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `dragitem:<n>:<dx>:<dy>` (in Build, selects the n-th item and drags it dx, dy pixels with a real mouse, and reports where it stood before and after in lándlet metres, #4198; it moves the item, so use it on the fleet's lándlet or a local world and drag it back), `mode:<shop|build|sell>`, `fly`,
+`rise:<up|down>[:ms]` (a finger sliding along the right edge while flying: up rises, down sinks, #4105), `look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `item[:n]` (in Build, taps the n-th placed item on screen, left to right, so its card can be looked at, #3930), `dragitem:<n>:<dx>:<dy>` (in Build, selects the n-th item and drags it dx, dy pixels with a real mouse, and reports where it stood before and after in lándlet metres, #4198; it moves the item, so use it on the fleet's lándlet or a local world and drag it back), `nudge:<x|y|z>:<+|->` (in Build, with an item selected, taps that arrowhead of the movement axes, 0.1 m a tap, and reports where the item stood before and after, #4570; Undo puts it back), `mode:<shop|build|sell>`, `fly`,
 `land` (every Shop arrival starts in flight 80 m up looking down, by design, and walking
 forward there descends; put `land` first to walk on the ground),
 `menu` (open the flower's general menu if it is closed),
@@ -84,6 +85,7 @@ forward there descends; put `land` first to walk on the ground),
 control by what it is, not by where it sits; prefer them to `tap:<x>:<y>`), `settings`,
 `idle`, `wait:<ms>`, `shot[:name]`, `stats`, `lap` (like `stats`, then counts afresh: the figures since the last `lap`, one row per phase), `marks` (the page's own start-up marks, request count and slowest requests, in ms since the navigation: after a `mode:` step it reads the reload that switch caused, #3873), `cover`, and
 `slow:<rate>` (the page's CSS animations run at that fraction of their speed, `slow:0.1` for ten times slower, `slow:1` to restore, so a burst can catch a 300 ms unfold even where each still takes longer),
+`fail:<401|403|429|500|503|offline>[:<route text>]` (every `/api` call, or only those whose path contains the route text, is answered with that failure until `unfail`, with the body the real worker sends and the numbers a real 429 carries, so a walk can read what a person sees when things go wrong, #4576),
 `burst:<name>:<count>:<ms>` (stills a few hundred ms apart; add `:burst:<name>:<count>:<ms>`
 to the end of any step to take them while it runs, as in
 `walk:forward:2000:burst:walk:4:500`, so legs moving or a leaf unfolding can be read from
@@ -1699,6 +1701,32 @@ most likely to come up again.
   what cannot be shown (a name when asked for, words they say). Before
   adding a label to something in the world, look for the animation, pose
   or effect that says it.
+
+- **Physical shipping is built now, the whole plan and not a first slice;
+  and an address is read only by its owner and by the buyer and seller of
+  the order it was used for.** (2026-11-27, #4394.) Reading the code for an
+  old gap against docs/SPEC.md, higglehaven1 found that a physical product
+  could be bought and the seller had a Mark shipped button, yet nothing ever
+  asked the buyer where to send it. Offered an address step for the United
+  States only (A, recommended), the full plan of docs/SPEC.md section 5 (B)
+  or waiting until real sellers were close (C), the owner: "Let's jump in
+  with the full shipping plan (B). Better to keep the push going." So:
+  addresses kept on the account; an address step when a physical product is
+  bought, with the order keeping its own copy; the seller's ship-to and a
+  tracking number on Mark shipped; zones in place of the single United
+  States only switch; the shopper's filter that dims what cannot be sent to
+  them; a cost per zone; and a basket across sellers with combined shipping,
+  designed before it is built (#4598 to #4605). The principles. When a gap
+  is found in something already being sold and the spec already says what
+  the whole thing is, the owner would rather the whole thing be built while
+  the fleet has the capacity than be asked again slice by slice; a
+  recommendation for the smaller option is only a recommendation. And
+  personal data of a new kind is taken in only for the job it does: an
+  address belongs to its owner, is copied onto the order it ships, and is
+  read by that order's buyer and seller and by nothing else without a
+  decision of its own (the look-only admin role sees it masked). Still the
+  owner's: how a zone's cost shows in the price a shopper sees (#4603), and
+  sales tax (#1402). Customs and duties are not handled.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 

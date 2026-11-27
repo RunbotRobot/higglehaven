@@ -12,10 +12,34 @@ const API_BASE = '/api';
 // may see: player copy for a known stable `code` (src/errorCopy.js), else the
 // server's own text, else `fallback`. The server's original text stays on
 // `serverMessage` for logs and diagnostics, with `code` and the HTTP `status`.
+// #4577: a session that ended while the page was open answered every call with the worker's
+// "Not authenticated", which each leaf then showed word for word. One place now says it in player words and
+// tells the account code once, so it can offer sign-in (src/account/auth.js); the account code does nothing
+// for a visitor who was never signed in. The /auth/* routes answer their own 401s (a wrong password).
+const SESSION_ENDED_MESSAGE = 'Your session ended. Sign in again to keep going.';
+let sessionEndedHandler = null;
+export function setSessionEndedHandler(handler) {
+  sessionEndedHandler = handler;
+}
+function isEndedSession(response, body) {
+  if (response.status !== 401 || body.error !== 'Not authenticated') return false;
+  try {
+    return !new URL(response.url, 'https://x.invalid').pathname.startsWith('/api/auth/');
+  } catch {
+    return false;
+  }
+}
+
 function apiError(response, body, fallback) {
-  const error = new Error(playerErrorMessage(body.code, body.error || fallback));
+  const endedSession = isEndedSession(response, body);
+  const error = new Error(endedSession ? SESSION_ENDED_MESSAGE : playerErrorMessage(body.code, body.error || fallback));
+  if (endedSession) {
+    error.sessionEnded = true;
+    try { sessionEndedHandler?.(); } catch (handlerError) { console.warn('Session-ended handler failed:', handlerError); }
+  }
   error.serverMessage = body.error;
   error.code = body.code;
+  error.field = body.field; // #4598: the field a validation refusal names
   error.status = response.status;
   // #3447: the whole body, for the few callers that act on a flag the server
   // sends beside the message (assistantBusy, conversationEnded, ...).
@@ -377,6 +401,38 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
+// #4598 (Shipping 1/8): a person's own addresses. The server decides every rule; the client shows its answers.
+export async function fetchAddresses() {
+  return requestJson('/addresses');
+}
+
+// #4602 (Shipping 5/8): where "ships to me" is judged from, and the dim switch. The server decides the country.
+export async function fetchShippingDestination() {
+  return requestJson('/shipping-destination');
+}
+
+export async function saveShippingDestination(change) {
+  return requestJson('/shipping-destination', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(change) });
+}
+
+const JSON_HEADERS = { 'content-type': 'application/json' };
+
+export async function addAddress(address) {
+  return requestJson('/addresses', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(address) });
+}
+
+export async function editAddress(addressId, address) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(address) });
+}
+
+export async function removeAddress(addressId) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}`, { method: 'DELETE' });
+}
+
+export async function makeAddressDefault(addressId) {
+  return requestJson(`/addresses/${encodeURIComponent(addressId)}/default`, { method: 'POST' });
+}
+
 // #2067 (leaf sub-issue of #1973, part of #1947): this account's opt-in
 // for an email alert on top of the dashboard notification already fired
 // unconditionally when a placed product sells out.
@@ -565,8 +621,21 @@ export async function fetchMyTaxEducation() {
 
 // Seller-initiated once a physical real-money order has actually been
 // shipped — starts the 7-day payout-hold fallback clock (see #454).
-export async function markPurchaseShipped(purchaseId) {
-  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, { method: 'POST' });
+export async function markPurchaseShipped(purchaseId, { carrier = '', trackingNumber = '' } = {}) {
+  // #4600: the carrier and tracking number are optional; both go with the one request.
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, {
+    method: 'POST',
+    body: JSON.stringify({ carrier, trackingNumber }),
+  });
+  return purchase;
+}
+
+// #4600: the seller corrects the carrier and tracking number of an order already marked shipped (empty clears one).
+export async function setPurchaseTracking(purchaseId, { carrier = '', trackingNumber = '' } = {}) {
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/tracking`, {
+    method: 'PATCH',
+    body: JSON.stringify({ carrier, trackingNumber }),
+  });
   return purchase;
 }
 
@@ -2002,12 +2071,13 @@ export async function getPurchaseQuote(instanceId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
 }
 
-export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents } = {}) {
+export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents, shippingAddress } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     // #4456: the price the shopper saw; the server refuses, uncharged, if it has changed since.
-    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
+    // #4599: where a shipped product goes (left out for a digital good); the server checks it and keeps a copy on the order.
+    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, shippingAddress, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
   });
 }
 

@@ -2782,6 +2782,24 @@ user id (see "Rate limiting" above).
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
 ```
 
+**Carrier and tracking number (#4600, shipping 3/8).** The body is optional JSON `{ "carrier": "Royal Mail",
+"trackingNumber": "RM123456789GB" }`; both fields are optional free text, trimmed, `carrier` at most 40 characters
+and `trackingNumber` at most 64, with control characters and non-text values refused (`400`); an empty string leaves
+one unset. They are stored in `purchases.shipping_carrier` / `tracking_number` (migration 0245) and returned as
+`shippingCarrier` / `trackingNumber` (null when not given) by exactly four reads: this route's own response, the
+seller's `GET /api/purchases?mine=seller` and `GET /api/purchases?templateId=`, the buyer's `GET /api/purchases/mine`,
+and the buyer's account export. They are deliberately not part of the purchase shape the lándlet host's
+`GET /api/purchases?builderId=` returns. `PATCH /api/purchases/:purchaseId/tracking` with the same body corrects them
+afterwards: the order's own seller (or the admin fallback above, logged as `tracking_override`), `409` before the order
+is marked shipped, `400` once refunded, same rate limit as Mark shipped; it sends no second notice.
+
+**Where to send it (#4600, shipping 3/8).** The same two seller reads, `GET /api/purchases?mine=seller` and
+`GET /api/purchases?templateId=`, carry each sale's `shippingAddress`: the order's own copy of the address the buyer gave
+at checkout (`{ name, line1, line2, city, region, postalCode, country }`), or `null` for a digital good or an order made
+before addresses were asked for. Like the carrier and tracking number it is deliberately not part of the shape the host's
+`GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
+shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`
@@ -6024,6 +6042,95 @@ documents for itself), no e2e session can actually reach
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
 
+## Addresses (#4598)
+
+The addresses a person ships to, kept on the account (`migrations/0244_user_addresses.sql`, keyed on `user_id`).
+Personal data of a new kind: every route needs a current (not suspended) session and reads and writes only the
+caller's own rows. Another person's address answers `404 Address not found`, exactly like one that does not exist.
+No admin page reads them (the look-only role will see them masked when one does). Writes share an
+`address-mutate` rate limit (30 per window). Later shipping pieces copy an address onto an order for that
+order's buyer and seller; nothing else reads one.
+
+An address is `{ recipientName, line1, line2, city, region, postalCode, country, phone }`. Required: recipient
+name, line 1, city, postal code, country (an ISO 3166-1 alpha-2 code, upper-cased); a state or region is also
+required for `US`, `CA` and `AU`. Postal codes get a light check by country (5 digits or ZIP+4 for `US`, `A1A 1A1`
+for `CA`, 3 to 12 letters, digits, spaces or hyphens elsewhere). Phone is optional (digits, spaces, `+ ( ) -`).
+A refusal is `400 { error, field }` naming the field and saying why.
+
+### `GET /api/addresses`
+
+`{ "addresses": [{ "addressId", "recipientName", "line1", "line2", "city", "region", "postalCode", "country",
+"phone", "isDefault", "createdAt", "updatedAt" }], "maxAddresses": 10, "regionRequiredFor": ["US", "CA", "AU"],
+"countries": [{ "code": "US", "name": "United States" }, ...] }`, the default first, then oldest first. The last two
+let a client say what is needed and offer the countries without a second copy of either.
+
+### `POST /api/addresses`
+
+Body: an address. `201 { "address": {...} }`. The first address a person adds is their default. At most 10:
+the eleventh answers `409 { error: "You can keep up to 10 addresses. Remove one to add another.", limit: 10 }`
+(the cap is decided by the INSERT itself, so two requests at once cannot both slip under it).
+
+### `PATCH /api/addresses/:addressId`
+
+Body: the whole address (the same rules as a new one). `200 { "address": {...} }`.
+
+### `DELETE /api/addresses/:addressId`
+
+`200 { "removed": true }`. Removing the default hands the default to the oldest address left.
+
+### `POST /api/addresses/:addressId/default`
+
+Makes that address the one default (a unique partial index guarantees at most one per account).
+`200 { "addresses": [...] }`.
+
+Account deletion removes a person's addresses (gated like the rest of the deletion), and the data export lists
+them as `communication.addresses`.
+
+## Basket (#4611)
+
+The lines of a person's basket, kept on the account (`migrations/0249_basket_lines.sql`, keyed on `user_id`). This
+piece only stores lines; pricing a basket and paying it come in later pieces (#4613, #4614). Every route needs a
+current (not suspended) session and reads and writes only the caller's own lines. A line is a **placed item**
+(`instanceId`), not a product, because the builder's commission follows the lándlet the item stands on; there is one
+line per item and `quantity` says how many. **The price is never stored on a line.** Writes share a `basket-mutate`
+rate limit (60 per window).
+
+### `GET /api/basket`
+
+`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName" }], "maxLines": 20,
+"maxQuantity": 1000 }`, oldest first. `templateId` and `productName` only name the line in a list; both are `null`
+when the item or its product is gone (the line is kept, never dropped silently).
+
+### `POST /api/basket`
+
+Body: `{ "instanceId", "quantity"? }` (quantity defaults to 1). `201 { "line": {...} }`. An item already in the basket
+has its quantity added to (stopping at `maxQuantity`), never a second line. At most 20 different items: the
+twenty-first answers `409 { error: "A basket holds up to 20 different items. Remove one to add another.", limit: 20 }`
+(the cap is decided by the INSERT itself, so two requests at once cannot both slip under it). `404` when the item is
+not on a lándlet any more; `400` when its product has no price, is a test model, is delisted or is hidden pending
+review; `400 { error, field: "quantity" }` for a quantity that is not a whole number from 1 to 1000. Whether the item
+can be bought right now (stock, seller, price changed) is not checked here: the quote says so per line.
+
+### `PATCH /api/basket/:instanceId`
+
+Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when that item is not in the caller's basket
+(another person's line answers exactly like one that does not exist).
+
+### `DELETE /api/basket/:instanceId`
+
+`200 { "removed": true }`, also when there was nothing to remove.
+
+Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
+them as `communication.basketLines`.
+
+## Shipping destination (#4602)
+
+`GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
+`country` is where "ships to me" is judged from: the country of the default address (`source: "address"`), else the
+country the person chose (`source: "chosen"`), else `null` (nothing is dimmed). `PUT /api/shipping-destination` takes
+`{ dimUnshippable?: boolean, country?: <ISO code> | null }` (at least one) and answers `{ destination }`; a bad country is
+`400 { error, field: "country" }`. Both are the caller's own account only and share the `address-mutate` rate limit.
+
 ## Blocks (#3140)
 
 A durable, **silent** block between two people, keyed on the account
@@ -6657,9 +6764,13 @@ Request body:
 Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying", "afk",
 "updatedAt" } }` — the row as stored, after the upsert.
 
-Rate-limited server-side (`presence-report:<builderId>`, 600 per the
-shared 15-minute rate-limit window — enough headroom for roughly one
-report every 1-2 seconds sustained, with some burst tolerance) — this is
+Rate-limited server-side (`presence-report:<userId>`, 1500 per the
+shared 15-minute rate-limit window — above the busiest poll the shop sends
+(the nearby read, 900 a window). Presence, nearby chat, voice signalling and
+the friend voice channel poll buckets count in one `rate_limit_counters` row
+per bucket in a fixed window (#4542) instead of the sliding event rows, so a
+check reads one row whatever the limit; the 429 carries the same `limit`,
+`windowSeconds` and `retryAfterSeconds`) — this is
 the only thing bounding write frequency; client-side throttling (only
 reporting on meaningful movement) is the client-integration sub-issue's
 own scope (#1100), not this endpoint's. Never trust a client to self-
@@ -8761,6 +8872,23 @@ gated to admins per #653 above.
 POST /api/instances/:instanceId/purchase
 { "quantity": 2, "buyerLabel": "A Shopper" }   // both optional
 ```
+
+**Shipping address (#4599).** A product that ships (anything that is not a digital
+good, an avatar or an animation) is bought with a `shippingAddress`:
+`{ "name", "line1", "line2"?, "city", "region", "postalCode", "country" }`
+(`country` is an ISO 3166-1 alpha-2 code; `region` is required for `US`; field
+lengths are capped at 60/80/60/40/40/20). Without one, or with an incomplete one,
+the purchase is refused with `400` `shipping_address_required` or
+`shipping_address_invalid`; a product its seller ships only within the United
+States, bought for another country, is refused `409` `not_shippable_there`. All
+three are answered before any payment is created, and the message says nothing was
+charged. A digital good ignores the field. The order keeps its own copy
+(`purchases.shipping_address_json`), carried to the finalize step in the
+PaymentIntent's metadata on the card path, and `GET /api/purchases/mine` returns it
+to the buyer as `shippingAddress` (null for a digital good or an order made before
+this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`
+and `domesticOnly` so the client asks before it sends. Only the buyer reads it here;
+the seller's own view of it is #4600.
 
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one," not a 400, since a
@@ -12486,6 +12614,15 @@ is restricted to domestic-only exactly when `metadata.domesticOnly` is
 `true`, the same single-flag-in-metadata simplicity `noReturns` (see
 "Refunds" above) already uses. `assertValidDomesticOnly` (also called from
 inside `validateTemplate`) rejects any non-boolean value with `400`.
+
+**Zones (#4601, part of #4394).** `metadata.shippingZones`, a list of zone ids, is the replacement for the
+single flag: `us`, `ca`, `mx`, `gb`, `eu`, `anz`, `jpkr` and `rest` (everywhere else), with every ISO 3166-1
+country code in exactly one zone, defined once in `shared/shipping-zones.js` and read by the Worker and the
+client. `validateTemplate` refuses anything but a non-empty list of known ids without repeats (`400`, naming the
+key). Both keys are accepted while products still carry the old flag; `shippingZonesOf(metadata)` is the one
+reader (`domesticOnly: true` is `["us"]`, absent or false is every zone), so nothing changes for a product until
+its seller edits shipping. The Sell panel, the card's note and the purchase check move to the zones in the
+following pieces.
 
 A seller opts a product into domestic-only shipping via its own row's
 "Edit Shipping" panel (checkbox + Save, same collapsed-panel idiom as that

@@ -684,7 +684,7 @@ describe('GET /auth/export-data -- communication section (#4142)', () => {
     const quiet = await signupBuilder('export-comm-quiet');
     const result = await api('/auth/export-data', quiet.session());
     expect(result.body.communication).toEqual({
-      assistantConversations: [], assistantQuestions: [], blocksMade: [], bugReports: [], contentEditHistory: [],
+      addresses: [], assistantConversations: [], assistantQuestions: [], basketLines: [], blocksMade: [], bugReports: [], contentEditHistory: [],
     });
   });
 });

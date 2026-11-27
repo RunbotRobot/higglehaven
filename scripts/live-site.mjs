@@ -23,10 +23,13 @@
 //   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control (the first visible match;
 //                                         `tap:text=Orders` works on a label too)
+//   type:<selector>:<text>                 tap a text box and type into it (the selector holds no ":"; send with a tap step) (#4572)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
 //   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198).
 //                                         n counts EVERY item on screen, other sessions' too: look first (a shot), and move only your own (#4489)
 //   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
+//   nudge:<x|y|z>:<+|->                   Build, with an item selected: tap that arrowhead of the movement axes (the nudge, #4414) at the screen point the page
+//                                         reports for it, and say where the item stood before and after (the sign is the end of the axis in the gizmo's own frame)
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
@@ -403,6 +406,7 @@ const settle = async (page = mainPage) => {
 // (#3749: the half it lands on decides, so each works alone); a fly is two quick taps.
 let touchSession = null;
 let animationSession = null;
+let failHandler = null; // #4576: the route handler `fail:` installed, so `unfail` can take it off
 async function sendTouch(type, points) {
   touchSession ||= await page.context().newCDPSession(page);
   await touchSession.send('Input.dispatchTouchEvent', { type, touchPoints: points });
@@ -704,6 +708,21 @@ async function runStepAction(step, index) {
       const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
       return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
     }
+    case 'nudge': {
+      // #4570: a person taps the small arrowhead at the end of a movement axis; a script has no way to know where it is
+      // on screen, so it asks the page (the hook e2e/build-axis-arrow-tap-nudge uses). Changes where the selected item
+      // stands by one step: use it on the fleet's own lándlet or a local world, and Undo after.
+      const axis = String(step.args[0] ?? '').toUpperCase();
+      const sign = step.args[1] === '-' ? -1 : step.args[1] === '+' ? 1 : NaN;
+      if (!['X', 'Y', 'Z'].includes(axis) || !Number.isFinite(sign)) throw new Error('step "nudge:<x|y|z>:<+|->": an axis and a sign');
+      const point = await page.evaluate(([ax, sg]) => (window.__testAxisHandlePoints?.() ?? []).find((h) => h.axis === ax && h.sign === sg) ?? null, [axis, sign]);
+      if (!point) throw new Error(`step "nudge:${axis}:${step.args[1]}": no such arrowhead on screen (select an item in Build first)`);
+      const stateBefore = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      await (device.hasTouch ? page.touchscreen.tap(point.x, point.y) : page.mouse.click(point.x, point.y));
+      await page.waitForTimeout(700);
+      const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
+      return { from: stateBefore, to: stateAfter, at: { x: Math.round(point.x), y: Math.round(point.y) } };
+    }
     case 'drag': {
       // #4489: a real mouse press at (x, y), then a drag of (dx, dy) in 20 steps; the selected item's place before and
       // after is reported (lándlet-local metres) and the selection status line. Changes what it moves: use it on the
@@ -754,6 +773,38 @@ async function runStepAction(step, index) {
       animationSession ||= await page.context().newCDPSession(page);
       await animationSession.send('Animation.enable');
       await animationSession.send('Animation.setPlaybackRate', { playbackRate: a });
+      return null;
+    }
+    case 'fail': {
+      // #4576: answer /api calls with a failure from here on (see parseStep), to read what a person sees.
+      if (failHandler) await page.unroute('**/api/**', failHandler);
+      const kind = String(a);
+      const only = b ? String(b) : null;
+      failHandler = async (route) => {
+        if (only && !route.request().url().includes(only)) return route.continue();
+        if (kind === 'offline') return route.abort('connectionfailed');
+        const status = Number(kind);
+        const body = status === 429
+          ? { error: 'Too many attempts. Wait a while and try again.', limit: 20, windowSeconds: 900, retryAfterSeconds: 420 }
+          : status === 401 ? { error: 'Not authenticated' }
+            : status === 500 ? { error: 'Internal server error', code: 'internal_error' }
+              : { error: 'Internal server error' };
+        return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      };
+      await page.route('**/api/**', failHandler);
+      return null;
+    }
+    case 'unfail':
+      if (failHandler) await page.unroute('**/api/**', failHandler);
+      failHandler = null;
+      return null;
+    case 'type': {
+      // #4572: a tap on the box (a finger, so the page sees focus the way it does for a person), then the text
+      // typed one key at a time, which fires the page's own input events. Press Send with a tap step after it.
+      const box = await controlOrFail(a, `"${a}"`);
+      await press(box);
+      await page.keyboard.type(String(b), { delay: 20 });
+      await page.waitForTimeout(300);
       return null;
     }
     case 'key':
@@ -914,7 +965,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

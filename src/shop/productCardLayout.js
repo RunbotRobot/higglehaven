@@ -212,7 +212,7 @@ export function sellerLine(label, rating = null) {
 // good (an avatar or an animation they bought, src/shop/ownedProducts.js): the
 // card says so and offers no Buy, but they can still rate it and read its return
 // policy, since it is theirs.
-export function productCardState({ template, inRange, owned = false, hasUnratedOrder = false }) {
+export function productCardState({ template, inRange, owned = false, hasUnratedOrder = false, unshippable = false }) {
   const reach = !!inRange;
   const canRate = reach && !!hasUnratedOrder;
   const priced = template?.priceCents != null;
@@ -230,6 +230,11 @@ export function productCardState({ template, inRange, owned = false, hasUnratedO
   }
   if (template.stockQuantity === 0) {
     return { canBuy: false, canReview: canRate, canReturnPolicy: reach, stateText: 'Out of stock.' };
+  }
+  // #4602: with "Dim what cannot ship to me" on, a physical product the seller does not send to the shopper's country
+  // says so and offers no Buy; the way out (another address) is named in the line.
+  if (unshippable) {
+    return { canBuy: false, canReview: canRate, canReturnPolicy: reach, stateText: 'This does not ship to your country. Choose a different address in Settings to change that.' };
   }
   if (!reach) {
     return { canBuy: false, canReview: false, canReturnPolicy: false, stateText: 'Walk closer to buy this.' };

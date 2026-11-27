@@ -36,6 +36,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import {
@@ -304,6 +305,7 @@ async function renderNotifications() {
 notificationsLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
   notificationsLoadMoreBtn.disabled = true;
+  showInlineActionStatus(notificationsLoadMoreBtn.parentElement, '');
   try {
     const page = await fetchNotifications({ cursor: notificationsNextCursor });
     if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
@@ -312,6 +314,8 @@ notificationsLoadMoreBtn.addEventListener('click', async () => {
     notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
   } catch (err) {
     console.warn('Could not load more notifications:', err);
+    // #4562: said beside the button (it used to just come back, which read as a tap that did nothing).
+    showInlineActionStatus(notificationsLoadMoreBtn.parentElement, err.message || 'Couldn\'t load more notices. Try again.');
   } finally {
     notificationsLoadMoreBtn.disabled = false;
   }
@@ -331,12 +335,14 @@ notificationsCloseBtn.addEventListener('click', closeNotificationsModal);
 notificationsMarkAllBtn.addEventListener('click', async () => {
   if (!currentAuthUser) return;
   notificationsMarkAllBtn.disabled = true;
+  showInlineActionStatus(notificationsLoadMoreBtn.parentElement, '');
   try {
     await markAllNotificationsRead();
     await renderNotifications();
     await refreshNotificationsBadge();
   } catch (err) {
     console.warn('Could not mark all notifications read:', err);
+    showInlineActionStatus(notificationsLoadMoreBtn.parentElement, err.message || 'Couldn\'t mark your notices read. Try again.'); // #4562
   } finally {
     notificationsMarkAllBtn.disabled = false;
   }
@@ -384,7 +390,9 @@ async function refreshAccountMenuPlace() {
   if (currentMode !== 'build' || !builderId) return;
   try {
     const [landlets, me] = await Promise.all([fetchAllLandlets(), fetchMyBuilder()]);
-    const mine = landlets.find((landlet) => landlet.landletId === currentLandletId);
+    // The lándlet being built is the person's own: a person with none yet (the Claim a lándlet sheet is open) still has the
+    // lándlet Shop last stood on as the current one, and naming that "by <me>" put their name on someone else's lot.
+    const mine = landlets.find((landlet) => landlet.landletId === currentLandletId && landlet.ownerBuilderId === builderId);
     if (!mine) {
       hideBudPlace();
       return;
@@ -451,6 +459,7 @@ const friendsModalEl = document.getElementById('friends-modal');
 const friendsCloseBtn = document.getElementById('friends-close-btn');
 const friendsAddBtn = document.getElementById('friends-add-btn');
 const friendsStatusEl = document.getElementById('friends-status');
+const friendsRetryBtn = document.getElementById('friends-retry-btn'); // #4578
 const friendsIncomingListEl = document.getElementById('friends-incoming-list');
 const friendsIncomingHeadingEl = document.getElementById('friends-incoming-heading');
 const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
@@ -568,6 +577,8 @@ async function renderDmThread() {
 dmLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = dmLoadToken; // this thread's current render — not a fresh reset
   dmLoadMoreBtn.disabled = true;
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
   try {
     const page = await fetchDirectMessages(dmOtherBuilderId, { cursor: dmNextCursor });
     if (myLoadToken !== dmLoadToken) return; // thread was closed/reopened against someone else while this page was loading
@@ -588,6 +599,11 @@ dmLoadMoreBtn.addEventListener('click', async () => {
     dmLoadMoreBtn.hidden = !dmNextCursor;
   } catch (err) {
     console.warn('Could not load more messages:', err);
+    // #4562: the thread's own status line, the same place its first load says it failed.
+    if (myLoadToken === dmLoadToken) { // not for a thread that was closed or swapped meanwhile
+      dmStatusEl.textContent = err.message || 'Couldn\'t load older messages. Try again.';
+      dmStatusEl.classList.add('error');
+    }
   } finally {
     dmLoadMoreBtn.disabled = false;
   }
@@ -797,6 +813,7 @@ async function renderFriends() {
   friendsIncomingListEl.innerHTML = '';
   friendsOutgoingListEl.innerHTML = '';
   friendsAcceptedListEl.innerHTML = '';
+  friendsRetryBtn.hidden = true; // #4578: a new load starts without the retry control
   // #4041: friends are the account's (user_id), not a builder's, so the list draws in Shop, which has no builder
   // identity of its own, exactly as the dot and the note on the head (refreshFriendsBadge) already read them there.
   // It used to stop here for a missing builder id and left the page's own "No friends yet" showing under a waiting request.
@@ -808,6 +825,9 @@ async function renderFriends() {
     if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
     friendsStatusEl.textContent = err.message || 'Couldn\'t load friends.';
     friendsStatusEl.classList.add('error');
+    // #4578: a list that could not be loaded is not an empty one: no "No friends yet", and a way to try again.
+    friendsPanelEmptyEl.hidden = true;
+    friendsRetryBtn.hidden = false;
     return;
   }
   if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
@@ -1462,6 +1482,7 @@ async function renderMyPurchases() {
 myPurchasesLoadMoreBtn.addEventListener('click', async () => {
   const myLoadToken = myPurchasesLoadToken;
   myPurchasesLoadMoreBtn.disabled = true;
+  showInlineActionStatus(myPurchasesLoadMoreBtn.parentElement, '');
   try {
     const page = await fetchMyPurchases({ cursor: myPurchasesNextCursor });
     if (myLoadToken !== myPurchasesLoadToken) return;
@@ -1470,6 +1491,7 @@ myPurchasesLoadMoreBtn.addEventListener('click', async () => {
     myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
   } catch (err) {
     console.warn('Could not load more purchases:', err);
+    showInlineActionStatus(myPurchasesLoadMoreBtn.parentElement, err.message || 'Couldn\'t load more purchases. Try again.'); // #4562
   } finally {
     myPurchasesLoadMoreBtn.disabled = false;
   }
@@ -1504,6 +1526,11 @@ friendsBtn.addEventListener('click', () => {
   renderFriends();
 });
 friendsCloseBtn.addEventListener('click', closeFriendsModal);
+friendsRetryBtn.addEventListener('click', () => {
+  friendsStatusEl.textContent = '';
+  friendsStatusEl.classList.remove('error');
+  renderFriends();
+});
 friendsAddBtn.addEventListener('click', async () => {
   // #3359: the shared in-app name modal instead of window.prompt() (a browser
   // that suppresses native dialogs made Add friend do nothing). The title keeps

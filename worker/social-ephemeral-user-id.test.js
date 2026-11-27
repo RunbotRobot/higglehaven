@@ -100,9 +100,9 @@ describe('Presence keyed on the account (#3147)', () => {
     const alice = await signupAccount('eph-presence-quota');
     await api('/presence', alice.session({ method: 'POST', body: JSON.stringify({ x: 1, y: 2, z: 3 }) }));
     const userId = await userIdOf(alice);
-    const counted = await env.DB.prepare('SELECT COUNT(*) AS c FROM rate_limit_events WHERE bucket_key = ?').bind(`presence-report:${userId}`).first();
+    const counted = await env.DB.prepare('SELECT COALESCE(SUM(count), 0) AS c FROM rate_limit_counters WHERE bucket_key = ?').bind(`presence-report:${userId}`).first();
     expect(counted.c).toBe(1);
-    const oldKey = await env.DB.prepare('SELECT COUNT(*) AS c FROM rate_limit_events WHERE bucket_key = ?').bind(`presence-report:${alice.builderId}`).first();
+    const oldKey = await env.DB.prepare('SELECT COALESCE(SUM(count), 0) AS c FROM rate_limit_counters WHERE bucket_key = ?').bind(`presence-report:${alice.builderId}`).first();
     expect(oldKey.c).toBe(0);
   });
 });

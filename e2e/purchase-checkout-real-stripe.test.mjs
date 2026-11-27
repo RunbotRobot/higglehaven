@@ -408,12 +408,26 @@ try {
   throw err;
 }
 
+// #4599: a shipped product asks for an address after Buy; fill it in when the form comes up.
+async function fillShippingAddressIfAsked() {
+  try {
+    await page.waitForSelector('#shipping-address-modal.visible', { timeout: 4000 });
+  } catch { return; }
+  await page.fill('#shipping-address-name', 'E2E Buyer');
+  await page.fill('#shipping-address-line1', '1 Test Street');
+  await page.fill('#shipping-address-city', 'Portland');
+  await page.fill('#shipping-address-region', 'OR');
+  await page.fill('#shipping-address-postal', '97201');
+  await page.click('#shipping-address-continue-btn');
+}
+
 // #3946: a purchase that takes a card opens the one payment sheet straight from Buy -- no
 // "Buy this item?" confirm first -- and the sheet says the price, the refund line and Pay with the
 // amount. Closing the sheet charges nothing and leaves the product card open and armed. (This file
 // still adds a dialog listener as a tripwire: the "Purchase complete" result is the in-app notice
 // modal, #3249, so any native dialog here means a purchase step regressed to confirm()/alert().)
 await page.click('#product-card-buy-btn');
+await fillShippingAddressIfAsked();
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 const noConfirmBeforeSheet = (await page.locator('#confirm-modal.visible').count()) === 0;
 const sheetNamesPrice = /\$\d/.test(await page.textContent('#checkout-summary'));
@@ -425,7 +439,7 @@ const previewStillOpen = (await page.locator('#product-card:not([hidden])').coun
 console.log('no confirm before the sheet / sheet names a price / refund line / Pay names the amount / card still open after closing:', noConfirmBeforeSheet, sheetNamesPrice, sheetSaysRefund, payNamesAmount, previewStillOpen);
 await page.waitForFunction(() => !document.getElementById('product-card-buy-btn').disabled, null, { timeout: 5000 });
 await page.click('#product-card-buy-btn');
-
+await fillShippingAddressIfAsked();
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('checkout-pay-btn').disabled, null, { timeout: 30000 });
 

@@ -27,6 +27,7 @@
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
 import { refundAmountCents } from './purchase-record.js';
+import { requiresShippingAddress, templateShipsDomesticOnly, shippingAddressForPurchase } from './shipping-address.js'; // #4599
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -74,7 +75,7 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // never purchased" (docs/SPEC.md §0) since earnings feed the land cap
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
 // these" simulation while ruling out that abuse.
-const PURCHASE_MAX_QUANTITY = 1000;
+export const PURCHASE_MAX_QUANTITY = 1000;
 // worker/index.js's own MAX_MONEY_CENTS is genuinely shared well beyond
 // purchases (catalog price validation, auction bids, model uploads
 // elsewhere in that file), so it stays there as the source of truth and is
@@ -265,6 +266,9 @@ export async function handleInstancePurchaseQuote(request, env, instanceId) {
     paysWithCard,
     unitPriceCents: template.price_cents,
     stockQuantity: template.stock_quantity ?? null,
+    // #4599: the server says whether this product is shipped, so the client asks for an address only when it is.
+    requiresShippingAddress: requiresShippingAddress(template),
+    domesticOnly: templateShipsDomesticOnly(template),
   });
 }
 
@@ -315,8 +319,11 @@ export async function handleInstancePurchase(request, env, instanceId) {
       { code: ERROR_CODES.PRICE_CHANGED, unitPriceCents: template.price_cents },
     );
   }
+  // #4599: a shipped product is bought with an address, checked here before any card is touched, and the order keeps
+  // its own copy. Covers the card path, the higgles path and the no-card path alike.
+  const shippingAddress = shippingAddressForPurchase(template, input);
   if (paysWithCard) {
-    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
+    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label, shippingAddress);
   }
   // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
   // direct D1 access the way worker/commerce.test.js's own mark-shipped/
@@ -352,6 +359,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
     // #1163: same "derive directly, no time gap" reasoning as
     // isAvatarCategory just above, for isAnimationCategory.
     template.category === 'animation',
+    false, shippingAddress ? JSON.stringify(shippingAddress) : null, // #4599: allowOversell stays off; the order's own address copy
   );
 }
 
@@ -444,7 +452,7 @@ function purchaseIdempotencyKey(instanceId, buyerBuilderId, rawKey) {
   return `purchase:${instanceId}:${buyerBuilderId}:${rawKey}`;
 }
 
-async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId, buyerBuilderLabel) {
+async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId, buyerBuilderLabel, shippingAddress = null) {
   const amounts = computePurchaseAmounts(template, input, buyerBuilderLabel);
   // #454: locked in at checkout time, same reasoning as every other amount
   // here — a digital good pays out instantly with no hold, so
@@ -491,6 +499,9 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       buyerBuilderId: buyerBuilderId || '',
       isAvatarCategory: String(isAvatarCategory),
       isAnimationCategory: String(isAnimationCategory),
+      // #4599: the address this order was bought for, locked in here like every other snapshot (about 360 characters at
+      // the field caps, under Stripe's 500 per value).
+      shippingAddress: shippingAddress ? JSON.stringify(shippingAddress) : '',
     },
   }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey))
     .catch((err) => {
@@ -654,6 +665,7 @@ async function writeFinalizedPurchase(env, paymentIntent) {
   // #1163: same checkout-time-locked reasoning as isAvatarCategory above,
   // for isAnimationCategory.
   const isAnimationCategory = meta.isAnimationCategory === 'true';
+  const shippingAddressJson = meta.shippingAddress || null; // #4599
   const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
   if (instance && template && checkoutBuilderId) {
@@ -690,7 +702,7 @@ async function writeFinalizedPurchase(env, paymentIntent) {
     // the moment of suspension, or a refund/reconciliation flow — both
     // bigger, separate design decisions, not a mechanical finalize-time
     // check.
-    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory, true);
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory, true, shippingAddressJson);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -847,7 +859,7 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id,
-         product_name, product_kind, seller_name)
+         product_name, product_kind, seller_name, shipping_address_json)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
       -- #3195: likewise the buyer's account id, so a buyer's purchase history
@@ -859,12 +871,14 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
         -- later delete, rename or seller removal cannot change what it says.
         (SELECT name FROM catalog_templates WHERE template_id = ?),
         (SELECT category FROM catalog_templates WHERE template_id = ?),
-        (SELECT label FROM sellers WHERE seller_id = ?))
+        (SELECT label FROM sellers WHERE seller_id = ?),
+        -- #4599: the address this order was bought for, its own copy.
+        ?)
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
       buyerBuilderStillExists ? meta.buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash, sellerId, buyerBuilderStillExists ? meta.buyerBuilderId : null,
-      meta.templateId, meta.templateId, sellerId),
+      meta.templateId, meta.templateId, sellerId, meta.shippingAddress || null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- commissionCreditClaimStatement's own live subquery
@@ -981,7 +995,7 @@ function purchaseContentMatches(existingRow, templateId, amounts) {
     && existingRow.total_cents === amounts.totalCents;
 }
 
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false) {
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false, shippingAddressJson = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -1104,7 +1118,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id,
-         product_name, product_kind, seller_name)
+         product_name, product_kind, seller_name, shipping_address_json)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
       -- #3195: likewise the buyer's account id, so a buyer's purchase history
@@ -1116,12 +1130,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         -- later delete, rename or seller removal cannot change what it says.
         (SELECT name FROM catalog_templates WHERE template_id = ?),
         (SELECT category FROM catalog_templates WHERE template_id = ?),
-        (SELECT label FROM sellers WHERE seller_id = ?))
+        (SELECT label FROM sellers WHERE seller_id = ?),
+        -- #4599: the address this order was bought for, its own copy.
+        ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash, template.seller_id, buyerBuilderStillExists ? buyerBuilderId : null,
-      template.template_id, template.template_id, template.seller_id),
+      template.template_id, template.template_id, template.seller_id, shippingAddressJson),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- see writeOrphanedPurchaseRow's own identical block
@@ -1375,6 +1391,13 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
 // handlePurchaseRefund/handlePurchaseDispute (the sibling "purchase
 // lifecycle actions" leaf, #2615, not yet moved), and handleExportData's
 // own GDPR export -- imported back from here rather than duplicated.
+// #4600: the carrier and tracking number of an order are read by that order's own seller and buyer and by nobody else,
+// so they are NOT part of purchaseFromRow (which also feeds the lándlet host's list); the seller's and the buyer's own
+// routes add them with this.
+export function trackingFromRow(row) {
+  return { shippingCarrier: row.shipping_carrier ?? null, trackingNumber: row.tracking_number ?? null };
+}
+
 export function purchaseFromRow(row) {
   return {
     purchaseId: row.purchase_id,

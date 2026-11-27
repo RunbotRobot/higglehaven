@@ -6,16 +6,30 @@ import {
   createProductReview, editProductReview, deleteProductReview,
 } from '../api.js';
 import {
-  DISPUTE_PROMPT_TEXT, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
+  disputePromptText, isDigitalPurchase, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
 } from './disputeOutcome.js';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
+// #4599: the address an order was bought for, on one line, in the order it is read aloud. Null for a digital good or an
+// order made before addresses were asked for.
+export function shippingAddressLine(address) {
+  if (!address) return null;
+  const place = [address.city, [address.region, address.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [address.name, address.line1, address.line2, place, address.country].filter(Boolean).join(', ');
+}
+
 export function purchaseStatusText(purchase) {
   if (purchase.refundedAt) return 'Refunded';
-  if (purchase.isDigitalGood) return 'Digital: ready';
+  if (isDigitalPurchase(purchase)) return 'Digital: ready';
   if (purchase.shippedAt) return 'Shipped';
   return 'Order placed';
+}
+
+// #4600: "Royal Mail · Tracking RM123456789GB" for a shipped order that has either; empty otherwise.
+export function purchaseTrackingText(purchase) {
+  if (!purchase.shippedAt || purchase.refundedAt) return '';
+  return [purchase.shippingCarrier, purchase.trackingNumber ? `Tracking ${purchase.trackingNumber}` : ''].filter(Boolean).join(' · ');
 }
 
 const stars = (rating) => '★'.repeat(rating) + '☆'.repeat(5 - rating);
@@ -58,6 +72,22 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
   };
   renderMeta();
   row.append(name, meta);
+  // #4599: where it was sent, from the order's own copy.
+  const addressText = shippingAddressLine(purchase.shippingAddress);
+  if (addressText) {
+    const ship = document.createElement('div');
+    ship.className = 'my-purchase-meta my-purchase-ship-to';
+    ship.textContent = `Ships to ${addressText}`;
+    row.appendChild(ship);
+  }
+  // #4600: once shipped, the carrier and tracking number the seller gave, as plain selectable text.
+  const trackingText = purchaseTrackingText(purchase);
+  if (trackingText) {
+    const tracking = document.createElement('div');
+    tracking.className = 'my-purchase-meta my-purchase-tracking';
+    tracking.textContent = trackingText;
+    row.appendChild(tracking);
+  }
 
   const feedbackArea = document.createElement('div');
   feedbackArea.className = 'my-purchase-feedback';
@@ -285,7 +315,7 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     const confirmBox = document.createElement('div');
     confirmBox.className = 'my-purchase-confirm';
     const prompt = document.createElement('span');
-    prompt.textContent = DISPUTE_PROMPT_TEXT;
+    prompt.textContent = disputePromptText(purchase);
     const yesBtn = button('Yes, report it', () => sendDispute(yesBtn, noBtn));
     yesBtn.classList.add('my-purchase-dispute-confirm-btn');
     const noBtn = button('Never mind', () => showDisputeIdle());

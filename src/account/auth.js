@@ -16,10 +16,11 @@
 // Zero behavior change otherwise.
 import {
   signUp, logIn, logOut, deleteAccount, exportMyData, changePassword,
-  fetchCurrentUser, requestPasswordReset, resetPassword, verifyEmail,
+  fetchCurrentUser, fetchShippingDestination, requestPasswordReset, resetPassword, verifyEmail,
   resendVerificationEmail, changeEmail, ageAttest, cardSetupIntent,
   confirmCard, reportCardRefusal, startDiditVerification, fetchDiditVerificationStatus,
   getTurnstileSitekey,
+  setSessionEndedHandler,
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { showNotice } from '../ui/noticeModal.js';
@@ -30,6 +31,7 @@ import { resetIdentityFlowPromises } from './identity.js';
 import { describeCardRefusal, VERIFY_INTRO, VERIFY_INTRO_PROOF_ONLY, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
 import { adoptAccountLoadingTips } from '../ui/loadingTipPrefs.js';
 import { adoptAccountFirstHints } from '../ui/firstVisitHints.js';
+import { loadShippingDestination } from '../shop/shippingDestination.js';
 
 export async function requireLogin(view = 'signup', hint) {
   if (currentAuthUser) return currentAuthUser;
@@ -287,6 +289,25 @@ export async function requireVerification(user) {
 }
 
 export let currentAuthUser = null;
+
+// #4577: a call answered "Not authenticated" while this page believed a person was signed in means the session
+// ended. Fold to signed-out and open the sign-in form with a plain sentence; signing back in closes it and the
+// page is where it was, so whatever failed can simply be tried again. Once per ending (the shop's polls all fail
+// together), and never for a visitor who was not signed in. A different account signing in resets what the old one
+// left behind, as logging out does (#432).
+let sessionEndedPromptOpen = false;
+setSessionEndedHandler(() => {
+  if (!currentAuthUser || sessionEndedPromptOpen) return;
+  sessionEndedPromptOpen = true;
+  const previous = currentAuthUser;
+  currentAuthUser = null;
+  refreshAccountAuthUI();
+  requireLogin('login', 'Your session ended. Sign in again to keep going.').then((user) => {
+    sessionEndedPromptOpen = false;
+    if (user && user.email !== previous.email) resetLocalSessionState();
+  });
+});
+
 export function setCurrentAuthUser(user) {
   currentAuthUser = user;
 }
@@ -526,6 +547,8 @@ async function refreshCurrentUser() {
     currentAuthUser = await fetchCurrentUser();
     adoptAccountLoadingTips(currentAuthUser);
     adoptAccountFirstHints(currentAuthUser);
+    // #4602: a signed-in person's shipping destination, so the world can dim what does not ship to them.
+    if (currentAuthUser) loadShippingDestination(fetchShippingDestination, { force: true });
   } catch (err) {
     console.warn('Could not refresh current user:', err);
   }
@@ -617,6 +640,8 @@ authForms.login.addEventListener('submit', async (event) => {
     currentAuthUser = await logIn({ email, password });
     adoptAccountLoadingTips(currentAuthUser);
     adoptAccountFirstHints(currentAuthUser);
+    // #4602: a signed-in person's shipping destination, so the world can dim what does not ship to them.
+    if (currentAuthUser) loadShippingDestination(fetchShippingDestination, { force: true });
     refreshAccountAuthUI();
     // #1730: disarm before closing -- notifyAuthResult(currentAuthUser)
     // below must be what resolves pendingAuthResolvers, not closeAuthModal's
@@ -642,6 +667,7 @@ authForms.signup.addEventListener('submit', async (event) => {
   try {
     const result = await signUp({ email, password, username, ageAttested, turnstileToken });
     currentAuthUser = result.user;
+    loadShippingDestination(fetchShippingDestination, { force: true }); // #4602
     refreshAccountAuthUI();
     authForms.signup.reset();
     // devVerifyUrl only ever appears when no real email provider is
