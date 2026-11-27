@@ -62,25 +62,24 @@ async function sessionUserWithStanding(request, db, { withBuilder = false } = {}
   let row;
   let builder = null;
   if (withBuilder) {
-    // #3464: the builder's own row rides in the same D1 round trip (a batch is one trip), so a request that needs the
-    // account and its builder profile pays one trip, not two. null when the session is invalid or no profile exists
-    // yet (the caller then provisions it, as before).
-    const [userResult, builderResult] = await db.batch([
-      userStatement,
+    // #3464: the builder's own row is asked for at the same moment as the session and account, not after them, so a
+    // request that needs both waits one D1 round trip's time, not two. (Two statements in flight together, not a
+    // batch: tests and tools hook db.batch to stand for "the handler's own write", and the session read is not that.)
+    // null when the session is invalid or no profile exists yet (the caller then provisions it, as before).
+    [row, builder] = await Promise.all([
+      userStatement.first(),
       db.prepare(`
         SELECT builders.* FROM sessions
         JOIN builders ON builders.user_id = sessions.user_id
         WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      `).bind(tokenHash),
+      `).bind(tokenHash).first(),
     ]);
-    row = userResult.results?.[0] ?? null;
-    builder = builderResult.results?.[0] ?? null;
   } else {
     row = await userStatement.first();
   }
   if (!row) return null;
   const { suspended_standing: suspendedStanding, ...user } = row;
-  return { user, suspended: suspendedStanding === 1, builder };
+  return { user, suspended: suspendedStanding === 1, builder: builder ?? null };
 }
 
 export async function currentUser(request, db) {
