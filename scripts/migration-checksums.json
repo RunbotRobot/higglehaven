@@ -230,5 +230,6 @@
   "0245_purchases_tracking.sql": "76d0cdfa9c6627fea4b96cc1f7b596d5d39346eb4cfd70b76d36b1676220e962",
   "0246_purchases_shipping_address.sql": "375b07fad989269c9dd8c0d23386d985f1f3284df73f40e8a7297000ed47b52b",
   "0247_users_shipping_destination.sql": "f0dccfc1974238c503b6cbe9064d3b6f6888dc73fa9b19ea1a97fc01129402dd",
-  "0248_shipping_zones.sql": "ac047e77611afe8541c1ba44392fa3b74e68ea434f988f56794e342e5a847b79"
+  "0248_shipping_zones.sql": "ac047e77611afe8541c1ba44392fa3b74e68ea434f988f56794e342e5a847b79",
+  "0249_basket_lines.sql": "4309229429af93dfa4b85348da3024138ae483748e541f0884672eb1a3a29341"
 }
