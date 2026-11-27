@@ -147,7 +147,7 @@
   }
 
   async function deleteEntry(id) {
-    if (!confirm('Delete this entry?')) return;
+    if (!(await window.adminConfirm({ title: 'Delete entry', message: 'Delete this entry?', confirmLabel: 'Delete' }))) return;
     clearError();
     try {
       await apiFetch('/api/tax-education/' + encodeURIComponent(id), { method: 'DELETE' });
