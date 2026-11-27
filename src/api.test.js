@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCard, createInstancesRemote, createVideoGenerationJob, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
   fetchBundles, fetchCatalog, fetchCreditOrbStanding, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, submitFeedbackBugReport,
-  uploadModelFile, upsertInstancesRemote,
+  setSessionEndedHandler, uploadModelFile, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -635,5 +635,41 @@ describe('a request that never reaches the server (#4342)', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort));
     const error = await fetchCurrentUser().then(() => null, (err) => err);
     expect(error).toBe(abort);
+  });
+});
+
+describe('a session that ended while the page was open (#4577)', () => {
+  function failWith(status, body, url = 'https://higglehaven.test/api/bundles') {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status, url, json: () => Promise.resolve(body) })));
+  }
+  afterEach(() => setSessionEndedHandler(null));
+
+  it('reads in player words and tells the account code once per call', async () => {
+    const handler = vi.fn();
+    setSessionEndedHandler(handler);
+    failWith(401, { error: 'Not authenticated' });
+    const error = await fetchBundles().catch((err) => err);
+    expect(error.message).toBe('Your session ended. Sign in again to keep going.');
+    expect(error.status).toBe(401);
+    expect(error.sessionEnded).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a wrong password on the sign-in route alone', async () => {
+    const handler = vi.fn();
+    setSessionEndedHandler(handler);
+    failWith(401, { error: 'Invalid email or password.' }, 'https://higglehaven.test/api/auth/login');
+    const error = await fetchBundles().catch((err) => err);
+    expect(error.message).toBe('Invalid email or password.');
+    expect(error.sessionEnded).toBeUndefined();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not treat other 401 texts as an ended session', async () => {
+    const handler = vi.fn();
+    setSessionEndedHandler(handler);
+    failWith(401, { error: 'Something else' });
+    await fetchBundles().catch(() => {});
+    expect(handler).not.toHaveBeenCalled();
   });
 });
