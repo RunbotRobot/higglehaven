@@ -14,12 +14,12 @@ for (const source of [socialSource, lifecycleSource, assistantSource]) {
 
 describe('notice destinations (#4498)', () => {
   it('finds the kinds the Worker sets', () => {
-    expect([...KINDS].sort()).toEqual(['assistant', 'friends', 'messages', 'purchases']);
+    expect([...KINDS].sort()).toEqual(['assistant', 'friends', 'messages', 'orders', 'purchases']);
     expect(payoutNoticeSource).toContain("'payouts'");
     expect(notificationsSource).toContain('kind = null');
   });
 
-  for (const kind of ['assistant', 'friends', 'messages', 'payouts', 'purchases']) {
+  for (const kind of ['assistant', 'friends', 'messages', 'orders', 'payouts', 'purchases']) {
     it(`the Notices leaf opens something for kind ${kind}`, () => {
       expect(menuSource).toMatch(new RegExp(`^\\s*${kind}: `, 'm'));
     });
