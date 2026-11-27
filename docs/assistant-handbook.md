@@ -315,8 +315,7 @@ animation you have applied (see the avatar entry below) replaces that motion.
 **If something goes wrong:**
 - Nothing moves: a quick tap does not move you, so keep the finger down and drag a
   little further, then try again.
-- Looking needs two fingers at once, so it can be awkward with one thumb: rest the
-  first finger anywhere and turn with the second.
+- The view moves when they only meant to walk, or the other way round: the left half of the screen always walks and the right half always looks, whatever the other finger is doing. To look without walking, use the right half; to walk without turning, use the left.
 - You want to go up in the air: see the flying entry below.
 
 ```controls shop
@@ -351,7 +350,7 @@ as you can fly, a short note says so and you stay there.
 ### How do I get back to where I was?
 
 1. When you arrive, look near the top of the screen for a button that says "Go to
-   Last Location". It shows only when the app has a last place on record for you.
+   last location". It shows only when the app has a last place on record for you.
 2. Tap it. Your bird fades out, comes back above the place you were last, and comes
    down.
 
