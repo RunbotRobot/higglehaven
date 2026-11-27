@@ -204,5 +204,6 @@ check(small.length === 0, `no text on the card is under 12px (${JSON.stringify(s
 await page.keyboard.press('Escape');
 await page.waitForTimeout(500);
 check(await page.evaluate(() => document.getElementById('product-card').hidden), 'Escape folds the card');
+check(await page.evaluate(() => document.activeElement && document.activeElement.id === 'app'), 'Escape leaves keyboard focus on the world, not nowhere (#4594)');
 
 await finish(browser, { pass, label: 'shop-product-card-a11y.test.mjs', errors });
