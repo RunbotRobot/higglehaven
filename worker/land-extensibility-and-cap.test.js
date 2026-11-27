@@ -1161,6 +1161,32 @@ describe('Land cap', () => {
   // uses, since the race only manifests when the two writes actually interleave
   // inside the same window -- the invariant checked below (a log row exists iff
   // the real write landed) must hold regardless of which order actually won.
+  // #4555: the race above passed or failed by chance (about one run in four on main). The failing interleaving, forced: the
+  // builder disappears between the grant's log row and the handler's answer. A trigger on the log insert deletes the
+  // builder at exactly that point. The grant landed and is logged, so the answer must say so (201 with the new balance),
+  // not 404 "Builder not found" next to a log row.
+  it('#4555: a builder deleted right after a higgles grant is logged still gets the grant answered as landed', async () => {
+    const builder = await signupBuilder('higgles-grant-deleted-after-log-builder');
+    await env.DB.prepare(`
+      CREATE TRIGGER IF NOT EXISTS test_delete_builder_after_higgles_grant_log
+      AFTER INSERT ON admin_action_log WHEN NEW.action_type = 'higgles_grant'
+      BEGIN DELETE FROM builders WHERE builder_id = NEW.target_id; END
+    `).run();
+    try {
+      const granted = await api(`/builders/${builder.builderId}/higgles-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 12345 }),
+      }));
+      expect(granted.response.status).toBe(201);
+      expect(granted.body.higglesBalanceCents).toBeGreaterThanOrEqual(12345);
+      const logged = (await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('higgles_grant', builder.builderId).first()).n;
+      expect(logged).toBe(1);
+    } finally {
+      await env.DB.prepare('DROP TRIGGER IF EXISTS test_delete_builder_after_higgles_grant_log').run();
+    }
+  });
+
   it('#1667: a builder self-deleting concurrently with land-cap-grants/higgles-grants never logs a grant that did not land', async () => {
     const landCapBuilder = await signupBuilder('land-cap-grant-race-builder');
     const [landCapGrant, landCapDelete] = await Promise.all([

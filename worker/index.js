@@ -1663,13 +1663,16 @@ async function handleBuilders(request, env, db, route, url) {
     // self-deleted since requireBuilder's stale read above), so run it
     // standalone and only log once that's confirmed, instead of #816's
     // original unconditional db.batch().
+    // #4555: the new balance comes back from the same UPDATE (RETURNING). It used to be read again after the log row
+    // was written, so a builder deleting themselves in that gap answered 404 for a grant that had landed and been
+    // logged: the log row and the answer disagreed, and the #1667 race test failed about one run in four.
     const result = await db.prepare(`
       UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-    `).bind(amountCents, route[1]).run();
-    if (result.meta.changes === 0) throw new HttpError('Builder not found', 404);
+      RETURNING higgles_balance_cents
+    `).bind(amountCents, route[1]).all();
+    if (!result.results?.length) throw new HttpError('Builder not found', 404);
     await adminActionLogStatement(db, admin.user_id, 'higgles_grant', 'builder', route[1], { amountCents }).run();
-    const builder = await requireBuilder(db, route[1]);
-    return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
+    return json({ higglesBalanceCents: result.results[0].higgles_balance_cents }, 201);
   }
 
   // #1065 (sub-issue of #1404): mechanical plumbing only. Once Stripe
