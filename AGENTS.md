@@ -2404,6 +2404,15 @@ closes it when a run on `main` is green again. If you see one open, fix `main` f
 the session already on it: a PR whose run fails on exactly those files is not at fault, and
 another two-hour run on it cannot pass.
 
+**A new or changed e2e file runs three times before it merges (#4529).** The
+`e2e-stability-changed-files` job runs on every pushed branch except `main`, in parallel with
+the shards: it runs the `e2e/*.test.mjs` files the branch adds or changes (at most six) three
+times each on a fresh D1, with no retry, and fails if any run fails; its job summary names
+each file and its three results. It reports success without doing anything when no e2e test
+file changed, and skipped on `main` or an already-tested SHA, so a merge gate that accepts
+success or skipped still works. A failure there means the test is flaky: fix the test, do
+not re-run it until it passes.
+
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 
 Issue #220 sat invisible to the whole fleet for over a day, not because

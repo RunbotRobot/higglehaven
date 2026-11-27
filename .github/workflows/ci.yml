@@ -188,89 +188,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      # ubuntu-latest ships Google's own Chrome apt repo pre-registered
-      # (for a system Chrome install this workflow never uses) — but
-      # --with-deps chromium below only needs apt to resolve shared-library
-      # runtime deps (libnss3, libatk, etc.), never anything actually
-      # fetched *from* that repo. Any apt-get update still hits it anyway
-      # as long as its source is present, and confirmed via job logs
-      # (PR #611, runs 34384027836/34385033854/34385292940 — 12 shard
-      # failures across three separate pushes, all identical) that
-      # dl.google.com's own CDN can serve an inconsistent package index
-      # ("Hash Sum mismatch") for well over 30 minutes straight, outlasting
-      # a short in-job retry. Matching by content (dl.google.com), not a
-      # guessed filename -- guessing google-chrome.list here first (the
-      # classic name Google's own installer normally uses) didn't actually
-      # match whatever this runner image's own source file is really
-      # called, confirmed by the exact same fetch still happening after
-      # that rm. Dropping whichever file it actually is removes the
-      # dependency on that repo's health entirely, rather than betting the
-      # outage clears in time.
-      - run: sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | xargs -r sudo rm -f
-      # Retries once on failure too, same rationale/shape as the shard
-      # retry below, as a fallback for any other transient apt/network
-      # issue this step's install-deps step might still hit.
-      #
-      # #3488: on 2026-11-11 the runners' DNS could not resolve any Ubuntu
-      # apt mirror for over an hour (security.ubuntu.com, archive.ubuntu.com),
-      # so every shard on every branch died here before running a test, and
-      # no retry inside the job could outlast it. Only the --with-deps half
-      # needs apt; the browser itself comes from Playwright's own CDN. So
-      # after the two --with-deps attempts, fall back to installing the
-      # browser alone and prove it launches: if the runner image already has
-      # Chromium's shared libraries the shard carries on, and if it does not
-      # the launch check fails the job loudly, so this never turns a missing
-      # dependency into a confusing test failure later.
-      #
-      # Each --with-deps attempt is capped at four minutes: under that outage
-      # apt retried for about ten minutes per attempt, so a shard spent ~20
-      # minutes failing before the fallback even started (measured on the
-      # run for PR #3489). A healthy install takes one to two minutes; if a
-      # slow-but-working one is ever cut off, the browser-only fallback below
-      # (which that run proved on the real runners) takes over.
-      - run: |
-          for attempt in 1 2; do
-            if timeout 240 npx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
-            sleep 10
-          done
-          echo "playwright install --with-deps failed twice (apt mirrors unreachable?) — installing the browser alone from Playwright's own CDN and checking it launches." >&2
-          npx playwright install chromium
-          node --input-type=module -e "
-            import { chromium } from 'playwright';
-            try {
-              const browser = await chromium.launch();
-              await browser.close();
-            } catch (error) {
-              console.error('chromium does not launch without the apt-installed libraries:', error.message);
-              process.exit(1);
-            }
-          "
-          echo "Browser-only install launches; continuing without --with-deps (apt was unavailable)." >&2
-      # .dev.vars is gitignored (wrangler's standard local-only-override
-      # mechanism — see docs/API.md's own note on it), so CI recreates the
-      # one value e2e/run-all.mjs's own wrangler dev needs. Not a real
-      # secret: this exact value is already a well-known dev-only fixture,
-      # visible in plaintext in this repo's own code comments (see
-      # e2e/helpers.mjs's ADMIN_BOOTSTRAP_SECRET fallback) — nothing this
-      # unlocks exists outside each ephemeral CI run's own throwaway D1.
-      # 127.0.0.1, not localhost, to match e2e/run-all.mjs and
-      # e2e/helpers.mjs's own BASE_URL — see run-all.mjs's comment on the
-      # dual-stack DNS race a hostname would otherwise be exposed to.
-      # Mismatched origins here would also break auth.test.mjs's own
-      # verify/reset-link flow (the dev-mode link this embeds is a
-      # different origin's cookie jar if the two don't agree).
-      - run: |
-          echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
-          echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
-          # #1231: not a real secret -- a dev-only test seam flag (see
-          # worker/index.js's handleInstancePurchase, where this is read)
-          # that only ever does anything when STRIPE_SECRET_KEY is also
-          # unset, which is already always true in this job.
-          echo "E2E_SIMULATE_PAID_PURCHASES=true" >> .dev.vars
+      - uses: ./.github/actions/e2e-setup
       # Retries once on failure, re-running only the files that failed
       # (#3022). Confirmed (via captured
       # wrangler dev server output — see e2e/run-all.mjs's own comment on
@@ -348,6 +266,56 @@ jobs:
             tail -c 50000 "$f"
             echo "::endgroup::"
           done
+
+  # #4529: a branch that adds or changes e2e/*.test.mjs files runs just those files three times,
+  # each on a fresh D1 (e2e/run-all.mjs), and fails if any run fails. Two files merged after one
+  # green run and then failed about half the time (13 of 17 red CI runs in one day); the in-job
+  # retry of the shards cannot rescue a test that fails at a fixed rate. This job needs only
+  # already-tested, so it starts with the shards and finishes long before them (a few files, not
+  # ~40). It reports skipped on a push to main (those files already ran) and when the SHA was
+  # already tested, and succeeds without doing anything when no e2e test file changed (every step
+  # after "Select" is skipped), so a required-check gate that accepts success or skipped still
+  # works. At most six files are run (scripts/changed-e2e-files.mjs says so in the job summary).
+  # There is no in-job retry on purpose: a retry would hide exactly the flakiness this looks for.
+  e2e-stability-changed-files:
+    needs: already-tested
+    if: needs.already-tested.outputs.skip != 'true' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      E2E_STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
+      E2E_STRIPE_PUBLISHABLE_KEY: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff against main needs history.
+          fetch-depth: 0
+      - run: git fetch --no-tags origin main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Select the e2e files this branch changed
+        id: select
+        run: node scripts/changed-e2e-files.mjs select
+      - name: No e2e test file changed
+        if: steps.select.outputs.count == '0'
+        run: echo "### e2e stability" >> "$GITHUB_STEP_SUMMARY" && echo "No e2e/*.test.mjs file added or changed on this branch; nothing to run three times." >> "$GITHUB_STEP_SUMMARY"
+      - if: steps.select.outputs.count != '0'
+        uses: ./.github/actions/e2e-setup
+      - name: Run each changed file three times, each on a fresh D1
+        if: steps.select.outputs.count != '0'
+        env:
+          RUN_LIST: ${{ steps.select.outputs.run_list }}
+        run: |
+          set -o pipefail
+          node e2e/run-all.mjs $RUN_LIST 2>&1 | tee "$RUNNER_TEMP/e2e-stability.log"
+      - name: Summary
+        if: always() && steps.select.outputs.count != '0'
+        env:
+          E2E_STABILITY_TOTAL: ${{ steps.select.outputs.total }}
+          E2E_STABILITY_CAPPED: ${{ steps.select.outputs.capped }}
+        run: node scripts/changed-e2e-files.mjs summary "$RUNNER_TEMP/e2e-stability.log" >> "$GITHUB_STEP_SUMMARY"
 
   # #3727: when the run on `main` goes red, say so with the failing files named (one open issue,
   # "main is red: ..."); when it is green again, close it. On 2026-11-17 two tests went red on
