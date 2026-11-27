@@ -255,8 +255,13 @@ export function nearbyProductChoices() {
 // A shopper folding the card away themselves (the close button, Escape): the
 // tapped product is forgotten too, so its highlight and its Rate/Buy gating go.
 function dismissProductCard() {
-  // #3824: focus on the card goes back to the page with it, not to nothing.
-  if (cardEl.contains(document.activeElement)) document.activeElement.blur();
+  // #3824: focus on the card goes back to the page with it, not to nothing. #4594: blur() leaves it on the body, so the
+  // next Tab started at the top of the page; the world is the place a person was, and the canvas is a tab stop.
+  if (cardEl.contains(document.activeElement)) {
+    const world = document.getElementById('app');
+    if (world) world.focus({ preventScroll: true });
+    else document.activeElement.blur();
+  }
   setShopTappedProduct(null);
   closeProductCard();
 }
