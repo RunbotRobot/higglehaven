@@ -53,6 +53,7 @@
 // module (which itself imports several things back from this one), same
 // shape every other extracted leaf here already uses.
 import { loadWhileInScene } from './loadWhileInScene.js';
+import { SHIPPING_ZONE_IDS, shippingNote, shippingZonesOf } from '../../shared/shipping-zones.js';
 import * as THREE from 'three';
 import { camera } from '../world/scene.js';
 import { meshDimensions } from '../world/models.js';
@@ -525,7 +526,8 @@ export function productInfoParts(template) {
   // — same tap-to-inspect treatment as the digital-goods disclaimer above,
   // shown right where a shopper would otherwise assume every item ships
   // internationally like the rest of the catalog.
-  if (metadata?.domesticOnly) notes.push('ships to United States only');
+  // #4601: derived from the zones (shared/shipping-zones.js); a product that ships everywhere has no note.
+  if (shippingZonesOf(metadata).length < SHIPPING_ZONE_IDS.length) notes.push(shippingNote(metadata));
   // #659 (owner, Control Room, 2026-09-11): a shopper had no way to see a
   // product's own return policy before buying it — this is the same
   // tap-to-inspect disclosure slot the digital-goods/domestic-only notes
