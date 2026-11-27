@@ -98,6 +98,9 @@ describe('The seller is told when a sale they earned is reversed (#3072)', () =>
     const event = chargeRefunded('pi_notice_full', { refunded: true, amount_refunded: ctx.totalCents });
     expect((await postStripeWebhook(event)).status).toBe(200);
     expect((await postStripeWebhook(event)).status).toBe(200);
+    // #4498: the seller reads this from Orders, so a tap on the notice opens it.
+    const { results: kinds } = await env.DB.prepare('SELECT kind FROM notifications WHERE builder_id = ?').bind(ctx.sellerBuilderId).all();
+    expect(kinds.map((row) => row.kind)).toEqual(['orders']);
     const notices = await sellerNotices(ctx.sellerBuilderId);
     expect(notices).toEqual([
       `A sale of "Product full" was refunded or disputed, so ${dollars(ctx.shareCents)} will no longer be part of your earnings from it.`,
