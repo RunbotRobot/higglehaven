@@ -1375,6 +1375,13 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
 // handlePurchaseRefund/handlePurchaseDispute (the sibling "purchase
 // lifecycle actions" leaf, #2615, not yet moved), and handleExportData's
 // own GDPR export -- imported back from here rather than duplicated.
+// #4600: the carrier and tracking number of an order are read by that order's own seller and buyer and by nobody else,
+// so they are NOT part of purchaseFromRow (which also feeds the lándlet host's list); the seller's and the buyer's own
+// routes add them with this.
+export function trackingFromRow(row) {
+  return { shippingCarrier: row.shipping_carrier ?? null, trackingNumber: row.tracking_number ?? null };
+}
+
 export function purchaseFromRow(row) {
   return {
     purchaseId: row.purchase_id,
