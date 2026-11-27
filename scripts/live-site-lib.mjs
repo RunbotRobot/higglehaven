@@ -254,6 +254,17 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [x, y, dx, dy] };
     }
+    case 'handle': {
+      // #4570: handle:<x|y|z>:<+|-> taps one arrowhead of the selected item's movement axes (the nudge, #4414), found from where
+      // the page draws it, so a 20 px arrowhead can be tapped without guessing a pixel. Select an item first (item:n).
+      need(2);
+      const axis = String(args[0]).toLowerCase();
+      const sign = args[1] === '+' || args[1] === 'plus' ? 1 : (args[1] === '-' || args[1] === 'minus' ? -1 : 0);
+      if (args.length !== 2 || !['x', 'y', 'z'].includes(axis) || !sign) {
+        throw new Error(`step "${token}": handle needs an axis (x, y or z) and an end (+ or -), as handle:x:+`);
+      }
+      return { command, args: [axis, sign] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -331,7 +342,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, aim, rise, look, tap, item, dragitem, drag, handle, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
   }
 }
 

@@ -69,6 +69,10 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('drag:150:600:40:-30')).toEqual({ command: 'drag', args: [150, 600, 40, -30] });
     expect(() => parseStep('drag:150:600:40')).toThrow(/needs 4 argument/);
     expect(() => parseStep('drag:a:600:40:1')).toThrow(/drag needs a point/);
+    expect(parseStep('handle:x:+')).toEqual({ command: 'handle', args: ['x', 1] });
+    expect(parseStep('handle:Z:-')).toEqual({ command: 'handle', args: ['z', -1] });
+    expect(() => parseStep('handle:w:+')).toThrow(/handle needs an axis/);
+    expect(() => parseStep('handle:x')).toThrow(/needs 2 argument/);
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
   });
 
