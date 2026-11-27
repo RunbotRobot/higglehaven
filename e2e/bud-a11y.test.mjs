@@ -28,6 +28,10 @@ for (const mode of ['shop', 'build', 'sell']) {
   if (mode === 'build') { await claimLandlet(page); await page.waitForTimeout(800); }
   await page.waitForSelector(`body[data-mode="${mode}"][data-bud="on"]`, { timeout: 30000 });
 
+  // #4591: the world canvas is named for the mode it is in (it carried the Build wording in every mode).
+  const worldName = await page.getAttribute('canvas#app', 'aria-label');
+  check(mode === 'build' ? /Build view/.test(worldName) : !/Build|place it/.test(worldName), `${mode}: the world canvas is named for this mode (got ${JSON.stringify(worldName)})`);
+
   // The head: linked to its menu, closed.
   check((await page.getAttribute('#account-menu-toggle', 'aria-controls')) === 'account-menu-panel', `${mode}: the head names the menu it opens (aria-controls)`);
   check((await page.getAttribute('#account-menu-toggle', 'aria-expanded')) === 'false', `${mode}: the head says the menu is closed`);

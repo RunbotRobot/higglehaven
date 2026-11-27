@@ -54,6 +54,7 @@
 // from src/main.js. settings/modal.js's renderSettingsSection just calls
 // renderBuildSettingsSection() rather than reaching into this module's own
 // state directly.
+import { worldCanvasName } from '../world/canvasName.js';
 import * as THREE from 'three';
 import { selectionStops, stepIndex, announceStop, isStepKeyEvent, isDeselectKeyEvent } from './keyboardSelect.js';
 import { isBudOpen } from '../ui/bud.js';
@@ -5383,7 +5384,9 @@ export async function handlePlacementClick() {
 // Focus is put on the world when the item is chosen (focusWorldForPlacement), because the control that was last focused
 // is now "Cancel placing" and Enter on it would cancel instead.
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'Build view. With an item chosen, press Enter to place it where the camera is looking.');
+// #4591: the name follows the mode (this canvas is the world in Shop and Sell too).
+canvas.setAttribute('aria-label', worldCanvasName(document.body?.dataset.mode));
+document.addEventListener('higglehaven:mode', (event) => canvas.setAttribute('aria-label', worldCanvasName(event.detail?.mode)));
 export function focusWorldForPlacement() {
   canvas.focus({ preventScroll: true });
 }
