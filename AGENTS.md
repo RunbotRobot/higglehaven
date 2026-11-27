@@ -84,6 +84,7 @@ forward there descends; put `land` first to walk on the ground),
 control by what it is, not by where it sits; prefer them to `tap:<x>:<y>`), `settings`,
 `idle`, `wait:<ms>`, `shot[:name]`, `stats`, `lap` (like `stats`, then counts afresh: the figures since the last `lap`, one row per phase), `marks` (the page's own start-up marks, request count and slowest requests, in ms since the navigation: after a `mode:` step it reads the reload that switch caused, #3873), `cover`, and
 `slow:<rate>` (the page's CSS animations run at that fraction of their speed, `slow:0.1` for ten times slower, `slow:1` to restore, so a burst can catch a 300 ms unfold even where each still takes longer),
+`fail:<401|403|429|500|503|offline>[:<route text>]` (every `/api` call, or only those whose path contains the route text, is answered with that failure until `unfail`, with the body the real worker sends and the numbers a real 429 carries, so a walk can read what a person sees when things go wrong, #4576),
 `burst:<name>:<count>:<ms>` (stills a few hundred ms apart; add `:burst:<name>:<count>:<ms>`
 to the end of any step to take them while it runs, as in
 `walk:forward:2000:burst:walk:4:500`, so legs moving or a leaf unfolding can be read from
