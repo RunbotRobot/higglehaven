@@ -19,7 +19,7 @@ import { json, HttpError } from './http.js';
 import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
-import { checkRateLimit, rateLimitInsertStatement, rateLimitRefusal } from './rate-limit.js';
+import { checkRateLimit, checkPollRateLimit, pollRateLimitStatement, pollRateLimitRefusal } from './rate-limit.js';
 import {
   requireCurrentUser, assertOwner, requireSessionBuilder, suspendedSellerTemplateIds,
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
@@ -242,7 +242,13 @@ const PRESENCE_NEARBY_LIMIT = 200;
 // 1-2s" sustained target over that window, not a true per-second throttle —
 // a burst can still spend the whole budget faster, same tradeoff every
 // other checkRateLimit call in this file already accepts.
-const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
+// #4542: was 600, below what the shop itself sends: the nearby read every
+// 1000 ms is 900 a window and the voice poll every 1200 ms is 750, so a
+// person who stayed in the world about ten minutes was refused by their own
+// client (which swallows the 429 and shows nothing). 1500 leaves room over
+// the busiest poll (900) for a reconnect or a second tab. Counted in one row
+// (checkPollRateLimit), so the larger number costs nothing to check.
+const PRESENCE_REPORT_RATE_LIMIT_MAX = 1500;
 
 // #1767: the "who's nearby" GET below had no rate limit at all, unlike its
 // own POST sibling above and every other poll-while-something-is-live GET
@@ -301,10 +307,10 @@ export async function handlePresence(request, db, route, url) {
     // after, so a 429 still wins and every attempt is counted exactly as before.
     const nearbyBucket = `presence-nearby:${sessionBuilder.user_id}`;
     const [limitInsert, ownPresenceRead] = await db.batch([
-      rateLimitInsertStatement(db, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX),
+      pollRateLimitStatement(db, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX),
       db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
     ]);
-    await rateLimitRefusal(db, limitInsert, nearbyBucket, PRESENCE_NEARBY_RATE_LIMIT_MAX);
+    pollRateLimitRefusal(limitInsert, PRESENCE_NEARBY_RATE_LIMIT_MAX);
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
     // #2269: a client-supplied `landletId` query param used to be trusted
     // outright -- any verified account could enumerate landlet ids via the
@@ -370,7 +376,7 @@ export async function handlePresence(request, db, route, url) {
   // write frequency.
   if (request.method === 'POST' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `presence-report:${sessionBuilder.user_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
+    await checkPollRateLimit(db, `presence-report:${sessionBuilder.user_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const x = finiteNumber(input.x, 'x');
     const y = finiteNumber(input.y, 'y');
@@ -481,7 +487,7 @@ export async function handleNearbyChat(request, db, route, url) {
   // presence/avatar-visibility's own looser "any non-'none' tier" gate.
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
-    await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.user_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
+    await checkPollRateLimit(db, `nearby-chat-poll:${sessionBuilder.user_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     if (landletId === null) {
       // #2802: landletId still reported (null here) so the client can tell
@@ -822,7 +828,7 @@ async function handleFriendVoiceChannels(request, db, route) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
 
   if (request.method === 'GET' && route.length === 2) {
-    await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.user_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    await checkPollRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.user_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
     // #3120: this poll is the member's liveness signal (see migration
     // 0186); pruneStaleFriendVoiceChannelMembers drops a member that stops
     // polling. Conditional so a member polling every ~1.2s writes about once
@@ -983,7 +989,7 @@ let warnedTurnMissingSecret = false;
 
 async function handleVoiceIceConfig(request, db, env) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-  await checkRateLimit(db, `voice-ice-config:${sessionBuilder.user_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
+  await checkPollRateLimit(db, `voice-ice-config:${sessionBuilder.user_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (env?.TURN_SERVER_URL) {
     if (env.TURN_SHARED_SECRET) {
@@ -1087,7 +1093,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   }
   if (request.method === 'GET') {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-    await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.user_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
+    await checkPollRateLimit(db, `voice-signal-poll:${sessionBuilder.user_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));

@@ -6657,9 +6657,13 @@ Request body:
 Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying", "afk",
 "updatedAt" } }` — the row as stored, after the upsert.
 
-Rate-limited server-side (`presence-report:<builderId>`, 600 per the
-shared 15-minute rate-limit window — enough headroom for roughly one
-report every 1-2 seconds sustained, with some burst tolerance) — this is
+Rate-limited server-side (`presence-report:<userId>`, 1500 per the
+shared 15-minute rate-limit window — above the busiest poll the shop sends
+(the nearby read, 900 a window). Presence, nearby chat, voice signalling and
+the friend voice channel poll buckets count in one `rate_limit_counters` row
+per bucket in a fixed window (#4542) instead of the sliding event rows, so a
+check reads one row whatever the limit; the 429 carries the same `limit`,
+`windowSeconds` and `retryAfterSeconds`) — this is
 the only thing bounding write frequency; client-side throttling (only
 reporting on meaningful movement) is the client-integration sub-issue's
 own scope (#1100), not this endpoint's. Never trust a client to self-

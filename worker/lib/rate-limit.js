@@ -110,3 +110,45 @@ export async function checkRateLimit(db, bucketKey, maxAttempts) {
   const result = await rateLimitInsertStatement(db, bucketKey, maxAttempts).run();
   await rateLimitRefusal(db, result, bucketKey, maxAttempts);
 }
+
+// #4542: counter-based limiting for the high-limit polling buckets (presence,
+// nearby chat, voice signalling: hundreds of calls a window). One row per
+// bucket holds the count in the current fixed window, so a check costs one
+// row whatever the limit, where the event-row limiter above reads up to
+// `maxAttempts` rows per call. Fixed windows (aligned to the same
+// RATE_LIMIT_WINDOW_MS) allow at most twice the limit across a window
+// boundary; that is fine for a poll whose limit is far above what a client
+// legitimately sends. Low-limit buckets (login, signup, sends) keep the
+// sliding window, which is exact. The 429 carries the same three numbers.
+export function rateLimitWindowStart(now = Date.now()) {
+  return Math.floor(now / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS;
+}
+
+// `changes` is 0 exactly when the bucket is at its limit in this window.
+export function pollRateLimitStatement(db, bucketKey, maxAttempts) {
+  const windowStart = rateLimitWindowStart();
+  return db.prepare(`
+    INSERT INTO rate_limit_counters (bucket_key, window_start, count)
+    VALUES (?1, ?2, 1)
+    ON CONFLICT (bucket_key) DO UPDATE SET
+      window_start = excluded.window_start,
+      count = CASE WHEN rate_limit_counters.window_start < excluded.window_start THEN 1 ELSE rate_limit_counters.count + 1 END
+    WHERE rate_limit_counters.window_start < excluded.window_start OR rate_limit_counters.count < ?3
+  `).bind(bucketKey, windowStart, maxAttempts);
+}
+
+// The wait is until the current window ends, which needs no read.
+export function pollRateLimitRefusal(result, maxAttempts) {
+  if (result.meta.changes !== 0) return;
+  const now = Date.now();
+  const retryAfterSeconds = Math.max(1, Math.ceil((rateLimitWindowStart(now) + RATE_LIMIT_WINDOW_MS - now) / 1000));
+  throw new HttpError('Too many attempts. Wait a while and try again.', 429, {
+    limit: maxAttempts,
+    windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+    retryAfterSeconds,
+  });
+}
+
+export async function checkPollRateLimit(db, bucketKey, maxAttempts) {
+  pollRateLimitRefusal(await pollRateLimitStatement(db, bucketKey, maxAttempts).run(), maxAttempts);
+}

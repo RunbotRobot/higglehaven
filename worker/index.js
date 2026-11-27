@@ -2675,6 +2675,8 @@ async function pruneExpiredAuthState(db) {
   const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
   await db.batch([
     db.prepare('DELETE FROM rate_limit_events WHERE created_at < ?').bind(cutoff),
+    // #4542: a counter whose window has passed is dead weight.
+    db.prepare('DELETE FROM rate_limit_counters WHERE window_start < ?').bind(cutoff),
     db.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM email_verification_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM password_reset_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
