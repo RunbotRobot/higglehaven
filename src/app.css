@@ -7523,6 +7523,27 @@
         color: var(--ink);
         font: var(--text-2xs)/var(--leading-normal) var(--font-sans);
       }
+      /* #4600: carrier and tracking boxes beside Mark shipped; one line each on a phone. */
+      .product-sale-row-tracking {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        margin-bottom: var(--space-xs);
+      }
+      .product-sale-row-tracking-input {
+        min-height: 44px;
+        padding: var(--space-xs) var(--space-md);
+        border-radius: var(--radius-pill);
+        border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
+        background: transparent;
+        color: var(--ink);
+        font: var(--text-2xs)/var(--leading-normal) var(--font-sans);
+        user-select: text;
+      }
+      .product-sale-row-tracking-line {
+        margin-bottom: var(--space-xs);
+        user-select: text;
+      }
       .product-sale-row-ship-btn:disabled {
         opacity: 0.5;
       }

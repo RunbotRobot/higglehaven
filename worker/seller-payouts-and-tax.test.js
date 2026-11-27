@@ -209,6 +209,51 @@ describe('Seller payouts (#454)', () => {
     expect(notices.body.notifications.find((n) => n.message.includes('has shipped!')).kind).toBe('purchases');
   });
 
+  // #4600 (shipping 3/8): the seller may say who carried the order and under what number; the buyer reads it on their
+  // order; nobody else does (not the lándlet host, not another seller).
+  it('carries a carrier and tracking number from Mark shipped to the buyer, and lets the seller correct them', async () => {
+    const builder = await signupBuilder('tracking-buyer-builder');
+    const seller = await createConnectedSeller('tracking-seller');
+    const stranger = await createConnectedSeller('tracking-stranger');
+    const purchaseId = await makeRealMoneyPurchase(builder, seller);
+    const patch = (who, body) => api(`/purchases/${purchaseId}/tracking`, who.session({ method: 'PATCH', body: JSON.stringify(body) }));
+
+    // Not shipped yet: nothing to correct.
+    expect((await patch(seller, { carrier: 'Post', trackingNumber: '1' })).response.status).toBe(409);
+
+    // Refused values, before anything is written.
+    const markWith = (body) => api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST', body: JSON.stringify(body) }));
+    expect((await markWith({ carrier: 'x'.repeat(41) })).response.status).toBe(400);
+    expect((await markWith({ trackingNumber: '1'.repeat(65) })).response.status).toBe(400);
+    expect((await markWith({ trackingNumber: 'AB\nCD' })).response.status).toBe(400);
+    expect((await markWith({ carrier: 12 })).response.status).toBe(400);
+
+    const shipped = await markWith({ carrier: '  Royal Mail ', trackingNumber: ' RM123456789GB ' });
+    expect(shipped.response.status).toBe(200);
+    expect(shipped.body.purchase.shippingCarrier).toBe('Royal Mail');
+    expect(shipped.body.purchase.trackingNumber).toBe('RM123456789GB');
+
+    // The buyer's own order and the seller's own lists show it.
+    const mine = await api('/purchases/mine', builder.session());
+    const buyerRow = mine.body.purchases.find((p) => p.purchaseId === purchaseId);
+    expect(buyerRow.shippingCarrier).toBe('Royal Mail');
+    expect(buyerRow.trackingNumber).toBe('RM123456789GB');
+    const sellerList = await api('/purchases?mine=seller', seller.session());
+    expect(sellerList.body.purchases.find((p) => p.purchaseId === purchaseId).trackingNumber).toBe('RM123456789GB');
+
+    // Nobody else reads it: the lándlet host's list of purchases made on their lándlet has no tracking.
+    const hostList = await api(`/purchases?builderId=${builder.builderId}`, builder.session());
+    const hostRow = (hostList.body.purchases || []).find((p) => p.purchaseId === purchaseId);
+    if (hostRow) expect(hostRow.trackingNumber).toBeUndefined();
+
+    // Only the order's own seller corrects it; an empty value clears it.
+    expect((await patch(stranger, { trackingNumber: 'NOPE' })).response.status).toBe(403);
+    const corrected = await patch(seller, { carrier: 'Royal Mail', trackingNumber: '' });
+    expect(corrected.response.status).toBe(200);
+    expect(corrected.body.purchase.trackingNumber).toBeNull();
+    expect(corrected.body.purchase.shippingCarrier).toBe('Royal Mail');
+  });
+
   // #925: the sequential re-ship test above only proves a repeat call
   // after the first one is already committed gets a 400 — it doesn't
   // exercise the actual race, two requests genuinely concurrent
