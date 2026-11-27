@@ -255,6 +255,15 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [x, y, dx, dy] };
     }
+    case 'nudge': {
+      // #4570: nudge:<x|y|z>:<+|->: with an item selected in Build, tap that arrowhead of the movement axes.
+      need(2);
+      const axis = String(args[0]).toLowerCase();
+      if (args.length !== 2 || !['x', 'y', 'z'].includes(axis) || !['+', '-'].includes(args[1])) {
+        throw new Error(`step "${token}": nudge needs an axis and a sign (nudge:x:+)`);
+      }
+      return { command, args: [axis, args[1]] };
+    }
     case 'mode':
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
@@ -342,7 +351,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
   }
 }
 
