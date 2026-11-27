@@ -2793,6 +2793,13 @@ and the buyer's account export. They are deliberately not part of the purchase s
 afterwards: the order's own seller (or the admin fallback above, logged as `tracking_override`), `409` before the order
 is marked shipped, `400` once refunded, same rate limit as Mark shipped; it sends no second notice.
 
+**Where to send it (#4600, shipping 3/8).** The same two seller reads, `GET /api/purchases?mine=seller` and
+`GET /api/purchases?templateId=`, carry each sale's `shippingAddress`: the order's own copy of the address the buyer gave
+at checkout (`{ name, line1, line2, city, region, postalCode, country }`), or `null` for a digital good or an order made
+before addresses were asked for. Like the carrier and tracking number it is deliberately not part of the shape the host's
+`GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
+shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`

@@ -190,6 +190,9 @@ export async function handlePurchases(request, env, route, url) {
     // #3704 (Sell in the bud, slice 3): every sale of the signed-in seller's own products, newest
     // first, for the Orders leaf. Read-only and scoped to the session's seller, so it needs no id
     // from the client; Mark shipped and Refund still go through their own routes unchanged.
+    // #4600: each sale carries its own copy of the address the buyer gave (null for a digital good or an older order),
+    // read only here and on the product's own Sales list, both scoped to the seller of that order; never on the host's
+    // commission view (builderId), whose builder is not the seller.
     if (url.searchParams.get('mine') === 'seller') {
       const sessionSeller = await requireSessionSeller(request, db);
       // #4541: a seller with more than a page of sales reaches the older ones by cursor (newest first, same shape as
@@ -216,7 +219,7 @@ export async function handlePurchases(request, env, route, url) {
       return json({
         // #3776: the order's own recorded name first, then the live product, so a delisted product
         // is still named on the seller's side too.
-        purchases: page.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        purchases: page.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
         nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,
         totalCount: total.count,
       });
@@ -287,7 +290,7 @@ export async function handlePurchases(request, env, route, url) {
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
-      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
+      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
     }
     throw new HttpError('builderId, templateId, mine=seller, or danglingSeller is required', 400);
   }

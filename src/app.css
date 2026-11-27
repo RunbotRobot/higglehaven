@@ -7590,6 +7590,9 @@
         font: var(--text-lg)/var(--leading-normal) var(--font-sans);
         user-select: text;
       }
+      .product-sale-row-ship-to {
+        user-select: text;
+      }
       .product-sale-row-tracking-line {
         margin-bottom: var(--space-xs);
         user-select: text;
