@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  disputeErrorText, disputeSuccessText, purchaseAfterDispute, DISPUTE_PROMPT_TEXT,
+  disputeErrorText, disputeSuccessText, purchaseAfterDispute, DISPUTE_PROMPT_TEXT, disputePromptText, isDigitalPurchase,
 } from './disputeOutcome.js';
 
 // #3199: wording and row update for the buyer's "Report a problem" action.
@@ -43,5 +43,17 @@ describe('dispute outcomes (#3199)', () => {
 
   it('exports the confirm prompt wording', () => {
     expect(DISPUTE_PROMPT_TEXT).toBe('Report a problem with this order?');
+  });
+
+  // #4573: the confirmation says a refund may follow at once, and that a digital item leaves what the buyer owns.
+  it('tells the buyer a refund may follow at once, and that a digital item is then removed', () => {
+    expect(disputePromptText({ isDigitalGood: false })).toBe("Report a problem with this order? If it can be refunded right away, you'll get your money back.");
+    expect(disputePromptText({ isDigitalGood: true })).toContain('the item leaves what you own');
+    // An avatar or an animation is digital whether or not the seller set the disclaimer flag.
+    expect(isDigitalPurchase({ isDigitalGood: false, productKind: 'avatar' })).toBe(true);
+    expect(isDigitalPurchase({ isDigitalGood: false, productKind: 'animation' })).toBe(true);
+    expect(isDigitalPurchase({ isDigitalGood: false, productKind: 'furniture' })).toBe(false);
+    expect(disputePromptText({ productKind: 'avatar' })).toContain('the item leaves what you own');
+    expect(disputePromptText({ isDigitalGood: true })).not.toMatch(/threshold|established|policy/i);
   });
 });
