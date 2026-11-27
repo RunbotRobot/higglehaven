@@ -8,6 +8,7 @@ import { markPurchaseShipped, refundPurchase } from '../api.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { formatPriceCents } from '../main.js';
+import { sellerKeepsCents } from './saleEarnings.js';
 
 export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
   const saleRow = document.createElement('div');
@@ -27,7 +28,11 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
   body.appendChild(summary);
   const commission = document.createElement('div');
   commission.className = 'product-sale-row-commission';
-  commission.textContent = `You earned ${formatPriceCents(purchase.builderShareCents)}`;
+  // #4585: a card sale says what the seller keeps; the host's higgles commission is not the seller's money.
+  const keeps = sellerKeepsCents(purchase);
+  commission.textContent = keeps == null
+    ? `You earned ${formatPriceCents(purchase.builderShareCents)}`
+    : `You keep ${formatPriceCents(keeps)}`;
   body.appendChild(commission);
   const time = document.createElement('div');
   time.className = 'product-sale-row-time';
