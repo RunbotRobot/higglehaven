@@ -84,7 +84,9 @@ const onlyOneLineOpen = (await page.locator('.shop-nearby-chat-message-actions:v
   && (await page.locator(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"] .shop-nearby-chat-message-actions:visible`).count()) === 1;
 console.log('tapping a second line hides the first line\'s actions (should be true):', onlyOneLineOpen);
 // #4596: the three safety actions are quiet buttons, so a thumb can hit each: at least 44px tall and 44px wide.
-const chipSizes = await page.evaluate((builderId) => [...document.querySelectorAll(`.shop-nearby-chat-message[data-builder-id="${builderId}"] .shop-nearby-chat-message-actions button`)]
+// Only the line that was tapped open is measured: a later poll can already have added a second line from the same
+// sender (its actions stay hidden, 0 by 0), and on a slow machine that is where the six chips of one run came from.
+const chipSizes = await page.evaluate((builderId) => [...document.querySelectorAll(`.shop-nearby-chat-message.actions-open[data-builder-id="${builderId}"] .shop-nearby-chat-message-actions button`)]
   .map((b) => { const r = b.getBoundingClientRect(); return { action: b.dataset.action, w: Math.round(r.width), h: Math.round(r.height) }; }), MUTED_BUILDER_ID);
 console.log('action chip sizes:', JSON.stringify(chipSizes));
 const chipsBigEnough = chipSizes.length === 3 && chipSizes.every((c) => c.h >= 44 && c.w >= 44);

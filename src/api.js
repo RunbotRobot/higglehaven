@@ -406,6 +406,15 @@ export async function fetchAddresses() {
   return requestJson('/addresses');
 }
 
+// #4602 (Shipping 5/8): where "ships to me" is judged from, and the dim switch. The server decides the country.
+export async function fetchShippingDestination() {
+  return requestJson('/shipping-destination');
+}
+
+export async function saveShippingDestination(change) {
+  return requestJson('/shipping-destination', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(change) });
+}
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 export async function addAddress(address) {
