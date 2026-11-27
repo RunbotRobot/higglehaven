@@ -126,6 +126,18 @@ describe('beginAvatarFogHold (#4067)', () => {
     await hold.done;
   });
 
+  it('with reduced motion, stepping before resolve does not throw and keeps waiting (#4579)', async () => {
+    const commit = vi.fn();
+    const hold = beginAvatarFogHold({ createFog: null, parent: {}, getPosition: () => pos, nowMs: 0, reducedMotion: true });
+    expect(hold.step(100)).toBe(false);
+    expect(hold.step(5000)).toBe(false);
+    expect(commit).not.toHaveBeenCalled();
+    hold.resolve(commit);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(hold.step(6000)).toBe(true);
+    await hold.done;
+  });
+
   it('a cancelled hold still runs a later commit, so a body is never lost', () => {
     const fog = fakeFog();
     const commit = vi.fn();
