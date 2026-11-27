@@ -486,6 +486,49 @@
     if (fromEl) fromDrafts.set(fromEl.dataset.replyFrom, fromEl.value);
   });
 
+
+  // #4522: a required reason is asked for in the page's own dialog, not window.prompt() (a phone browser can
+  // suppress a native prompt, which answered null at once, so the button did nothing and said nothing).
+  // Resolves the trimmed text, or '' for Cancel, Escape, the backdrop or an empty answer.
+  function askReason(title, label) {
+    return new Promise((resolve) => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'reason-dialog';
+      const form = document.createElement('form');
+      form.method = 'dialog';
+      const heading = document.createElement('h3');
+      heading.textContent = title;
+      const field = document.createElement('label');
+      field.textContent = label;
+      const input = document.createElement('textarea');
+      input.className = 'reason-input';
+      input.rows = 3;
+      input.required = true;
+      field.append(input);
+      const toolbar = document.createElement('div');
+      toolbar.className = 'toolbar';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'secondary reason-cancel';
+      cancel.textContent = 'Cancel';
+      const ok = document.createElement('button');
+      ok.type = 'submit';
+      ok.className = 'reason-ok';
+      ok.textContent = 'Save';
+      toolbar.append(cancel, ok);
+      form.append(heading, field, toolbar);
+      dialog.append(form);
+      document.body.append(dialog);
+      let answer = '';
+      cancel.addEventListener('click', () => dialog.close());
+      form.addEventListener('submit', () => { answer = input.value.trim(); });
+      dialog.addEventListener('close', () => { dialog.remove(); resolve(answer); });
+      dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+      dialog.showModal();
+      input.focus();
+    });
+  }
+
   listEl.addEventListener('click', async (event) => {
     // Checked before data-toggle below: the "Blocked on #n" pill (see
     // waitingBadge) sits inside a card-head, which itself carries
@@ -554,7 +597,7 @@
           method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'subtasks' }),
         });
       } else if (action === 'waitingOwner') {
-        const reason = window.prompt('Reason for waiting on the owner (required):');
+        const reason = await askReason('Waiting on the owner', 'Reason for waiting on the owner (required):');
         if (!reason) return;
         await apiCall('/tasks/' + encodeURIComponent(taskId), {
           method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'owner', reason }),
