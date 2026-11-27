@@ -79,7 +79,10 @@ try {
       const full = await loadBase64(template.modelUrl);
       if (regenerate) {
         const generated = await page.evaluate(([b, sizes, wantStills]) => window.compareGenerated(b, sizes, wantStills), [full, SIZES, Boolean(stillsDir)]);
+        row.stats = generated.stats;
         for (const [tier, result] of Object.entries(generated)) {
+          if (tier === 'stats') continue;
+          if (result.sharesFullModel) { row.tiers[tier] = { views: [], colourShift: 0, pixelDiff: 0, visible: false, sharesFullModel: true }; continue; }
           if (stillsDir) {
             await fs.mkdir(stillsDir, { recursive: true });
             for (const still of result.stills) {
@@ -115,7 +118,8 @@ try {
   else {
     for (const row of rows) {
       console.log(`${row.status.padEnd(10)} ${row.name} (${row.templateId.slice(0, 8)})`);
-      for (const [tier, t] of Object.entries(row.tiers)) console.log(`    ${tier} at ${SIZES[tier]} px: colour shift ${t.colourShift}, pixel difference ${t.pixelDiff}${t.visible ? '  <-- visible' : ''}`);
+      if (row.stats) console.log(`    triangles made: ${JSON.stringify(row.stats)}`);
+      for (const [tier, t] of Object.entries(row.tiers)) console.log(t.sharesFullModel ? `    ${tier}: the full model itself (no cheaper version passed)` : `    ${tier} at ${SIZES[tier]} px: colour shift ${t.colourShift}, pixel difference ${t.pixelDiff}${t.visible ? '  <-- visible' : ''}`);
       if (showViews) for (const [tier, t] of Object.entries(row.tiers)) for (const v of t.views) console.log(`      ${tier} view ${v.view} (${['+x', '-x', '+y', '-y', '+z', '-z'][v.view]}): colour shift ${v.colourShift}, pixel difference ${v.pixelDiff}`);
     }
   }

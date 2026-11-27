@@ -3,6 +3,7 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { describe, expect, it } from 'vitest';
 import {
   FAR_BBOX_TOLERANCE,
+  FAR_BUDGET_STEPS,
   FAR_MAX_TRIANGLES,
   MID_MAX_TRIANGLES,
   MID_MIN_TRIANGLES,
@@ -14,7 +15,7 @@ import {
 } from './modelTiers.js';
 import { boundaryEdgeCountSteps, countTriangles } from './geometrySimplify.js';
 import { fidelityBatches } from './modelTiers.js';
-import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, FAR_HEAVIER_LIMITS } from './tierFidelity.js';
 
 // ---- Fixtures: procedural stand-ins for real uploads ----
 
@@ -270,7 +271,9 @@ describe('every simpler version still reads as the model (#4062)', () => {
     const { mid, far, stats } = buildModelTiersSync(model);
     const full = fidelityBatches(model);
     expect(isFaithful(silhouetteFidelity(full, fidelityBatches(mid.object)), 'mid')).toBe(true);
-    expect(isFaithful(silhouetteFidelity(full, fidelityBatches(far.object)), 'far')).toBe(true);
+    // #4111: a far version passes the usual limits, or (only after those failed) the heavier version's own.
+    const farReport = silhouetteFidelity(full, fidelityBatches(far.object));
+    expect(isFaithful(farReport, 'far') || isFaithful(farReport, FAR_HEAVIER_LIMITS)).toBe(true);
     expect(stats.far).toBeGreaterThan(0);
   });
 
@@ -628,7 +631,9 @@ describe('buildModelTiersSync', () => {
   it('keeps every part of a multi-mesh model in the far version, merged into one mesh', () => {
     const { far, stats } = buildModelTiersSync(multiMesh());
     expect(meshesOf(far.object)).toHaveLength(1);
-    expect(stats.far).toBeLessThanOrEqual(FAR_MAX_TRIANGLES);
+    // #4111: three smooth parts do not stand for themselves in 200 triangles (the usual far budget covered 61%); the
+    // heavier version, three times the budget, is the most a far version ever has.
+    expect(stats.far).toBeLessThanOrEqual(FAR_MAX_TRIANGLES * Math.max(1, ...FAR_BUDGET_STEPS));
     // All three colours survive in the baked vertex colours.
     const color = meshesOf(far.object)[0].geometry.attributes.color;
     let hasRed = false;

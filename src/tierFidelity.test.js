@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem, meanBatchColor } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, boundsOfBatches, surfaceStats, materialKindProblem, meanBatchColor, FAR_HEAVIER_LIMITS } from './tierFidelity.js';
 
 // A unit cube as twelve triangles with outward-facing (counter-clockwise from outside) windings.
 function cube(scale = 1, doubleSided = false, flip = false) {
@@ -142,5 +142,26 @@ describe('meanBatchColor with batches of no colour (#4111)', () => {
   });
   it('is null with no coloured batch at all', () => {
     expect(meanBatchColor([{ positions: tri, area: 1 }])).toBeNull();
+  });
+});
+
+// #4111: the far limits. A far version that covers 67% of the model (the live door: its lower corner gone, a pixel
+// difference of 0.38 where it is swapped in) or fills in a quarter of the outline again (a toilet's tank and bowl) is
+// a version a person can tell from the model, so it does not pass; one heavier version is held to a little less.
+describe('far limits (#4111)', () => {
+  const report = (coverage, extra) => ({ coverage, extra });
+  it('refuses a version that covers a third less of the outline than the model', () => {
+    expect(isFaithful(report(0.67, 0.05), 'far')).toBe(false);
+  });
+  it('refuses an outline that covers an extra third of the model (the gap between tank and bowl filled in)', () => {
+    expect(isFaithful(report(1, 0.34), 'far')).toBe(false);
+  });
+  it('accepts a version that covers nine tenths and adds a fifth', () => {
+    expect(isFaithful(report(0.92, 0.2), 'far')).toBe(true);
+  });
+  it('holds the one heavier version to eight tenths: a third of a sphere\'s triangles cover about 87%', () => {
+    expect(isFaithful(report(0.87, 0.01), FAR_HEAVIER_LIMITS)).toBe(true);
+    expect(isFaithful(report(0.87, 0.01), 'far')).toBe(false);
+    expect(isFaithful(report(0.75, 0.01), FAR_HEAVIER_LIMITS)).toBe(false);
   });
 });

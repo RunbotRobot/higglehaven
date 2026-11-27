@@ -107,10 +107,10 @@ window.compareRendered = async (fullBase64, tierBase64, sizePx, wantStills = fal
 // compared the same way, so a change to the generator can be looked at before anything is regenerated or stored.
 window.compareGenerated = async (fullBase64, sizes, wantStills = false) => {
   const model = await parse(fullBase64);
-  const { mid, far } = await buildModelTiers(model);
-  const out = {};
+  const { mid, far, stats } = await buildModelTiers(model);
+  const out = { stats };
   for (const [tier, version] of [['mid', mid], ['far', far]]) {
-    if (!version || version.sharesFullModel) continue;
+    if (!version || version.sharesFullModel) { out[tier] = { sharesFullModel: true }; continue; }
     out[tier] = await compareObjects(await parse(fullBase64), version.object, sizes[tier], wantStills);
   }
   return out;

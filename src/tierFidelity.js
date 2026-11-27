@@ -23,6 +23,14 @@ export const FIDELITY_GRID = 64;
 // held to "this is the model, not a net": the owner's brick far version covered 0 to 36% and its mid
 // version 73%, where a sound far version of a smooth shape covers about 65 to 95%.
 //
+// #4111 (the owner: a person "shouldn't be seeing a difference between the two objects"): far was 0.6 and 0.5, which
+// passed a door covering 67% of itself (torn, with its lower corner gone: pixel difference 0.38 at the size where it
+// is swapped in) and an outline that filled in the gap between a toilet's tank and bowl. Measured on the live
+// catalogue with scripts/render-model-tiers.mjs --regenerate: at 0.9 and 0.25 the door becomes a 20-triangle box
+// (pixel difference 0.05, was 0.38), the white wall 48 triangles (0.025, was 0.12) and the tree its own 448 (0.006,
+// was 0.31); at 0.8 the toilet and the wall went back to their poor versions. Thresholds are a first reading of
+// "cannot be told apart", tuned on nine models.
+//
 // #4114: the outline alone passed a brick whose mid version had lost 12% of its surface (0.91 coverage:
 // "nine percent of the outline missing is a pass") and showed jagged, torn faces from two metres. A mid
 // version is also held to keep its surface (minAreaKept: the area of its triangles over the full model's)
@@ -31,8 +39,14 @@ export const FIDELITY_GRID = 64;
 // dozen triangles meant to read as an outline, so neither applies to it.
 export const TIER_LIMITS = {
   mid: { minCoverage: 0.95, maxExtra: 0.4, minAreaKept: 0.95, maxOpenGrowth: 1.15 },
-  far: { minCoverage: 0.6, maxExtra: 0.5 },
+  far: { minCoverage: 0.9, maxExtra: 0.25 },
 };
+// #4111: the far limits above are for the cheap versions (the usual far budget, the model's outline). One heavier
+// version (three times the budget) is tried only after both failed, and is held to a little less coverage, because a
+// smooth shape simplified to a third of its triangles covers about 87% of its own outline, not 90.
+// Its colour limit is a little looser too: a version that keeps 86% of its area has the colour of its parts weighted by
+// the area it kept, so a model of three colours moves by about 0.10 (a box, a sphere and a cylinder, in the tests).
+export const FAR_HEAVIER_LIMITS = { minCoverage: 0.8, maxExtra: 0.25, maxColorShift: 0.12 };
 
 // Triangle batches' shared bounds, so both models are drawn on the same grid.
 export function boundsOfBatches(batches) {
