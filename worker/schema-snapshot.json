@@ -645,9 +645,11 @@
       "seller_name": "TEXT|0||0",
       "seller_user_id": "TEXT|0||0",
       "shipped_at": "TEXT|0||0",
+      "shipping_carrier": "TEXT|0||0",
       "stripe_payout_id": "TEXT|0||0",
       "template_id": "TEXT|1||0",
       "total_cents": "INTEGER|1||0",
+      "tracking_number": "TEXT|0||0",
       "unit_price_cents": "INTEGER|1||0"
     },
     "rate_limit_counters": {
