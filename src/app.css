@@ -7463,6 +7463,9 @@
       .orders-list { display: flex; flex-direction: column; gap: var(--space-md); }
       .bud-leaf .orders-note { margin: 0 0 var(--space-sm); font-size: var(--text-sm); color: rgb(var(--ink-rgb) / 0.75); }
       .bud-leaf .orders-note.error { color: var(--danger-text); }
+      /* #4541: the same quiet pill as My purchases' Load more. */
+      .bud-leaf .orders-more { align-self: center; margin-top: var(--space-sm); padding: var(--space-xs) var(--space-lg); border-radius: var(--radius-pill); border: none; background: rgb(var(--ink-rgb) / 0.1); color: var(--pill-text); font: var(--text-sm)/var(--leading-normal) var(--font-sans); }
+      .bud-leaf .orders-more:disabled { opacity: 0.5; }
       .product-sale-row-commission {
         color: var(--brand-green);
       }

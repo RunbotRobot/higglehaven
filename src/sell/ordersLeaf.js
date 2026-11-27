@@ -39,13 +39,42 @@ export function openOrdersLeaf() {
     }
     const list = document.createElement('div');
     list.className = 'orders-list';
-    for (const purchase of purchases) {
-      list.appendChild(buildSaleRow(purchase, { onChanged: () => paint(body), showProduct: true }));
-    }
-    const summary = note(totalCount > purchases.length
-      ? `Showing newest ${purchases.length} of ${totalCount} orders.`
-      : `${totalCount} order${totalCount === 1 ? '' : 's'}`);
-    body.replaceChildren(summary, list);
+    const addRows = (rows) => {
+      for (const purchase of rows) {
+        list.appendChild(buildSaleRow(purchase, { onChanged: () => paint(body), showProduct: true }));
+      }
+    };
+    addRows(purchases);
+    const summary = note('');
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'orders-more';
+    more.textContent = 'Show older orders';
+    let nextCursor = result.nextCursor;
+    const describe = () => {
+      summary.textContent = list.children.length < totalCount
+        ? `Showing newest ${list.children.length} of ${totalCount} orders.`
+        : `${totalCount} order${totalCount === 1 ? '' : 's'}`;
+      more.hidden = !nextCursor;
+    };
+    more.addEventListener('click', async () => {
+      more.disabled = true;
+      try {
+        const older = await fetchSellerOrders({ cursor: nextCursor });
+        if (mine !== token) return;
+        addRows(older.purchases);
+        nextCursor = older.nextCursor;
+        describe();
+      } catch (err) {
+        if (mine !== token) return;
+        summary.textContent = err.message || 'Couldn\'t load older orders.';
+        summary.className = 'orders-note error';
+      } finally {
+        more.disabled = false;
+      }
+    });
+    describe();
+    body.replaceChildren(summary, list, more);
   }
   openLeaf({
     id: 'orders',

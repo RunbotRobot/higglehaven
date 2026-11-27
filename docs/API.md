@@ -414,7 +414,10 @@ not a retroactive merge — accounts already registered before this existed
 (under the old lowercase-only normalization) are untouched and keep
 logging in/resetting exactly as before, matched by the same literal
 address they always have been. `429` after 5 attempts against the same
-email within 15 minutes (see "Rate limiting" above). `password` must be
+email within 15 minutes (see "Rate limiting" above), and (#4472) after 20
+attempts from one connection within 15 minutes whatever the address, so one
+connection cannot test many addresses against the `409` below; the `429`
+carries the limit and when it lifts, as every other. `password` must be
 8–200 characters.
 `username` is required (how
 users identify each other, not a cosmetic label), at most 40 characters,
@@ -9087,8 +9090,11 @@ panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
 seller-less template stays open to unauthenticated reads.
 `GET /api/purchases?mine=seller` (#3704) lists every sale of every product the
-signed-in seller owns, newest first (at most 100, with the real `totalCount`),
-for the bud's Orders leaf. It needs a session logged in as a seller (`401`
+signed-in seller owns, newest first, for the bud's Orders leaf. It pages like
+`/api/purchases/mine`: `limit` (1 to 100, default 100) and `cursor`, answering
+`nextCursor` (`null` on the last page) with the real `totalCount` (#4541: it used
+to stop at the newest 100, which left older orders out of reach of Mark shipped
+and Refund). It needs a session logged in as a seller (`401`
 otherwise) and takes no id: the seller is the session's own, so one seller can
 never read another's sales. Each row is the same purchase object plus
 `productName`, taken from the order's own record first (#3776) and the live
