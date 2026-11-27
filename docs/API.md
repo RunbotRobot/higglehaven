@@ -6024,6 +6024,48 @@ documents for itself), no e2e session can actually reach
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
 
+## Addresses (#4598)
+
+The addresses a person ships to, kept on the account (`migrations/0244_user_addresses.sql`, keyed on `user_id`).
+Personal data of a new kind: every route needs a current (not suspended) session and reads and writes only the
+caller's own rows. Another person's address answers `404 Address not found`, exactly like one that does not exist.
+No admin page reads them (the look-only role will see them masked when one does). Writes share an
+`address-mutate` rate limit (30 per window). Later shipping pieces copy an address onto an order for that
+order's buyer and seller; nothing else reads one.
+
+An address is `{ recipientName, line1, line2, city, region, postalCode, country, phone }`. Required: recipient
+name, line 1, city, postal code, country (an ISO 3166-1 alpha-2 code, upper-cased); a state or region is also
+required for `US`, `CA` and `AU`. Postal codes get a light check by country (5 digits or ZIP+4 for `US`, `A1A 1A1`
+for `CA`, 3 to 12 letters, digits, spaces or hyphens elsewhere). Phone is optional (digits, spaces, `+ ( ) -`).
+A refusal is `400 { error, field }` naming the field and saying why.
+
+### `GET /api/addresses`
+
+`{ "addresses": [{ "addressId", "recipientName", "line1", "line2", "city", "region", "postalCode", "country",
+"phone", "isDefault", "createdAt", "updatedAt" }], "maxAddresses": 10 }`, the default first, then oldest first.
+
+### `POST /api/addresses`
+
+Body: an address. `201 { "address": {...} }`. The first address a person adds is their default. At most 10:
+the eleventh answers `409 { error: "You can keep up to 10 addresses. Remove one to add another.", limit: 10 }`
+(the cap is decided by the INSERT itself, so two requests at once cannot both slip under it).
+
+### `PATCH /api/addresses/:addressId`
+
+Body: the whole address (the same rules as a new one). `200 { "address": {...} }`.
+
+### `DELETE /api/addresses/:addressId`
+
+`200 { "removed": true }`. Removing the default hands the default to the oldest address left.
+
+### `POST /api/addresses/:addressId/default`
+
+Makes that address the one default (a unique partial index guarantees at most one per account).
+`200 { "addresses": [...] }`.
+
+Account deletion removes a person's addresses (gated like the rest of the deletion), and the data export lists
+them as `communication.addresses`.
+
 ## Blocks (#3140)
 
 A durable, **silent** block between two people, keyed on the account
