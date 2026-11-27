@@ -77,12 +77,20 @@ export function shippingZonesProblem(value) {
   return null;
 }
 
+// The places a product ships to, in words ("worldwide", "United States only", "United States and Canada").
+export function shippingPlaces(metadata) {
+  const zones = shippingZonesOf(metadata);
+  if (zones.length === SHIPPING_ZONE_IDS.length) return 'worldwide';
+  const labels = zones.map((id) => SHIPPING_ZONES.find((zone) => zone.id === id).label);
+  if (labels.length === 0) return 'nowhere';
+  if (labels.length === 1) return `${labels[0]} only`;
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
 // The words on the product's card, derived from the zones and never stored.
 export function shippingNote(metadata) {
   const zones = shippingZonesOf(metadata);
   if (zones.length === SHIPPING_ZONE_IDS.length) return 'ships worldwide';
-  const labels = zones.map((id) => SHIPPING_ZONES.find((zone) => zone.id === id).label);
-  if (labels.length === 0) return 'does not ship';
-  if (labels.length === 1) return `ships to ${labels[0]} only`;
-  return `ships to ${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+  if (zones.length === 0) return 'does not ship';
+  return `ships to ${shippingPlaces(metadata)}`;
 }

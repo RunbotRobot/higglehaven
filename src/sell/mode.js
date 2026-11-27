@@ -87,6 +87,7 @@ import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
 import { duplicateName } from './duplicateName.js';
 import { hasFractionOfACent, FRACTION_OF_A_CENT_MESSAGE } from '../priceInput.js';
+import { SHIPPING_ZONES, shippingPlaces, shippingZonesOf } from '../../shared/shipping-zones.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -864,16 +865,13 @@ function renderSellerList() {
       if (!noReturnsPanel.hidden) noReturnsCheckbox.checked = !!template.metadata?.noReturns;
     });
 
-    // Shipping (docs/SPEC.md §5: "Dimmed-filter approach ... non-shippable
-    // items are dimmed with a label ('ships to United States only')") —
-    // absent/false means the product ships internationally (the spec's own
-    // permissive default), same single-boolean-in-metadata simplicity and
-    // own-classes-per-row reasoning as No-Returns above.
+    // Shipping (docs/SPEC.md §5): where the product ships, one checkbox per zone (shared/shipping-zones.js,
+    // #4601), in place of the single "United States only" switch. All zones ticked is the permissive default and is
+    // stored as nothing at all, the same clear-to-absent convention as No-Returns above.
     const domesticOnlyText = document.createElement('div');
     domesticOnlyText.className = 'seller-row-domestic-only';
     const refreshDomesticOnlyText = () => {
-      domesticOnlyText.textContent = template.metadata?.domesticOnly
-        ? 'Shipping: United States only' : 'Shipping: international';
+      domesticOnlyText.textContent = `Ships: ${shippingPlaces(template.metadata)}`;
     };
     refreshDomesticOnlyText();
     details.appendChild(domesticOnlyText);
@@ -889,13 +887,22 @@ function renderSellerList() {
     domesticOnlyPanel.hidden = true;
     details.appendChild(domesticOnlyPanel);
 
-    const domesticOnlyCheckboxLabel = document.createElement('label');
-    domesticOnlyCheckboxLabel.className = 'seller-domestic-only-checkbox-label';
-    const domesticOnlyCheckbox = document.createElement('input');
-    domesticOnlyCheckbox.type = 'checkbox';
-    domesticOnlyCheckboxLabel.appendChild(domesticOnlyCheckbox);
-    domesticOnlyCheckboxLabel.appendChild(document.createTextNode('This product ships to the United States only'));
-    domesticOnlyPanel.appendChild(domesticOnlyCheckboxLabel);
+    const zoneCheckboxes = new Map();
+    for (const zone of SHIPPING_ZONES) {
+      const zoneLabel = document.createElement('label');
+      zoneLabel.className = 'seller-domestic-only-checkbox-label seller-shipping-zone-label';
+      const zoneCheckbox = document.createElement('input');
+      zoneCheckbox.type = 'checkbox';
+      zoneCheckbox.value = zone.id;
+      zoneCheckboxes.set(zone.id, zoneCheckbox);
+      zoneLabel.appendChild(zoneCheckbox);
+      zoneLabel.appendChild(document.createTextNode(zone.label));
+      domesticOnlyPanel.appendChild(zoneLabel);
+    }
+    const syncZoneCheckboxes = () => {
+      const zones = shippingZonesOf(template.metadata);
+      for (const [id, box] of zoneCheckboxes) box.checked = zones.includes(id);
+    };
 
     const domesticOnlyStatus = document.createElement('div');
     domesticOnlyStatus.className = 'seller-domestic-only-status';
@@ -909,11 +916,18 @@ function renderSellerList() {
       if (isMetadataSaveBusy()) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
+      const chosen = SHIPPING_ZONES.filter((zone) => zoneCheckboxes.get(zone.id).checked).map((zone) => zone.id);
+      if (chosen.length === 0) {
+        domesticOnlyStatus.textContent = 'Choose at least one place this ships to.';
+        domesticOnlyStatus.classList.add('error');
+        return;
+      }
       const nextMetadata = { ...template.metadata };
-      if (domesticOnlyCheckbox.checked) {
-        nextMetadata.domesticOnly = true;
+      delete nextMetadata.domesticOnly; // the one model is shippingZones now
+      if (chosen.length === SHIPPING_ZONES.length) {
+        delete nextMetadata.shippingZones;
       } else {
-        delete nextMetadata.domesticOnly;
+        nextMetadata.shippingZones = chosen;
       }
       setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
@@ -936,7 +950,7 @@ function renderSellerList() {
     domesticOnlyToggle.addEventListener('click', () => {
       domesticOnlyPanel.hidden = !domesticOnlyPanel.hidden;
       domesticOnlyToggle.textContent = `Edit shipping ${domesticOnlyPanel.hidden ? '▾' : '▴'}`;
-      if (!domesticOnlyPanel.hidden) domesticOnlyCheckbox.checked = !!template.metadata?.domesticOnly;
+      if (!domesticOnlyPanel.hidden) syncZoneCheckboxes();
     });
 
     // Edit size: correct a mis-measured (or since-outgrown) real-world
