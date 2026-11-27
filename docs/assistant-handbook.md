@@ -702,7 +702,7 @@ top left is the small round bud with the higglehaven logo: tap it and it unfolds
    item where the camera is looking, in the middle of the screen.
 
 **You will see:** the item stands where you tapped and is already selected, with a
-a small card beside it that has "Copy", "Delete" and "More", and a ring around it.
+small card beside it that has "Copy", "Delete" and "More", and three rings and three arrows around it.
 
 **If something goes wrong:**
 - The search finds nothing: the list says No products match what they typed, and then: Try fewer letters, or clear the search to see everything.
@@ -963,8 +963,9 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 2. Tap "Build level above" to add a level over the one you are on, or "Dig Level
    Below" to add one underneath. The button shows in brackets how much space the
    new level uses.
-3. Use the up and down arrows ("Level up", "Level down") to move between levels.
-   The sheet says which level you are on.
+3. Once you have a level besides Ground, two small arrows ("Level up", "Level down") appear to move
+   between levels; with only Ground there is nowhere to go, so they are not drawn. The sheet says
+   which level you are on.
 4. On a level above or below the ground, "Remove this level" appears. It removes
    that level.
 5. The "×" at the top right of the sheet puts it away. It stays open while you move
@@ -976,9 +977,13 @@ label:has(#bundle-name-share-private) | Only you can place this bundle
 - The app says "That's as high as this lándlet goes. Use Build level above to
   build higher." or "That's as deep as this lándlet goes. Use Dig level below to
   go deeper." It means an item has hit the top or bottom level you have.
-- Adding a level is refused: the app says why in words. Read it out with the
-  person and do not promise more than it says. If money or allowances are
-  involved, use the runbook's hand-off.
+- "Build level above" or "Dig level below" is greyed out and the sheet says "A new level takes
+  ... and you have ... left. The cap grows as your products earn higgles.": a new level would take
+  more of the lándlet cap than is left. Nothing is sent when it is greyed. Read the sentence out with
+  the person and do not promise more than it says; if allowances are the question, use the runbook's
+  hand-off.
+- A level that is refused after a tap: the app says why in words. Read it out and do not promise more
+  than it says.
 - "Remove this level" takes the items on that level off your lándlet. Say so
   before the person taps it.
 
