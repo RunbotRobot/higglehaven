@@ -84,7 +84,9 @@ const onlyOneLineOpen = (await page.locator('.shop-nearby-chat-message-actions:v
   && (await page.locator(`.shop-nearby-chat-message[data-builder-id="${MUTED_BUILDER_ID}"] .shop-nearby-chat-message-actions:visible`).count()) === 1;
 console.log('tapping a second line hides the first line\'s actions (should be true):', onlyOneLineOpen);
 // #4596: the three safety actions are quiet buttons, so a thumb can hit each: at least 44px tall and 44px wide.
+// Only the chips on screen: a later poll adds a second line from the same sender, whose chips are hidden (0 by 0) until it is tapped, and on a slow runner that line can arrive before this measurement.
 const chipSizes = await page.evaluate((builderId) => [...document.querySelectorAll(`.shop-nearby-chat-message[data-builder-id="${builderId}"] .shop-nearby-chat-message-actions button`)]
+  .filter((b) => b.offsetParent !== null)
   .map((b) => { const r = b.getBoundingClientRect(); return { action: b.dataset.action, w: Math.round(r.width), h: Math.round(r.height) }; }), MUTED_BUILDER_ID);
 console.log('action chip sizes:', JSON.stringify(chipSizes));
 const chipsBigEnough = chipSizes.length === 3 && chipSizes.every((c) => c.h >= 44 && c.w >= 44);
