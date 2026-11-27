@@ -50,7 +50,7 @@ import {
 } from 'three';
 import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
-import { silhouetteFidelity, isFaithful } from './tierFidelity.js';
+import { silhouetteFidelity, isFaithful, FAR_HEAVIER_LIMITS } from './tierFidelity.js';
 import {
   boundaryEdgeCountSteps, countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps,
   MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION,
@@ -99,6 +99,9 @@ const HULL_DIRECTIONS = (() => {
 export const FAR_TRIANGLE_FRACTION = 0.01;
 export const FAR_MIN_TRIANGLES = 24;
 export const FAR_MAX_TRIANGLES = 200;
+// #4111: the far budget a model that fails at FAR_MAX_TRIANGLES and as an outline may be tried at, as multiples of it
+// (one step: nothing heavier than three times the usual far budget is ever a far version).
+export const FAR_BUDGET_STEPS = [3];
 // Fewest triangles one part keeps in the far model. When a model has more
 // parts than the budget can give this to, the smallest parts (by bounding
 // volume) are left out of the far model; the bounding-box fit below keeps
@@ -1040,58 +1043,76 @@ function* buildFar(model, meshes, getPixels, fullBatches) {
   const total = parts.reduce((sum, part) => sum + part.triangles, 0);
   if (total === 0) return sharedModel(model);
 
-  // A model already within budget keeps its own geometry (merged, coloured).
-  const target = total <= FAR_MAX_TRIANGLES ? total : clamp(Math.round(total * FAR_TRIANGLE_FRACTION), FAR_MIN_TRIANGLES, FAR_MAX_TRIANGLES);
-
-  // Too many parts to give each its minimum: keep the biggest ones.
-  let kept = parts;
-  if (total > target && parts.length * FAR_MIN_TRIANGLES_PER_MESH > target) {
-    const limit = Math.max(1, Math.floor(target / FAR_MIN_TRIANGLES_PER_MESH));
-    kept = parts
-      .map((part, index) => ({ part, index }))
-      .sort((a, b) => b.part.volume - a.part.volume || a.index - b.index)
-      .slice(0, limit)
-      .sort((a, b) => a.index - b.index)
-      .map((entry) => entry.part);
-  }
-  const keptTotal = kept.reduce((sum, part) => sum + part.triangles, 0);
-
-  const simplifiedParts = [];
-  for (const part of kept) {
-    let geometry = part.geometry;
-    if (total > target) {
-      const partTarget = Math.max(FAR_MIN_TRIANGLES_PER_MESH, Math.round((target * part.triangles) / keptTotal));
-      geometry = yield* simplifyToTarget(part.geometry, partTarget);
-    }
-    simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
-  }
-
-  const joined = mergeGeometries(simplifiedParts, false);
-  if (!joined || countTriangles(joined) === 0) return sharedModel(model);
-  if (facing) recolourByFacing(joined, facing);
-  // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
-  // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
-  // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
-  const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
-  fitBoundingBox(merged, fullBox);
-  merged.computeBoundingBox();
-  merged.computeBoundingSphere();
-
-  // #4062: a far version must still read as the model from every side. Single-sided drawing hid whatever
-  // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
-  // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
-  // by the model's own outline. null means not even that held: the caller uses a more detailed version.
   const unlit = visible.every((mesh) => {
     const material = materialForMesh(mesh);
     return !!(material && material.isMeshBasicMaterial);
   });
-  const simplified = farObject(merged, unlit);
-  if (tierIsFaithful(fullBatches, simplified.object, 'far', getPixels)) return simplified;
+
+  // One attempt at the model's own simplified far version at a given triangle budget: null when it is not faithful.
+  // A model already within the budget keeps its own geometry (merged, coloured).
+  const attempt = function* (budget) {
+    // The usual budget takes a hundredth of the model (within FAR_MIN_TRIANGLES..FAR_MAX_TRIANGLES); a larger one, tried
+    // only after that failed, takes the whole of it.
+    const target = total <= budget ? total : (budget === FAR_MAX_TRIANGLES ? clamp(Math.round(total * FAR_TRIANGLE_FRACTION), FAR_MIN_TRIANGLES, budget) : budget);
+
+    // Too many parts to give each its minimum: keep the biggest ones.
+    let kept = parts;
+    if (total > target && parts.length * FAR_MIN_TRIANGLES_PER_MESH > target) {
+      const limit = Math.max(1, Math.floor(target / FAR_MIN_TRIANGLES_PER_MESH));
+      kept = parts
+        .map((part, index) => ({ part, index }))
+        .sort((a, b) => b.part.volume - a.part.volume || a.index - b.index)
+        .slice(0, limit)
+        .sort((a, b) => a.index - b.index)
+        .map((entry) => entry.part);
+    }
+    const keptTotal = kept.reduce((sum, part) => sum + part.triangles, 0);
+
+    const simplifiedParts = [];
+    for (const part of kept) {
+      let geometry = part.geometry;
+      if (total > target) {
+        const partTarget = Math.max(FAR_MIN_TRIANGLES_PER_MESH, Math.round((target * part.triangles) / keptTotal));
+        geometry = yield* simplifyToTarget(part.geometry, partTarget);
+      }
+      simplifiedParts.push(positionAndColorOnly(geometry.index ? geometry.toNonIndexed() : geometry));
+    }
+
+    const joined = mergeGeometries(simplifiedParts, false);
+    if (!joined || countTriangles(joined) === 0) return null;
+    if (facing) recolourByFacing(joined, facing);
+    // #4111: a far version is joined triangle by triangle, so plain vertex normals made every face its own
+    // flat shade: a rounded fixture read as a faceted one. Shared corners are smoothed unless the surface
+    // turns sharply there (a box's edge stays an edge), as a smooth-shaded full model shows it.
+    const merged = toCreasedNormals(joined, FAR_CREASE_ANGLE);
+    fitBoundingBox(merged, fullBox);
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+
+    // #4062: a far version must still read as the model from every side. Single-sided drawing hid whatever
+    // the simplifier left facing the wrong way, so the far material draws both sides; and a version that
+    // still fails (a noisy open scan simplified to fifty triangles covered 0 to 36% of itself) is replaced
+    // by the model's own outline.
+    const simplified = farObject(merged, unlit);
+    return tierIsFaithful(fullBatches, simplified.object, budget === FAR_MAX_TRIANGLES ? 'far' : FAR_HEAVIER_LIMITS, getPixels) ? simplified : null;
+  };
+
+  // #4111 (a person must not see the version change): the order is the cost order. The usual budget first; then the
+  // model's own outline (a few dozen triangles); then more triangles, three times the usual budget,
+  // spent only on a model the cheaper ones could not stand for (a toilet's tank and bowl, which an outline fills in).
+  // null means not even that held: the caller uses a more detailed version.
+  const first = yield* attempt(FAR_MAX_TRIANGLES);
+  if (first) return first;
   const hull = buildHullFar(parts);
   if (hull && facing) recolourByFacing(hull, facing);
   if (hull) {
     const outline = farObject(hull, unlit);
     if (tierIsFaithful(fullBatches, outline.object, 'far', getPixels)) return outline;
+  }
+  for (const step of FAR_BUDGET_STEPS) {
+    if (total <= FAR_MAX_TRIANGLES) break; // the first attempt already held the whole model
+    const heavier = yield* attempt(FAR_MAX_TRIANGLES * step);
+    if (heavier) return heavier;
   }
   return null;
 }
