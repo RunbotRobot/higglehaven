@@ -2782,6 +2782,17 @@ user id (see "Rate limiting" above).
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
 ```
 
+**Carrier and tracking number (#4600, shipping 3/8).** The body is optional JSON `{ "carrier": "Royal Mail",
+"trackingNumber": "RM123456789GB" }`; both fields are optional free text, trimmed, `carrier` at most 40 characters
+and `trackingNumber` at most 64, with control characters and non-text values refused (`400`); an empty string leaves
+one unset. They are stored in `purchases.shipping_carrier` / `tracking_number` (migration 0245) and returned as
+`shippingCarrier` / `trackingNumber` (null when not given) by exactly four reads: this route's own response, the
+seller's `GET /api/purchases?mine=seller` and `GET /api/purchases?templateId=`, the buyer's `GET /api/purchases/mine`,
+and the buyer's account export. They are deliberately not part of the purchase shape the lándlet host's
+`GET /api/purchases?builderId=` returns. `PATCH /api/purchases/:purchaseId/tracking` with the same body corrects them
+afterwards: the order's own seller (or the admin fallback above, logged as `tracking_override`), `409` before the order
+is marked shipped, `400` once refunded, same rate limit as Mark shipped; it sends no second notice.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`
@@ -6068,6 +6079,14 @@ Makes that address the one default (a unique partial index guarantees at most on
 Account deletion removes a person's addresses (gated like the rest of the deletion), and the data export lists
 them as `communication.addresses`.
 
+## Shipping destination (#4602)
+
+`GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
+`country` is where "ships to me" is judged from: the country of the default address (`source: "address"`), else the
+country the person chose (`source: "chosen"`), else `null` (nothing is dimmed). `PUT /api/shipping-destination` takes
+`{ dimUnshippable?: boolean, country?: <ISO code> | null }` (at least one) and answers `{ destination }`; a bad country is
+`400 { error, field: "country" }`. Both are the caller's own account only and share the `address-mutate` rate limit.
+
 ## Blocks (#3140)
 
 A durable, **silent** block between two people, keyed on the account
@@ -8809,6 +8828,23 @@ gated to admins per #653 above.
 POST /api/instances/:instanceId/purchase
 { "quantity": 2, "buyerLabel": "A Shopper" }   // both optional
 ```
+
+**Shipping address (#4599).** A product that ships (anything that is not a digital
+good, an avatar or an animation) is bought with a `shippingAddress`:
+`{ "name", "line1", "line2"?, "city", "region", "postalCode", "country" }`
+(`country` is an ISO 3166-1 alpha-2 code; `region` is required for `US`; field
+lengths are capped at 60/80/60/40/40/20). Without one, or with an incomplete one,
+the purchase is refused with `400` `shipping_address_required` or
+`shipping_address_invalid`; a product its seller ships only within the United
+States, bought for another country, is refused `409` `not_shippable_there`. All
+three are answered before any payment is created, and the message says nothing was
+charged. A digital good ignores the field. The order keeps its own copy
+(`purchases.shipping_address_json`), carried to the finalize step in the
+PaymentIntent's metadata on the card path, and `GET /api/purchases/mine` returns it
+to the buyer as `shippingAddress` (null for a digital good or an order made before
+this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`
+and `domesticOnly` so the client asks before it sends. Only the buyer reads it here;
+the seller's own view of it is #4600.
 
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one," not a 400, since a

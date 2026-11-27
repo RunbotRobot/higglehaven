@@ -1,9 +1,9 @@
-// #4601: migration 0246 rewrites the old `metadata.domesticOnly` flag into `metadata.shippingZones`. The test
+// #4601: migration 0248 rewrites the old `metadata.domesticOnly` flag into `metadata.shippingZones`. The test
 // database already has every migration applied, so this runs the migration's own SQL again over rows set up in
 // each old shape and checks what each becomes.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import migrationSql from '../migrations/0246_shipping_zones.sql?raw';
+import migrationSql from '../migrations/0248_shipping_zones.sql?raw';
 
 async function insertTemplate(templateId, metadataJson) {
   await env.DB.prepare(`
@@ -13,7 +13,7 @@ async function insertTemplate(templateId, metadataJson) {
 }
 const metadataOf = async (templateId) => JSON.parse((await env.DB.prepare('SELECT metadata_json FROM catalog_templates WHERE template_id = ?').bind(templateId).first()).metadata_json);
 
-describe('0246_shipping_zones', () => {
+describe('0248_shipping_zones', () => {
   beforeAll(async () => {
     await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
     await insertTemplate('ship-mig-us-only', '{"domesticOnly":true,"noReturns":true}');

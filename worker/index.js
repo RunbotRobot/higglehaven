@@ -115,7 +115,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // instead (the lifecycle actions and sold-out-marker/self-dealing-review
 // siblings this leaf doesn't own).
 import { createD1Timing } from './lib/d1-timing.js';
-import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from './lib/purchase-creation.js';
+import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './lib/purchase-creation.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
 // /api/purchases dispatcher itself, extracted into
@@ -174,7 +174,7 @@ import {
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
-import { handleAddresses, addressFromRow } from './lib/addresses.js';
+import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -786,6 +786,10 @@ async function handleApi(request, env, url, ctx) {
   // #4598 (Shipping 1/8, part of #4394): a person's own addresses.
   if (route[0] === 'addresses') {
     return handleAddresses(request, env.DB, route);
+  }
+  // #4602: where "ships to me" is judged from, and the dim switch.
+  if (route[0] === 'shipping-destination' && route.length === 1) {
+    return handleShippingDestination(request, env.DB);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -4095,7 +4099,7 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
   `).bind(builderId).all();
 
   return {
-    purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
+    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row) })), // #4600: the buyer's own order reads its tracking
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     videoGenerationJobs: videoGenerationJobs.results.map((row) => ({

@@ -406,6 +406,15 @@ export async function fetchAddresses() {
   return requestJson('/addresses');
 }
 
+// #4602 (Shipping 5/8): where "ships to me" is judged from, and the dim switch. The server decides the country.
+export async function fetchShippingDestination() {
+  return requestJson('/shipping-destination');
+}
+
+export async function saveShippingDestination(change) {
+  return requestJson('/shipping-destination', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(change) });
+}
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 export async function addAddress(address) {
@@ -612,8 +621,21 @@ export async function fetchMyTaxEducation() {
 
 // Seller-initiated once a physical real-money order has actually been
 // shipped — starts the 7-day payout-hold fallback clock (see #454).
-export async function markPurchaseShipped(purchaseId) {
-  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, { method: 'POST' });
+export async function markPurchaseShipped(purchaseId, { carrier = '', trackingNumber = '' } = {}) {
+  // #4600: the carrier and tracking number are optional; both go with the one request.
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, {
+    method: 'POST',
+    body: JSON.stringify({ carrier, trackingNumber }),
+  });
+  return purchase;
+}
+
+// #4600: the seller corrects the carrier and tracking number of an order already marked shipped (empty clears one).
+export async function setPurchaseTracking(purchaseId, { carrier = '', trackingNumber = '' } = {}) {
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/tracking`, {
+    method: 'PATCH',
+    body: JSON.stringify({ carrier, trackingNumber }),
+  });
   return purchase;
 }
 
@@ -2049,12 +2071,13 @@ export async function getPurchaseQuote(instanceId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-quote`);
 }
 
-export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents } = {}) {
+export async function purchaseInstance(instanceId, { quantity, buyerLabel, expectedUnitPriceCents, shippingAddress } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     // #4456: the price the shopper saw; the server refuses, uncharged, if it has changed since.
-    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
+    // #4599: where a shipped product goes (left out for a digital good); the server checks it and keeps a copy on the order.
+    body: JSON.stringify({ quantity, buyerLabel, expectedUnitPriceCents, shippingAddress, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
   });
 }
 

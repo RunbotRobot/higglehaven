@@ -15,7 +15,25 @@
 // helpers that don't close over anything file-local.
 import { env, SELF } from 'cloudflare:test';
 
-export async function api(path, options = {}) {
+// #4599: a physical product is bought with an address, and most tests buying one are not about the address, so a
+// purchase request without a `shippingAddress` key gets this one. A test about the address sends its own, or
+// `shippingAddress: null` to be refused for having none.
+export const TEST_SHIPPING_ADDRESS = Object.freeze({
+  name: 'Test Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US',
+});
+
+function withTestShippingAddress(path, options) {
+  if (options.method !== 'POST' || !/^\/instances\/[^/?]+\/purchase$/.test(path)) return options;
+  let body = {};
+  if (options.body) {
+    try { body = JSON.parse(options.body); } catch { return options; }
+  }
+  if (!body || typeof body !== 'object' || 'shippingAddress' in body) return options;
+  return { ...options, body: JSON.stringify({ ...body, shippingAddress: TEST_SHIPPING_ADDRESS }) };
+}
+
+export async function api(path, rawOptions = {}) {
+  const options = withTestShippingAddress(path, rawOptions);
   const response = await SELF.fetch(`https://higglehaven.test/api${path}`, {
     ...options,
     // Found via #362: several IP-keyed rate limits (checkRateLimit calls

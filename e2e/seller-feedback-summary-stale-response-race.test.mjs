@@ -12,6 +12,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin, openMyProducts, openAddProductLeaf } from './helpers.mjs';
+const E2E_SHIPPING_ADDRESS = { name: 'E2E Buyer', line1: '1 Test Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' };
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -73,7 +74,7 @@ await grantAdmin(emailForLabel(LABEL));
 
 // First purchase/feedback: a single 5-star rating, submitted before the
 // race begins -- this is the content the stale (first) fetch will see.
-const purchase1 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' })).body.purchase;
+const purchase1 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) })).body.purchase;
 await fetchJson(`/api/purchases/${purchase1.purchaseId}/feedback`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
@@ -115,7 +116,7 @@ await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 // A second rating lands while GET #1 is still in flight -- averaging to 4.0
 // across 2 ratings, the content the fresher GET #2 below should show.
-const purchase2 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' })).body.purchase;
+const purchase2 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shippingAddress: E2E_SHIPPING_ADDRESS }) })).body.purchase;
 const feedback2 = await fetchJson(`/api/purchases/${purchase2.purchaseId}/feedback`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
