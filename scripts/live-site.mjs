@@ -719,7 +719,11 @@ async function runStepAction(step, index) {
       await (device.hasTouch ? page.touchscreen.tap(x, y) : page.mouse.click(x, y));
       await page.waitForTimeout(600);
       const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
-      return { at: { x, y }, from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
+      // Every arrowhead the page drew for this item, so whether a thumb can reach each (inside the screen, clear of the edge) can be read.
+      const edge = 12;
+      const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      const arrowheads = points.map((p) => ({ end: `${String(p.axis).toLowerCase()}${p.sign > 0 ? '+' : '-'}`, x: Math.round(p.x), y: Math.round(p.y), reachable: p.x >= edge && p.x <= viewport.width - edge && p.y >= edge && p.y <= viewport.height - edge }));
+      return { at: { x, y }, arrowheads, from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
     }
     case 'drag': {
       // #4489: a real mouse press at (x, y), then a drag of (dx, dy) in 20 steps; the selected item's place before and
