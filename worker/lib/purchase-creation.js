@@ -74,7 +74,7 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // never purchased" (docs/SPEC.md §0) since earnings feed the land cap
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
 // these" simulation while ruling out that abuse.
-const PURCHASE_MAX_QUANTITY = 1000;
+export const PURCHASE_MAX_QUANTITY = 1000;
 // worker/index.js's own MAX_MONEY_CENTS is genuinely shared well beyond
 // purchases (catalog price validation, auction bids, model uploads
 // elsewhere in that file), so it stays there as the source of truth and is
