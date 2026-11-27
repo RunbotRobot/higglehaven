@@ -174,6 +174,7 @@ import {
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
+import { handleAddresses, addressFromRow } from './lib/addresses.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -780,6 +781,11 @@ async function handleApi(request, env, url, ctx) {
   // #3140 (sub-issue 1/2 of #3124): durable, silent blocks keyed on user_id.
   if (route[0] === 'blocks') {
     return handleBlocks(request, env.DB, route);
+  }
+
+  // #4598 (Shipping 1/8, part of #4394): a person's own addresses.
+  if (route[0] === 'addresses') {
+    return handleAddresses(request, env.DB, route);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -3506,6 +3512,10 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
       DELETE FROM user_blocks WHERE (blocker_user_id = ? OR blocked_user_id = ?)
         AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, userId, ...guardBinds),
+    // #4598: the addresses a person ships to go with them (gated like the rest).
+    db.prepare(`
+      DELETE FROM user_addresses WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
   );
 
   const batchResults = await db.batch(statements);
@@ -3815,6 +3825,10 @@ async function exportCommunicationData(db, userId) {
     SELECT status, text, answer_text, answered_at, created_at, closed_at FROM assistant_questions
     WHERE shopper_user_id = ? ORDER BY created_at ASC
   `).bind(userId).all();
+  // #4598: the addresses the person keeps for shipping (their own data, listed as they entered it).
+  const addresses = await db.prepare(
+    'SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, address_id',
+  ).bind(userId).all();
   const blocks = await db.prepare(`
     SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
     LEFT JOIN users u ON u.user_id = b.blocked_user_id
@@ -3856,6 +3870,7 @@ async function exportCommunicationData(db, userId) {
       closedAt: row.closed_at,
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
+    addresses: addresses.results.map(addressFromRow),
     contentEditHistory: editHistory.results.map((row) => {
       let snapshot = null;
       try { snapshot = JSON.parse(row.snapshot_json); } catch { snapshot = row.snapshot_json; }

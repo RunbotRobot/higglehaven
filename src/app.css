@@ -5635,7 +5635,8 @@
       }
       /* #3941: the one field look (fill --alpha-faint, a --alpha-line border, --radius-md,
          16px text so a phone does not zoom on focus). */
-      .stripe-onboarding-form input {
+      .stripe-onboarding-form input,
+      .stripe-onboarding-form select {
         flex: 1 1 auto;
         min-width: 0;
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));

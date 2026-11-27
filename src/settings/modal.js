@@ -41,6 +41,7 @@ import {
 import { sellerModalEl, renderActiveSellerView } from '../sell/mode.js';
 import { trimUnitLabelEls } from '../main.js';
 import { renderShopSettingsSection } from '../shop/mode.js';
+import { renderAddressesField } from './addressesField.js';
 import { renderBuildSettingsSection, resetBuildSettingsFolds } from '../build/scene.js';
 
 // Settings: local, per-device display preferences — nothing here is ever
@@ -181,6 +182,14 @@ function renderGeneralSettingsSection() {
   renderTaxPaperworkField();
   renderTaxEducationField();
   renderNotificationPreferencesField();
+  // #4598 (Shipping 1/8): the places a person ships to; only for someone signed in.
+  if (currentAuthUser) {
+    const addressesToken = settingsRenderToken;
+    renderAddressesField(accountHost(), {
+      isCurrent: () => addressesToken === settingsRenderToken,
+      confirmOptions: { restoreModalEl: settingsModalEl, restoreCloseFn: closeSettingsModal },
+    });
+  }
 }
 
 // #3763 (part of #3759, #3738): the opening screen's tips can be switched off.
