@@ -44,6 +44,7 @@ import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openOrdersLeaf } from './ordersLeaf.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import { inlineConfirm } from '../ui/inlineConfirm.js';
 import {
@@ -1758,12 +1759,17 @@ function renderSellerList() {
           const category = await promptModerationCategory();
           if (!category) return;
           deleteRowBtn.disabled = true;
+          showInlineActionStatus(reviewPanel, '');
           try {
             await deleteProductReview(template.templateId, review.reviewId, { category });
             await renderReviews();
           } catch (err) {
             console.warn('Could not delete review:', err);
-            deleteRowBtn.disabled = false;
+            // #4548: said in this panel, kept and selectable, like the sign-post and calendar panels (#3889 shape b).
+            // The button used to just come back, so a refused delete looked like a tap that did nothing. The re-render
+            // rebuilds only the list, so the line stays, and a review someone else already removed leaves the list.
+            showInlineActionStatus(reviewPanel, err.message || 'Couldn\'t delete this review.');
+            await renderReviews();
           }
         });
         reviewRow.appendChild(deleteRowBtn);
