@@ -457,7 +457,7 @@ async function handlePurchaseConfirmDelivery(request, env) {
       `).bind(purchase.seller_id).first();
       if (owner) {
         await fireNotification(db, owner.builder_id,
-          `"${template?.name || 'A product'}" delivery was confirmed by the buyer.`);
+          `"${template?.name || 'A product'}" delivery was confirmed by the buyer.`, null, 'orders'); // #4498: a tap opens Orders
       }
     }
   }
@@ -492,7 +492,7 @@ export async function notifySellerOfSaleChange(db, purchase, messageFor) {
     if (!owner) return;
     const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
     const message = messageFor(template?.name || 'A product');
-    if (message) await fireNotification(db, owner.builder_id, message);
+    if (message) await fireNotification(db, owner.builder_id, message, null, 'orders'); // #4498: a tap opens Orders
   } catch (err) {
     console.error('notifySellerOfSaleChange failed', purchase.purchase_id, err);
   }

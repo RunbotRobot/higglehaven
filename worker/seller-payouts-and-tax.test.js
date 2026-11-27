@@ -448,10 +448,11 @@ describe('Seller payouts (#454)', () => {
     // released early, the same way every other transactional event in
     // this file notifies the other party.
     const { results: notifications } = await env.DB.prepare(
-      'SELECT message FROM notifications WHERE builder_id = ?',
+      'SELECT message, kind FROM notifications WHERE builder_id = ?',
     ).bind(sellerBuilderId).all();
     expect(notifications).toHaveLength(1);
     expect(notifications[0].message).toContain('delivery was confirmed by the buyer');
+    expect(notifications[0].kind).toBe('orders'); // #4498: a tap opens Orders
 
     // Idempotent — a second visit to the same link is a no-op, not an
     // error, and doesn't re-notify the seller.
