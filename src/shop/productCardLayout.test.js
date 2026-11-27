@@ -369,3 +369,15 @@ describe('a card keeps its side (#4118)', () => {
     expect(bothFresh.side).toBe('right');
   });
 });
+
+describe('a product that does not ship to the shopper (#4602)', () => {
+  it('offers no Buy and says why, even when the shopper stands beside it', () => {
+    const state = productCardState({ template: { priceCents: 500, stockQuantity: null }, inRange: true, unshippable: true });
+    expect(state.canBuy).toBe(false);
+    expect(state.stateText).toMatch(/does not ship to your country/i);
+    expect(state.stateText).toMatch(/address/i);
+  });
+  it('leaves an ordinary product alone', () => {
+    expect(productCardState({ template: { priceCents: 500, stockQuantity: null }, inRange: true }).canBuy).toBe(true);
+  });
+});
