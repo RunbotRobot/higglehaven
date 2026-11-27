@@ -11,8 +11,8 @@ function fakeDb() {
         values: [],
         bind(...values) { const next = { ...statement, values, bind: statement.bind }; issued.add(next); return next; },
         async first() { await new Promise((r) => setTimeout(r, 5)); return { sql, values: this.values }; },
-        async run() { await new Promise((r) => setTimeout(r, 5)); return { success: true }; },
-        async all() { return { results: [] }; },
+        async run() { await new Promise((r) => setTimeout(r, 5)); return { success: true, meta: { rows_read: 3 } }; },
+        async all() { await new Promise((r) => setTimeout(r, 5)); return { results: [{ sql, values: this.values, n: 7 }], meta: { rows_read: 4 } }; },
         async raw() { return []; },
       };
       issued.add(statement);
@@ -20,7 +20,7 @@ function fakeDb() {
     },
     async batch(statements) {
       for (const s of statements) if (!issued.has(s)) throw new Error('batch got a statement D1 did not make');
-      return statements.map(() => ({ success: true }));
+      return statements.map(() => ({ success: true, meta: { rows_read: 2 } }));
     },
     async exec() { return { count: 1 }; },
     name: 'fake',
@@ -33,11 +33,28 @@ describe('createD1Timing (#3464)', () => {
     const timing = createD1Timing();
     const db = timing.wrap(fakeDb());
     const row = await db.prepare('SELECT 1').bind('a').first();
-    expect(row).toEqual({ sql: 'SELECT 1', values: ['a'] });
+    expect(row).toMatchObject({ sql: 'SELECT 1', values: ['a'] });
     await db.prepare('UPDATE t SET x = 1').run();
     expect(timing.stats.trips).toBe(2);
     expect(timing.stats.ms).toBeGreaterThanOrEqual(0);
-    expect(timing.header()).toMatch(/^d1;dur=\d+;desc="2 trips"$/);
+    expect(timing.header()).toMatch(/^d1;dur=\d+;desc="2 trips", d1rows;dur=0;desc="7 rows read"$/);
+  });
+
+  it('sums the rows D1 says it read: first, all, run and a whole batch (#4542)', async () => {
+    const timing = createD1Timing();
+    const db = timing.wrap(fakeDb());
+    await db.prepare('SELECT 1').first(); // 4 (answered through all, so it can be counted)
+    await db.prepare('SELECT 2').all(); // 4
+    await db.prepare('UPDATE t').run(); // 3
+    await db.batch([db.prepare('a'), db.prepare('b')]); // 2 + 2
+    expect(timing.stats.rowsRead).toBe(15);
+    expect(timing.header()).toContain('"15 rows read"');
+  });
+
+  it('first(column) still returns that column, and a missing one still throws', async () => {
+    const db = createD1Timing().wrap(fakeDb());
+    expect(await db.prepare('SELECT n').first('n')).toBe(7);
+    await expect(db.prepare('SELECT n').first('nope')).rejects.toThrow(/No such column/);
   });
 
   it('counts a batch once and hands D1 its own statements', async () => {
@@ -58,6 +75,6 @@ describe('createD1Timing (#3464)', () => {
   });
 
   it('says zero trips when nothing was asked of D1', () => {
-    expect(createD1Timing().header()).toBe('d1;dur=0;desc="0 trips"');
+    expect(createD1Timing().header()).toBe('d1;dur=0;desc="0 trips", d1rows;dur=0;desc="0 rows read"');
   });
 });
