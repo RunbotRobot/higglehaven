@@ -2427,6 +2427,13 @@ dropped by the purchase's own `last_dispute_event_at` guard before it gets here.
 of it is logged and never stops the clawback or its reversal. A lost dispute needs no event: it is the withdrawal
 standing. (A basket order's lines share one PaymentIntent, #4614; this record points at the purchase the PaymentIntent
 id finds, and per-line disputes are #4616's.)
+**#4650** (Disputes 2/3): the cron (`scheduled()`, `worker/lib/dispute-evidence.js`) sends the evidence for each `open`
+dispute that has none yet and is still before `evidence_due_by`: `POST /v1/disputes/:id` with `submit: true`, built only
+from the order's own record (product name, the order's address copy, carrier, tracking number, shipped date, delivery
+confirmation; a digital good sends only the product and that the buyer owns it). The row is claimed first
+(`evidence_submitted_at`) so two runs never send twice; a failed send clears the claim and writes `evidence_error` for
+the next run; Stripe refusing a second submit counts as done; past the due date the row reads `due date passed...` and
+is left alone. It moves no money.
 **#2901**: a partial refund that happened *before* the dispute is a
 separate, already-settled event the buyer keeps permanently regardless of
 how the dispute resolves — `funds_withdrawn`'s own clawback already

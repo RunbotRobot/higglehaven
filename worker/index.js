@@ -129,6 +129,7 @@ import { handlePurchases } from './lib/purchase-lifecycle.js';
 // mechanism. releaseDueCommissionHolds is this module's own cron sweep,
 // wired into scheduled() below the same way every other job there is.
 import { releaseDueCommissionHolds } from './lib/commission-caps.js';
+import { submitDueDisputeEvidence } from './lib/dispute-evidence.js';
 // #2531: catalog-template CRUD/batch/search/thumbnail/concept-image route
 // handler, extracted into worker/lib/ -- see that module's own comment for
 // what deliberately stayed here instead (and why).
@@ -606,6 +607,12 @@ export default {
     ctx.waitUntil(releaseDueCommissionHolds(env.DB).catch((error) => {
       console.error('releaseDueCommissionHolds failed', error);
     }));
+    // #4650: the evidence for an open card dispute is sent to Stripe once, from the order's own record, before it is due.
+    if (stripeConfigured(env)) {
+      ctx.waitUntil(submitDueDisputeEvidence(env, env.DB, { stripeRequest }).catch((error) => {
+        console.error('submitDueDisputeEvidence failed', error);
+      }));
+    }
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
     // #4076: an orb hands out a free video-to-model credit, so none spawns while the provider is not connected
