@@ -6180,6 +6180,12 @@ the buyer one receipt email, a part per seller and the total, best effort: a mai
 `GET /api/purchases/mine` carries `basketOrderId` on each line of a basket order (null otherwise), so My purchases shows
 the lines as one order.
 
+Refunds and disputes (#4616) work per line. `POST /api/purchases/:id/refund` on a basket line refunds the buyer's 99% from
+the shared payment and pulls that line's seller part (price minus commission) back out of the order's Transfer; the
+commission share is not reversed. A `charge.dispute.*` event on the shared charge applies to every line of the order; a
+`charge.refunded` event for a basket payment is only logged, because this app records each refund itself. A seller who is
+suspended or closed before the Transfer has their lines refunded whole to the buyer and receives no Transfer.
+
 ## Shipping destination (#4602)
 
 `GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
