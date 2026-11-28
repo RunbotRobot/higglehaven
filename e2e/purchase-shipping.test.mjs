@@ -111,6 +111,10 @@ await page.waitForTimeout(500);
 const shipBtnCountBefore = await row().locator('.product-sale-row-ship-btn').count();
 console.log('Mark shipped button present for this real-money, non-digital, unrefunded purchase (should be 1):', shipBtnCountBefore);
 
+// #4600: the sale row says where to send it, from the order's own copy of the address the buyer gave.
+const shipToText = await row().locator('.product-sale-row-ship-to').first().textContent().catch(() => '');
+console.log('sale row names where to send it (should read "Ship to E2E Buyer, 1 Test Street, Portland, OR 97201, US"):', shipToText);
+
 await row().locator('.product-sale-row-ship-btn').click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.product-sale-row-shipping')).some((el) => el.textContent.includes('Shipped')),
@@ -152,6 +156,7 @@ console.log('shipping status text after delivery confirmed (should mention "Deli
 const pass = !!template && purchased.status === 201 &&
   !!purchased.body.purchase?.paymentIntentId && !!deliveryConfirmUrl &&
   shipBtnCountBefore === 1 &&
+  shipToText === 'Ship to E2E Buyer, 1 Test Street, Portland, OR 97201, US' &&
   shippingTextAfterShip.includes('Shipped') && shipBtnCountAfter === 0 &&
   noticeMessages.filter((m) => m.includes('Delivery confirmed')).length === 2 &&
   dialogMessages.length === 0 &&
