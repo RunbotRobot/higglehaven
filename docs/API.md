@@ -9338,8 +9338,10 @@ land, most recent first — their "did I earn commission" view.
 instead, across every builder who happens to host an instance of it — a
 seller's own "did my product sell" view, used by the Seller modal's "Sales"
 panel (see "Refunds" below). If the template has a `sellerId`, this
-requires a session logged in as that seller (`403` otherwise) — a
-seller-less template stays open to unauthenticated reads.
+requires a session logged in as that seller (`403` otherwise). A
+template with no seller (a seeded or fixture product), or one whose seller account is gone,
+needs an admin session (#4673: it used to be open to anyone, and each sale carries the buyer's
+address and payment reference).
 `GET /api/purchases?mine=seller` (#3704) lists every sale of every product the
 signed-in seller owns, newest first, for the bud's Orders leaf. It pages like
 `/api/purchases/mine`: `limit` (1 to 100, default 100) and `cursor`, answering

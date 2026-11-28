@@ -191,3 +191,25 @@ describe('the card path carries the address from checkout to the order (#4599)',
     expect(JSON.parse(row.shipping_address_json)).toEqual(TEST_SHIPPING_ADDRESS);
   });
 });
+
+// #4673 (walk of a seller shipping orders): an address is read only by the order's buyer and the seller it was bought
+// from. These pin who can not read it.
+describe('who can read an order\'s address (#4599, #4673)', () => {
+  it('is not in the host\'s commission view, not on another account\'s lists, and not on a seller-less product\'s Sales list for a stranger', async () => {
+    const { seller, instanceId, templateId } = await setup('privacy');
+    const bought = await buy(instanceId, seller, { shippingAddress: TEST_SHIPPING_ADDRESS });
+    expect(bought.response.status).toBe(201);
+    const stranger = await signupBuilder('shipaddr-privacy-stranger');
+    // A stranger's own orders do not list it.
+    const strangerMine = await api('/purchases/mine', stranger.session());
+    expect(JSON.stringify(strangerMine.body)).not.toContain('Test Street');
+    // The host's commission view (by builderId) never carries the address.
+    const hostView = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(hostView.response.status).toBe(200);
+    expect(JSON.stringify(hostView.body)).not.toContain('Test Street');
+    // The product's Sales list is the seller's (or an admin's); a stranger gets no address from it, whatever the
+    // product's seller state.
+    const sales = await api(`/purchases?templateId=${templateId}`, stranger.session());
+    expect(JSON.stringify(sales.body)).not.toContain('Test Street');
+  });
+});
