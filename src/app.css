@@ -3650,7 +3650,7 @@
         max-width: 380px;
         max-height: 100%;
         overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
+        background: rgb(var(--panel-rgb));
         border-radius: var(--radius-lg);
         padding: var(--space-2xl);
         color: var(--pill-text);
@@ -4346,7 +4346,7 @@
         position: relative;
         width: 100%;
         max-width: 360px;
-        background: rgb(var(--panel-rgb) / 0.97);
+        background: rgb(var(--panel-rgb));
         border-radius: var(--radius-lg);
         padding: var(--space-2xl);
         color: var(--pill-text);
