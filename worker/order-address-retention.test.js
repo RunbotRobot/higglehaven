@@ -51,3 +51,22 @@ describe('clearSettledOrderAddresses (#4636)', () => {
     expect(await clearSettledOrderAddresses(env.DB, now)).toBe(0);
   });
 });
+
+describe('an open dispute holds the address past the term (#4648)', () => {
+  it('keeps it while the dispute is open, and the term applies once it is won', async () => {
+    const now = Date.now();
+    const old = new Date(now - (ADDRESS_KEPT_AFTER_SHIPPING_DAYS + 5) * 86400000).toISOString();
+    await order('ret-dispute-open', { shipped: old });
+    await order('ret-dispute-won', { shipped: old });
+    await order('ret-no-dispute', { shipped: old });
+    await env.DB.prepare("INSERT INTO purchase_disputes (dispute_id, purchase_id, outcome) VALUES ('dp_ret_open', 'ret-dispute-open', 'open'), ('dp_ret_won', 'ret-dispute-won', 'won')").run();
+    await clearSettledOrderAddresses(env.DB, now);
+    expect(await addressOf('ret-dispute-open')).toBe(ADDRESS);
+    expect(await addressOf('ret-dispute-won')).toBeNull();
+    expect(await addressOf('ret-no-dispute')).toBeNull();
+    // The dispute is decided: the next run clears it.
+    await env.DB.prepare("UPDATE purchase_disputes SET outcome = 'won' WHERE dispute_id = 'dp_ret_open'").run();
+    await clearSettledOrderAddresses(env.DB, now);
+    expect(await addressOf('ret-dispute-open')).toBeNull();
+  });
+});

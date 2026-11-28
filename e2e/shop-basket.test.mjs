@@ -163,6 +163,16 @@ check(first.names.length === 1 && first.names[0] === 'Basket Crate', 'the basket
 check(first.quantity === '2', `two taps of Add to basket make quantity 2 (${first.quantity})`);
 check(first.sellers.length === 1 && first.sellers[0].length > 0, 'the line sits under its seller');
 
+// #4666: the leaf also asks for the server's quote. A tester with a verified session sees each line's price and a
+// total; one without sees the route's own sentence above the same lines (never a silent blank).
+const quoted = await page.evaluate(() => ({
+  prices: document.querySelectorAll('#bud-leaf-basket .basket-line-price').length,
+  total: document.querySelector('#bud-leaf-basket .basket-total')?.textContent.trim() ?? null,
+  refusal: document.querySelector('#bud-leaf-basket .orders-note.error')?.textContent.trim() ?? null,
+}));
+console.log('quote in leaf:', JSON.stringify(quoted));
+check((quoted.prices === 1 && quoted.total !== null) || (quoted.refusal && quoted.refusal.length > 0), 'the leaf shows the quote, or says why it has none');
+
 await page.click('#bud-leaf-basket button[aria-label^="One fewer"]');
 await page.waitForFunction(() => document.querySelector('#bud-leaf-basket .basket-quantity')?.textContent.trim() === '1', null, { timeout: 8000 });
 await page.click('#bud-leaf-basket button[aria-label^="One more"]');

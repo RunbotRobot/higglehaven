@@ -223,20 +223,23 @@ describe('productCardState (#3651)', () => {
 
   it('offers Buy for a priced, in-stock product the shopper stands next to, and Rate only with an unrated order (#3775)', () => {
     expect(productCardState({ template: priced, inRange: true })).toEqual({
-      canBuy: true, canAddToBasket: true, canReview: false, canReturnPolicy: true, stateText: '',
+      canBuy: true, canAddToBasket: false, canReview: false, canReturnPolicy: true, stateText: '',
     });
     expect(productCardState({ template: priced, inRange: true, hasUnratedOrder: true })).toEqual({
-      canBuy: true, canAddToBasket: true, canReview: true, canReturnPolicy: true, stateText: '',
+      canBuy: true, canAddToBasket: false, canReview: true, canReturnPolicy: true, stateText: '',
     });
   });
 
   it('offers Add to basket wherever Buy is, except for an avatar or an animation (#4612)', () => {
-    expect(productCardState({ template: { ...priced, category: 'building' }, inRange: true }).canAddToBasket).toBe(true);
+    expect(productCardState({ template: { ...priced, category: 'building' }, inRange: true, basketEnabled: true }).canAddToBasket).toBe(true);
     for (const category of ['avatar', 'animation']) {
-      const state = productCardState({ template: { ...priced, category }, inRange: true });
+      const state = productCardState({ template: { ...priced, category }, inRange: true, basketEnabled: true });
       expect(state.canBuy).toBe(true);
       expect(state.canAddToBasket).toBe(false);
     }
+    // #4664: not drawn while a basket cannot be paid for yet.
+    expect(productCardState({ template: { ...priced, category: 'building' }, inRange: true }).canAddToBasket).toBe(false);
+    expect(productCardState({ template: { ...priced, category: 'building' }, inRange: true, basketEnabled: false }).canAddToBasket).toBe(false);
     expect(productCardState({ template: priced, inRange: false }).canAddToBasket).toBeFalsy();
     expect(productCardState({ template: { priceCents: 5, stockQuantity: 0 }, inRange: true }).canAddToBasket).toBeFalsy();
   });

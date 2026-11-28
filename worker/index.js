@@ -181,7 +181,7 @@ import { handleAddresses, handleShippingDestination, addressFromRow } from './li
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
 import { sweepBaskets } from './lib/basket-sweeps.js'; // #4615
-import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
+import { handleBasketCheckout, handleBasketConfig } from './lib/basket-checkout.js'; // #4614, #4664
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -812,6 +812,11 @@ async function handleApi(request, env, url, ctx) {
   // #4602: where "ships to me" is judged from, and the dim switch.
   if (route[0] === 'shipping-destination' && route.length === 1) {
     return handleShippingDestination(request, env.DB);
+  }
+
+  // #4664: whether a basket can be paid for yet, read by the client before it draws Add to basket or the Basket petal.
+  if (route[0] === 'basket-config' && route.length === 1 && request.method === 'GET') {
+    return handleBasketConfig(env);
   }
 
   // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.

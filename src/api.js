@@ -433,9 +433,20 @@ export async function makeAddressDefault(addressId) {
   return requestJson(`/addresses/${encodeURIComponent(addressId)}/default`, { method: 'POST' });
 }
 
+// #4664: whether a basket can be paid for yet (public, no session).
+export async function fetchBasketConfig() {
+  return requestJson('/basket-config');
+}
+
 // #4612 (Basket 2/7, part of #4604): the lines of a person's own basket. The server holds the caps and says which one was hit.
 export async function fetchBasket() {
   return requestJson('/basket');
+}
+
+// #4666: the server's quote of the basket (#4613). `expected` is [[instanceId, unitPriceCents], ...] of prices the person saw.
+export async function fetchBasketQuote(expected = []) {
+  const query = expected.map(([id, cents]) => `expected=${encodeURIComponent(`${id}:${cents}`)}`).join('&');
+  return requestJson(`/basket/quote${query ? `?${query}` : ''}`);
 }
 
 export async function addToBasket(instanceId, quantity = 1) {
