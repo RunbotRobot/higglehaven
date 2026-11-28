@@ -438,6 +438,12 @@ export async function fetchBasket() {
   return requestJson('/basket');
 }
 
+// #4666: the server's quote of the basket (#4613). `expected` is [[instanceId, unitPriceCents], ...] of prices the person saw.
+export async function fetchBasketQuote(expected = []) {
+  const query = expected.map(([id, cents]) => `expected=${encodeURIComponent(`${id}:${cents}`)}`).join('&');
+  return requestJson(`/basket/quote${query ? `?${query}` : ''}`);
+}
+
 export async function addToBasket(instanceId, quantity = 1) {
   return requestJson('/basket', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ instanceId, quantity }) });
 }
