@@ -45,6 +45,7 @@ import {
 import {
   stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, formatCents,
 } from '../index.js';
+import { finalizeBasketPaymentIntent } from './basket-checkout.js'; // #4614
 
 // #1978: workerd requires every named export of the main Worker entry
 // module (worker/index.js) to be a function/class binding, not a plain
@@ -573,7 +574,7 @@ export async function handlePurchaseFinalize(request, env) {
   // rather than after — cheaper, and it means a repeat finalize call for
   // an already-completed purchase keeps working even if Stripe access
   // were ever revoked in between.
-  const existing = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+  const existing = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ? AND basket_order_id IS NULL').bind(paymentIntentId).first();
   if (existing) return json({ purchase: purchaseFromRow(existing) });
 
   // #839: every other unauthenticated repeatable write in this file is
@@ -626,13 +627,16 @@ export async function handlePurchaseFinalize(request, env) {
 export async function finalizeSucceededPaymentIntent(env, paymentIntent) {
   const db = env.DB;
   const paymentIntentId = paymentIntent.id;
-  const existingRow = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+  // #4614: a basket is one charge for many purchases; it has its own finalize (worker/lib/basket-checkout.js), which is
+  // idempotent per line, so a redelivery or a second caller simply completes what is missing.
+  if (paymentIntent.metadata?.basketOrderId) return finalizeBasketPaymentIntent(env, paymentIntent);
+  const existingRow = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ? AND basket_order_id IS NULL').bind(paymentIntentId).first();
   if (existingRow) return json({ purchase: purchaseFromRow(existingRow) });
   try {
     return await writeFinalizedPurchase(env, paymentIntent);
   } catch (error) {
     // Lost the race to a concurrent finalize/webhook: its row is the answer.
-    const winner = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+    const winner = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ? AND basket_order_id IS NULL').bind(paymentIntentId).first();
     if (winner) return json({ purchase: purchaseFromRow(winner) });
     throw error;
   }
@@ -794,7 +798,7 @@ function ownedAnimationStatements(db, buyerBuilderId, templateId, purchaseId) {
 // checkout -> finalize flow only ever reaches this fallback via a live
 // Stripe PaymentIntent lookup, which this test suite deliberately never
 // configures.
-export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
+export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood, basket = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
@@ -861,7 +865,7 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id,
-         product_name, product_kind, seller_name, shipping_address_json)
+         product_name, product_kind, seller_name, shipping_address_json, basket_order_id, basket_line_no)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
       -- #3195: likewise the buyer's account id, so a buyer's purchase history
@@ -875,12 +879,15 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
         (SELECT category FROM catalog_templates WHERE template_id = ?),
         (SELECT label FROM sellers WHERE seller_id = ?),
         -- #4599: the address this order was bought for, its own copy.
-        ?)
+        ?,
+        -- #4614: the basket order and line this charge belonged to (NULL outside a basket).
+        ?, ?)
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
       buyerBuilderStillExists ? meta.buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash, sellerId, buyerBuilderStillExists ? meta.buyerBuilderId : null,
-      meta.templateId, meta.templateId, sellerId, meta.shippingAddress || null),
+      meta.templateId, meta.templateId, sellerId, meta.shippingAddress || null,
+      basket?.basketOrderId ?? null, basket?.lineNo ?? null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- commissionCreditClaimStatement's own live subquery

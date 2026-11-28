@@ -177,6 +177,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
+import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -798,6 +799,9 @@ async function handleApi(request, env, url, ctx) {
   // #4613 (Basket 3/7): the read-only quote of that basket, before the lines routes so `quote` is never an instance id.
   if (route[0] === 'basket' && route[1] === 'quote' && route.length === 2 && request.method === 'GET') {
     return handleBasketQuote(request, env);
+  }
+  if (route[0] === 'basket' && route[1] === 'checkout' && route.length === 2 && request.method === 'POST') {
+    return handleBasketCheckout(request, env); // #4614, behind BASKET_CHECKOUT_ENABLED
   }
   if (route[0] === 'basket') {
     return handleBasket(request, env.DB, route);
