@@ -6184,7 +6184,10 @@ Finalize is the existing `POST /api/purchases/finalize` and the `payment_intent.
 purchase (`purchases.basket_order_id`, `basket_line_no`), once per line however often it runs, then makes one Stripe
 Transfer per seller for the price minus the commission (`purchases.stripe_transfer_id`), then marks the order `paid`
 and removes the bought items from the basket. A basket line is not payout-eligible until its Transfer exists. A failure
-throws so the webhook is redelivered.
+throws so the webhook is redelivered. The call that marks the order `paid` (once, however often finalize runs) also sends
+the buyer one receipt email, a part per seller and the total, best effort: a mail failure never fails the payment (#4617).
+`GET /api/purchases/mine` carries `basketOrderId` on each line of a basket order (null otherwise), so My purchases shows
+the lines as one order.
 
 Refunds and disputes (#4616) work per line. `POST /api/purchases/:id/refund` on a basket line refunds the buyer's 99% from
 the shared payment and pulls that line's seller part (price minus commission) back out of the order's Transfer; the
