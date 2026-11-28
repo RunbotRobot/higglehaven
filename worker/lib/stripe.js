@@ -246,8 +246,23 @@ export async function handleStripeWebhook(request, env, db) {
 async function handlePurchaseReversalWebhookEvent(db, event) {
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
-  const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
-  if (!purchase) return;
+  const { results: purchases } = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).all();
+  if (!purchases.length) return;
+  // #4616: a basket is one charge for several purchases. A dispute is against the whole charge, so it reaches every line.
+  // A refund is not: every refund of a basket line is made by this app, one line at a time, and has already marked that
+  // line, so the event is only noted (a refund made by hand in Stripe's dashboard is not matched to a line here).
+  if (purchases[0].basket_order_id) {
+    if (event.type === 'charge.refunded') {
+      console.warn('basket: charge.refunded for a basket payment is recorded per line when this app refunds it', paymentIntentId);
+      return;
+    }
+    for (const purchase of purchases) await applyPurchaseReversalEvent(db, event, purchase);
+    return;
+  }
+  await applyPurchaseReversalEvent(db, event, purchases[0]);
+}
+
+async function applyPurchaseReversalEvent(db, event, purchase) {
 
   // #3060: Stripe does not guarantee webhook delivery order, and a failed
   // delivery is retried for days. funds_withdrawn and funds_reinstated are

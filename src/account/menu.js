@@ -10,7 +10,7 @@
 import { scheduleRetry } from '../retryRead.js';
 import { EMPTY_COPY } from '../ui/emptyState.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
-import { createPurchaseRow } from './myPurchases.js';
+import { createPurchaseRow, basketHeadText } from './myPurchases.js';
 import { builderId, currentMode, currentLandletId } from '../world/state.js';
 import { isSentByMe } from './dmSide.js';
 import { currentAuthUser } from './auth.js';
@@ -1444,13 +1444,37 @@ let myPurchasesNextCursor = null;
 
 // A row updates itself from the API's own response (onChanged); anything the
 // local copy can't be trusted for -- a delete, a 409 -- reloads the list.
+// #4617: the lines of one basket payment sit under one heading, as one order; a later page that carries more lines of the
+// same basket adds them to the same group.
+const myPurchaseBasketGroups = new Map();
+function basketGroupFor(purchase) {
+  let group = myPurchaseBasketGroups.get(purchase.basketOrderId);
+  if (!group) {
+    const el = document.createElement('div');
+    el.className = 'my-purchase-basket';
+    const head = document.createElement('div');
+    head.className = 'my-purchase-basket-head';
+    el.appendChild(head);
+    myPurchasesListEl.appendChild(el);
+    group = { el, head, purchases: [] };
+    myPurchaseBasketGroups.set(purchase.basketOrderId, group);
+  }
+  return group;
+}
 function appendMyPurchaseRow(purchase) {
   const row = createPurchaseRow(purchase, {
     onChanged: () => {},
     onReload: () => renderMyPurchases(),
     dispute: disputePurchase, // #3199
   });
-  myPurchasesListEl.appendChild(row);
+  if (!purchase.basketOrderId) {
+    myPurchasesListEl.appendChild(row);
+    return;
+  }
+  const group = basketGroupFor(purchase);
+  group.purchases.push(purchase);
+  group.el.appendChild(row);
+  group.head.textContent = basketHeadText(group.purchases);
 }
 
 function showMyPurchasesMessage(text) {
@@ -1461,6 +1485,7 @@ function showMyPurchasesMessage(text) {
 async function renderMyPurchases() {
   const myLoadToken = ++myPurchasesLoadToken;
   myPurchasesListEl.innerHTML = '';
+  myPurchaseBasketGroups.clear();
   myPurchasesLoadMoreBtn.hidden = true;
   myPurchasesEmptyEl.hidden = true;
   myPurchasesNextCursor = null;

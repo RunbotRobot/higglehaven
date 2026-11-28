@@ -50,6 +50,17 @@ async function addPurchase(buyer, {
 const mine = (who, query = '') => api(`/purchases/mine${query}`, who.session());
 
 describe('GET /api/purchases/mine (#3196)', () => {
+  it('names the basket order a line belongs to, and null for an ordinary purchase (#4617)', async () => {
+    const buyer = await signupBuilder('mine-basket');
+    const line = await addPurchase(buyer, { createdAt: '2026-11-28T00:00:01.000Z' });
+    const single = await addPurchase(buyer, { createdAt: '2026-11-28T00:00:00.000Z' });
+    await env.DB.prepare('UPDATE purchases SET basket_order_id = ?, basket_line_no = 1 WHERE purchase_id = ?').bind('basket-order-x', line).run();
+    const res = await mine(buyer);
+    const byId = Object.fromEntries(res.body.purchases.map((p) => [p.purchaseId, p]));
+    expect(byId[line].basketOrderId).toBe('basket-order-x');
+    expect(byId[single].basketOrderId).toBeNull();
+  });
+
   it('requires a session', async () => {
     expect((await api('/purchases/mine')).response.status).toBe(401);
   });
@@ -105,7 +116,7 @@ describe('GET /api/purchases/mine (#3196)', () => {
     // The list must not become a way to read anything the buyer did not already see.
     const allowed = [
       'purchaseId', 'createdAt', 'productName', 'productKind', 'sellerName', 'quantity', 'totalCents', 'isDigitalGood', 'shippedAt',
-      'refundedAt', 'shippingCarrier', 'trackingNumber', 'refundedAmountCents', 'canLeaveFeedback', 'feedback', 'canDispute', 'templateId', 'productReview', 'canReviewProduct', 'shippingAddress',
+      'refundedAt', 'shippingCarrier', 'trackingNumber', 'refundedAmountCents', 'canLeaveFeedback', 'feedback', 'canDispute', 'templateId', 'productReview', 'canReviewProduct', 'shippingAddress', 'basketOrderId',
     ].sort();
     for (const purchase of res.body.purchases) expect(Object.keys(purchase).sort()).toEqual(allowed);
     expect(JSON.stringify(res.body)).not.toMatch(/paymentIntent|payment_intent|tokenHash|commission|builderShare|platformShare/i);

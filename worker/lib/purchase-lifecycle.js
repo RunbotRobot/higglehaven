@@ -113,7 +113,7 @@ async function handleMyPurchases(request, env, url) {
   }
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
-           p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
+           p.basket_order_id, p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
            p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
            p.template_id, t.name AS live_name, s.label AS live_seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text,
@@ -146,6 +146,9 @@ async function handleMyPurchases(request, env, url) {
         isDigitalGood: !!row.is_digital_good,
         // #4599: the address this order was bought for, its own copy (null for a digital good or an older order).
         shippingAddress: shippingAddressFromRow(row.shipping_address_json),
+        // #4617: the lines of one basket payment share this id, so My purchases can show them as one order (null for an
+        // ordinary one-product purchase). Each line is still its own order for confirming, rating and refunding.
+        basketOrderId: row.basket_order_id || null,
         shippedAt: row.shipped_at,
         shippingCarrier: row.shipping_carrier, // #4600
         trackingNumber: row.tracking_number,
@@ -832,12 +835,32 @@ export async function finalizeRefundReversal(env, purchase) {
     }
     const refundCents = refundAmountCents(purchase.total_cents);
     try {
-      await stripeRequest(env, 'POST', 'refunds', {
-        payment_intent: purchase.payment_intent_id,
-        amount: refundCents,
-        reverse_transfer: true,
-        refund_application_fee: true,
-      }, refundIdempotencyKey(purchase.purchase_id));
+      if (purchase.basket_order_id) {
+        // #4616: a line of a basket was paid by one charge on the platform's own account (no destination, no
+        // application fee), so there is nothing for reverse_transfer to reverse. The buyer gets the same 99% back from
+        // the shared charge, and the seller's part of THIS line (its price minus the commission) is pulled back out of
+        // the seller's Transfer for the order. The commission share is simply not reversed: the platform keeps it, as a
+        // one-product refund keeps 1% (#651). A line whose Transfer does not exist yet has nothing to pull back; the
+        // transfer step leaves a refunded line out. Both calls are idempotent by key, so a retry after one landed and the
+        // other did not completes the rest.
+        await stripeRequest(env, 'POST', 'refunds', {
+          payment_intent: purchase.payment_intent_id,
+          amount: refundCents,
+        }, refundIdempotencyKey(purchase.purchase_id));
+        const sellerPartCents = purchase.total_cents - purchase.commission_cents;
+        if (purchase.stripe_transfer_id && sellerPartCents > 0) {
+          await stripeRequest(env, 'POST', `transfers/${encodeURIComponent(purchase.stripe_transfer_id)}/reversals`, {
+            amount: sellerPartCents,
+          }, `refund-reversal:${purchase.purchase_id}`);
+        }
+      } else {
+        await stripeRequest(env, 'POST', 'refunds', {
+          payment_intent: purchase.payment_intent_id,
+          amount: refundCents,
+          reverse_transfer: true,
+          refund_application_fee: true,
+        }, refundIdempotencyKey(purchase.purchase_id));
+      }
     } catch (err) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
       throw err;
