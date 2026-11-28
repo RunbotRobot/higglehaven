@@ -730,6 +730,7 @@ async function runStepAction(step, index) {
       const [tile, x, y] = step.args;
       const count = () => page.evaluate(() => (window.__testProductScreenPositions?.() ?? []).length);
       const before = await count();
+      await ensureMenuOpen(); // Add item is a leaf of Build's stem: it is on screen only while the flower is open
       await press(await controlOrFail('#add-item-btn', '"Add item"'));
       const tiles = page.locator('#catalog-picker-grid .catalog-tile');
       await tiles.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
