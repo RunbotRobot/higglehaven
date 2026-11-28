@@ -21,24 +21,26 @@ async function order(id, columns = {}) {
 const addressOf = async (id) => (await env.DB.prepare('SELECT shipping_address_json AS a FROM purchases WHERE purchase_id = ?').bind(id).first()).a;
 
 describe('clearSettledOrderAddresses (#4636)', () => {
-  it('keeps the address of an order still to be shipped or still open to a dispute', async () => {
+  it('keeps the address of an order still to be shipped, or shipped and paid out but inside the term (a card dispute can still come)', async () => {
     const now = Date.now();
     await order('ret-open');
     await order('ret-shipped-recent', { shipped: new Date(now - 5 * 86400000).toISOString() });
+    const stampPaid = new Date(now - 1000).toISOString();
+    await order('ret-paid-inside-term', { shipped: new Date(now - 30 * 86400000).toISOString(), paidOut: stampPaid });
     await clearSettledOrderAddresses(env.DB, now);
     expect(await addressOf('ret-open')).toBe(ADDRESS);
     expect(await addressOf('ret-shipped-recent')).toBe(ADDRESS);
+    expect(await addressOf('ret-paid-inside-term')).toBe(ADDRESS);
   });
 
-  it('clears it once the order is paid out or refunded, and long after it shipped, leaving the order itself', async () => {
+  it('clears it at once for a refunded order and after the term for a shipped one, leaving the order itself', async () => {
     const now = Date.now();
     const stamp = new Date(now - 1000).toISOString();
-    await order('ret-paid', { shipped: stamp, paidOut: stamp });
     await order('ret-refunded', { refunded: stamp });
     await order('ret-old', { shipped: new Date(now - (ADDRESS_KEPT_AFTER_SHIPPING_DAYS + 1) * 86400000).toISOString() });
     const changed = await clearSettledOrderAddresses(env.DB, now);
-    expect(changed).toBe(3);
-    for (const id of ['ret-paid', 'ret-refunded', 'ret-old']) {
+    expect(changed).toBe(2);
+    for (const id of ['ret-refunded', 'ret-old']) {
       expect(await addressOf(id)).toBeNull();
       expect((await env.DB.prepare('SELECT total_cents FROM purchases WHERE purchase_id = ?').bind(id).first()).total_cents).toBe(500);
     }

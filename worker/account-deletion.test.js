@@ -106,7 +106,7 @@ describe('Account deletion (#1146)', () => {
 
   // #4636: the address copies on a deleted buyer's orders go once they have no job left; an order still to be shipped
   // keeps its copy so the seller can send it.
-  it('clears the address on a deleted buyer\'s shipped and refunded orders, and keeps it on one still to be shipped', async () => {
+  it('clears the address on a deleted buyer\'s refunded order at once, and keeps it on a shipped one (the term, for a card dispute) and one still to be shipped', async () => {
     const host = await signupBuilder('del-address-host');
     const password = 'a fine long password here';
     const email = `del-address-${crypto.randomUUID()}@example.com`;
@@ -128,7 +128,7 @@ describe('Account deletion (#1146)', () => {
     expect(deletion.response.status).toBe(200);
 
     const addressOf = async (id) => (await env.DB.prepare('SELECT shipping_address_json AS a FROM purchases WHERE purchase_id = ?').bind(id).first()).a;
-    expect(await addressOf('del-addr-shipped')).toBeNull();
+    expect(await addressOf('del-addr-shipped')).toBe(address);
     expect(await addressOf('del-addr-refunded')).toBeNull();
     expect(await addressOf('del-addr-open')).toBe(address);
   });
