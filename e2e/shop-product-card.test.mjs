@@ -236,6 +236,21 @@ await page.click('#refund-policy-close-btn');
 await page.waitForFunction(() => !document.getElementById('refund-policy-modal').classList.contains('visible'), null, { timeout: 5000 });
 check(await cardOpen(), 'closing the Return policy leaves the card open');
 
+// #4690: Report this product sits in More. It asks for an optional reason in the shared modal, says the outcome on the card's own
+// line, and a second report from the same account is told it already reported (the server allows one flag per account per listing).
+check(await page.locator('#product-card-report-btn').isVisible(), 'More offers Report this product');
+await page.click('#product-card-report-btn');
+await page.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
+await page.fill('#report-reason-input', 'Looks like a fake brand');
+await page.click('#report-reason-submit-btn');
+await page.waitForFunction(() => /Report sent/.test(document.getElementById('product-card-state')?.textContent || ''), null, { timeout: 10000 });
+check(await cardOpen(), 'reporting leaves the card open and says it was sent');
+await page.click('#product-card-report-btn');
+await page.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
+await page.click('#report-reason-submit-btn');
+await page.waitForFunction(() => /already reported/.test(document.getElementById('product-card-state')?.textContent || ''), null, { timeout: 10000 });
+check(true, 'a second report from the same account says it was already reported');
+
 // #3946: Buy asks the server first what the purchase will do. This product's seller has no real
 // payments set up and the shopper is not an admin, so the answer is a refusal: the reason comes up at
 // once in the notice, with no "Buy this item?" confirm and no payment sheet, and the card stays open.
@@ -348,4 +363,4 @@ await page.waitForTimeout(300);
 check(!(await cardOpen()), 'Escape folds the card opened by key');
 check(!(await focusInCard()), 'and focus is no longer inside it');
 
-await finish(browser, { pass: pass && errors.every((e) => /status of 403/.test(String(e))), label: '#3651: a tapped product\'s card blooms beside it, follows it, offers Buy only when it can, and folds away', errors });
+await finish(browser, { pass: pass && errors.every((e) => /status of 40[39]/.test(String(e))), label: '#3651: a tapped product\'s card blooms beside it, follows it, offers Buy only when it can, and folds away', errors });

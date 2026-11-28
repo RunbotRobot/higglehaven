@@ -33,7 +33,8 @@ import { productCardState, sellerLine } from './productCardLayout.js';
 import { currentAuthUser, requireLogin } from '../account/auth.js';
 import { addInstanceToBasket } from './basketLeaf.js';
 import { basketCheckoutEnabled, onBasketConfig } from './basketConfig.js'; // #4664
-import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
+import { fetchSellerSummaries, fetchShippingDestination, reportProduct } from '../api.js';
+import { promptReportReason } from '../ui/reportReasonModal.js';
 import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
 import { loadUnratedOrders, hasUnratedOrder } from './unratedOrders.js';
@@ -50,6 +51,7 @@ const moreBtn = document.getElementById('product-card-more-btn');
 const moreEl = document.getElementById('product-card-more');
 const reviewBtn = document.getElementById('product-card-review-btn');
 const returnPolicyBtn = document.getElementById('product-card-return-policy-btn');
+const reportBtn = document.getElementById('product-card-report-btn'); // #4690
 const closeBtn = document.getElementById('product-card-close-btn');
 
 // The projection, the placement writes and the bloom are the shared world-card
@@ -177,7 +179,7 @@ export function syncProductCardActions(review, inRange) {
   basketBtn.classList.toggle('visible', !!state.canAddToBasket);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
-  // Nothing in More to open when neither petal in it applies.
+  // Nothing in More to open when neither petal in it applies (Report this product sits in it whenever it is open, #4690).
   moreBtn.hidden = !(state.canReview || state.canReturnPolicy);
   if (moreBtn.hidden) {
     moreEl.hidden = true;
@@ -306,6 +308,30 @@ basketBtn.addEventListener('click', async () => {
     if (review === openReview) stateEl.textContent = err.message || 'That did not work. Try again.';
   } finally {
     basketBtn.disabled = false;
+    card.markDirty();
+  }
+});
+// #4690: Report this product. The reason is optional; the outcome is said on the card's own line, and it never says whether
+// the listing was hidden or tells the seller (a report is invisible to the reported). Limits arrive in the server's words.
+reportBtn.addEventListener('click', async () => {
+  const review = openReview;
+  const templateId = review?.mesh.userData.template?.templateId;
+  if (!templateId) return;
+  if (!currentAuthUser && !(await requireLogin('signup', 'Log in or sign up to report a product.'))) return;
+  const answer = await promptReportReason({ title: 'Report this product as counterfeit or against the rules?' });
+  if (answer === null) return;
+  reportBtn.disabled = true;
+  let line;
+  try {
+    await reportProduct(templateId, answer.reason);
+    line = 'Report sent. Thank you.';
+  } catch (err) {
+    line = err?.status === 409 ? 'You have already reported this product.' : `Couldn't send the report. ${err?.message || 'Try again.'}`;
+  } finally {
+    reportBtn.disabled = false;
+  }
+  if (review === openReview) {
+    stateEl.textContent = line;
     card.markDirty();
   }
 });
