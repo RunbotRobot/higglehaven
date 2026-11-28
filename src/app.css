@@ -7092,7 +7092,9 @@
       #product-card-more {
         display: flex;
         flex-wrap: wrap;
-        gap: var(--space-sm);
+        /* #4690: with three buttons the third wraps to a second row, and each is tapped in a 44px square, so
+           the rows sit 14px apart (30px drawn + 14px = 44px between centres) and no two squares overlap. */
+        gap: 14px var(--space-sm);
         /* #3824: the buttons here are tapped in a 44px square, 7px above and below their drawn
            30px; this keeps that from reaching into Buy's last pixel on the row above. */
         margin-top: 2px;
