@@ -111,7 +111,8 @@ export function shippingAddressFromRow(json) {
 // seller or buyer (nothing left to dispute). A dispute withdrawal also marks the order refunded (stripe.js), but the
 // card dispute is then still being answered with this very address, so an order that has had a dispute event
 // (last_dispute_event_at) keeps it for the term like any other.
-// The order, its price and its tracking stay; only the address goes. (higglehaven1's rule, #4636.)
+// The order, its price and its tracking stay; only the address goes. (higglehaven1's rule, #4636.) A dispute that is still
+// open on the order (purchase_disputes, #4648) holds the address past the term; it goes once the dispute is decided.
 export const ADDRESS_KEPT_AFTER_SHIPPING_DAYS = 180;
 
 // One statement, safe to run every ten minutes and to run twice: it only ever clears.
@@ -121,6 +122,9 @@ export async function clearSettledOrderAddresses(db, nowMs = Date.now()) {
     UPDATE purchases SET shipping_address_json = NULL
     WHERE shipping_address_json IS NOT NULL
       AND ((refunded_at IS NOT NULL AND last_dispute_event_at IS NULL) OR (shipped_at IS NOT NULL AND shipped_at < ?))
+      -- #4636/#4648: a dispute still open on the order is being answered with this very address, so it stays until the
+      -- dispute is decided (a won dispute is no longer open and the term applies as for any order).
+      AND NOT EXISTS (SELECT 1 FROM purchase_disputes d WHERE d.purchase_id = purchases.purchase_id AND d.outcome = 'open')
   `).bind(cutoff).run();
   return result.meta?.changes ?? 0;
 }
