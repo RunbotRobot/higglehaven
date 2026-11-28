@@ -1363,6 +1363,17 @@ otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
 
+### `GET /api/auth/admin-purchase-disputes` (#4651)
+
+The admin dashboard's list of Stripe disputes on orders (`purchase_disputes`, #4648), for the **full admin only**: an
+order's seller, product and evidence state are closed to a look-only admin like every other order read (`403`, and the
+dashboard answers it itself with "Not shown to a look-only account."). `{ "disputes": [{ "disputeId", "purchaseId",
+"productName", "sellerName", "reason", "amountCents", "status", "evidenceDueBy", "outcome", "evidenceSent",
+"evidenceError", "openedAt", "shipped", "hasTracking", "isDigitalGood" }], "totalCount", "limit": 200 }`. Open
+disputes come first and the soonest due date first, then the rest newest first. Built for today's size: the newest 200,
+with `totalCount` saying when there are more; past that it needs paging. `evidenceError` is shown here and never to the
+seller. A plain GET, no writes.
+
 ### `GET /api/auth/admin-users` (#4060)
 
 The Admin Dashboard's Users table (Accounts tab): every account in one `requireAdmin`-gated read, so the

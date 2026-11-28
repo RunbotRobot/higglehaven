@@ -42,7 +42,7 @@
       p.textContent = NOT_SHOWN;
       return p;
     };
-    ['tax', 'purchases', 'flags'].forEach((name) => {
+    ['tax', 'purchases', 'disputes', 'flags'].forEach((name) => {
       const panel = document.getElementById('panel-' + name);
       if (panel) panel.replaceChildren(note());
       delete window.__adminDashboardPanels[name];
