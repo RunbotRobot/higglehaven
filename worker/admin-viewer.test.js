@@ -61,6 +61,7 @@ const VIEWER_CLOSED_READS = [
   '/auth/suspension-status?email=nobody@example.com', // looks an account up by its email
   '/admin-items-outside-landlets', // other builders' placed items
   '/admin-action-log', // the admin log
+  '/auth/admin-purchase-disputes', // #4651: an order's seller, product and evidence state
 ];
 
 describe('which dashboard reads a look-only admin gets (#4382)', () => {

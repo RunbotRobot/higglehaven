@@ -2,6 +2,9 @@
 // Worker already receives (charge.dispute.funds_withdrawn opens it, funds_reinstated marks it won); data.object is
 // Stripe's Dispute. This moves no money and sends nothing to anyone: the clawback and its reversal are the purchase's
 // own columns, handled by the code around the call. A failed write here is logged and never stops that code.
+import { json } from './http.js';
+import { requireAdmin } from './auth.js';
+
 const OPEN = 'open';
 const WON = 'won';
 
@@ -80,4 +83,36 @@ export async function latestDisputesByPurchase(db, purchaseIds) {
     for (const row of results) latest.set(row.purchase_id, disputeFromRow(row));
   }
   return latest;
+}
+
+// #4651: the admin dashboard's list of disputes, open ones first and the soonest due date first. Full admin only: an
+// order's seller, product and evidence are closed to a look-only admin like every other order read (worker/admin-viewer
+// test). Built for today's size, as the owner's tools are: the newest 200, and totalCount says when there are more; past
+// that this needs paging (#4060's rule). evidenceError is shown here and never to the seller.
+export const ADMIN_DISPUTES_LIMIT = 200;
+
+export async function handleAdminPurchaseDisputes(request, db) {
+  await requireAdmin(request, db);
+  const { results } = await db.prepare(`
+    SELECT d.*, p.product_name, p.seller_name, p.shipped_at, p.tracking_number, p.is_digital_good
+    FROM purchase_disputes d LEFT JOIN purchases p ON p.purchase_id = d.purchase_id
+    ORDER BY (d.outcome = 'open') DESC, d.evidence_due_by IS NULL, d.evidence_due_by ASC, d.opened_at DESC
+    LIMIT ?
+  `).bind(ADMIN_DISPUTES_LIMIT).all();
+  const total = await db.prepare('SELECT COUNT(*) AS count FROM purchase_disputes').first();
+  return json({
+    disputes: results.map((row) => ({
+      ...disputeFromRow(row),
+      purchaseId: row.purchase_id,
+      productName: row.product_name ?? null,
+      sellerName: row.seller_name ?? null,
+      status: row.status ?? null,
+      evidenceError: row.evidence_error ?? null,
+      shipped: !!row.shipped_at,
+      hasTracking: !!row.tracking_number,
+      isDigitalGood: !!row.is_digital_good,
+    })),
+    totalCount: total.count,
+    limit: ADMIN_DISPUTES_LIMIT,
+  });
 }
