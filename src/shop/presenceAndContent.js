@@ -2700,7 +2700,8 @@ function popAndCollectCreditOrb(orb) {
   const snapshot = { orbId: orb.orbId, group: orb.group, position: orb.mesh.position.clone() };
   // #2441: spawned before removeCreditOrb disposes the real orb.mesh -- the pop
   // clones it first, so it has its own geometry/material to animate.
-  spawnCreditOrbPopEffect(orb);
+  // #4574: under reduced motion the orb simply goes (as it does for someone looking on, #4387).
+  if (!otherAvatarReducedMotion()) spawnCreditOrbPopEffect(orb);
   removeCreditOrb(orb);
   const countedIntoBalance = showCreditOrbToast();
   // #4123: a refused collect takes the expected credit back, with the word it showed.
@@ -2739,7 +2740,7 @@ function popAndCollectCreditOrb(orb) {
       if (refusal === 'gone') {
         // The server's own atomic claim is authoritative: another shopper
         // collected it first. It stays gone; the reversal shows where it was.
-        spawnCreditOrbReversalEffect(snapshot);
+        if (!otherAvatarReducedMotion()) spawnCreditOrbReversalEffect(snapshot); // #4574: the sentence below says it
         showCreditOrbProblemNotice('Someone else collected that orb just before you.');
         return;
       }
@@ -2766,7 +2767,7 @@ function restoreCreditOrb(snapshot) {
   mesh.position.copy(snapshot.position);
   mesh.scale.setScalar(0.01);
   snapshot.group.add(mesh);
-  shopCreditOrbs.push({ mesh, group: snapshot.group, orbId: snapshot.orbId, collecting: false, appearT: 0, rearmOnLeave: true });
+  shopCreditOrbs.push({ mesh, group: snapshot.group, orbId: snapshot.orbId, collecting: false, appearT: otherAvatarReducedMotion() ? 1 : 0, rearmOnLeave: true }); // #4574: reduced motion: back at once
 }
 
 // #2447: null while no genuine network failure is currently in progress;
