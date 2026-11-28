@@ -102,3 +102,21 @@ export function shippingAddressFromRow(json) {
   if (!json) return null;
   try { return JSON.parse(json); } catch { return null; }
 }
+
+// #4636: an order keeps its address copy only while the address can still do a job: to ship the parcel and to settle a
+// dispute about it. A buyer can dispute until the sale is paid out or refunded (purchase-lifecycle's disputeBlock), so
+// once either has happened the copy is cleared. A shipped order that is never paid out (a seller without payouts set
+// up) is cleared this many days after it shipped, so nothing is kept for good. The order, its price and its tracking
+// stay; only the address goes.
+export const ADDRESS_KEPT_AFTER_SHIPPING_DAYS = 90;
+
+// One statement, safe to run every ten minutes and to run twice: it only ever clears.
+export async function clearSettledOrderAddresses(db, nowMs = Date.now()) {
+  const cutoff = new Date(nowMs - ADDRESS_KEPT_AFTER_SHIPPING_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const result = await db.prepare(`
+    UPDATE purchases SET shipping_address_json = NULL
+    WHERE shipping_address_json IS NOT NULL
+      AND (paid_out_at IS NOT NULL OR refunded_at IS NOT NULL OR (shipped_at IS NOT NULL AND shipped_at < ?))
+  `).bind(cutoff).run();
+  return result.meta?.changes ?? 0;
+}

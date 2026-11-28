@@ -186,14 +186,16 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
     await env.DB.prepare(`
       INSERT INTO purchases (
         purchase_id, instance_id, template_id, builder_id, buyer_builder_id, unit_price_cents, quantity,
-        total_cents, commission_cents, builder_share_cents, platform_share_cents
-      ) VALUES (?, 'export-data-instance', 'export-data-template', ?, ?, 500, 1, 500, 10, 490, 10)
-    `).bind(purchaseId, host.builderId, buyer.builderId).run();
+        total_cents, commission_cents, builder_share_cents, platform_share_cents, shipping_address_json
+      ) VALUES (?, 'export-data-instance', 'export-data-template', ?, ?, 500, 1, 500, 10, 490, 10, ?)
+    `).bind(purchaseId, host.builderId, buyer.builderId, JSON.stringify({ name: 'Export Buyer', line1: '1 Export Street', line2: '', city: 'Portland', region: 'OR', postalCode: '97201', country: 'US' })).run();
 
     const buyerResult = await api('/auth/export-data', buyer.session());
     expect(buyerResult.body.commerce.purchasesAsBuyer).toHaveLength(1);
     expect(buyerResult.body.commerce.purchasesAsBuyer[0]).toMatchObject({
       purchaseId, builderId: host.builderId, buyerBuilderId: buyer.builderId, totalCents: 500,
+      // #4599: the address an order was bought for is the buyer's own personal data, so their export lists it.
+      shippingAddress: { name: 'Export Buyer', line1: '1 Export Street', city: 'Portland', country: 'US' },
     });
 
     // The host earned commission on this purchase but didn't buy anything —
