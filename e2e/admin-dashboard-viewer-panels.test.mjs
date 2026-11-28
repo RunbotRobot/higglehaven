@@ -45,7 +45,7 @@ const banner = await page.textContent('.viewer-banner');
 const landedOn = await page.evaluate(() => document.querySelector('nav button.nav-item.active')?.dataset.panel);
 
 const OPEN = ['roster', 'models', 'world', 'landlets', 'tax-education', 'accounts', 'video-jobs'];
-const CLOSED = ['tax', 'purchases', 'flags'];
+const CLOSED = ['tax', 'purchases', 'disputes', 'flags'];
 const sections = {};
 for (const name of [...OPEN, ...CLOSED, 'fixtures']) {
   await page.click(`nav button[data-panel="${name}"]`);

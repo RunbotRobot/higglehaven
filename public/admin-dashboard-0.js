@@ -10,7 +10,7 @@
     .then((r) => (r && r.role) || null)
     .catch(() => null);
   window.__adminNotShown = 'Not shown to a look-only account.';
-  const CLOSED = /^\/api\/(models(\?|$)|ncmec-reports|auth\/suspension-status|admin-items-outside-landlets|tax\/admin-forms|purchases|product-flags|self-dealing-flags)/;
+  const CLOSED = /^\/api\/(models(\?|$)|ncmec-reports|auth\/suspension-status|admin-items-outside-landlets|tax\/admin-forms|auth\/admin-purchase-disputes|purchases|product-flags|self-dealing-flags)/;
   window.fetch = (input, options) => {
     const method = String((options && options.method) || (input && input.method) || 'GET').toUpperCase();
     const url = typeof input === 'string' ? input : (input && input.url) || '';

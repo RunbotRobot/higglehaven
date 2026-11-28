@@ -1363,6 +1363,17 @@ otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
 
+### `GET /api/auth/admin-purchase-disputes` (#4651)
+
+The admin dashboard's list of Stripe disputes on orders (`purchase_disputes`, #4648), for the **full admin only**: an
+order's seller, product and evidence state are closed to a look-only admin like every other order read (`403`, and the
+dashboard answers it itself with "Not shown to a look-only account."). `{ "disputes": [{ "disputeId", "purchaseId",
+"productName", "sellerName", "reason", "amountCents", "status", "evidenceDueBy", "outcome", "evidenceSent",
+"evidenceError", "openedAt", "shipped", "hasTracking", "isDigitalGood" }], "totalCount", "limit": 200 }`. Open
+disputes come first and the soonest due date first, then the rest newest first. Built for today's size: the newest 200,
+with `totalCount` saying when there are more; past that it needs paging. `evidenceError` is shown here and never to the
+seller. A plain GET, no writes.
+
 ### `GET /api/auth/admin-users` (#4060)
 
 The Admin Dashboard's Users table (Accounts tab): every account in one `requireAdmin`-gated read, so the
@@ -6151,6 +6162,15 @@ Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when th
 
 Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
 them as `communication.basketLines`.
+
+### `GET /api/basket-config` (#4664)
+
+Public, no session: `{ "checkoutEnabled": true|false }`, true only when `BASKET_CHECKOUT_ENABLED` is the string `true`,
+the same switch `POST /api/basket/checkout` reads. The client reads it once per page and draws **Add to basket** on a
+product card and the **Basket** petal in Shop's stem only while it is true, so a shopper is never offered a basket that
+nothing can pay for ("a control is not drawn for a person it can only refuse"). Lines already in the table stay there.
+Flipping the variable is the whole release of the basket's buttons; until then the routes above still answer, they are
+just not reached from the app.
 
 ### `GET /api/basket/quote` (#4613)
 

@@ -88,6 +88,7 @@ import {
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 import { handleAdminUsers } from './lib/admin-users-table.js';
+import { handleAdminPurchaseDisputes } from './lib/purchase-disputes.js';
 import { handleAdminSetViewer, handleAdminRole } from './lib/admin-viewer-grant.js';
 import { handleAdminVideoJobs } from './lib/admin-video-jobs.js';
 import { handleAdminItemsOutsideLandlets } from './lib/admin-outside-items.js';
@@ -180,7 +181,7 @@ import { handleAddresses, handleShippingDestination, addressFromRow } from './li
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
 import { sweepBaskets } from './lib/basket-sweeps.js'; // #4615
-import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
+import { handleBasketCheckout, handleBasketConfig } from './lib/basket-checkout.js'; // #4614, #4664
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -811,6 +812,11 @@ async function handleApi(request, env, url, ctx) {
   // #4602: where "ships to me" is judged from, and the dim switch.
   if (route[0] === 'shipping-destination' && route.length === 1) {
     return handleShippingDestination(request, env.DB);
+  }
+
+  // #4664: whether a basket can be paid for yet, read by the client before it draws Add to basket or the Basket petal.
+  if (route[0] === 'basket-config' && route.length === 1 && request.method === 'GET') {
+    return handleBasketConfig(env);
   }
 
   // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.
@@ -3293,6 +3299,10 @@ async function handleAuth(request, env, db, route, url, ctx) {
   // #4060: the admin dashboard's table of every user (capped, admin-only); sorting and filtering are in the page.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-users') {
     return handleAdminUsers(request, db);
+  }
+  // #4651: the admin dashboard's list of Stripe disputes on orders (full admin only).
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-purchase-disputes') {
+    return handleAdminPurchaseDisputes(request, db);
   }
   // #4175: which dashboard the caller has (admin or look-only), asked by the page when it opens.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-role') {

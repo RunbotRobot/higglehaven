@@ -3,7 +3,7 @@
 // clawback and its reversal.
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, signupAdmin } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 import { disputeRowFromEvent } from './lib/purchase-disputes.js';
 
 let adminSession;
@@ -95,5 +95,35 @@ describe('recording a dispute (#4648)', () => {
     expect((await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, { ...DISPUTE, id: 'dp_unknown', payment_intent: 'pi_not_ours' }))).status).toBe(200);
     const none = await env.DB.prepare("SELECT COUNT(*) AS n FROM purchase_disputes WHERE dispute_id = 'dp_unknown'").first();
     expect(none.n).toBe(0);
+  });
+});
+
+describe('the admin list of disputes (#4651)', () => {
+  it('lists open disputes soonest-due first, for a full admin only, and shows the evidence error', async () => {
+    const soon = await createRealMoneyPurchase('adm-soon', 'pi_adm_soon');
+    const later = await createRealMoneyPurchase('adm-later', 'pi_adm_later');
+    const won = await createRealMoneyPurchase('adm-won', 'pi_adm_won');
+    const object = (id, pi, dueBy) => ({ id, reason: 'product_not_received', amount: 10000, status: 'needs_response', payment_intent: pi, evidence_details: { due_by: dueBy } });
+    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, object('dp_adm_later', 'pi_adm_later', 1_900_000_000)));
+    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, object('dp_adm_soon', 'pi_adm_soon', 1_800_000_000)));
+    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, object('dp_adm_won', 'pi_adm_won', 1_700_000_000)));
+    await postStripeWebhook(event('charge.dispute.funds_reinstated', 2000, object('dp_adm_won', 'pi_adm_won', 1_700_000_000)));
+    await env.DB.prepare("UPDATE purchase_disputes SET evidence_error = 'Stripe did not answer' WHERE dispute_id = 'dp_adm_soon'").run();
+
+    const listed = await api('/auth/admin-purchase-disputes', adminSession());
+    expect(listed.response.status).toBe(200);
+    const ours = listed.body.disputes.filter((d) => d.disputeId.startsWith('dp_adm_'));
+    // Open first and soonest due first; the won one after them.
+    expect(ours.map((d) => d.disputeId)).toEqual(['dp_adm_soon', 'dp_adm_later', 'dp_adm_won']);
+    expect(ours[0]).toMatchObject({ purchaseId: soon.purchaseId, productName: 'Product adm-soon', outcome: 'open', evidenceSent: false, evidenceError: 'Stripe did not answer', amountCents: 10000 });
+    expect(ours[2].outcome).toBe('won');
+    expect(listed.body.limit).toBe(200);
+    expect(listed.body.totalCount).toBeGreaterThanOrEqual(3);
+    expect(later.purchaseId).not.toBe(won.purchaseId);
+
+    // Not a signed-out caller, not a plain person; the seller's own read never carries the error text.
+    expect((await api('/auth/admin-purchase-disputes')).response.status).toBe(401);
+    const person = await signupBuilder('adm-disputes-person');
+    expect((await api('/auth/admin-purchase-disputes', person.session())).response.status).toBe(403);
   });
 });

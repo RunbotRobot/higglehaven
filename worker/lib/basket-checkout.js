@@ -32,6 +32,12 @@ export function basketCheckoutEnabled(env) {
   return env.BASKET_CHECKOUT_ENABLED === 'true';
 }
 
+// GET /api/basket-config (#4664): public, no session. The one switch the checkout reads, as a boolean, so the client
+// draws nothing for a basket until it can be paid for ("a control is not drawn for a person it can only refuse").
+export function handleBasketConfig(env) {
+  return json({ checkoutEnabled: basketCheckoutEnabled(env) });
+}
+
 // POST /api/basket/checkout { shippingAddress?, expected?: { <instanceId>: <unitPriceCents> } }
 export async function handleBasketCheckout(request, env) {
   const db = env.DB;

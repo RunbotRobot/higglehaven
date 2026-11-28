@@ -17,6 +17,7 @@
   <button class="nav-item" data-panel="tax">Tax / 1099 e-filing</button>
   <button class="nav-item" data-panel="tax-education">Tax education content</button>
   <button class="nav-item" data-panel="purchases">Purchases (admin fallback)</button>
+  <button class="nav-item" data-panel="disputes">Disputes</button>
   <button class="nav-item" data-panel="flags">Trust &amp; Safety flags</button>
   <button class="nav-item" data-panel="accounts">Users &amp; suspension</button>
   <button class="nav-item" data-panel="video-jobs">Video-to-3D jobs</button>
@@ -250,6 +251,18 @@
     </div>
     <div id="purchasesTableWrap"></div>
   </section>
+  <section class="panel" id="panel-disputes">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/4648" target="_blank" rel="noopener">#4648</a> ·
+      <a href="https://github.com/RunbotRobot/higglehaven/issues/4651" target="_blank" rel="noopener">#4651</a></p>
+    <p class="sub">Stripe disputes on orders, open ones first, soonest due date first. A lost dispute is the withdrawal
+      standing; a won one counts the sale toward the seller's earnings again.</p>
+    <p class="sub" id="disputesStatusLine">Loading…</p>
+    <p class="err" id="disputesErrLine" hidden></p>
+    <div class="toolbar">
+      <button class="secondary" id="disputesRefreshBtn">Refresh</button>
+    </div>
+    <div id="disputesTableWrap"></div>
+  </section>
   <section class="panel" id="panel-flags">
     <p class="sub">Trust &amp; safety review queues. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2178" target="_blank" rel="noopener">#2178</a></p>
 
@@ -466,6 +479,7 @@
 <script src="/admin-dashboard-9.js"></script>
 <script src="/admin-dashboard-10.js"></script>
 <script src="/admin-dashboard-11.js"></script>
+<script src="/admin-dashboard-12.js"></script>
 <script src="/admin-tables.js"></script>
 </body>
 </html>

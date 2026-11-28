@@ -136,3 +136,24 @@ describe('basket lines (#4611)', () => {
     expect(left.n).toBe(0);
   });
 });
+
+describe('GET /api/basket-config (#4664)', () => {
+  it('is public and says whether a basket can be paid for, from the one switch the checkout reads', async () => {
+    const off = await api('/basket-config');
+    expect(off.response.status).toBe(200);
+    expect(off.body).toEqual({ checkoutEnabled: false });
+    env.BASKET_CHECKOUT_ENABLED = 'true';
+    try {
+      expect((await api('/basket-config')).body).toEqual({ checkoutEnabled: true });
+    } finally {
+      env.BASKET_CHECKOUT_ENABLED = undefined;
+    }
+    // Anything but the exact string "true" is off, as for the checkout itself.
+    env.BASKET_CHECKOUT_ENABLED = '1';
+    try {
+      expect((await api('/basket-config')).body).toEqual({ checkoutEnabled: false });
+    } finally {
+      env.BASKET_CHECKOUT_ENABLED = undefined;
+    }
+  });
+});

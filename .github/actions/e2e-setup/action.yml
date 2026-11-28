@@ -97,3 +97,7 @@ runs:
         # that only ever does anything when STRIPE_SECRET_KEY is also
         # unset, which is already always true in this job.
         echo "E2E_SIMULATE_PAID_PURCHASES=true" >> .dev.vars
+        # #4664: Add to basket and the Basket petal are drawn only while paying a basket is switched on, and the e2e
+        # files that tap them (shop-basket, shop-product-card-a11y, assistant-handbook-controls) need them drawn. No
+        # Stripe key is set in this job, so nothing can be charged either way.
+        echo "BASKET_CHECKOUT_ENABLED=true" >> .dev.vars
