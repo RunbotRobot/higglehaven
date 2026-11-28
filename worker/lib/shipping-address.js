@@ -107,8 +107,11 @@ export function shippingAddressFromRow(json) {
 // "not received" dispute about it. The in-app dispute closes at payout (7 days after shipping) but a card dispute does
 // not: the buyer's bank can open one for roughly 120 days, and what answers it is the address, carrier and tracking
 // number (Stripe's dispute evidence fields). So the copy is kept for one term after the order ships, sized to that window
-// plus time to respond, whether or not the sale has been paid out, and cleared at once for a refunded order (nothing
-// left to dispute). The order, its price and its tracking stay; only the address goes. (higglehaven1's rule, #4636.)
+// plus time to respond, whether or not the sale has been paid out, and cleared at once for an order refunded by the
+// seller or buyer (nothing left to dispute). A dispute withdrawal also marks the order refunded (stripe.js), but the
+// card dispute is then still being answered with this very address, so an order that has had a dispute event
+// (last_dispute_event_at) keeps it for the term like any other.
+// The order, its price and its tracking stay; only the address goes. (higglehaven1's rule, #4636.)
 export const ADDRESS_KEPT_AFTER_SHIPPING_DAYS = 180;
 
 // One statement, safe to run every ten minutes and to run twice: it only ever clears.
@@ -117,7 +120,7 @@ export async function clearSettledOrderAddresses(db, nowMs = Date.now()) {
   const result = await db.prepare(`
     UPDATE purchases SET shipping_address_json = NULL
     WHERE shipping_address_json IS NOT NULL
-      AND (refunded_at IS NOT NULL OR (shipped_at IS NOT NULL AND shipped_at < ?))
+      AND ((refunded_at IS NOT NULL AND last_dispute_event_at IS NULL) OR (shipped_at IS NOT NULL AND shipped_at < ?))
   `).bind(cutoff).run();
   return result.meta?.changes ?? 0;
 }
