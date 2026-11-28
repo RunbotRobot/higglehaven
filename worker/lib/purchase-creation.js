@@ -113,7 +113,7 @@ const STRIPE_STATUS_MAX_AGE_MS = 60 * 60 * 1000;
 // `beforeRouting` runs after the product checks and before the seller checks,
 // where the purchase reads its body, so a malformed body is refused at the same
 // point it always was.
-async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = null) {
+export async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = null) {
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) throw new HttpError('Instance not found', 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -376,7 +376,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
 // review-eligibility check (requires an exact buyer_label match) then
 // rejects every real reviewer unconditionally. input.buyerLabel still wins
 // when a caller does supply one (e.g. a test exercising a specific label).
-function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
+export function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
   // Capped as a sanity bound against a malformed/abusive request producing
   // an absurd totalCents (and the higgles-balance/land-cap credit that
