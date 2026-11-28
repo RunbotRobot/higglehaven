@@ -465,7 +465,8 @@ Someone who has added nothing sees "Your basket is empty. Tap a product in Shop 
 
 **If something goes wrong:**
 - The card has no "Add to basket" button: it is only there when "Buy" is, so the card's own line says why
-  (walk closer, out of stock, or not for sale).
+  (walk closer, out of stock, or not for sale). It is also not there, and the menu has no "Basket", while paying for a
+  basket is not open yet: say so, and offer "Buy" on the product's card instead.
 - "A basket holds up to 20 different items. Remove one to add another." means the basket is full.
 - Paying for a whole basket at once is not available yet. To buy something now, open its card and tap "Buy".
   Do not promise a date for it.
