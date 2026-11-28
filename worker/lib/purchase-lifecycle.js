@@ -113,7 +113,7 @@ async function handleMyPurchases(request, env, url) {
   }
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
-           p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
+           p.basket_order_id, p.shipped_at, p.shipping_carrier, p.tracking_number, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.shipping_address_json,
            p.product_name AS recorded_name, p.product_kind AS recorded_kind, p.seller_name AS recorded_seller_name,
            p.template_id, t.name AS live_name, s.label AS live_seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text,
@@ -146,6 +146,9 @@ async function handleMyPurchases(request, env, url) {
         isDigitalGood: !!row.is_digital_good,
         // #4599: the address this order was bought for, its own copy (null for a digital good or an older order).
         shippingAddress: shippingAddressFromRow(row.shipping_address_json),
+        // #4617: the lines of one basket payment share this id, so My purchases can show them as one order (null for an
+        // ordinary one-product purchase). Each line is still its own order for confirming, rating and refunding.
+        basketOrderId: row.basket_order_id || null,
         shippedAt: row.shipped_at,
         shippingCarrier: row.shipping_carrier, // #4600
         trackingNumber: row.tracking_number,

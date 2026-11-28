@@ -11,6 +11,14 @@ import {
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
+// #4617: the heading over the lines of one basket order ("One order · 3 products · $42.00"): the products counted by
+// line and the total of what was paid across them. Pure, so the wording is testable.
+export function basketHeadText(purchases) {
+  const count = purchases.length;
+  const total = purchases.reduce((sum, p) => sum + (p.totalCents || 0), 0);
+  return `One order · ${count} ${count === 1 ? 'product' : 'products'} · ${money(total)}`;
+}
+
 // #4599: the address an order was bought for, on one line, in the order it is read aloud. Null for a digital good or an
 // order made before addresses were asked for.
 export function shippingAddressLine(address) {
