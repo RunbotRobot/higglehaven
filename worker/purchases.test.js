@@ -624,7 +624,7 @@ describe('Simulated purchases', () => {
     // what the Seller modal's own "Sales" panel uses (a seller sees every
     // sale of their product, regardless of which builder's lándlet hosted
     // the instance that sold).
-    const byTemplate = await api('/purchases?templateId=purchase-list-template');
+    const byTemplate = await api('/purchases?templateId=purchase-list-template', adminSession()); // #4673: a seller-less product's sales are an admin's to read
     expect(byTemplate.response.status).toBe(200);
     expect(byTemplate.body.purchases).toHaveLength(2);
   });
@@ -652,7 +652,7 @@ describe('Simulated purchases', () => {
     expect(byBuilder.body.purchases).toHaveLength(100);
     expect(byBuilder.body.totalCount).toBe(105);
 
-    const byTemplate = await api('/purchases?templateId=purchase-count-template');
+    const byTemplate = await api('/purchases?templateId=purchase-count-template', adminSession()); // #4673: a seller-less product's sales are an admin's to read
     expect(byTemplate.body.purchases).toHaveLength(100);
     expect(byTemplate.body.totalCount).toBe(105);
   });
@@ -767,7 +767,7 @@ describe('Simulated purchases', () => {
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
 
-    const listing = await api(`/purchases?templateId=purchase-builder-deleted-template`);
+    const listing = await api(`/purchases?templateId=purchase-builder-deleted-template`, adminSession());
     expect(listing.response.status).toBe(200);
     expect(listing.body.purchases).toContainEqual(expect.objectContaining({ purchaseId, builderId: null }));
 

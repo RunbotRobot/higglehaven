@@ -281,13 +281,14 @@ export async function handlePurchases(request, env, route, url) {
       // per getOrCreateSellerForUser) -- a plain truthiness check here would
       // 403 this endpoint forever, for everyone, the same way #932/#934/#936/
       // #937 already found on this resource's other sibling handlers.
-      if (template.seller_id) {
-        if (await sellerExists(db, template.seller_id)) {
-          const sessionSeller = await requireSessionSeller(request, db);
-          assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your product');
-        } else {
-          await requireAdmin(request, db);
-        }
+      // #4673: a product with no seller at all (a seeded or fixture product) has nobody to ask, so like the dangling
+      // case it is an admin's to read: its orders carry each buyer's address and payment reference, and the route
+      // used to answer anyone for it.
+      if (template.seller_id && await sellerExists(db, template.seller_id)) {
+        const sessionSeller = await requireSessionSeller(request, db);
+        assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your product');
+      } else {
+        await requireAdmin(request, db);
       }
       const { results } = await db.prepare(`
         -- #4541: a product's Sales panel shows the newest 100 and says so; past 100 sales of one product the older
