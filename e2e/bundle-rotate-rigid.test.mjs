@@ -44,8 +44,7 @@ await page.waitForTimeout(800);
 const rotateEnabledGrouped = true;
 
 const before = await fetchInstances();
-await page.click('#toggle-multiselect'); // leaves multi-select: the bundle's ring is on
-await page.waitForTimeout(400);
+await page.waitForTimeout(400); // Bundle leaves multi-select itself (#4694): the bundle's ring is on
 const attached = await page.evaluate(() => window.__testRotateBundle('z', Math.PI / 2));
 console.log('bundle rotated 90 degrees about Z via the gizmo path (should be true):', attached);
 await page.waitForTimeout(1500);

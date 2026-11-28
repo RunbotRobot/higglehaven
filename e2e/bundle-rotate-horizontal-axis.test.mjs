@@ -35,7 +35,6 @@ await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 await page.click('#group-item');
 await page.waitForTimeout(800);
-await page.click('#toggle-multiselect'); // leaves multi-select: the bundle's ring is on
 await page.waitForTimeout(400);
 
 let allOk = true;
