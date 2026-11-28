@@ -41,6 +41,8 @@ const NOT_EXPORTED = {
   assistant_contacts: 'who they spoke to and when; derivable from the exported conversations',
   owned_avatar_purchases: 'idempotency plumbing; every field is on owned_avatars (#1985)',
   owned_animation_purchases: 'idempotency plumbing; every field is on owned_animations (#1985)',
+  basket_orders: 'payment bookkeeping for a basket (#4614); each line becomes an ordinary purchase, which the commerce export already carries',
+  basket_order_lines: 'snapshots of what a basket payment covered (#4614); each line becomes an ordinary purchase, which the commerce export already carries',
   products: 'the shared product row; a seller\'s own listings are exported as commerce.listings (catalog_templates)',
   closed_sellers: 'record of a closed seller account kept by the platform',
   builder_label_backfill_3142: 'a one-off migration table',
