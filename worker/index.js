@@ -3536,6 +3536,13 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
       DELETE FROM user_blocks WHERE (blocker_user_id = ? OR blocked_user_id = ?)
         AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, userId, ...guardBinds),
+    // #4636: the address copies on this person's orders go too once they have no job left (the order is shipped or
+    // refunded); one still to be shipped keeps its copy so the seller can send it, and the sweep clears it afterwards.
+    db.prepare(`
+      UPDATE purchases SET shipping_address_json = NULL
+      WHERE buyer_user_id = ? AND shipping_address_json IS NOT NULL AND (shipped_at IS NOT NULL OR refunded_at IS NOT NULL)
+        AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
     // #4598: the addresses a person ships to go with them (gated like the rest).
     db.prepare(`
       DELETE FROM user_addresses WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
