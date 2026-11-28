@@ -53,7 +53,7 @@ async function createTemplate(fields) {
   if (res.status !== 200 && res.status !== 201) throw new Error(`catalog template create failed (${res.status}): ${JSON.stringify(body)}`);
   return body.template.templateId;
 }
-const shippedTemplate = await createTemplate({ name: 'Shipped Crate', priceCents: 500 });
+const shippedTemplate = await createTemplate({ name: 'Shipped Crate', priceCents: 500, metadata: { shippingZones: ['us', 'ca'] } });
 
 const { body: buildersBody } = await pageFetchJson('/api/builders');
 const builder = buildersBody.builders.find((b) => b.label === LABEL);
@@ -98,6 +98,11 @@ await page.waitForSelector('#product-card-buy-btn.visible', { timeout: 8000 });
 await page.click('#product-card-buy-btn');
 await page.waitForSelector('#shipping-address-modal.visible', { timeout: 10000 });
 check((await page.locator('#confirm-modal.visible').count()) === 0, 'the address is asked before any confirmation');
+
+// #4601: a product sent to the United States and Canada offers those two countries and says so.
+check(/United States and Canada/.test(await page.textContent('#shipping-address-note')), 'the form says where the seller sends it');
+const offeredCountries = await page.evaluate(() => [...document.getElementById('shipping-address-country').options].filter((o) => !o.hidden).map((o) => o.value).sort());
+check(offeredCountries.join() === 'CA,US', `only the zones' countries are offered (got ${offeredCountries.join()})`);
 
 // An empty form says what is missing and stays open.
 await page.click('#shipping-address-continue-btn');

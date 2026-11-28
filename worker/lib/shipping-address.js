@@ -7,6 +7,7 @@
 // to that country. The client only shows.
 import { HttpError, ERROR_CODES } from './http.js';
 import { isKnownCountryCode } from './country-codes.js';
+import { shipsToCountry, shippingZonesOf, shippingPlaces } from '../../shared/shipping-zones.js';
 
 // Stripe keeps one metadata value to 500 characters, and the card path carries this address there from checkout to
 // finalize, so every field has a cap that keeps the whole JSON well under it (about 360 characters at the caps).
@@ -31,9 +32,13 @@ export function requiresShippingAddress(template) {
   return template.category !== 'avatar' && template.category !== 'animation';
 }
 
-export function templateShipsDomesticOnly(template) {
-  try { return JSON.parse(template.metadata_json || '{}').domesticOnly === true; } catch { return false; }
+function metadataOf(template) {
+  try { return JSON.parse(template.metadata_json || '{}') || {}; } catch { return {}; }
 }
+
+// #4601: the zones the seller sends this product to (a product that still has the old flag reads as the United States).
+export function templateShippingZones(template) { return shippingZonesOf(metadataOf(template)); }
+export function templateShippingPlaces(template) { return shippingPlaces(metadataOf(template)); }
 
 function clean(value) {
   // eslint-disable-next-line no-control-regex
@@ -72,8 +77,8 @@ export function parseShippingAddress(input) {
 export function shippingAddressForPurchase(template, input) {
   if (!requiresShippingAddress(template)) return null;
   const address = parseShippingAddress(input?.shippingAddress);
-  if (templateShipsDomesticOnly(template) && address.country !== 'US') {
-    throw new HttpError('The seller sends this product within the United States only, so it cannot be sent to that country. You were not charged.', 409, { code: ERROR_CODES.NOT_SHIPPABLE_THERE });
+  if (!shipsToCountry(metadataOf(template), address.country)) {
+    throw new HttpError(`The seller sends this product to ${templateShippingPlaces(template)}, so it cannot be sent to that country. You were not charged.`, 409, { code: ERROR_CODES.NOT_SHIPPABLE_THERE });
   }
   return address;
 }

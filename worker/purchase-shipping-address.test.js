@@ -91,12 +91,25 @@ describe('a shipped product is bought with an address (#4599)', () => {
   it('refuses a country the seller does not send to, before anything is written, and allows the United States', async () => {
     const { seller, instanceId, templateId } = await setup('domestic', { metadata: { domesticOnly: true } });
     const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());
-    expect(quote.body).toMatchObject({ requiresShippingAddress: true, domesticOnly: true });
+    expect(quote.body).toMatchObject({ requiresShippingAddress: true, shippingZones: ['us'], shippingPlaces: 'United States only' });
     const refused = await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'FR', region: '' } });
     expect(refused.response.status).toBe(409);
     expect(refused.body.code).toBe('not_shippable_there');
     expect(await orders(templateId)).toBe(0);
     expect((await buy(instanceId, seller, { shippingAddress: TEST_SHIPPING_ADDRESS })).response.status).toBe(201);
+  });
+
+  it('reads the zones: a Canada-and-Mexico product refuses the United States and France, and sends to Mexico (#4601)', async () => {
+    const { seller, instanceId, templateId } = await setup('zones', { metadata: { shippingZones: ['ca', 'mx'] } });
+    const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());
+    expect(quote.body).toMatchObject({ shippingZones: ['ca', 'mx'], shippingPlaces: 'Canada and Mexico' });
+    for (const country of ['US', 'FR']) {
+      const refused = await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country } });
+      expect(refused.response.status).toBe(409);
+      expect(refused.body.code).toBe('not_shippable_there');
+    }
+    expect(await orders(templateId)).toBe(0);
+    expect((await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'MX', region: '' } })).response.status).toBe(201);
   });
 
   it('never asks for an address for an avatar or an animation, or a product marked a digital good', async () => {

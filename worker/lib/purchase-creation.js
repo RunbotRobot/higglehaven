@@ -27,7 +27,7 @@
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
 import { refundAmountCents } from './purchase-record.js';
-import { requiresShippingAddress, templateShipsDomesticOnly, shippingAddressForPurchase } from './shipping-address.js'; // #4599
+import { requiresShippingAddress, templateShippingZones, templateShippingPlaces, shippingAddressForPurchase } from './shipping-address.js'; // #4599
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -268,7 +268,8 @@ export async function handleInstancePurchaseQuote(request, env, instanceId) {
     stockQuantity: template.stock_quantity ?? null,
     // #4599: the server says whether this product is shipped, so the client asks for an address only when it is.
     requiresShippingAddress: requiresShippingAddress(template),
-    domesticOnly: templateShipsDomesticOnly(template),
+    shippingZones: templateShippingZones(template),
+    shippingPlaces: templateShippingPlaces(template),
   });
 }
 

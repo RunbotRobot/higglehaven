@@ -5,6 +5,7 @@
 // the page is closed, so buying two things does not mean typing it twice.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { shippingCountryOptions } from './shippingCountries.js';
+import { shippingZoneOfCountry, SHIPPING_ZONE_IDS } from '../../shared/shipping-zones.js';
 
 const modalEl = document.getElementById('shipping-address-modal');
 const formEl = document.getElementById('shipping-address-form');
@@ -77,18 +78,21 @@ formEl.addEventListener('submit', (event) => {
 cancelBtn.addEventListener('click', () => close(null));
 
 // Resolves to the address as typed ({ name, line1, line2, city, region, postalCode, country }), or null when the
-// person closes the form. `domesticOnly`: the seller sends within the United States only, so that is the one country
-// offered and the form says so.
-export function promptShippingAddress({ domesticOnly = false } = {}) {
+// person closes the form. `zones`: the zones the seller sends to (#4601); only the countries in them are offered, and
+// when that is not everywhere the form says where it ships (`places`, in words).
+export function promptShippingAddress({ zones = SHIPPING_ZONE_IDS, places = '' } = {}) {
+  const restricted = zones.length < SHIPPING_ZONE_IDS.length;
+  const offered = (code) => zones.includes(shippingZoneOfCountry(code));
   buildCountries();
   return new Promise((resolve) => {
     resolveAsk = resolve;
     const start = lastAddress || { name: '', line1: '', line2: '', city: '', region: '', postalCode: '', country: 'US' };
     for (const [field, el] of Object.entries(FIELDS)) el.value = start[field] || '';
-    for (const option of countryEl.options) option.hidden = domesticOnly && option.value !== 'US';
-    countryEl.value = domesticOnly ? 'US' : start.country || 'US';
-    noteEl.hidden = !domesticOnly;
-    noteEl.textContent = domesticOnly ? 'The seller sends this within the United States only.' : '';
+    for (const option of countryEl.options) option.hidden = restricted && !offered(option.value);
+    const first = [...countryEl.options].find((option) => !option.hidden);
+    countryEl.value = offered(start.country || 'US') ? start.country || 'US' : first?.value || 'US';
+    noteEl.hidden = !restricted;
+    noteEl.textContent = restricted ? `The seller sends this to ${places}.` : '';
     errorEl.hidden = true;
     modalEl.classList.add('visible');
     openModalA11y(modalEl, () => close(null));
