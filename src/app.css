@@ -6165,6 +6165,17 @@
       .my-purchase-row {
         overflow-wrap: anywhere;
       }
+      .my-purchase-basket {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding-left: var(--space-sm);
+        border-left: 2px solid var(--pill-text-soft);
+      }
+      .my-purchase-basket-head {
+        font-size: var(--text-2xs);
+        color: var(--pill-text-soft);
+      }
       .my-purchase-name {
         font-weight: var(--weight-semibold);
       }
