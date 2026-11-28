@@ -413,7 +413,7 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
     .bind(`earnings-${crypto.randomUUID()}`, purchase.builder_id, creditBackCents, purchase.purchase_id).run();
   const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
   await fireNotification(db, purchase.builder_id,
-    `The dispute on "${template?.name || 'A product'}" went your way, so ${formatCents(creditBackCents)} is back in your higgles.`);
+    `The dispute on "${template?.name || 'A product'}" went your way, so ${formatCents(creditBackCents)} is back in your higgles.`, null, 'orders'); // #4498: a tap opens Orders
 }
 
 // #2247 (owner decision 2026-10-25, on the issue's own open question about
@@ -512,7 +512,7 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
     .bind(clawbackCents, purchase.builder_id).run();
   const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
   await fireNotification(db, purchase.builder_id,
-    `A sale of "${template?.name || 'A product'}" was refunded in part, so ${formatCents(clawbackCents)} comes off your higgles.`);
+    `A sale of "${template?.name || 'A product'}" was refunded in part, so ${formatCents(clawbackCents)} comes off your higgles.`, null, 'orders'); // #4498
 }
 
 // #556 (docs/SPEC.md §6): credit-card-type detection at signup, the

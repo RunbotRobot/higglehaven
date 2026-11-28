@@ -104,7 +104,7 @@ export async function retryMissingBasketTransfers(env, nowMs = Date.now()) {
           'SELECT b.builder_id FROM sellers s JOIN builders b ON b.user_id = s.user_id WHERE s.seller_id = ?',
         ).bind(sellerId).first();
         if (target?.builder_id) {
-          await fireNotification(db, target.builder_id, 'The payment for one of your sales has now been sent to your payout account.');
+          await fireNotification(db, target.builder_id, 'The payment for one of your sales has now been sent to your payout account.', null, 'orders'); // #4498
         }
       }
       retried += 1;

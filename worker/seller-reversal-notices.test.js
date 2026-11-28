@@ -244,5 +244,11 @@ describe('The hosting builder reads commission notices in plain words (#4500)', 
       expect(notice).not.toContain(' -- ');
       expect(notice).not.toMatch(/clawed|reinstated/);
     }
+    // #4498: these are about the hosting builder's sales, read from Orders, so a tap on each opens it.
+    for (const ctx of [partial, disputed, inApp]) {
+      const { results } = await env.DB.prepare("SELECT kind FROM notifications WHERE builder_id = ? AND message LIKE '%higgles.'").bind(ctx.buyerBuilderId).all();
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.every((row) => row.kind === 'orders')).toBe(true);
+    }
   });
 });
