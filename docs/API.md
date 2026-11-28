@@ -2418,6 +2418,15 @@ destructively deleted (the underlying `catalog_templates` row may not
 even exist anymore), or to un-revoke a `commission_holds` row — both
 remain a known, accepted residual gap tracked at #2235, since reinstating
 money is safe and mechanical while reinstating ownership isn't.
+**#4648** (Disputes 1/3): the same two events also keep the dispute itself, one row per Stripe dispute id in
+`purchase_disputes` (`migrations/0251_purchase_disputes.sql`: `dispute_id` UNIQUE, `purchase_id`, `reason`,
+`amount_cents`, `status`, `evidence_due_by`, `outcome` `open` or `won`, `last_event_at`, and `evidence_submitted_at` /
+`evidence_error` for the evidence piece, #4650). `data.object` is Stripe's Dispute, so no new event subscription is
+needed. A redelivered event is a no-op, an event older than the one the row holds changes nothing, and a stale event is
+dropped by the purchase's own `last_dispute_event_at` guard before it gets here. The write moves no money and a failure
+of it is logged and never stops the clawback or its reversal. A lost dispute needs no event: it is the withdrawal
+standing. (A basket order's lines share one PaymentIntent, #4614; this record points at the purchase the PaymentIntent
+id finds, and per-line disputes are #4616's.)
 **#2901**: a partial refund that happened *before* the dispute is a
 separate, already-settled event the buyer keeps permanently regardless of
 how the dispute resolves — `funds_withdrawn`'s own clawback already

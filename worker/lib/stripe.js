@@ -27,6 +27,7 @@ import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChan
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
+import { recordDisputeEvent } from './purchase-disputes.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { notifyPayoutSetupNeedsAttention } from './stripe-payout-notice.js';
 import { cardNotAcceptedMessage, CARD_ALREADY_USED_MESSAGE } from './card-refusal.js';
@@ -268,6 +269,11 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
        WHERE purchase_id = ? AND (last_dispute_event_at IS NULL OR last_dispute_event_at <= ?)`,
     ).bind(event.created, purchase.purchase_id, event.created).run();
     if (recorded.meta.changes === 0) return;
+  }
+  // #4648: the dispute itself, kept as its own record (a stale event never gets here, the guard above returned).
+  // Never in the way of the money handling below: it logs its own failure.
+  if (event.type === 'charge.dispute.funds_withdrawn' || event.type === 'charge.dispute.funds_reinstated') {
+    await recordDisputeEvent(db, purchase, event);
   }
 
   // #2419 (owner decision 2026-10-25): charge.dispute.funds_reinstated is

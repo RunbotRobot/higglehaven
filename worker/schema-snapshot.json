@@ -653,6 +653,19 @@
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "width_m": "REAL|1||0"
     },
+    "purchase_disputes": {
+      "amount_cents": "INTEGER|0||0",
+      "dispute_id": "TEXT|0||1",
+      "evidence_due_by": "TEXT|0||0",
+      "evidence_error": "TEXT|0||0",
+      "evidence_submitted_at": "TEXT|0||0",
+      "last_event_at": "INTEGER|0||0",
+      "opened_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "outcome": "TEXT|1|'open'|0",
+      "purchase_id": "TEXT|1||0",
+      "reason": "TEXT|0||0",
+      "status": "TEXT|0||0"
+    },
     "purchases": {
       "basket_line_no": "INTEGER|0||0",
       "basket_order_id": "TEXT|0||0",
@@ -1429,6 +1442,10 @@
     "index:idx_product_reviews_template_id": {
       "tbl": "product_reviews",
       "sql": "CREATE INDEX idx_product_reviews_template_id ON product_reviews(template_id, created_at)"
+    },
+    "index:idx_purchase_disputes_purchase": {
+      "tbl": "purchase_disputes",
+      "sql": "CREATE INDEX idx_purchase_disputes_purchase ON purchase_disputes(purchase_id)"
     },
     "index:idx_purchases_basket_order": {
       "tbl": "purchases",
