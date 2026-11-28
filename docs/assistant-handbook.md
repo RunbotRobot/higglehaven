@@ -428,10 +428,10 @@ shows under "My purchases".
   signed out; they sign in again from the menu and tap "Buy" again. "Verify your age and add a card before buying. You
   were not charged." means the adult check above is not finished.
 - "Where should it go?" says "Add a name." (or a street address, a city, a postal code, a state): the first line still
-  missing; they fill it in and tap "Continue". For a product a seller sends within the United States only, the window
-  says "The seller sends this within the United States only." and a purchase to another country is refused with
-  "The seller sends this product within the United States only, so it cannot be sent to that country. You were not
-  charged."
+  missing; they fill it in and tap "Continue". For a product the seller sends to some places only, the window
+  says "The seller sends this to" those places (for example "United States only"), offers only their countries, and
+  a purchase to another country is refused with "This product ships to United States only, so it cannot be sent to
+  that country. You were not charged." (with the seller's own places in place of "United States only").
 - "You already own this, so it was not bought again. You were not charged.": avatars and animations can only be bought
   once; it is in their purchases already.
 - "Your payment went through, but we couldn't finish your purchase yet. Tap "Finish purchase" to try again -- your card
@@ -1118,6 +1118,10 @@ lándlets are shown here.
    tap "Upload a model file I already have" under it, and choose the .glb or .fbx file with
    "Choose File" (up to 20MB). Tick "This is a digital good" only for things like an avatar or an
    art file that is delivered, not placed.
+   A product that is sent by post also has a row that reads "Ships worldwide". Tapping it opens one tick per
+   place (United States, Canada, Mexico, United Kingdom, European Union, Australia and New Zealand, Japan and
+   South Korea, Everywhere else) under "Untick any place you do not ship to."; at least one has to stay ticked
+   ("Choose at least one place this ships to."). A digital good has no such row.
 4. Tap "Generate model" for a video, or "Add product" for a file. The app shows a preview; this can
    take a moment, and a video takes a couple of minutes.
 5. The window is now called "Confirm dimensions". Set the product's real size with
