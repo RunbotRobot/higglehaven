@@ -77,18 +77,20 @@ formEl.addEventListener('submit', (event) => {
 cancelBtn.addEventListener('click', () => close(null));
 
 // Resolves to the address as typed ({ name, line1, line2, city, region, postalCode, country }), or null when the
-// person closes the form. `domesticOnly`: the seller sends within the United States only, so that is the one country
-// offered and the form says so.
-export function promptShippingAddress({ domesticOnly = false } = {}) {
+// person closes the form. `countries`: the country codes the seller sends this product to (null or absent: everywhere),
+// so only those are offered; `places` is the same in words, for the note ("United States only").
+export function promptShippingAddress({ countries = null, places = '' } = {}) {
   buildCountries();
+  const limited = Array.isArray(countries);
   return new Promise((resolve) => {
     resolveAsk = resolve;
     const start = lastAddress || { name: '', line1: '', line2: '', city: '', region: '', postalCode: '', country: 'US' };
     for (const [field, el] of Object.entries(FIELDS)) el.value = start[field] || '';
-    for (const option of countryEl.options) option.hidden = domesticOnly && option.value !== 'US';
-    countryEl.value = domesticOnly ? 'US' : start.country || 'US';
-    noteEl.hidden = !domesticOnly;
-    noteEl.textContent = domesticOnly ? 'The seller sends this within the United States only.' : '';
+    for (const option of countryEl.options) option.hidden = limited && !countries.includes(option.value);
+    const first = limited ? (countries.includes(start.country) ? start.country : countries[0] || '') : '';
+    countryEl.value = limited ? first : start.country || 'US';
+    noteEl.hidden = !limited;
+    noteEl.textContent = limited ? `The seller sends this to ${places || 'some countries only'}.` : '';
     errorEl.hidden = true;
     modalEl.classList.add('visible');
     openModalA11y(modalEl, () => close(null));

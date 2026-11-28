@@ -91,12 +91,37 @@ describe('a shipped product is bought with an address (#4599)', () => {
   it('refuses a country the seller does not send to, before anything is written, and allows the United States', async () => {
     const { seller, instanceId, templateId } = await setup('domestic', { metadata: { domesticOnly: true } });
     const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());
-    expect(quote.body).toMatchObject({ requiresShippingAddress: true, domesticOnly: true });
+    expect(quote.body).toMatchObject({ requiresShippingAddress: true, shippingPlaces: 'United States only' });
+    expect(quote.body.shippingCountries).toContain('US');
+    expect(quote.body.shippingCountries).not.toContain('FR');
     const refused = await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'FR', region: '' } });
     expect(refused.response.status).toBe(409);
     expect(refused.body.code).toBe('not_shippable_there');
     expect(await orders(templateId)).toBe(0);
     expect((await buy(instanceId, seller, { shippingAddress: TEST_SHIPPING_ADDRESS })).response.status).toBe(201);
+  });
+
+  // #4631: after migration 0248 a product's limits are `shippingZones`; the purchase used to read only the old flag.
+  it('refuses a buyer outside the zones a product ships to, and allows one inside them', async () => {
+    const { seller, instanceId, templateId } = await setup('zones', { metadata: { shippingZones: ['us', 'ca'] } });
+    const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());
+    expect(quote.body.shippingPlaces).toBe('United States and Canada');
+    expect(quote.body.shippingCountries).toEqual(expect.arrayContaining(['US', 'CA']));
+    expect(quote.body.shippingCountries).not.toContain('FR');
+    const refused = await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'FR', region: '' } });
+    expect(refused.response.status).toBe(409);
+    expect(refused.body.code).toBe('not_shippable_there');
+    expect(refused.body.error).toContain('ships to United States and Canada');
+    expect(refused.body.error).toContain('not charged');
+    expect(await orders(templateId)).toBe(0);
+    expect((await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'CA', region: 'ON' } })).response.status).toBe(201);
+  });
+
+  it('asks nothing of a product that ships everywhere: no country list in the quote, no refusal', async () => {
+    const { seller, instanceId } = await setup('worldwide');
+    const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());
+    expect(quote.body.shippingCountries).toBeNull();
+    expect((await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, country: 'FR', region: '' } })).response.status).toBe(201);
   });
 
   it('never asks for an address for an avatar or an animation, or a product marked a digital good', async () => {

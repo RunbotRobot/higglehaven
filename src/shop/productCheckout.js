@@ -381,7 +381,7 @@ export async function handleShopProductBuyClick() {
     let shippingAddress;
     if (quote.requiresShippingAddress) {
       productCardBuyButton().disabled = false;
-      shippingAddress = await promptShippingAddress({ domesticOnly: !!quote.domesticOnly });
+      shippingAddress = await promptShippingAddress({ countries: quote.shippingCountries, places: quote.shippingPlaces });
       if (!shippingAddress) return;
       productCardBuyButton().disabled = true;
     }
