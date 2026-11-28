@@ -8879,15 +8879,17 @@ good, an avatar or an animation) is bought with a `shippingAddress`:
 (`country` is an ISO 3166-1 alpha-2 code; `region` is required for `US`; field
 lengths are capped at 60/80/60/40/40/20). Without one, or with an incomplete one,
 the purchase is refused with `400` `shipping_address_required` or
-`shipping_address_invalid`; a product its seller ships only within the United
-States, bought for another country, is refused `409` `not_shippable_there`. All
+`shipping_address_invalid`; a product whose seller does not ship to the buyer's country (outside the zones in
+`metadata.shippingZones`, or the United States only for a product still carrying the old flag) is
+refused `409` `not_shippable_there` (#4631). All
 three are answered before any payment is created, and the message says nothing was
 charged. A digital good ignores the field. The order keeps its own copy
 (`purchases.shipping_address_json`), carried to the finalize step in the
 PaymentIntent's metadata on the card path, and `GET /api/purchases/mine` returns it
 to the buyer as `shippingAddress` (null for a digital good or an order made before
-this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`
-and `domesticOnly` so the client asks before it sends. Only the buyer reads it here;
+this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`,
+`shippingCountries` (the country codes it ships to, or `null` for everywhere) and `shippingPlaces`
+(the same in words) so the client asks, and offers only those countries, before it sends. Only the buyer reads it here;
 the seller's own view of it is #4600.
 
 Both fields are genuinely optional (unlike every other POST body in this
