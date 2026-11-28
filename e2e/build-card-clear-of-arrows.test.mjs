@@ -38,7 +38,39 @@ async function cardVersusArrows(label) {
   return read.side;
 }
 
+// #4624: the card's buttons are drawn small (28 and 32px) so the card stays small, but a finger just outside each still
+// lands on a card button, not on the card behind it: 3px above and below each action button, 5px outside Close. The four
+// action buttons wrap onto two rows, and where two rows meet the gap is shared between them, so a point there may belong to
+// the neighbour; what must never happen is a neighbour's tap area reaching into a drawn button (Delete stealing a tap from
+// Save bundle), so a point 1px inside every drawn edge must hit its own button.
+async function tapAreas(label) {
+  const misses = await page.evaluate(() => {
+    const out = [];
+    const actions = ['save-bundle-item', 'copy-item', 'delete-item', 'item-card-more-btn'];
+    const hit = (id, points, mayBe = [id]) => {
+      const b = document.getElementById(id);
+      if (!b || b.hidden || b.getClientRects().length === 0) { out.push(`${id} not shown`); return; }
+      const r = b.getBoundingClientRect();
+      for (const [name, x, y, own] of points(r)) {
+        const el = document.elementFromPoint(x, y);
+        const ok = own ? el === b : mayBe.includes(el?.id);
+        if (!ok) out.push(`${id} ${name} (${Math.round(x)},${Math.round(y)}) hit ${el?.id || el?.tagName}`);
+      }
+    };
+    for (const id of actions) {
+      hit(id, (r) => [
+        ['3px above', r.left + r.width / 2, r.top - 3, false], ['3px below', r.left + r.width / 2, r.bottom + 3, false],
+        ['1px inside the top', r.left + r.width / 2, r.top + 1, true], ['1px inside the bottom', r.left + r.width / 2, r.bottom - 1, true],
+      ], actions);
+    }
+    hit('item-card-close-btn', (r) => [['5px out the top', r.left + r.width / 2, r.top - 5, true], ['5px out the left', r.left - 5, r.top + r.height / 2, true]]);
+    return out;
+  });
+  check(misses.length === 0, `${label}: a finger just outside each card button lands on one, and none steals from another (${misses.join('; ')})`);
+}
+
 await placeTreeAt(640); // low on the screen: the card goes above
+await tapAreas('item low');
 const sideLow = await cardVersusArrows('item low');
 check(sideLow === 'above', `the card is above an item low on the screen (it is ${sideLow})`);
 

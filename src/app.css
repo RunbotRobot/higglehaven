@@ -7274,6 +7274,28 @@
         top: var(--space-xs);
         right: var(--space-xs);
       }
+      /* #4624: a finger hits at least 44px (docs/DESIGN.md) although the drawn buttons are 28 and 32px: the card must stay
+         small and clear of the item, so only the tap area grows, invisibly, behind each button. The four action buttons
+         grow up and down (they share a row, so sideways would overlap); Close grows all round. */
+      #item-card #save-bundle-item,
+      #item-card #copy-item,
+      #item-card #delete-item,
+      #item-card #item-card-more-btn {
+        position: relative;
+      }
+      #item-card #save-bundle-item::after,
+      #item-card #copy-item::after,
+      #item-card #delete-item::after,
+      #item-card #item-card-more-btn::after {
+        content: '';
+        position: absolute;
+        inset: -6px 0;
+      }
+      #item-card #item-card-close-btn::after {
+        content: '';
+        position: absolute;
+        inset: -8px;
+      }
       /* #3702: the showroom product card's own parts: the price line, the inline price field
          with its Save, and the status line. The shell, pointer and bloom are the shared
          .world-card rules; its text is selectable like every text surface. */
