@@ -4806,6 +4806,12 @@ groupBtn.addEventListener('click', async () => {
       }
       groupBtn.classList.add('pressed');
       setTimeout(() => groupBtn.classList.remove('pressed'), 150);
+      // #4694: the three items just became ONE bundle, and one item is chosen like any other, so the
+      // sweep-select mode ends here. Left on, the new bundle showed no rings or arrows and the multi-select
+      // card (a Brush slider, no Copy or Delete) until the builder found Tools > Multi-Select and turned
+      // it off, with nothing saying that was why ("In Build, the handles are on the thing and all of them
+      // at once", 2026-11-26).
+      exitMultiSelectMode();
     } catch (err) {
       console.error('Could not group selection:', err);
       showSelectionActionStatus(`Couldn't bundle these items. ${err.message || 'Try again.'}`);

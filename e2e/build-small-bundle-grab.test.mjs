@@ -32,7 +32,6 @@ await page.waitForTimeout(200);
 for (const p of positions) { await page.mouse.click(p.x, p.y); await page.waitForTimeout(150); }
 await page.click('#group-item');
 await page.waitForTimeout(800);
-await page.click('#toggle-multiselect');
 await page.waitForTimeout(400);
 const members = await page.evaluate(() => window.__testProductScreenPositions());
 await page.mouse.click(members[0].x, members[0].y);

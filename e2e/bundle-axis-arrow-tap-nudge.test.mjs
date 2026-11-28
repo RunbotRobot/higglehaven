@@ -58,7 +58,6 @@ await page.mouse.click(posB.x, posB.y);
 await page.waitForTimeout(300);
 await page.click('#group-item');
 await page.waitForTimeout(800);
-await page.click('#toggle-multiselect');
 await page.waitForTimeout(500);
 
 check((await arrows()).length === 6, 'a bundle wears the three axes with an arrow at each end');
