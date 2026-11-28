@@ -1801,6 +1801,15 @@ window.__testTapPersonByBuilderId = (builderId) => {
 // world (the standing line is about where she stands, not whether she is in view).
 window.__testOpenAssistant = (target) => openAssistantChat(target);
 
+// #4575: where each loaded product stands on screen in Shop, read by scripts/live-site.mjs's `product[:n]` step so a walk
+// can tap a product with a real touch (the Shop twin of Build's __testProductScreenPositions). Null for one behind the camera.
+window.__testShopProductScreenPositions = () => shopReviews.map((r) => {
+  const v = r.mesh.getWorldPosition(new THREE.Vector3()).project(camera);
+  if (v.z < -1 || v.z > 1) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  return { instanceId: r.mesh.userData.instanceId, x: rect.left + (v.x * 0.5 + 0.5) * rect.width, y: rect.top + (-v.y * 0.5 + 0.5) * rect.height };
+});
+
 window.__testTapShopProductByInstanceId = (instanceId) => {
   const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
   if (!review) return false;
