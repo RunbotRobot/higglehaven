@@ -107,6 +107,7 @@ import {
 // respect -- see that module's own header comment.
 import { pollNearbyChatIfNeeded } from './nearbyChat.js';
 import './nearbyLeaf.js'; // #3824: registers Shop's Nearby petal
+import './basketLeaf.js'; // #4612: registers Shop's Basket petal
 import { registerViewTurner } from './viewTurn.js';
 import { easedPitch, shouldLevelOnLanding, LANDING_LEVEL_PITCH, LANDING_LEVEL_EASE_S } from './landingLevel.js';
 import { yawFacing } from './nearbyProducts.js';

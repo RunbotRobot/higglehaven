@@ -19,15 +19,20 @@ export function basketLineFromRow(row) {
     // Only to name the line in a list; null once the item or its product is gone (the quote says what that means).
     templateId: row.template_id ?? null,
     productName: row.product_name ?? null,
+    // #4612: who sells it, so the leaf can group lines by seller. The seller's own name, as My purchases shows it.
+    sellerId: row.seller_id ?? null,
+    sellerName: row.seller_name ?? null,
   };
 }
 
 async function listFor(db, userId) {
   const { results } = await db.prepare(`
-    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name
+    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name,
+           ct.seller_id, s.label AS seller_name
     FROM basket_lines b
     LEFT JOIN placed_instances pi ON pi.instance_id = b.instance_id
     LEFT JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    LEFT JOIN sellers s ON s.seller_id = ct.seller_id
     WHERE b.user_id = ? ORDER BY b.added_at ASC, b.instance_id
   `).bind(userId).all();
   return results.map(basketLineFromRow);

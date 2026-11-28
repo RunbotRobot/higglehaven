@@ -30,6 +30,7 @@ export const MANUALS = [
     entries: [
       'How do I look at a product and read about it?',
       'How do I buy something?',
+      'How do I gather several things in a basket?',
       'Where are the things I bought, and how do I rate a seller?',
       'How do I leave a review for a product?',
       'What are the glowing orbs, and what if I hit the limit?',

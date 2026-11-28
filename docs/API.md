@@ -6097,9 +6097,9 @@ rate limit (60 per window).
 
 ### `GET /api/basket`
 
-`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName" }], "maxLines": 20,
-"maxQuantity": 1000 }`, oldest first. `templateId` and `productName` only name the line in a list; both are `null`
-when the item or its product is gone (the line is kept, never dropped silently).
+`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName", "sellerId", "sellerName" }], "maxLines": 20,
+"maxQuantity": 1000 }`, oldest first. `templateId`, `productName`, `sellerId` and `sellerName` only name the line in a list (the leaf groups by seller);
+they are `null` when the item, its product or its seller is gone (the line is kept, never dropped silently).
 
 ### `POST /api/basket`
 
