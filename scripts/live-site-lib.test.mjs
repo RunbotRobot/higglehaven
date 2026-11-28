@@ -42,6 +42,13 @@ describe('live-site steps (#3430)', () => {
     expect(parseStep('settings')).toEqual({ command: 'settings', args: [] });
   });
 
+  it('parses viewport:<w>:<h>, the phone with its keyboard open, and refuses nonsense (#4674)', () => {
+    expect(parseStep('viewport:390:480')).toEqual({ command: 'viewport', args: [390, 480] });
+    expect(() => parseStep('viewport:390')).toThrow(/needs 2 argument/);
+    expect(() => parseStep('viewport:10:10')).toThrow(/from 200 to 3000/);
+    expect(() => parseStep('viewport:390:abc')).toThrow(/from 200 to 3000/);
+  });
+
   it('parses type: a selector, then the text with its colons kept (#4572)', () => {
     expect(parseStep('type:#dm-input:hello')).toEqual({ command: 'type', args: ['#dm-input', 'hello'] });
     expect(parseStep('type:.box:see you at 5:30')).toEqual({ command: 'type', args: ['.box', 'see you at 5:30'] });

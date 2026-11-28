@@ -274,6 +274,16 @@ function parseStepWithoutBurst(token, command, args) {
       need(1);
       if (!MODES.includes(args[0])) throw new Error(`step "${token}": mode must be one of ${MODES.join(', ')}`);
       return { command, args: [args[0]] };
+    case 'viewport': {
+      // viewport:<w>:<h>: the window becomes that size, so a phone keyboard can be stood in for (viewport:390:480 is the
+      // 390x844 phone with its keyboard open) and a field being typed in can be checked for staying in view (#4674).
+      need(2);
+      const [w, h] = args.map(Number);
+      if (args.length !== 2 || !Number.isInteger(w) || !Number.isInteger(h) || w < 200 || h < 200 || w > 3000 || h > 3000) {
+        throw new Error(`step "${token}": viewport needs a width and a height in pixels from 200 to 3000 (viewport:390:480)`);
+      }
+      return { command, args: [w, h] };
+    }
     case 'wait':
       need(1);
       if (!(Number(args[0]) >= 0)) throw new Error(`step "${token}": milliseconds must be a number`);

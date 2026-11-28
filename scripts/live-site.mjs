@@ -57,6 +57,7 @@
 //                                         unfold or a bloom; slow:1 puts them back
 //   others                                the other people this page has drawn: afk, animState, playing clip (#4509)
 //   idle                                  wait until the network and frames settle
+//   viewport:<w>:<h>                      resize the window (viewport:390:480 is the phone with its keyboard open), #4674
 //   wait:<ms>                             wait
 //   key:<name>                            press one key, e.g. key:KeyN, key:Escape, key:Shift+KeyN
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
@@ -777,6 +778,10 @@ async function runStepAction(step, index) {
       return null;
     case 'idle':
       await settle();
+      return null;
+    case 'viewport':
+      await page.setViewportSize({ width: a, height: b });
+      await page.waitForTimeout(300);
       return null;
     case 'wait':
       await page.waitForTimeout(a);
