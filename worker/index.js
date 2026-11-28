@@ -3855,10 +3855,12 @@ async function exportCommunicationData(db, userId) {
   ).bind(userId).all();
   // #4611: the lines of the person's basket (an item and how many; the price is never stored on a line).
   const basketLines = await db.prepare(`
-    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name
+    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name,
+           ct.seller_id, s.label AS seller_name
     FROM basket_lines b
     LEFT JOIN placed_instances pi ON pi.instance_id = b.instance_id
     LEFT JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    LEFT JOIN sellers s ON s.seller_id = ct.seller_id
     WHERE b.user_id = ? ORDER BY b.added_at ASC, b.instance_id
   `).bind(userId).all();
   const blocks = await db.prepare(`
