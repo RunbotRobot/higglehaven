@@ -126,7 +126,7 @@ async function lineRecorded(db, paymentIntentId, lineNo) {
 async function recordBasketLine(env, order, line, paymentIntent, shippingAddressJson) {
   const db = env.DB;
   const existing = await lineRecorded(db, paymentIntent.id, line.line_no);
-  if (existing) return existing;
+  if (existing) return { row: existing, deliveryConfirmUrl: null };
   const amounts = {
     quantity: line.quantity,
     buyerLabel: line.buyer_label || null,
@@ -143,13 +143,17 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(line.instance_id).first();
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(line.template_id).first();
   const builderId = instance && template ? await resolveFinalizeBuilderId(db, { builderId: line.landlet_owner_builder_id }) : null;
+  let deliveryConfirmUrl = null;
   try {
     if (instance && template && builderId) {
-      await writePurchaseRow(
+      // The raw delivery-confirmation token exists only in this response (only its hash is stored), so it is read here
+      // and handed to the buyer once, exactly as a one-product purchase does.
+      const written = await writePurchaseRow(
         env, instance, template, { owner_builder_id: builderId }, amounts, paymentIntent.id, isDigitalGood, order.buyer_builder_id,
         !!line.is_avatar_category, `basket:${order.basket_order_id}:${line.line_no}`, !!line.is_animation_category, true,
         addressForLine, basket,
       );
+      deliveryConfirmUrl = (await written.clone().json().catch(() => null))?.deliveryConfirmUrl ?? null;
     } else {
       await writeOrphanedPurchaseRow(env, {
         instanceId: line.instance_id, templateId: line.template_id, builderId: line.landlet_owner_builder_id || '',
@@ -162,7 +166,7 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
     const winner = await lineRecorded(db, paymentIntent.id, line.line_no);
     if (!winner) throw error;
   }
-  return lineRecorded(db, paymentIntent.id, line.line_no);
+  return { row: await lineRecorded(db, paymentIntent.id, line.line_no), deliveryConfirmUrl };
 }
 
 // One Transfer per seller, out of this charge, for the sellers' share (price minus the commission) of their lines that
@@ -257,7 +261,11 @@ export async function finalizeBasketPaymentIntent(env, paymentIntent) {
     throw new HttpError('This payment does not match its order.', 400);
   }
   const shippingAddressJson = paymentIntent.metadata?.shippingAddress || null;
-  for (const line of lines) await recordBasketLine(env, order, line, paymentIntent, shippingAddressJson);
+  const deliveryConfirmUrls = [];
+  for (const line of lines) {
+    const { row, deliveryConfirmUrl } = await recordBasketLine(env, order, line, paymentIntent, shippingAddressJson);
+    if (deliveryConfirmUrl && row) deliveryConfirmUrls.push({ purchaseId: row.purchase_id, productName: line.product_name, url: deliveryConfirmUrl });
+  }
   await transferSellerShares(env, order, paymentIntent);
   const firstFinalize = await markBasketOrderPaid(env, order.basket_order_id);
   // What was bought leaves the basket; anything added since stays.
@@ -269,5 +277,7 @@ export async function finalizeBasketPaymentIntent(env, paymentIntent) {
   if (firstFinalize) {
     try { await sendBasketReceipt(env, order, results); } catch (error) { console.error('basket: receipt email failed', order.basket_order_id, error); }
   }
-  return json({ basketOrderId: order.basket_order_id, purchases: results.map(purchaseFromRow) });
+  // deliveryConfirmUrls: one per physical line recorded by THIS call (a line recorded earlier by the webhook has its link
+  // lost, as for a one-product purchase; the buyer confirms from My purchases).
+  return json({ basketOrderId: order.basket_order_id, purchases: results.map(purchaseFromRow), deliveryConfirmUrls });
 }

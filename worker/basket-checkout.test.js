@@ -112,6 +112,10 @@ describe('paying a basket (#4614)', () => {
         basketOrderId: started.body.basketOrderId, shippingAddress: JSON.stringify(TEST_SHIPPING_ADDRESS) } };
       const first = await finalizeSucceededPaymentIntent(env, pi);
       expect(first.status).toBe(200);
+      const firstBody = await first.json();
+      // Both products are physical, so each line's one-time delivery link comes back once, and only from the call that recorded it.
+      expect(firstBody.deliveryConfirmUrls).toHaveLength(2);
+      expect(firstBody.deliveryConfirmUrls.every((d) => d.url.includes('confirmDelivery='))).toBe(true);
       await finalizeSucceededPaymentIntent(env, pi); // the webhook arriving after the buyer's own call
       const { results: rows } = await env.DB.prepare('SELECT * FROM purchases WHERE basket_order_id = ? ORDER BY basket_line_no').bind(started.body.basketOrderId).all();
       expect(rows.map((r) => r.basket_line_no)).toEqual([1, 2]);

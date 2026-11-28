@@ -306,6 +306,13 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
   });
 }
 
+// #4666 slice 2: the same sheet, card form, stages and retry rules Buy uses, for a basket's one payment ("One model, not
+// a hybrid"). Resolves with finalizePurchase's answer (purchases and one delivery link per physical line); rejects when
+// the person cancels, with the same 'Checkout cancelled.' message Buy's flow uses.
+export function runBasketCheckoutFlow(intent, { totalCents }) {
+  return runCheckoutFlow(intent, { name: 'Your basket', totalCents });
+}
+
 // #3116: e2e-only hook (same window.__test* convention as the other hooks in
 // this file) -- runs the real checkout modal directly, so a test can drive
 // the charged-but-not-finalized path with a stubbed Stripe and finalize

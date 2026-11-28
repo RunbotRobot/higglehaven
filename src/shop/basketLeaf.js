@@ -3,15 +3,19 @@
 // change), draws nothing until it is opened, and the server holds every rule (caps, what a line is); this only shows
 // what the server answers. #4666 slice 1: the leaf also asks for the server's quote (#4613) and shows each line's
 // price, a plain sentence for any line that cannot be bought, each seller's shipping when above zero, and the total.
-// Paying (#4614) is a later slice, so there is no Pay button yet.
+// Slice 2 adds the Pay button: it opens the same payment sheet Buy uses for the basket's one payment.
 import { addBudPetals, openLeaf } from '../ui/bud.js';
-import { fetchBasket, fetchBasketQuote, addToBasket, setBasketQuantity, removeFromBasket } from '../api.js';
+import { fetchBasket, fetchBasketQuote, addToBasket, setBasketQuantity, removeFromBasket, startBasketCheckout } from '../api.js';
 import { emptyState, EMPTY_COPY } from '../ui/emptyState.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { groupBasketLines } from './basketGroups.js';
 import { statusSentence, quoteLinesByInstance, expectedPrices, sellerTotals } from './basketQuote.js';
 import { formatPriceCents } from '../main.js';
 import { loadBasketConfig } from './basketConfig.js';
+import { promptShippingAddress } from './shippingAddressModal.js';
+import { runBasketCheckoutFlow } from './productCheckout.js';
+import { showNotice } from '../ui/noticeModal.js';
+import { refreshOwnedAfterPurchase } from './productCard.js';
 
 function button(label, ariaLabel, onClick) {
   const btn = document.createElement('button');
@@ -65,6 +69,69 @@ function lineRow(line, { maxQuantity, onChange, quoteLine, onAccept }) {
   controls.append(less, quantity, more, remove);
   row.append(name, ...notes, controls);
   return row;
+}
+
+// What the delivery links of a paid basket say: one line per physical item, shown once because the server keeps only a
+// hash of each link, so a person who closes this loses them (the same rule as a single purchase's link).
+function deliveryLinksText(links) {
+  return links.map((link) => `${link.productName || 'Your order'}: ${link.url}`).join('\n');
+}
+
+// "Pay $X": disabled with its reason beside it while the quote says some line cannot be bought (each line already says
+// why), otherwise one tap asks for an address when anything is shipped, then opens the payment sheet. Money is shown as
+// moved only after the server's finalize answers; a refusal redraws the quote with each line's own status.
+function payControl(quote, repaint) {
+  const wrap = document.createElement('div');
+  wrap.className = 'basket-pay';
+  const pay = button(`Pay ${formatPriceCents(quote.totals.totalCents)}`, `Pay ${formatPriceCents(quote.totals.totalCents)} for your basket`, () => run());
+  pay.classList.add('basket-pay-button');
+  pay.disabled = !quote.payable;
+  wrap.append(pay);
+  if (!quote.payable) {
+    const why = document.createElement('p');
+    why.className = 'orders-note basket-pay-reason';
+    why.textContent = 'Fix the items marked above, then you can pay.';
+    wrap.append(why);
+  }
+  async function run() {
+    pay.disabled = true;
+    let paymentStarted = false;
+    try {
+      let shippingAddress;
+      if (quote.lines.some((line) => line.requiresShippingAddress)) {
+        pay.disabled = false;
+        shippingAddress = await promptShippingAddress();
+        if (!shippingAddress) return;
+        pay.disabled = true;
+      }
+      const expected = Object.fromEntries(expectedPrices(quote));
+      const intent = await startBasketCheckout({ expected, shippingAddress });
+      paymentStarted = true; // from here a card can be charged, so "you were not charged" is no longer ours to say
+      const finalized = await runBasketCheckoutFlow(intent, { totalCents: intent.totalCents });
+      refreshOwnedAfterPurchase();
+      const links = finalized.deliveryConfirmUrls || [];
+      if (links.length) {
+        await showNotice({
+          title: 'Purchase complete',
+          message: 'Once you receive each item, confirm delivery with its link so the seller gets paid. They are shown only once, so copy them now.',
+          copyText: deliveryLinksText(links),
+          returnFocusEl: pay,
+        });
+      }
+    } catch (err) {
+      if (err.message !== 'Checkout cancelled.') {
+        await showNotice({
+          title: err.chargedClosed ? 'Your payment went through' : "Payment didn't go through",
+          message: (!paymentStarted && err.body?.lines ? err.serverMessage : err.message) || "Couldn't complete this payment.",
+          returnFocusEl: pay,
+        });
+      }
+    } finally {
+      pay.disabled = false;
+      repaint();
+    }
+  }
+  return wrap;
 }
 
 export function openBasketLeaf() {
@@ -132,6 +199,7 @@ export function openBasketLeaf() {
       total.className = 'orders-note basket-total';
       total.textContent = `Total ${formatPriceCents(quote.totals.totalCents)}`;
       list.append(total);
+      list.append(payControl(quote, () => paint(body)));
     }
     body.replaceChildren(list);
   }
