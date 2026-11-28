@@ -987,7 +987,8 @@ on all of them; and a drag that starts on any chosen item moves all of them toge
 
 1. Select two or more items (see the entry above).
 2. Tap "Bundle" on the card that opens beside them. They become one thing: one box around them,
-   moved and turned together.
+   moved and turned together. Choosing several items ends when you tap "Bundle", so the new bundle
+   has its rings and arrows on it at once.
 3. To keep it for later, tap "Save bundle", give it a name, choose whether
    "Anyone can place this bundle" or "Only you can place this bundle", and tap
    "Save".
