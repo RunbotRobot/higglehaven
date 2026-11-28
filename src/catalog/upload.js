@@ -56,6 +56,7 @@ import {
   MAX_MONEY_CENTS,
 } from '../main.js';
 import { refreshSellerShowcase } from '../sell/showcase.js';
+import { SHIPPING_ZONES, shippingPlaces } from '../../shared/shipping-zones.js';
 // #2558: closeCatalogPicker/buildCatalogPickerButtons now live in
 // src/catalog/picker.js (extracted after this module) rather than main.js.
 import { closeCatalogPicker, buildCatalogPickerButtons } from './picker.js';
@@ -156,7 +157,47 @@ uploadAnimationCategoryCheckbox.addEventListener('change', () => {
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
+  uploadShippingDetailsEl.hidden = uploadDigitalGoodCheckbox.checked; // #4601: a digital good has no shipping
 });
+
+// #4601 (part of #4394): where a physical product ships, one tick per zone, all ticked by default (the permissive
+// default, stored as nothing). Asked on the step that holds the price and the digital-good tick, and checked
+// before the person can leave it.
+const uploadShippingDetailsEl = document.getElementById('upload-shipping-details');
+const uploadShippingSummaryEl = document.getElementById('upload-shipping-summary');
+const uploadShippingZonesEl = document.getElementById('upload-shipping-zones');
+const uploadShippingBoxes = new Map();
+for (const zone of SHIPPING_ZONES) {
+  const label = document.createElement('label');
+  label.className = 'upload-shipping-zone';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.value = zone.id;
+  box.checked = true;
+  box.addEventListener('change', refreshUploadShippingSummary);
+  label.append(box, document.createTextNode(zone.label));
+  uploadShippingZonesEl.appendChild(label);
+  uploadShippingBoxes.set(zone.id, box);
+}
+function chosenUploadShippingZones() {
+  return SHIPPING_ZONES.filter((zone) => uploadShippingBoxes.get(zone.id).checked).map((zone) => zone.id);
+}
+function refreshUploadShippingSummary() {
+  const chosen = chosenUploadShippingZones();
+  uploadShippingSummaryEl.textContent = chosen.length === 0 ? 'Choose where it ships' : `Ships ${shippingPlaces({ shippingZones: chosen })}`;
+}
+function resetUploadShipping() {
+  for (const box of uploadShippingBoxes.values()) box.checked = true;
+  uploadShippingDetailsEl.open = false;
+  uploadShippingDetailsEl.hidden = false;
+  refreshUploadShippingSummary();
+}
+// The refusal, on the step that holds the choice (null when fine): a physical product ships somewhere.
+function uploadShippingProblem() {
+  if (uploadDigitalGoodCheckbox.checked || chosenUploadShippingZones().length > 0) return null;
+  uploadShippingDetailsEl.open = true;
+  return 'Choose at least one place this ships to.';
+}
 // N50: reformat to "$123.45" once the seller leaves the field — leave a
 // blank or not-yet-valid value alone so the submit-time check below still
 // catches it and reports the same error message.
@@ -418,6 +459,7 @@ function openUploadModal() {
   uploadDigitalGoodCheckbox.checked = false;
   uploadDigitalGoodDisclaimerLabel.hidden = true;
   uploadDigitalGoodDisclaimerSelect.value = 'gift-card';
+  resetUploadShipping();
   uploadFileInput.value = '';
   uploadVideoInput.value = '';
   refreshUploadVideoRecordLabel();
@@ -766,6 +808,11 @@ async function handleUploadFileStep() {
     return;
   }
   if (validateUploadPrice() === null) return;
+  const shippingProblem = uploadShippingProblem();
+  if (shippingProblem) {
+    setUploadStatus(shippingProblem, true);
+    return;
+  }
   const file = uploadFileInput.files[0];
   if (!file) {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
@@ -1049,6 +1096,11 @@ async function handleUploadVideoStep() {
     return;
   }
   if (validateUploadPrice() === null) return;
+  const shippingProblem = uploadShippingProblem();
+  if (shippingProblem) {
+    setUploadStatus(shippingProblem, true);
+    return;
+  }
   const videoFile = uploadVideoInput.files[0];
   if (!videoFile) {
     setUploadStatus(uploadDeviceHasCamera ? 'Record a video first.' : 'Choose a video first.', true);
@@ -1152,6 +1204,10 @@ async function handleUploadDimensionsStep() {
     const metadata = {};
     if (uploadDigitalGoodCheckbox.checked) {
       metadata.digitalGoodDisclaimer = uploadDigitalGoodDisclaimerSelect.value;
+    } else if (!uploadAvatarCategoryCheckbox.checked && !uploadAnimationCategoryCheckbox.checked) {
+      // #4601: all zones ticked is stored as nothing; an avatar or an animation is digital and has no shipping.
+      const zones = chosenUploadShippingZones();
+      if (zones.length < SHIPPING_ZONES.length) metadata.shippingZones = zones;
     }
     const template = await createCatalogTemplate({
       name,

@@ -75,6 +75,11 @@ await page.waitForTimeout(150);
 await page.keyboard.up('KeyD');
 await page.waitForTimeout(100);
 
+// E2E_SHOT_DIR=<dir> saves a still at each stage (for a PR description).
+const shot = async (name) => {
+  if (process.env.E2E_SHOT_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOT_DIR, `ship-address-${name}.png`) });
+};
+
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 const modalOpen = () => page.locator('#shipping-address-modal.visible').count();
@@ -98,6 +103,7 @@ check((await page.locator('#confirm-modal.visible').count()) === 0, 'the address
 await page.click('#shipping-address-continue-btn');
 await page.waitForTimeout(200);
 check((await modalOpen()) === 1, 'an incomplete form stays open');
+await shot('empty-refused');
 check(/name/i.test(await page.textContent('#shipping-address-error')), 'it says the first thing missing');
 
 // Cancel buys nothing and leaves the card open.
@@ -115,6 +121,7 @@ await page.fill('#shipping-address-line1', '12 Orchard Lane');
 await page.fill('#shipping-address-city', 'Portland');
 await page.fill('#shipping-address-region', 'OR');
 await page.fill('#shipping-address-postal', '97201');
+await shot('filled');
 await page.click('#shipping-address-continue-btn');
 await page.waitForSelector('#confirm-modal.visible', { timeout: 10000 });
 await page.click('#confirm-modal-confirm-btn');

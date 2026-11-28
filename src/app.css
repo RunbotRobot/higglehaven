@@ -3396,6 +3396,20 @@
         align-items: center;
         gap: 8px !important;
       }
+      /* #4601: where a physical product ships. A native disclosure, closed it is one line. */
+      #upload-shipping-details > summary {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+      }
+      .upload-shipping-zone {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+        min-height: 44px;
+      }
       /* #3940: the one field look. */
       #upload-digital-good-disclaimer-select {
         min-height: 44px;
@@ -3666,6 +3680,16 @@
       #shipping-address-error { color: var(--danger-text); }
       #shipping-address-note[hidden], #shipping-address-error[hidden] { display: none; }
       #shipping-address-actions { display: flex; justify-content: flex-end; }
+      /* #4573 walk: the button wore the browser's own look; it is the same primary pill as the confirm sheet's. */
+      #shipping-address-continue-btn {
+        padding: var(--space-sm) var(--space-2xl);
+        border-radius: var(--radius-pill);
+        border: none;
+        background: var(--brand-green);
+        color: var(--ink);
+        font: var(--text-md)/var(--leading-normal) var(--font-sans);
+        min-height: 44px;
+      }
       /* #3783: the wordmark picker (My lándlets > Wordmark). Same shell as the name modal; the name is drawn in
          every option so the choice is made by looking at it. */
       #wordmark-modal {
@@ -7324,6 +7348,28 @@
         position: absolute;
         top: var(--space-xs);
         right: var(--space-xs);
+      }
+      /* #4624: a finger hits at least 44px (docs/DESIGN.md) although the drawn buttons are 28 and 32px: the card must stay
+         small and clear of the item, so only the tap area grows, invisibly, behind each button. The four action buttons
+         grow up and down (they share a row, so sideways would overlap); Close grows all round. */
+      #item-card #save-bundle-item,
+      #item-card #copy-item,
+      #item-card #delete-item,
+      #item-card #item-card-more-btn {
+        position: relative;
+      }
+      #item-card #save-bundle-item::after,
+      #item-card #copy-item::after,
+      #item-card #delete-item::after,
+      #item-card #item-card-more-btn::after {
+        content: '';
+        position: absolute;
+        inset: -6px 0;
+      }
+      #item-card #item-card-close-btn::after {
+        content: '';
+        position: absolute;
+        inset: -8px;
       }
       /* #3702: the showroom product card's own parts: the price line, the inline price field
          with its Save, and the status line. The shell, pointer and bloom are the shared
