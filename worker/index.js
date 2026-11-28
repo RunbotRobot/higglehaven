@@ -178,6 +178,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
+import { sweepBaskets } from './lib/basket-sweeps.js'; // #4615
 import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
@@ -572,6 +573,11 @@ export default {
     // #4636: an order's address copy is cleared once it has no job left (paid out, refunded, or shipped long ago).
     ctx.waitUntil(clearSettledOrderAddresses(env.DB).catch((error) => {
       console.error('clearSettledOrderAddresses failed', error);
+    }));
+    // #4615: a basket whose payment succeeded but was never finished is finished; one nobody paid in a day is closed;
+    // a seller's share that could not be transferred is sent once they can be paid.
+    ctx.waitUntil(sweepBaskets(env).catch((error) => {
+      console.error('sweepBaskets failed', error);
     }));
     // #3447: assistant conversations are kept no longer than nearby chat.
     ctx.waitUntil(pruneStaleAssistantChat(env.DB).catch((error) => {

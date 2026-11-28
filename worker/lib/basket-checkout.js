@@ -164,7 +164,7 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
 // harmless. A line already refunded is left out (its refund took the buyer's money back before the seller was paid).
 // A seller who was suspended or closed between the payment and now is not paid: their lines are refunded whole to the
 // buyer instead (#4616), so nobody pays a seller the platform has stopped.
-async function transferSellerShares(env, order, paymentIntent) {
+export async function transferSellerShares(env, order, paymentIntent) {
   const db = env.DB;
   const { results: standing } = await db.prepare(`
     SELECT * FROM purchases

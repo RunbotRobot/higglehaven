@@ -6195,6 +6195,17 @@ commission share is not reversed. A `charge.dispute.*` event on the shared charg
 `charge.refunded` event for a basket payment is only logged, because this app records each refund itself. A seller who is
 suspended or closed before the Transfer has their lines refunded whole to the buyer and receives no Transfer.
 
+**Sweeps on the cron (#4615, `worker/lib/basket-sweeps.js`).** Two jobs keep a paid basket from being lost; both only
+finish or close what Stripe already says and both are idempotent. (1) A `pending` order older than 15 minutes is looked up
+at Stripe: a succeeded payment is finalized now (a lost webhook, or a Transfer that failed and was never retried); a
+cancelled one closes the order; one nobody paid within a day is cancelled at Stripe and the order set to `cancelled`, as is
+an order whose payment was never created. A payment that succeeded is never cancelled, however old. A Stripe failure
+leaves the order pending for the next run, and one order's failure never stops the others (25 per run). (2) A paid
+order's line whose seller's share has no Transfer yet (the seller had no payout account when it was paid) is retried
+once the seller has one, and the seller gets the notice "The payment for one of your sales has now been sent to your
+payout account." once, for the lines whose Transfer it made. A refunded line does not trigger a retry, and a seller suspended or closed
+in the meantime has the line refunded whole by the same transfer step (#4616) and is not told it was sent.
+
 ## Shipping destination (#4602)
 
 `GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
