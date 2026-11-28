@@ -2121,12 +2121,23 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel, expec
 // `purchase` rather than folded into it since it's this ONE checkout's
 // own one-time credential, not a durable field of the purchase record.
 export async function finalizePurchase(paymentIntentId) {
-  const { purchase, deliveryConfirmUrl } = await requestJson('/purchases/finalize', {
+  const { purchase, deliveryConfirmUrl, purchases, deliveryConfirmUrls } = await requestJson('/purchases/finalize', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ paymentIntentId }),
   });
-  return { purchase, deliveryConfirmUrl };
+  // #4666: a basket payment answers `purchases` and one delivery link per physical line instead of `purchase`.
+  return { purchase, deliveryConfirmUrl, purchases, deliveryConfirmUrls };
+}
+
+// #4666 slice 2: starts the one card payment for the whole basket (POST /api/basket/checkout, #4614). `expected` is
+// { <instanceId>: <unitPriceCents> } of what the person last saw; a refusal is a 409 whose body carries `lines`.
+export async function startBasketCheckout({ expected, shippingAddress }) {
+  return requestJson('/basket/checkout', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ expected, ...(shippingAddress ? { shippingAddress } : {}) }),
+  });
 }
 
 // The list is capped at 100 rows server-side (no pagination) — totalCount
