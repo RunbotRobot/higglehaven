@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderEmail, verifyEmailMessage, passwordResetMessage, soldOutMessage } from './email-layout.js';
+import { renderEmail, verifyEmailMessage, passwordResetMessage, soldOutMessage, basketReceiptMessage } from './email-layout.js';
 
 // #3877: every email a person can receive, rendered and read the way a person reads it.
 const URL_A = 'https://higglehaven.com/?verifyEmail=abc123';
@@ -56,5 +56,21 @@ describe('the emails', () => {
     const { html } = renderEmail({ heading: 'a<b', paragraphs: ['<i>'], action: { label: '<x>', url: 'https://e.com/?a=1&b=2' }, footnote: '"' });
     expect(html).not.toMatch(/<b[ >]|<i>|<x>/);
     expect(html).toContain('a=1&amp;b=2');
+  });
+});
+
+describe('basketReceiptMessage (#4617)', () => {
+  it('names each seller with what was bought from them, then the total, and escapes names', () => {
+    const m = basketReceiptMessage([
+      { sellerName: 'Shop A', lines: [{ name: 'Lamp', quantity: 1, totalCents: 1000 }] },
+      { sellerName: 'Shop <B>', lines: [{ name: 'Rug', quantity: 2, totalCents: 2500 }] },
+    ], 3500);
+    expect(m.subject).toBe('Your higglehaven order');
+    expect(m.text).toContain('From Shop A: Lamp × 1 ($10.00).');
+    expect(m.text).toContain('From Shop <B>: Rug × 2 ($25.00).');
+    expect(m.text).toContain('Total paid: $35.00.');
+    expect(m.text).toContain('2 products from 2 sellers');
+    expect(m.html).toContain('Shop &lt;B&gt;');
+    expect(m.html).not.toContain('Shop <B>');
   });
 });

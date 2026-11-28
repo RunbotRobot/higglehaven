@@ -40,17 +40,23 @@ async function world(tag) {
 
 function mockStripe() {
   const calls = [];
+  const emails = []; // #4617: what the mail provider was asked to send
   const originalFetch = globalThis.fetch;
   env.STRIPE_SECRET_KEY = 'test-stripe-key';
+  env.RESEND_API_KEY = 'test-resend-key';
   globalThis.fetch = async (input, init) => {
     const url = String(typeof input === 'string' ? input : input.url);
+    if (url.includes('api.resend.com')) {
+      emails.push(JSON.parse(String(init?.body || '{}')));
+      return new Response('{}', { status: 200 });
+    }
     if (!url.includes('stripe.com')) return originalFetch(input, init);
     const path = url.split('/v1/')[1];
     calls.push({ path, body: new URLSearchParams(String(init?.body || '')) });
     const body = path === 'payment_intents' ? { id: `pi_bk_${crypto.randomUUID()}`, client_secret: 'cs_bk' } : { id: `tr_${calls.length}` };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   };
-  return { calls, restore() { globalThis.fetch = originalFetch; env.STRIPE_SECRET_KEY = undefined; } };
+  return { calls, emails, restore() { globalThis.fetch = originalFetch; env.STRIPE_SECRET_KEY = undefined; env.RESEND_API_KEY = undefined; } };
 }
 
 const checkout = (who, body = { shippingAddress: TEST_SHIPPING_ADDRESS }) =>
@@ -120,6 +126,11 @@ describe('paying a basket (#4614)', () => {
       expect(new Set(rows.map((r) => r.seller_id))).toEqual(new Set(sellers.map((s) => s.sellerId)));
       expect((await env.DB.prepare('SELECT status FROM basket_orders WHERE basket_order_id = ?').bind(started.body.basketOrderId).first()).status).toBe('paid');
       expect((await api('/basket', buyer.session())).body.lines).toHaveLength(0);
+      // #4617: one receipt for the whole basket, sent once however often finalize runs, naming each seller and the total.
+      expect(stripe.emails).toHaveLength(1);
+      expect(stripe.emails[0].subject).toBe('Your higglehaven order');
+      expect(stripe.emails[0].text).toContain('Total paid: $35.00.');
+      expect(stripe.emails[0].text.match(/From /g)).toHaveLength(2);
     } finally { stripe.restore(); }
   });
 

@@ -83,3 +83,25 @@ export function soldOutMessage(productName, count) {
   });
   return { subject: `"${productName}" just sold out`, html: rendered.html, text: rendered.text, line };
 }
+
+const emailMoney = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+// #4617: one receipt for a basket that held products from several sellers: a line per seller naming what was bought
+// from them, then the total. `sections`: [{ sellerName, lines: [{ name, quantity, totalCents }] }].
+export function basketReceiptMessage(sections, totalCents) {
+  const count = sections.reduce((n, section) => n + section.lines.length, 0);
+  const paragraphs = sections.map((section) => {
+    const items = section.lines.map((l) => `${l.name} × ${l.quantity} (${emailMoney(l.totalCents)})`).join(', ');
+    return `From ${section.sellerName}: ${items}.`;
+  });
+  paragraphs.push(`Total paid: ${emailMoney(totalCents)}.`);
+  const heading = `Your order: ${count} ${count === 1 ? 'product' : 'products'} from ${sections.length} ${sections.length === 1 ? 'seller' : 'sellers'}`;
+  return {
+    subject: 'Your higglehaven order',
+    ...renderEmail({
+      heading,
+      paragraphs,
+      footnote: 'Each seller sends their own part. Find every order under My purchases.',
+    }),
+  };
+}
