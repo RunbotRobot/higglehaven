@@ -757,6 +757,9 @@ function renderSellerList() {
       const nextMetadata = { ...template.metadata };
       if (digitalGoodCheckbox.checked) {
         nextMetadata.digitalGoodDisclaimer = digitalGoodSelect.value;
+        // #4601: a digital good has no shipping settings; none are kept.
+        delete nextMetadata.shippingZones;
+        delete nextMetadata.domesticOnly;
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
@@ -766,6 +769,7 @@ function renderSellerList() {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
         refreshDigitalGoodText();
+        syncShippingForDigital();
         digitalGoodStatus.textContent = 'Saved.';
       } catch (err) {
         digitalGoodStatus.textContent = err.message || 'Couldn\'t save.';
@@ -952,6 +956,15 @@ function renderSellerList() {
       domesticOnlyToggle.textContent = `Edit shipping ${domesticOnlyPanel.hidden ? '▾' : '▴'}`;
       if (!domesticOnlyPanel.hidden) syncZoneCheckboxes();
     });
+
+    // #4601: a digital good (the disclaimer, or an avatar or animation listing) has no shipping settings at all.
+    function syncShippingForDigital() {
+      const digital = !!template.metadata?.digitalGoodDisclaimer || template.category === 'avatar' || template.category === 'animation';
+      domesticOnlyText.hidden = digital;
+      domesticOnlyToggle.hidden = digital;
+      if (digital) domesticOnlyPanel.hidden = true;
+    }
+    syncShippingForDigital();
 
     // Edit size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
