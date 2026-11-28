@@ -1407,7 +1407,8 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
 // so they are NOT part of purchaseFromRow (which also feeds the lándlet host's list); the seller's and the buyer's own
 // routes add them with this.
 export function trackingFromRow(row) {
-  return { shippingCarrier: row.shipping_carrier ?? null, trackingNumber: row.tracking_number ?? null };
+  return { shippingCarrier: row.shipping_carrier ?? null, trackingNumber: row.tracking_number ?? null,
+    addressClearedAt: row.shipping_address_cleared_at ?? null }; // #4636: when the order's address copy was removed
 }
 
 export function purchaseFromRow(row) {

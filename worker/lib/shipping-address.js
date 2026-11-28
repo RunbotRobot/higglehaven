@@ -119,7 +119,7 @@ export const ADDRESS_KEPT_AFTER_SHIPPING_DAYS = 180;
 export async function clearSettledOrderAddresses(db, nowMs = Date.now()) {
   const cutoff = new Date(nowMs - ADDRESS_KEPT_AFTER_SHIPPING_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const result = await db.prepare(`
-    UPDATE purchases SET shipping_address_json = NULL
+    UPDATE purchases SET shipping_address_json = NULL, shipping_address_cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE shipping_address_json IS NOT NULL
       AND ((refunded_at IS NOT NULL AND last_dispute_event_at IS NULL) OR (shipped_at IS NOT NULL AND shipped_at < ?))
       -- #4636/#4648: a dispute still open on the order is being answered with this very address, so it stays until the
