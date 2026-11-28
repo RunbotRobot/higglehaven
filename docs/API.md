@@ -823,6 +823,8 @@ here, `commerce` and `social` below. A "Download my data" Settings UI
 }
 ```
 
+Each `purchasesAsBuyer` entry also carries the order's own `shippingAddress` (#4599; null for a digital good or an order made before addresses were asked for): it is the buyer's own personal data.
+
 Unlike `social` below, always an object, never `null` — empty arrays
 throughout when the account has no builder profile, since none of these
 tables have a `user_id` column of their own to fall back to (every one
@@ -6123,6 +6125,39 @@ Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when th
 Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
 them as `communication.basketLines`.
 
+### `GET /api/basket/quote` (#4613)
+
+What paying the basket would do, without doing it: nothing is created and no card is touched. Needs a verified session
+(the same gate as `GET /api/instances/:id/purchase-quote`) and shares its `basket-quote` rate limit (60 per window).
+Every line is judged by the same function Buy uses (`resolvePurchaseTarget`), so a basket and a Buy cannot disagree,
+and each comes back with a `status` of its own; **no line is ever dropped silently**:
+
+```json
+{
+  "lines": [{ "instanceId", "quantity", "productName", "sellerId", "unitPriceCents", "lineTotalCents",
+              "commissionCents", "paysWithCard", "requiresShippingAddress", "status": "ok" }],
+  "sellers": [{ "sellerId", "goodsCents", "commissionCents", "shippingCents", "lineCount" }],
+  "totals": { "goodsCents", "shippingCents", "totalCents" },
+  "payable": true
+}
+```
+
+`status` is `ok`, `price_changed` (with `previousUnitPriceCents` and the new `unitPriceCents`), `sold_out`,
+`seller_not_selling` (the seller is suspended), `not_for_sale` (delisted, hidden pending review, no price, a test model,
+or its lándlet owner is suspended), `seller_not_ready` (the seller cannot be paid yet), `already_owned` (an avatar or an
+animation the person has), `item_gone` (no longer on a lándlet) or `cannot_buy`; a line that cannot be bought carries the
+refusal's `code` and `message` instead of prices. `?expected=<instanceId>:<unitPriceCents>` (repeatable, up to 20) says
+what price the person last saw, so a line whose live price differs is `price_changed`, as in Buy's own check (#4456).
+Totals, `sellers` and commission cover only the `ok` lines; `payable` is true when the basket has lines and every one is
+`ok`. Commission is the single purchase's own math (`computePurchaseAmounts`), per line, so a basket is the sum of the
+purchases it replaces.
+
+**Shipping** is per seller, never netted across sellers: each item pays its per-item amount, except that every item after
+the first pays its "each additional item" amount when the seller set one; the first item is the one with the largest
+per-item amount, so the order things were added never changes the price (`combinedShippingCents`, with the three worked
+examples of #4604's design as tests). Until a seller can set a cost per zone (#4603) every amount is zero, so
+`shippingCents` is `0` today.
+
 ## Shipping destination (#4602)
 
 `GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
@@ -8879,15 +8914,17 @@ good, an avatar or an animation) is bought with a `shippingAddress`:
 (`country` is an ISO 3166-1 alpha-2 code; `region` is required for `US`; field
 lengths are capped at 60/80/60/40/40/20). Without one, or with an incomplete one,
 the purchase is refused with `400` `shipping_address_required` or
-`shipping_address_invalid`; a product its seller ships only within the United
-States, bought for another country, is refused `409` `not_shippable_there`. All
+`shipping_address_invalid`; a product whose seller does not ship to the buyer's country (outside the zones in
+`metadata.shippingZones`, or the United States only for a product still carrying the old flag) is
+refused `409` `not_shippable_there` (#4631). All
 three are answered before any payment is created, and the message says nothing was
 charged. A digital good ignores the field. The order keeps its own copy
 (`purchases.shipping_address_json`), carried to the finalize step in the
 PaymentIntent's metadata on the card path, and `GET /api/purchases/mine` returns it
 to the buyer as `shippingAddress` (null for a digital good or an order made before
-this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`
-and `domesticOnly` so the client asks before it sends. Only the buyer reads it here;
+this). `GET /api/instances/:instanceId/purchase-quote` adds `requiresShippingAddress`,
+`shippingCountries` (the country codes it ships to, or `null` for everywhere) and `shippingPlaces`
+(the same in words) so the client asks, and offers only those countries, before it sends. Only the buyer reads it here;
 the seller's own view of it is #4600.
 
 Both fields are genuinely optional (unlike every other POST body in this

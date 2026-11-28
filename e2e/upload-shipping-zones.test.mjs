@@ -64,10 +64,35 @@ const { templates } = await page.evaluate(async () => (await fetch('/api/catalog
 const stored = templates.find((t) => t.name === PRODUCT);
 console.log('stored metadata.shippingZones (should be ["us","ca"]):', JSON.stringify(stored?.metadata?.shippingZones));
 
+// The same product in Sell's row: the panel opens on what was stored, and ticking everything again clears it.
+const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT });
+await row().locator('.seller-row-toggle').click();
+await page.waitForTimeout(300);
+const rowLine = (await row().locator('.seller-row-domestic-only').textContent())?.trim();
+console.log('the row says where it ships (should be "Ships: United States and Canada"):', rowLine);
+await row().locator('.seller-more-settings-toggle').click();
+await row().locator('button', { hasText: 'Edit shipping' }).click();
+await page.waitForTimeout(300);
+const ticked = await row().locator('.seller-shipping-zone-label input:checked').evaluateAll((boxes) => boxes.map((box) => box.value));
+console.log('the panel opens on the stored zones (should be ["us","ca"]):', JSON.stringify(ticked));
+for (const box of await row().locator('.seller-shipping-zone-label input').all()) await box.check();
+await row().locator('button', { hasText: 'Save shipping' }).click();
+await page.waitForFunction(
+  () => Array.from(document.querySelectorAll('.seller-domestic-only-status')).some((el) => el.textContent === 'Saved.'),
+  null,
+  { timeout: 30000 },
+);
+const afterAll = (await page.evaluate(async () => (await fetch('/api/catalog?limit=100')).json())).templates.find((t) => t.name === PRODUCT);
+console.log('ticking every zone stores nothing (should be undefined):', afterAll?.metadata?.shippingZones);
+const rowLineAfter = (await row().locator('.seller-row-domestic-only').textContent())?.trim();
+console.log('and the row reads (should be "Ships: worldwide"):', rowLineAfter);
+
 const pass = summaryAtFirst === 'Ships worldwide' && zoneBoxesHiddenAtFirst && allZonesTicked
   && hiddenForDigital && backForPhysical
   && /at least one place/.test(refusal ?? '') && stillOnFirstStep
   && summaryTwo === 'Ships United States and Canada'
   && JSON.stringify(stored?.metadata?.shippingZones) === '["us","ca"]'
+  && rowLine === 'Ships: United States and Canada' && JSON.stringify(ticked) === '["us","ca"]'
+  && afterAll?.metadata?.shippingZones === undefined && rowLineAfter === 'Ships: worldwide'
   && errors.length === 0;
 await finish(browser, { pass, label: '#4601: the upload wizard asks where a physical product ships, once, and refuses none', errors });

@@ -27,7 +27,7 @@
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
 import { refundAmountCents } from './purchase-record.js';
-import { requiresShippingAddress, templateShipsDomesticOnly, shippingAddressForPurchase } from './shipping-address.js'; // #4599
+import { requiresShippingAddress, shippingCountriesOf, shippingPlacesOf, shippingAddressForPurchase } from './shipping-address.js'; // #4599
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -113,7 +113,7 @@ const STRIPE_STATUS_MAX_AGE_MS = 60 * 60 * 1000;
 // `beforeRouting` runs after the product checks and before the seller checks,
 // where the purchase reads its body, so a malformed body is refused at the same
 // point it always was.
-async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = null) {
+export async function resolvePurchaseTarget(env, db, user, instanceId, beforeRouting = null) {
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) throw new HttpError('Instance not found', 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -268,7 +268,9 @@ export async function handleInstancePurchaseQuote(request, env, instanceId) {
     stockQuantity: template.stock_quantity ?? null,
     // #4599: the server says whether this product is shipped, so the client asks for an address only when it is.
     requiresShippingAddress: requiresShippingAddress(template),
-    domesticOnly: templateShipsDomesticOnly(template),
+    // #4631: where it goes, so the form offers only those countries (null: everywhere) and says so in words.
+    shippingCountries: shippingCountriesOf(template),
+    shippingPlaces: shippingPlacesOf(template),
   });
 }
 
@@ -375,7 +377,7 @@ export async function handleInstancePurchase(request, env, instanceId) {
 // review-eligibility check (requires an exact buyer_label match) then
 // rejects every real reviewer unconditionally. input.buyerLabel still wins
 // when a caller does supply one (e.g. a test exercising a specific label).
-function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
+export function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
   // Capped as a sanity bound against a malformed/abusive request producing
   // an absurd totalCents (and the higgles-balance/land-cap credit that
@@ -995,7 +997,7 @@ function purchaseContentMatches(existingRow, templateId, amounts) {
     && existingRow.total_cents === amounts.totalCents;
 }
 
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false, shippingAddressJson = null) {
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false, shippingAddressJson = null, basket = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -1118,7 +1120,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id,
-         product_name, product_kind, seller_name, shipping_address_json)
+         product_name, product_kind, seller_name, shipping_address_json, basket_order_id, basket_line_no)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
       -- #3195: likewise the buyer's account id, so a buyer's purchase history
@@ -1132,12 +1134,15 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         (SELECT category FROM catalog_templates WHERE template_id = ?),
         (SELECT label FROM sellers WHERE seller_id = ?),
         -- #4599: the address this order was bought for, its own copy.
-        ?)
+        ?,
+        -- #4614: the basket order and line this purchase came from (NULL outside a basket).
+        ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash, template.seller_id, buyerBuilderStillExists ? buyerBuilderId : null,
-      template.template_id, template.template_id, template.seller_id, shippingAddressJson),
+      template.template_id, template.template_id, template.seller_id, shippingAddressJson,
+      basket?.basketOrderId ?? null, basket?.lineNo ?? null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- see writeOrphanedPurchaseRow's own identical block

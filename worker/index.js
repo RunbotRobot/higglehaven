@@ -116,6 +116,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // siblings this leaf doesn't own).
 import { createD1Timing } from './lib/d1-timing.js';
 import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './lib/purchase-creation.js';
+import { shippingAddressFromRow, clearSettledOrderAddresses } from './lib/shipping-address.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
 // /api/purchases dispatcher itself, extracted into
@@ -176,6 +177,7 @@ import {
 import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
+import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -566,6 +568,10 @@ export default {
     ctx.waitUntil(pruneStaleNearbyChatMessages(env.DB).catch((error) => {
       console.error('pruneStaleNearbyChatMessages failed', error);
     }));
+    // #4636: an order's address copy is cleared once it has no job left (paid out, refunded, or shipped long ago).
+    ctx.waitUntil(clearSettledOrderAddresses(env.DB).catch((error) => {
+      console.error('clearSettledOrderAddresses failed', error);
+    }));
     // #3447: assistant conversations are kept no longer than nearby chat.
     ctx.waitUntil(pruneStaleAssistantChat(env.DB).catch((error) => {
       console.error('pruneStaleAssistantChat failed', error);
@@ -794,6 +800,10 @@ async function handleApi(request, env, url, ctx) {
   }
 
   // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.
+  // #4613 (Basket 3/7): the read-only quote of that basket, before the lines routes so `quote` is never an instance id.
+  if (route[0] === 'basket' && route[1] === 'quote' && route.length === 2 && request.method === 'GET') {
+    return handleBasketQuote(request, env);
+  }
   if (route[0] === 'basket') {
     return handleBasket(request, env.DB, route);
   }
@@ -4120,7 +4130,7 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
   `).bind(builderId).all();
 
   return {
-    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row) })), // #4600: the buyer's own order reads its tracking
+    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json) })), // #4600: the buyer's own order reads its tracking; the address is the buyer's own personal data (the right to see what is held about them)
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     videoGenerationJobs: videoGenerationJobs.results.map((row) => ({

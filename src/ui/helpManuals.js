@@ -31,6 +31,7 @@ export const MANUALS = [
       'How do I look at a product and read about it?',
       'How do I buy something?',
       'How do I gather several things in a basket?',
+      'How do I keep a shipping address?',
       'Where are the things I bought, and how do I rate a seller?',
       'How do I leave a review for a product?',
       'What are the glowing orbs, and what if I hit the limit?',
@@ -63,6 +64,7 @@ export const MANUALS = [
       'How do I find, change the price of, or rename one of my products?',
       'How do I take a product off sale, and what do buyers keep?',
       'Where do I set up payouts and tax forms?',
+      'Where do I see what I have sold, and mark something shipped?',
     ],
   },
 ];
