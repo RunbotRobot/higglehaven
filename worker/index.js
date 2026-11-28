@@ -116,6 +116,7 @@ import { handleAssistant } from './lib/assistant-shift.js';
 // siblings this leaf doesn't own).
 import { createD1Timing } from './lib/d1-timing.js';
 import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './lib/purchase-creation.js';
+import { shippingAddressFromRow } from './lib/shipping-address.js';
 // #2615: the purchase lifecycle actions domain (mark-shipped, confirm-
 // delivery, refund, buyer-initiated dispute auto-resolve) and the
 // /api/purchases dispatcher itself, extracted into
@@ -4099,7 +4100,7 @@ async function exportCommerceData(db, builderRow, userId, sellerId) {
   `).bind(builderId).all();
 
   return {
-    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row) })), // #4600: the buyer's own order reads its tracking
+    purchasesAsBuyer: purchasesAsBuyer.results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json) })), // #4600: the buyer's own order reads its tracking; the address is the buyer's own personal data (the right to see what is held about them)
     ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
     videoGenerationJobs: videoGenerationJobs.results.map((row) => ({

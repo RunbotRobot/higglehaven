@@ -823,6 +823,8 @@ here, `commerce` and `social` below. A "Download my data" Settings UI
 }
 ```
 
+Each `purchasesAsBuyer` entry also carries the order's own `shippingAddress` (#4599; null for a digital good or an order made before addresses were asked for): it is the buyer's own personal data.
+
 Unlike `social` below, always an object, never `null` — empty arrays
 throughout when the account has no builder profile, since none of these
 tables have a `user_id` column of their own to fall back to (every one
