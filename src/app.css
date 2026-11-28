@@ -3680,6 +3680,11 @@
       #shipping-address-error { color: var(--danger-text); }
       #shipping-address-note[hidden], #shipping-address-error[hidden] { display: none; }
       #shipping-address-actions { display: flex; justify-content: flex-end; }
+      /* #4674: the chooser of kept addresses sits like the other fields; the keep tick is one quiet line. */
+      #shipping-address-saved { width: 100%; }
+      #shipping-address-form #shipping-address-save-label { display: flex; flex-direction: row; align-items: center; gap: var(--space-sm); font-size: var(--text-sm); }
+      #shipping-address-form #shipping-address-save-label input { width: auto; flex: none; }
+      #shipping-address-form #shipping-address-save-label[hidden], #shipping-address-form #shipping-address-saved-label[hidden] { display: none; }
       /* #4573 walk: the button wore the browser's own look; it is the same primary pill as the confirm sheet's. */
       #shipping-address-continue-btn {
         padding: var(--space-sm) var(--space-2xl);

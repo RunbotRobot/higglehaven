@@ -132,4 +132,21 @@ const mine = (await pageFetchJson('/api/purchases/mine')).body?.purchases || [];
 check(mine.length === 1, 'one order was made');
 check(mine[0]?.shippingAddress?.line1 === '12 Orchard Lane' && mine[0]?.shippingAddress?.country === 'US', 'the order keeps the address it was bought with');
 
+// #4674: the address typed at checkout was kept on the account (the box is ticked when none is kept yet), and the next
+// Buy offers it: the form opens filled in with a chooser of kept addresses.
+const kept = (await pageFetchJson('/api/addresses')).body?.addresses || [];
+check(kept.length === 1 && kept[0].line1 === '12 Orchard Lane', 'the address typed at checkout is kept on the account');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(600);
+await page.evaluate((id) => window.__testTapShopProductByInstanceId(id), SHIPPED_ID);
+await page.waitForSelector('#product-card-buy-btn.visible', { timeout: 8000 });
+await page.waitForFunction(() => !document.getElementById('product-card-buy-btn').disabled, null, { timeout: 8000 });
+await page.click('#product-card-buy-btn');
+await page.waitForSelector('#shipping-address-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#shipping-address-saved-label:not([hidden])', { timeout: 8000 });
+check((await page.inputValue('#shipping-address-name')) === 'Ship Tester', 'the next Buy opens with the kept address filled in');
+check((await page.inputValue('#shipping-address-line1')) === '12 Orchard Lane', 'including the street');
+await shot('kept-address');
+await page.click('#shipping-address-cancel-btn');
+
 await finish(browser, { pass, label: '#4599: Buy on a shipped product asks for an address, and the order keeps it', errors });
