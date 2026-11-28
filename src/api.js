@@ -2294,6 +2294,16 @@ export function closeAssistantQuestion() {
   return jsonPost('/assistant-chat/question/close');
 }
 
+// #4690: report a product as counterfeit or prohibited. The server holds every rule (one flag per account per listing, the
+// rate limit, the weighting, the auto-hide); the answer is only "recorded" or an error whose message says why.
+export async function reportProduct(templateId, reason) {
+  await requestJson(`/catalog/${encodeURIComponent(templateId)}/flags`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
+}
+
 // #2956: parity with sendVoiceReport below -- mute itself is purely local/
 // client-side (src/shop/nearbyChat.js) and never calls the server at all.
 export async function sendNearbyChatReport({ reportedBuilderId, reason }) {

@@ -7106,6 +7106,10 @@
       #product-card-return-policy-btn {
         display: none;
       }
+      /* #4690: Report this product is offered whenever More is (no range gate: a person can report what they see). */
+      #product-card-report-btn {
+        display: inline-block;
+      }
       #product-card-review-btn.visible,
       #product-card-return-policy-btn.visible {
         display: inline-block;
