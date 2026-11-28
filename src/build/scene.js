@@ -2789,24 +2789,30 @@ async function applySnapshotLocally(snapshot) {
 
 async function undo() {
   if (undoStack.length === 0 || !beginSceneMutation()) return;
+  let done = false;
   try {
     const previous = undoStack.pop();
     redoStack.push(captureSnapshot());
     await restoreSnapshot(previous);
+    done = true;
   } finally {
     endSceneMutation();
   }
+  if (done) announceBuild('Undone.'); // #4574: the live region was left on the last nudge sentence
 }
 
 async function redo() {
   if (redoStack.length === 0 || !beginSceneMutation()) return;
+  let done = false;
   try {
     const next = redoStack.pop();
     undoStack.push(captureSnapshot());
     await restoreSnapshot(next);
+    done = true;
   } finally {
     endSceneMutation();
   }
+  if (done) announceBuild('Redone.');
 }
 
 undoBtn.addEventListener('click', undo);
@@ -6057,14 +6063,27 @@ window.addEventListener('keydown', (event) => {
     canUndo: usable(undoBtn),
     canRedo: usable(redoBtn),
   });
-  if (!action) return;
+  if (!action) {
+    // #4574: Ctrl+Z or Ctrl+Y with nothing to undo or redo did nothing and said nothing; a screen reader hears why.
+    const wanted = sceneMutationBusy ? null : buildEditKeyAction(event, { canUndo: true, canRedo: true });
+    if (wanted === 'undo' && undoStack.length === 0) announceBuild('Nothing to undo.');
+    else if (wanted === 'redo' && redoStack.length === 0) announceBuild('Nothing to redo.');
+    return;
+  }
   event.preventDefault(); // Backspace would otherwise go back a page, Ctrl+Z reach the browser
   ({ delete: deleteBtn, undo: undoBtn, redo: redoBtn })[action].click();
 });
 // #4162 (leaf 4 of #4158): Shift with the arrows, Page Up and Page Down, Q and E moves and turns the one
 // selected item, a step per press like the card's Nudge pad (same pipeline, same limits and messages).
 let lastItemKeyAt = 0;
-let itemKeyAnnounceFlip = false;
+let announceFlip = false;
+// Says one sentence in Build's live region for a screen reader. The same sentence twice in a row is not read again,
+// so every other call carries an invisible mark. (#4162 for the item keys, #4574 for Undo and Redo.)
+function announceBuild(sentence) {
+  if (!buildSelectStatusEl) return;
+  announceFlip = !announceFlip;
+  buildSelectStatusEl.textContent = sentence + (announceFlip ? '\u200b' : '');
+}
 function turnSelectedItem(degrees, axis = 'z') {
   if (selectedMeshes.size !== 1 || measureMode || sceneMutationBusy) return;
   const [mesh] = selectedMeshes;
@@ -6087,11 +6106,7 @@ window.addEventListener('keydown', (event) => {
   else turnSelectedItem(action.degrees);
   // A press that did something says so for a screen reader; one that did nothing already said why.
   const did = action.type === 'nudge' ? item.position.distanceTo(was.position) > 1e-4 : item.quaternion.angleTo(was.quaternion) > 1e-4;
-  if (did && buildSelectStatusEl) {
-    // The same sentence twice in a row is not read again, so every other press carries an invisible mark.
-    itemKeyAnnounceFlip = !itemKeyAnnounceFlip;
-    buildSelectStatusEl.textContent = itemKeyAnnouncement(action, getUnits()) + (itemKeyAnnounceFlip ? '\u200b' : '');
-  }
+  if (did) announceBuild(itemKeyAnnouncement(action, getUnits()));
 });
 window.addEventListener('blur', () => { buildKeysDown.clear(); });
 function applyBuildKeyboardCamera(now) {

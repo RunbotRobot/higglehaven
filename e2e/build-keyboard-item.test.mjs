@@ -94,4 +94,12 @@ await page.waitForTimeout(300);
 check(moved(fieldBefore, await item()) < 0.01, 'keys typed in a field do not move the item');
 await page.evaluate(() => document.getElementById('kb-item-field').remove());
 
+// #4574: Undo and Redo by key say what they did, and say so when there is nothing to do.
+await press('Control+KeyZ');
+check(/^Undone\.$/.test(await said()), `Ctrl+Z is announced (${JSON.stringify(await said())})`);
+await press('Control+KeyY');
+check(/^Redone\.$/.test(await said()), `Ctrl+Y is announced (${JSON.stringify(await said())})`);
+await press('Control+KeyY');
+check(/^Nothing to redo\.$/.test(await said()), `a Redo with nothing to redo says so (${JSON.stringify(await said())})`);
+
 await finish(browser, { pass: pass && errors.length === 0, label: '#4162: Shift with the arrows, Page Up/Down and Q/E moves and turns the selected item', errors });
