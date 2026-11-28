@@ -234,6 +234,12 @@ function parseStepWithoutBurst(token, command, args) {
       if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": item needs a whole number from 1 (which placed item, left to right)`);
       return { command, args: [n] };
     }
+    case 'product': {
+      // #4575: product[:n] taps the n-th loaded product that is on screen in Shop (left to right, 1 by default).
+      const n = args[0] === undefined || args[0] === '' ? 1 : Number(args[0]);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": product needs a whole number from 1 (which product, left to right)`);
+      return { command, args: [n] };
+    }
     case 'dragitem': {
       // #4198: dragitem:<n>:<dx>:<dy>: select the n-th placed item on screen in Build and drag it dx, dy pixels.
       need(3);
