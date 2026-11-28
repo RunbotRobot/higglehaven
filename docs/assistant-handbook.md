@@ -465,7 +465,8 @@ Someone who has added nothing sees "Your basket is empty. Tap a product in Shop 
 
 **If something goes wrong:**
 - The card has no "Add to basket" button: it is only there when "Buy" is, so the card's own line says why
-  (walk closer, out of stock, or not for sale).
+  (walk closer, out of stock, or not for sale). It is also not there, and the menu has no "Basket", while paying for a
+  basket is not open yet: say so, and offer "Buy" on the product's card instead.
 - "A basket holds up to 20 different items. Remove one to add another." means the basket is full.
 - Paying for a whole basket at once is not available yet. To buy something now, open its card and tap "Buy".
   Do not promise a date for it.
@@ -943,12 +944,13 @@ while they show. Only the builder sees them, never a shopper, and the choice is 
 2. Tap it again to go back further.
 3. If you went too far, tap the "Redo" arrow next to it to put things back. It is greyed until you have undone something.
 
-**You will see:** the item jumps back to how it was. "Redo" shows up only after an
-"Undo".
+**You will see:** the item jumps back to how it was. "Redo" stays greyed until you have
+undone something. A screen reader says "Undone." or "Redone.", and "Nothing to undo." or
+"Nothing to redo." for the keys Ctrl+Z and Ctrl+Y when there is nothing to do.
 
 **If something goes wrong:**
-- "Undo" is greyed out, or the logo button shows no "Undo": there is nothing to take back yet.
-- "Redo" has gone: it only shows while there is something to put back.
+- "Undo" is greyed out: there is nothing to take back yet (or an edit is still being saved; wait a moment).
+- "Redo" is greyed out: there is nothing to put back; it wakes after an "Undo".
 
 ```controls build
 #undo-btn | Undo

@@ -6163,6 +6163,15 @@ Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when th
 Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
 them as `communication.basketLines`.
 
+### `GET /api/basket-config` (#4664)
+
+Public, no session: `{ "checkoutEnabled": true|false }`, true only when `BASKET_CHECKOUT_ENABLED` is the string `true`,
+the same switch `POST /api/basket/checkout` reads. The client reads it once per page and draws **Add to basket** on a
+product card and the **Basket** petal in Shop's stem only while it is true, so a shopper is never offered a basket that
+nothing can pay for ("a control is not drawn for a person it can only refuse"). Lines already in the table stay there.
+Flipping the variable is the whole release of the basket's buttons; until then the routes above still answer, they are
+just not reached from the app.
+
 ### `GET /api/basket/quote` (#4613)
 
 What paying the basket would do, without doing it: nothing is created and no card is touched. Needs a verified session

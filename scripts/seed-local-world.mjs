@@ -239,7 +239,7 @@ export async function seedLocalWorld(baseUrl, log = console.log) {
   if (questionCount === 0) {
     const left = await call('POST', '/assistant-chat/question', looker.cookie, { text: 'How do I move a placed item?' });
     if (left.ok) {
-      localSql("UPDATE assistant_questions SET status = 'answered', answer_text = 'In Build, tap the item, then drag the yellow handle to move it. Undo is in the Build menu if you change your mind.', answered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE shopper_user_id = (SELECT user_id FROM users WHERE username = 'looker') AND status = 'waiting'");
+      localSql("UPDATE assistant_questions SET status = 'answered', answer_text = 'In Build, tap the item, then drag the yellow handle to move it. Undo is the arrow in the small row at the top right if you change your mind.', answered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE shopper_user_id = (SELECT user_id FROM users WHERE username = 'looker') AND status = 'waiting'");
       log('looker left a question for an assistant, and it was answered.');
     } else {
       log(`No assistant thread seeded (${left.status}: ${left.data.error}).`);
