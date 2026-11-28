@@ -39,7 +39,7 @@
     'higgles-grants': {
       builderIdField: 'higglesBuilderId',
       amountField: 'higglesAmountDollars',
-      describeSuccess: (body) => `Granted. New higgles balance: $${(body.higglesBalanceCents / 100).toFixed(2)}.`,
+      describeSuccess: (body) => `Granted. New higgles balance: ${window.hhFormatCents(body.higglesBalanceCents)}.`,
     },
   };
 
@@ -801,7 +801,7 @@
           <td>${escapeHtml(form.email || '—')}</td>
           <td>${escapeHtml(form.formType)}</td>
           <td><span class="status-pill status-${escapeHtml(form.status)}">${escapeHtml(form.status)}</span></td>
-          <td>$${(form.grossIncomeCents / 100).toFixed(2)}</td>
+          <td>${window.hhFormatCents(form.grossIncomeCents)}</td>
           <td>${form.taxPaperworkOnFile ? 'Yes' : 'No'}</td>
           <td>${escapeHtml(form.filingReference || '—')}</td>
           <td>${buttons}</td>

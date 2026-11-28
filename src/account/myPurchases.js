@@ -9,7 +9,7 @@ import {
   disputePromptText, isDigitalPurchase, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
 } from './disputeOutcome.js';
 
-const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+import { formatCents as money } from '../../shared/money.js'; // #4681
 
 // #4617: the heading over the lines of one basket order ("One order · 3 products · $42.00"): the products counted by
 // line and the total of what was paid across them. Pure, so the wording is testable.

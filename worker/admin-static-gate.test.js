@@ -22,7 +22,7 @@ const gate = async (path, who) => {
   return gateAdminStaticFile(new Request(url, init), env, url);
 };
 
-const PATHS = ['/admin-dashboard', '/admin-dashboard.html', '/admin-dashboard.css', '/admin-dashboard-1.js', '/admin-dashboard-10.js', '/admin-tables.js'];
+const PATHS = ['/admin-dashboard', '/admin-dashboard.html', '/admin-dashboard.css', '/admin-dashboard-1.js', '/admin-dashboard-10.js', '/admin-tables.js', '/admin-money.js'];
 const STRICT = ['/admin-control-room', '/admin-control-room.html', '/admin-control-room.js', '/admin-action-log', '/admin-action-log.css'];
 
 describe('the admin pages static files (#4232)', () => {

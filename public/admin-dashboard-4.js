@@ -111,7 +111,7 @@
   const rbCancel = document.getElementById('refundBuyersCancel');
   let rbPlan = null;
   let rbBusy = false;
-  const dollars = (cents) => '$' + (cents / 100).toFixed(2);
+  const dollars = window.hhFormatCents; // #4681
   const orders = (n) => n + (n === 1 ? ' order' : ' orders');
 
   async function loadRefundBuyers() {
@@ -291,7 +291,7 @@
         <td>${escapeHtml(f.templateId)}</td>
         <td>${escapeHtml(f.buyerBuilderId)}</td>
         <td>${escapeHtml(f.builderId)}</td>
-        <td>${(f.totalCents / 100).toFixed(2)}</td>
+        <td>${window.hhFormatCents(f.totalCents)}</td>
         <td>${escapeHtml((f.matchedSignals || []).join(', '))}</td>
         <td>
           <input class="review-notes" placeholder="Optional note" aria-label="Review note" />
@@ -303,7 +303,7 @@
     sdTableWrap.innerHTML = `
       <table>
         <thead>
-          <tr><th>Flagged</th><th>Purchase</th><th>Template</th><th>Buyer builder</th><th>Host builder</th><th>Total ($)</th><th>Matched on</th><th>Actions</th></tr>
+          <tr><th>Flagged</th><th>Purchase</th><th>Template</th><th>Buyer builder</th><th>Host builder</th><th>Total</th><th>Matched on</th><th>Actions</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>

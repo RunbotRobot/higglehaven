@@ -29,7 +29,7 @@
   }
 
   const isNil = (v) => v === null || v === undefined || v === '';
-  const dollars = (cents) => '$' + (cents / 100).toFixed(2);
+  const dollars = window.hhFormatCents; // #4681
 
   // #4073: every column has a set width (from its kind) the owner can change by dragging the right edge of
   // its heading; widths are remembered with the rest of the view and "Reset view" clears them. Wide enough

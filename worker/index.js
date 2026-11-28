@@ -1,4 +1,5 @@
 import { withNotFoundPage } from './lib/not-found-page.js';
+import { formatCents as formatMoneyCents } from '../shared/money.js'; // #4681
 import { normalizeUsername, usernameSkeleton, isReservedSkeleton, isLocalDevServer } from './lib/username-rules.js';
 import { ensureUsernameSkeletons } from './lib/username-store.js';
 import { landletMaxWorldRadius } from './geometry.js';
@@ -2624,7 +2625,7 @@ async function resolveAuction(db, auction) {
 // still used directly here throughout the file for user-facing error
 // messages.
 export function formatCents(cents) {
-  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  return formatMoneyCents(cents); // #4681: the one formatter, shared/money.js
 }
 
 // Same "growth is earned, never purchased" reasoning as PURCHASE_MAX_QUANTITY
