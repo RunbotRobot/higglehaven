@@ -3540,7 +3540,7 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
     // any other order keeps its copy for the seller to ship and to answer a card dispute, until the sweep's term ends.
     db.prepare(`
       UPDATE purchases SET shipping_address_json = NULL
-      WHERE buyer_user_id = ? AND shipping_address_json IS NOT NULL AND refunded_at IS NOT NULL
+      WHERE buyer_user_id = ? AND shipping_address_json IS NOT NULL AND refunded_at IS NOT NULL AND last_dispute_event_at IS NULL
         AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, ...guardBinds),
     // #4598: the addresses a person ships to go with them (gated like the rest).

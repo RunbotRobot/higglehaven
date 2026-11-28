@@ -14,9 +14,9 @@ const ADDRESS = JSON.stringify({ name: 'A', line1: '1 St', city: 'X', region: 'O
 async function order(id, columns = {}) {
   await env.DB.prepare(`
     INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity, total_cents,
-      commission_cents, builder_share_cents, platform_share_cents, shipping_address_json, shipped_at, paid_out_at, refunded_at)
-    VALUES (?, 'i', 't', ?, 500, 1, 500, 10, 5, 5, ?, ?, ?, ?)
-  `).bind(id, builderId, ADDRESS, columns.shipped ?? null, columns.paidOut ?? null, columns.refunded ?? null).run();
+      commission_cents, builder_share_cents, platform_share_cents, shipping_address_json, shipped_at, paid_out_at, refunded_at, last_dispute_event_at)
+    VALUES (?, 'i', 't', ?, 500, 1, 500, 10, 5, 5, ?, ?, ?, ?, ?)
+  `).bind(id, builderId, ADDRESS, columns.shipped ?? null, columns.paidOut ?? null, columns.refunded ?? null, columns.dispute ?? null).run();
 }
 const addressOf = async (id) => (await env.DB.prepare('SELECT shipping_address_json AS a FROM purchases WHERE purchase_id = ?').bind(id).first()).a;
 
@@ -37,9 +37,12 @@ describe('clearSettledOrderAddresses (#4636)', () => {
     const now = Date.now();
     const stamp = new Date(now - 1000).toISOString();
     await order('ret-refunded', { refunded: stamp });
+    // A dispute withdrawal marks the order refunded too, but the card dispute still needs the address.
+    await order('ret-disputed', { refunded: stamp, shipped: new Date(now - 20 * 86400000).toISOString(), dispute: 1700000000 });
     await order('ret-old', { shipped: new Date(now - (ADDRESS_KEPT_AFTER_SHIPPING_DAYS + 1) * 86400000).toISOString() });
     const changed = await clearSettledOrderAddresses(env.DB, now);
     expect(changed).toBe(2);
+    expect(await addressOf('ret-disputed')).toBe(ADDRESS);
     for (const id of ['ret-refunded', 'ret-old']) {
       expect(await addressOf(id)).toBeNull();
       expect((await env.DB.prepare('SELECT total_cents FROM purchases WHERE purchase_id = ?').bind(id).first()).total_cents).toBe(500);
