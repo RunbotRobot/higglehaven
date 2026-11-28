@@ -202,6 +202,8 @@ function uploadShippingProblem() {
 // blank or not-yet-valid value alone so the submit-time check below still
 // catches it and reports the same error message.
 uploadPriceInput.addEventListener('blur', () => {
+  // #4685: a fraction of a cent is left as typed, or tapping Create would round it before the refusal below can see it.
+  if (hasFractionOfACent(uploadPriceInput.value)) return;
   const dollars = parsePriceInputDollars(uploadPriceInput.value);
   if (Number.isFinite(dollars) && dollars >= 0) {
     uploadPriceInput.value = formatDollarsForPriceInput(dollars);

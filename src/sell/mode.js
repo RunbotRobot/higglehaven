@@ -1160,6 +1160,8 @@ function renderSellerList() {
     // N50: reformat to "$123.45" once the seller leaves the field — see
     // parsePriceInputDollars/formatDollarsForPriceInput above.
     priceInput.addEventListener('blur', () => {
+      // #4685: left as typed, so Save's refusal of a fraction of a cent still sees it.
+      if (hasFractionOfACent(priceInput.value)) return;
       const dollars = parsePriceInputDollars(priceInput.value);
       if (Number.isFinite(dollars) && dollars >= 0) {
         priceInput.value = formatDollarsForPriceInput(dollars);
