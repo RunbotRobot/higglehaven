@@ -116,7 +116,7 @@ describe('GET /api/purchases/mine (#3196)', () => {
     // The list must not become a way to read anything the buyer did not already see.
     const allowed = [
       'purchaseId', 'createdAt', 'productName', 'productKind', 'sellerName', 'quantity', 'totalCents', 'isDigitalGood', 'shippedAt',
-      'refundedAt', 'shippingCarrier', 'trackingNumber', 'refundedAmountCents', 'canLeaveFeedback', 'feedback', 'canDispute', 'templateId', 'productReview', 'canReviewProduct', 'shippingAddress', 'basketOrderId',
+      'refundedAt', 'shippingCarrier', 'trackingNumber', 'refundedAmountCents', 'canLeaveFeedback', 'feedback', 'canDispute', 'templateId', 'productReview', 'canReviewProduct', 'shippingAddress', 'addressClearedAt', 'basketOrderId',
     ].sort();
     for (const purchase of res.body.purchases) expect(Object.keys(purchase).sort()).toEqual(allowed);
     expect(JSON.stringify(res.body)).not.toMatch(/paymentIntent|payment_intent|tokenHash|commission|builderShare|platformShare/i);
