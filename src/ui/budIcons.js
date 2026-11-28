@@ -22,6 +22,7 @@ const PATHS = {
   chat: 'M4 4.5h16v11H11l-5 4v-4H4z M8 9h8 M8 12h5',
   // Shop's Nearby: a map pin, the picture of "what is close by"
   nearby: 'M12 21s6.5-5.7 6.5-11a6.5 6.5 0 0 0-13 0c0 5.3 6.5 11 6.5 11z M12 12.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
+  basket: 'M3 9.5h18l-2 10.5H5z M8 9.5l3-5.5 M16 9.5l-3-5.5 M9.5 13v4 M14.5 13v4',
   bag: 'M5 8.5h14l-1 12.5H6z M9 8.5V7a3 3 0 0 1 6 0v1.5',
   plot: 'M3 17.5l9-4 9 4-9 4z M12 13.5V3.5l5.5 2.2L12 8',
   gear: 'M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5z M12 2.5l1.6 2.7 3-.7.9 3 2.9 1.2-1.1 2.8 1.1 2.8-2.9 1.2-.9 3-3-.7L12 21.5l-1.6-2.7-3 .7-.9-3-2.9-1.2L4.7 12 3.6 9.2l2.9-1.2.9-3 3 .7z',
@@ -68,6 +69,7 @@ const BY_ID = {
   'bud-petal-row-help': 'help',
   'bud-petal-shop-chat': 'chat',
   'bud-petal-shop-nearby': 'nearby',
+  'bud-petal-shop-basket': 'basket',
 };
 const BY_MODE = { shop: 'shop', build: 'build', sell: 'sell' };
 

@@ -34,9 +34,11 @@ describe('basket lines (#4611)', () => {
   it('adds, adds to, changes and removes a line, naming the product and storing no price', async () => {
     const person = await signupBuilder('basket-crud');
     const id = await item('crud');
+    await env.DB.prepare("INSERT INTO sellers (seller_id, label) VALUES ('basket-seller', 'Lamp Works')").run();
+    await env.DB.prepare("UPDATE catalog_templates SET seller_id = 'basket-seller' WHERE template_id = 'tpl-crud'").run();
     const first = await add(person, id);
     expect(first.response.status).toBe(201);
-    expect(first.body.line).toMatchObject({ instanceId: id, quantity: 1, productName: 'Product crud' });
+    expect(first.body.line).toMatchObject({ instanceId: id, quantity: 1, productName: 'Product crud', sellerId: 'basket-seller', sellerName: 'Lamp Works' });
     expect(JSON.stringify(first.body)).not.toMatch(/price/i);
     // The same item again adds to its line, it does not make a second one.
     expect((await add(person, id, 2)).body.line.quantity).toBe(3);
@@ -116,7 +118,7 @@ describe('basket lines (#4611)', () => {
     await env.DB.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(id).run();
     const list = await api('/basket', person.session());
     expect(list.body.lines).toHaveLength(1);
-    expect(list.body.lines[0]).toMatchObject({ instanceId: id, productName: null, templateId: null });
+    expect(list.body.lines[0]).toMatchObject({ instanceId: id, productName: null, templateId: null, sellerName: null });
   });
 
   it('is in the data export, and goes when the account is deleted', async () => {

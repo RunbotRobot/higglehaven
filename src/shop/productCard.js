@@ -30,7 +30,8 @@ import { camera } from '../world/scene.js';
 import { groupNearby, stepNearby, nearbyAnnouncement, distanceWords, directionWords, nameWithCount, NO_NEARBY_PRODUCTS } from './nearbyProducts.js';
 import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
-import { currentAuthUser } from '../account/auth.js';
+import { currentAuthUser, requireLogin } from '../account/auth.js';
+import { addInstanceToBasket } from './basketLeaf.js';
 import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
 import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -43,6 +44,7 @@ const sellerEl = document.getElementById('product-card-seller');
 const notesEl = document.getElementById('product-card-notes');
 const stateEl = document.getElementById('product-card-state');
 const buyBtn = document.getElementById('product-card-buy-btn');
+const basketBtn = document.getElementById('product-card-basket-btn'); // #4612
 const moreBtn = document.getElementById('product-card-more-btn');
 const moreEl = document.getElementById('product-card-more');
 const reviewBtn = document.getElementById('product-card-review-btn');
@@ -144,8 +146,9 @@ function fillCard(review) {
   cardEl.setAttribute('aria-label', name);
   // #3824: the Buy button names what it buys and for how much; the visible word "Buy" stays first.
   buyBtn.setAttribute('aria-label', `Buy ${name}${priceText ? `, ${priceText}` : ''}`);
+  basketBtn.setAttribute('aria-label', `Add ${name} to your basket`);
   stateEl.textContent = '';
-  for (const btn of [buyBtn, reviewBtn, returnPolicyBtn]) btn.classList.remove('visible');
+  for (const btn of [buyBtn, basketBtn, reviewBtn, returnPolicyBtn]) btn.classList.remove('visible');
   moreEl.hidden = true;
   moreBtn.setAttribute('aria-expanded', 'false');
   card.markDirty();
@@ -168,6 +171,7 @@ export function syncProductCardActions(review, inRange) {
   const template = review.mesh.userData.template;
   const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId), unshippable: doesNotShipToMe(template) });
   buyBtn.classList.toggle('visible', state.canBuy);
+  basketBtn.classList.toggle('visible', !!state.canAddToBasket);
   reviewBtn.classList.toggle('visible', state.canReview);
   returnPolicyBtn.classList.toggle('visible', state.canReturnPolicy);
   // Nothing in More to open when neither petal in it applies.
@@ -286,6 +290,21 @@ moreBtn.addEventListener('click', () => {
   moreEl.hidden = !opening;
   moreBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
   card.markDirty();
+});
+// #4612: "Add to basket" says in the card's own line what happened, and a refusal stays until the card changes.
+basketBtn.addEventListener('click', async () => {
+  const review = openReview;
+  if (!review) return;
+  if (!currentAuthUser && !(await requireLogin('signup', 'Log in or sign up to keep a basket.'))) return;
+  basketBtn.disabled = true;
+  try {
+    stateEl.textContent = await addInstanceToBasket(review.mesh.userData.instanceId);
+  } catch (err) {
+    if (review === openReview) stateEl.textContent = err.message || 'That did not work. Try again.';
+  } finally {
+    basketBtn.disabled = false;
+    card.markDirty();
+  }
 });
 closeBtn.addEventListener('click', dismissProductCard);
 // Escape folds the card, unless a modal has just used that same Escape (the

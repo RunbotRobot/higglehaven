@@ -433,6 +433,23 @@ export async function makeAddressDefault(addressId) {
   return requestJson(`/addresses/${encodeURIComponent(addressId)}/default`, { method: 'POST' });
 }
 
+// #4612 (Basket 2/7, part of #4604): the lines of a person's own basket. The server holds the caps and says which one was hit.
+export async function fetchBasket() {
+  return requestJson('/basket');
+}
+
+export async function addToBasket(instanceId, quantity = 1) {
+  return requestJson('/basket', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ instanceId, quantity }) });
+}
+
+export async function setBasketQuantity(instanceId, quantity) {
+  return requestJson(`/basket/${encodeURIComponent(instanceId)}`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ quantity }) });
+}
+
+export async function removeFromBasket(instanceId) {
+  return requestJson(`/basket/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
+}
+
 // #2067 (leaf sub-issue of #1973, part of #1947): this account's opt-in
 // for an email alert on top of the dashboard notification already fired
 // unconditionally when a placed product sells out.

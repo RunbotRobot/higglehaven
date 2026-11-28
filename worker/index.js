@@ -178,6 +178,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
+import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -803,6 +804,9 @@ async function handleApi(request, env, url, ctx) {
   // #4613 (Basket 3/7): the read-only quote of that basket, before the lines routes so `quote` is never an instance id.
   if (route[0] === 'basket' && route[1] === 'quote' && route.length === 2 && request.method === 'GET') {
     return handleBasketQuote(request, env);
+  }
+  if (route[0] === 'basket' && route[1] === 'checkout' && route.length === 2 && request.method === 'POST') {
+    return handleBasketCheckout(request, env); // #4614, behind BASKET_CHECKOUT_ENABLED
   }
   if (route[0] === 'basket') {
     return handleBasket(request, env.DB, route);
@@ -3862,10 +3866,12 @@ async function exportCommunicationData(db, userId) {
   ).bind(userId).all();
   // #4611: the lines of the person's basket (an item and how many; the price is never stored on a line).
   const basketLines = await db.prepare(`
-    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name
+    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name,
+           ct.seller_id, s.label AS seller_name
     FROM basket_lines b
     LEFT JOIN placed_instances pi ON pi.instance_id = b.instance_id
     LEFT JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    LEFT JOIN sellers s ON s.seller_id = ct.seller_id
     WHERE b.user_id = ? ORDER BY b.added_at ASC, b.instance_id
   `).bind(userId).all();
   const blocks = await db.prepare(`
