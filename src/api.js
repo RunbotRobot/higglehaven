@@ -653,6 +653,8 @@ export async function markPurchaseShipped(purchaseId, { carrier = '', trackingNu
   // #4600: the carrier and tracking number are optional; both go with the one request.
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, {
     method: 'POST',
+    // #4673: without this the server reads the body as plain text and drops the carrier and tracking number.
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ carrier, trackingNumber }),
   });
   return purchase;
@@ -662,6 +664,7 @@ export async function markPurchaseShipped(purchaseId, { carrier = '', trackingNu
 export async function setPurchaseTracking(purchaseId, { carrier = '', trackingNumber = '' } = {}) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/tracking`, {
     method: 'PATCH',
+    headers: { 'content-type': 'application/json' }, // #4673: see markPurchaseShipped
     body: JSON.stringify({ carrier, trackingNumber }),
   });
   return purchase;
@@ -1482,6 +1485,7 @@ export async function fetchArchivedVersions() {
 export async function restoreArchivedVersion(versionId, landletId) {
   return requestJson(`/builders/me/archived-versions/${encodeURIComponent(versionId)}/restore`, {
     method: 'POST',
+    headers: { 'content-type': 'application/json' }, // #4673: the server refuses a body that does not say it is JSON (415)
     body: JSON.stringify({ landletId }),
   }); // { version }
 }
