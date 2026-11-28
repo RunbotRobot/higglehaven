@@ -151,6 +151,13 @@
       "y": "REAL|1||0",
       "z": "REAL|1||0"
     },
+    "basket_lines": {
+      "added_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "instance_id": "TEXT|1||2",
+      "quantity": "INTEGER|1||0",
+      "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "user_id": "TEXT|1||1"
+    },
     "bug_reports": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "description": "TEXT|0||0",

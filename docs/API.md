@@ -2795,6 +2795,13 @@ and the buyer's account export. They are deliberately not part of the purchase s
 afterwards: the order's own seller (or the admin fallback above, logged as `tracking_override`), `409` before the order
 is marked shipped, `400` once refunded, same rate limit as Mark shipped; it sends no second notice.
 
+**Where to send it (#4600, shipping 3/8).** The same two seller reads, `GET /api/purchases?mine=seller` and
+`GET /api/purchases?templateId=`, carry each sale's `shippingAddress`: the order's own copy of the address the buyer gave
+at checkout (`{ name, line1, line2, city, region, postalCode, country }`), or `null` for a digital good or an order made
+before addresses were asked for. Like the carrier and tracking number it is deliberately not part of the shape the host's
+`GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
+shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`
@@ -6080,6 +6087,43 @@ Makes that address the one default (a unique partial index guarantees at most on
 
 Account deletion removes a person's addresses (gated like the rest of the deletion), and the data export lists
 them as `communication.addresses`.
+
+## Basket (#4611)
+
+The lines of a person's basket, kept on the account (`migrations/0249_basket_lines.sql`, keyed on `user_id`). This
+piece only stores lines; pricing a basket and paying it come in later pieces (#4613, #4614). Every route needs a
+current (not suspended) session and reads and writes only the caller's own lines. A line is a **placed item**
+(`instanceId`), not a product, because the builder's commission follows the lándlet the item stands on; there is one
+line per item and `quantity` says how many. **The price is never stored on a line.** Writes share a `basket-mutate`
+rate limit (60 per window).
+
+### `GET /api/basket`
+
+`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName" }], "maxLines": 20,
+"maxQuantity": 1000 }`, oldest first. `templateId` and `productName` only name the line in a list; both are `null`
+when the item or its product is gone (the line is kept, never dropped silently).
+
+### `POST /api/basket`
+
+Body: `{ "instanceId", "quantity"? }` (quantity defaults to 1). `201 { "line": {...} }`. An item already in the basket
+has its quantity added to (stopping at `maxQuantity`), never a second line. At most 20 different items: the
+twenty-first answers `409 { error: "A basket holds up to 20 different items. Remove one to add another.", limit: 20 }`
+(the cap is decided by the INSERT itself, so two requests at once cannot both slip under it). `404` when the item is
+not on a lándlet any more; `400` when its product has no price, is a test model, is delisted or is hidden pending
+review; `400 { error, field: "quantity" }` for a quantity that is not a whole number from 1 to 1000. Whether the item
+can be bought right now (stock, seller, price changed) is not checked here: the quote says so per line.
+
+### `PATCH /api/basket/:instanceId`
+
+Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when that item is not in the caller's basket
+(another person's line answers exactly like one that does not exist).
+
+### `DELETE /api/basket/:instanceId`
+
+`200 { "removed": true }`, also when there was nothing to remove.
+
+Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
+them as `communication.basketLines`.
 
 ## Shipping destination (#4602)
 

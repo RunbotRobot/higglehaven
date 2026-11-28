@@ -77,6 +77,17 @@ describe('a shipped product is bought with an address (#4599)', () => {
     expect(again.body.purchases[0].shippingAddress.line2).toBe('Apt 4');
   });
 
+  it('shows the address on the seller\'s own sale list (#4600) and never on the host\'s commission view', async () => {
+    const { seller, instanceId, templateId } = await setup('seller-view');
+    expect((await buy(instanceId, seller, { shippingAddress: { ...TEST_SHIPPING_ADDRESS, name: 'Grace Hopper' } })).response.status).toBe(201);
+    const sales = await api(`/purchases?templateId=${templateId}`, seller.session());
+    expect(sales.response.status).toBe(200);
+    expect(sales.body.purchases[0].shippingAddress).toMatchObject({ name: 'Grace Hopper', line1: '1 Test Street', country: 'US' });
+    const hosted = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(hosted.response.status).toBe(200);
+    expect(hosted.body.purchases[0]).not.toHaveProperty('shippingAddress');
+  });
+
   it('refuses a country the seller does not send to, before anything is written, and allows the United States', async () => {
     const { seller, instanceId, templateId } = await setup('domestic', { metadata: { domesticOnly: true } });
     const quote = await api(`/instances/${instanceId}/purchase-quote`, seller.session());

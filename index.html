@@ -488,6 +488,13 @@
               <option value="avatar-model">Avatar model</option>
             </select>
           </label>
+          <!-- #4601 (part of #4394): where a physical product ships. Closed, it reads "Ships worldwide"; opened,
+               one tick per zone (shared/shipping-zones.js, built in src/catalog/upload.js). Hidden for a digital good. -->
+          <details id="upload-shipping-details">
+            <summary id="upload-shipping-summary">Ships worldwide</summary>
+            <p class="field-hint">Untick any place you do not ship to.</p>
+            <div id="upload-shipping-zones"></div>
+          </details>
           <!-- #4078: making a model from a video comes first (most sellers have no model of their
                product yet); uploading a file they already have is the quieter second way. The
                two are one at a time: setUploadFileMode in src/catalog/upload.js. -->

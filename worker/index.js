@@ -176,6 +176,7 @@ import {
 } from './lib/social.js';
 import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
+import { handleBasket, basketLineFromRow } from './lib/basket.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -791,6 +792,11 @@ async function handleApi(request, env, url, ctx) {
   // #4602: where "ships to me" is judged from, and the dim switch.
   if (route[0] === 'shipping-destination' && route.length === 1) {
     return handleShippingDestination(request, env.DB);
+  }
+
+  // #4611 (Basket 1/7, part of #4604): the lines of a person's own basket.
+  if (route[0] === 'basket') {
+    return handleBasket(request, env.DB, route);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -3521,6 +3527,10 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
     db.prepare(`
       DELETE FROM user_addresses WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, ...guardBinds),
+    // #4611: and so do the lines of their basket.
+    db.prepare(`
+      DELETE FROM basket_lines WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
   );
 
   const batchResults = await db.batch(statements);
@@ -3834,6 +3844,14 @@ async function exportCommunicationData(db, userId) {
   const addresses = await db.prepare(
     'SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at ASC, address_id',
   ).bind(userId).all();
+  // #4611: the lines of the person's basket (an item and how many; the price is never stored on a line).
+  const basketLines = await db.prepare(`
+    SELECT b.instance_id, b.quantity, b.added_at, b.updated_at, pi.template_id, ct.name AS product_name
+    FROM basket_lines b
+    LEFT JOIN placed_instances pi ON pi.instance_id = b.instance_id
+    LEFT JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    WHERE b.user_id = ? ORDER BY b.added_at ASC, b.instance_id
+  `).bind(userId).all();
   const blocks = await db.prepare(`
     SELECT b.created_at, u.username AS blocked_name FROM user_blocks b
     LEFT JOIN users u ON u.user_id = b.blocked_user_id
@@ -3876,6 +3894,7 @@ async function exportCommunicationData(db, userId) {
     })),
     blocksMade: blocks.results.map((row) => ({ blocked: row.blocked_name, blockedAt: row.created_at })),
     addresses: addresses.results.map(addressFromRow),
+    basketLines: basketLines.results.map(basketLineFromRow),
     contentEditHistory: editHistory.results.map((row) => {
       let snapshot = null;
       try { snapshot = JSON.parse(row.snapshot_json); } catch { snapshot = row.snapshot_json; }
