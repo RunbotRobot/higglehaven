@@ -18,9 +18,7 @@
     }[c]));
   }
 
-  function formatCents(cents) {
-    return '$' + (cents / 100).toFixed(2);
-  }
+  const formatCents = window.hhFormatCents; // #4681
 
   function clearError() {
     errLine.hidden = true;

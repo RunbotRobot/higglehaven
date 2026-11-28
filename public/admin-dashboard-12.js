@@ -15,7 +15,7 @@
     }[c]));
   }
   function dollars(cents) {
-    return Number.isInteger(cents) ? '$' + (cents / 100).toFixed(2) : '';
+    return Number.isInteger(cents) ? window.hhFormatCents(cents) : '';
   }
   function when(iso) {
     const date = iso ? new Date(iso) : null;
