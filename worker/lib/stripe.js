@@ -23,11 +23,11 @@ import { readJson, stringValue } from './validation.js';
 // #2615 moved clawBackPurchaseCommission out of worker/index.js into
 // worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
 // still needs it, just from its new home.
-import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChange } from './purchase-lifecycle.js';
+import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChange, sellerDisputeNotice } from './purchase-lifecycle.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
-import { recordDisputeEvent } from './purchase-disputes.js';
+import { recordDisputeEvent, disputeRowFromEvent } from './purchase-disputes.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { notifyPayoutSetupNeedsAttention } from './stripe-payout-notice.js';
 import { cardNotAcceptedMessage, CARD_ALREADY_USED_MESSAGE } from './card-refusal.js';
@@ -338,7 +338,11 @@ async function applyPurchaseReversalEvent(db, event, purchase) {
   if (guard.meta.changes === 0) return;
 
   const template = { name: await purchaseProductName(db, purchase) }; // #3776: the order's own record
-  await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
+  // #4651: a dispute tells the seller what it is and when evidence is due, not just that a sale was "refunded or disputed".
+  const disputeOptions = isDisputeWithdrawal
+    ? { sellerNotice: sellerDisputeNotice(purchase, disputeRowFromEvent(event)?.evidenceDueBy ?? null) }
+    : {};
+  await clawBackPurchaseCommission(db, purchase, template?.name || 'A product', disputeOptions);
 }
 
 // #2419 (owner decision 2026-10-25): reverses the money side of an

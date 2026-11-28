@@ -1283,11 +1283,13 @@ nobody owns and nothing uses is removed completely.
 2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when. A physical product's row also says "Ship to" with the name and address the buyer gave for that order (plain text, so it can be copied onto a label). An order that has been refunded shows no address.
 3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. It has two optional boxes, "Carrier (optional)" and "Tracking number (optional)", which the buyer then sees under the order in "My purchases". After it, the row says "Shipped" with the date, and that the money is available 7 days after shipping if the buyer has not confirmed delivery sooner; once they have, it says "Delivery confirmed — available to cash out." A shipped row shows the carrier and tracking number, or "No carrier or tracking number given.", with "Add tracking" or "Edit tracking" to give or correct them ("Save tracking" keeps them).
 4. "Refund" on a row asks "Refund this order?" first, names the buyer and the amount, and says it cannot be undone. A sale that has been refunded says "Refunded". A product with returns turned off says "Returns are turned off for this product" instead of the button, and a sale already paid out says "Paid out — contact support for a refund".
+5. An order the buyer's bank has questioned says "Disputed:" with the reason in plain words, and "Evidence is due" with a date. They are told once when it opens, in a notice that opens Orders. If the order has no tracking number yet, the row says to add the carrier and tracking number; that is the one thing a seller can do. When the bank decides in their favour the row says "Won: the money counts toward your earnings again."
 
 **You will see:** "No orders yet. When someone buys one of your products, it will show up here." until something sells.
 
 **If something goes wrong:**
 - A refund, a missing payment or an amount that looks wrong is not for the assistant to answer: say so plainly and use the runbook's hand-off.
+- A dispute is a money question: explain what the row says, do not promise how it will end or that evidence will be sent for them, and use the runbook's hand-off.
 - The list looks different from what is described here: ask what they see, and offer to pass it to the team.
 
 ```controls sell

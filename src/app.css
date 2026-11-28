@@ -7703,6 +7703,12 @@
       .product-sale-row-ship-to {
         user-select: text;
       }
+      /* #4651: a disputed order, in full ink so it is read first; text only, selectable. */
+      .product-sale-row-dispute {
+        margin-top: var(--space-2xs);
+        font-weight: var(--weight-semibold);
+        user-select: text;
+      }
       .product-sale-row-tracking-line {
         margin-bottom: var(--space-xs);
         user-select: text;

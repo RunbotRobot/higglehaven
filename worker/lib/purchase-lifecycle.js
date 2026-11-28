@@ -26,6 +26,7 @@ import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { handlePurchaseFinalize, purchaseFromRow, trackingFromRow } from './purchase-creation.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
+import { latestDisputesByPurchase } from './purchase-disputes.js'; // #4651
 import { sessionIsPurchaseBuyer, BUYER_PURCHASES_MATCH_SQL } from './purchase-buyer.js';
 import { handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete } from './reputation.js';
 import {
@@ -219,10 +220,11 @@ export async function handlePurchases(request, env, route, url) {
       const page = results.slice(0, limit);
       const last = page.at(-1);
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      const disputes = await latestDisputesByPurchase(db, page.map((row) => row.purchase_id)); // #4651
       return json({
         // #3776: the order's own recorded name first, then the live product, so a delisted product
         // is still named on the seller's side too.
-        purchases: page.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME })),
+        purchases: page.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(row.template_metadata_json), productName: row.product_name || row.live_name || ORPHANED_PRODUCT_NAME, dispute: disputes.get(row.purchase_id) ?? null })),
         nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,
         totalCount: total.count,
       });
@@ -293,7 +295,8 @@ export async function handlePurchases(request, env, route, url) {
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
-      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(template.metadata_json) })), totalCount: total.count });
+      const disputes = await latestDisputesByPurchase(db, results.map((row) => row.purchase_id)); // #4651
+      return json({ purchases: results.map((row) => ({ ...purchaseFromRow(row), ...trackingFromRow(row), shippingAddress: shippingAddressFromRow(row.shipping_address_json), noReturns: templateNoReturns(template.metadata_json), dispute: disputes.get(row.purchase_id) ?? null })), totalCount: total.count });
     }
     throw new HttpError('builderId, templateId, mine=seller, or danglingSeller is required', 400);
   }
@@ -595,6 +598,17 @@ export function sellerReversalNotice(purchase) {
   return (name) => `A sale of "${name}" was refunded or disputed, so ${formatCents(lostCents)} will no longer be part of your earnings from it.`;
 }
 
+// #4651: the seller's notice when a dispute opens, in place of the generic "refunded or disputed" one: it says what it is
+// and when evidence is due. `evidenceDueBy` is an ISO time or null. Tapping the notice opens Orders (kind 'orders').
+export function sellerDisputeNotice(purchase, evidenceDueBy) {
+  const heldCents = purchaseSellerShareCents(purchase);
+  const due = evidenceDueBy ? new Date(evidenceDueBy) : null;
+  const dueText = due && Number.isFinite(due.getTime())
+    ? ` Evidence is due ${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}.`
+    : '';
+  return (name) => `A dispute was opened over a sale of "${name}"${heldCents > 0 ? `, so ${formatCents(heldCents)} is held back from your earnings while it is decided` : ''}.${dueText} Open Orders to see it.`;
+}
+
 // #1086: the builder-commission clawback a reversed purchase needs —
 // debit the host builder's higgles_balance_cents by the full
 // builder_share_cents (allowed to go negative, per the 2026-09-10
@@ -612,7 +626,7 @@ export function sellerReversalNotice(purchase) {
 // buyer did not ask for.
 // #4422: `sellerKeepsEarnings` is the platform-covered refund of a counterfeit order whose seller was already paid: the
 // seller's earnings stay as paid, so they are not told they were reduced.
-export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '', buyerRefundCents = null, sellerKeepsEarnings = false } = {}) {
+export async function clawBackPurchaseCommission(db, purchase, templateName, { buyerReason = '', buyerRefundCents = null, sellerKeepsEarnings = false, sellerNotice: sellerNoticeOverride = null } = {}) {
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
@@ -699,7 +713,7 @@ export async function clawBackPurchaseCommission(db, purchase, templateName, { b
     { reason: buyerReason });
 
   // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
-  const sellerNotice = sellerKeepsEarnings ? null : sellerReversalNotice(purchase);
+  const sellerNotice = sellerKeepsEarnings ? null : (sellerNoticeOverride || sellerReversalNotice(purchase)); // #4651: a dispute words its own
   if (sellerNotice) await notifySellerOfSaleChange(db, purchase, sellerNotice);
 
   // #754: without this, a refunded avatar purchase left the buyer holding
