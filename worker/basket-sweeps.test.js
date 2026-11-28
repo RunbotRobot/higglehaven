@@ -207,4 +207,29 @@ describe('a seller\'s share that could not be transferred (#4615)', () => {
       expect(stripe.calls.filter((c) => c.path === 'transfers')).toHaveLength(transfersBefore + 1);
     } finally { stripe.restore(); }
   });
+
+  it('refunds a stuck line whole, and does not say it was sent, when its seller was suspended meanwhile (#4616)', async () => {
+    const { buyer, sellers } = await world('suspended');
+    const stripe = mockStripe();
+    try {
+      const order = await startedOrder(buyer);
+      await env.DB.prepare('UPDATE sellers SET stripe_account_id = NULL WHERE seller_id = ?').bind(sellers[1].sellerId).run();
+      const paymentIntent = succeeded(order);
+      stripe.payments.set(order.paymentIntentId, paymentIntent);
+      await finalizeSucceededPaymentIntent(env, paymentIntent);
+      await env.DB.prepare('UPDATE purchases SET created_at = ? WHERE basket_order_id = ?').bind(new Date(Date.now() - 60 * 60 * 1000).toISOString(), order.basketOrderId).run();
+      // The seller finishes setting up, and is then suspended before the sweep runs.
+      await env.DB.prepare('UPDATE sellers SET stripe_account_id = ? WHERE seller_id = ?').bind('acct_susp', sellers[1].sellerId).run();
+      const sellerUser = (await env.DB.prepare('SELECT user_id FROM sellers WHERE seller_id = ?').bind(sellers[1].sellerId).first()).user_id;
+      await env.DB.prepare("INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at) VALUES ('sus-sw', ?, ?, 'x', '2099-01-01T00:00:00Z')").bind(sellerUser, sellerUser).run();
+      await sweepBaskets(env);
+      const line = await env.DB.prepare('SELECT refunded_at, stripe_transfer_id FROM purchases WHERE basket_order_id = ? AND seller_id = ?').bind(order.basketOrderId, sellers[1].sellerId).first();
+      expect(line.refunded_at).not.toBeNull();
+      expect(line.stripe_transfer_id).toBeNull();
+      const notices = await env.DB.prepare(`
+        SELECT n.message FROM notifications n JOIN builders b ON b.builder_id = n.builder_id JOIN sellers s ON s.user_id = b.user_id WHERE s.seller_id = ?
+      `).bind(sellers[1].sellerId).all();
+      expect(notices.results.some((n) => /has now been sent/.test(n.message))).toBe(false);
+    } finally { stripe.restore(); }
+  });
 });

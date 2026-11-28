@@ -6185,7 +6185,8 @@ an order whose payment was never created. A payment that succeeded is never canc
 leaves the order pending for the next run, and one order's failure never stops the others (25 per run). (2) A paid
 order's line whose seller's share has no Transfer yet (the seller had no payout account when it was paid) is retried
 once the seller has one, and the seller gets the notice "The payment for one of your sales has now been sent to your
-payout account." once, because after the retry no line is missing its Transfer. A refunded line does not trigger a retry.
+payout account." once, for the lines whose Transfer it made. A refunded line does not trigger a retry, and a seller suspended or closed
+in the meantime has the line refunded whole by the same transfer step (#4616) and is not told it was sent.
 
 ## Shipping destination (#4602)
 

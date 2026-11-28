@@ -87,17 +87,19 @@ export async function retryMissingBasketTransfers(env, nowMs = Date.now()) {
       const found = await getBasketOrder(env, basketOrderId);
       if (!found?.order.payment_intent_id) continue;
       const stuck = await db.prepare(`
-        SELECT DISTINCT p.seller_id FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id AND s.stripe_account_id IS NOT NULL
+        SELECT p.purchase_id, p.seller_id FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id AND s.stripe_account_id IS NOT NULL
         WHERE p.basket_order_id = ? AND p.stripe_transfer_id IS NULL AND p.refunded_at IS NULL
       `).bind(basketOrderId).all();
       const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${found.order.payment_intent_id}`);
-      await transferSellerShares(env, found.order, found.lines, paymentIntent);
-      // Tell each seller whose money has now gone out, once: after this a line is no longer missing its transfer.
-      for (const { seller_id: sellerId } of stuck.results) {
-        const still = await db.prepare(
-          'SELECT 1 AS missing FROM purchases WHERE basket_order_id = ? AND seller_id = ? AND stripe_transfer_id IS NULL AND refunded_at IS NULL',
-        ).bind(basketOrderId, sellerId).first();
-        if (still) continue;
+      await transferSellerShares(env, found.order, paymentIntent);
+      // Tell each seller whose stuck line now has its Transfer, once: after this the line is no longer missing it. A
+      // line that was refunded instead (its seller was suspended or closed in the meantime) is not "sent", so it
+      // does not count.
+      const stuckIds = stuck.results.map((r) => r.purchase_id);
+      const sent = stuckIds.length
+        ? await db.prepare(`SELECT DISTINCT seller_id FROM purchases WHERE purchase_id IN (${stuckIds.map(() => '?').join(',')}) AND stripe_transfer_id IS NOT NULL`).bind(...stuckIds).all()
+        : { results: [] };
+      for (const { seller_id: sellerId } of sent.results) {
         const target = await db.prepare(
           'SELECT b.builder_id FROM sellers s JOIN builders b ON b.user_id = s.user_id WHERE s.seller_id = ?',
         ).bind(sellerId).first();
