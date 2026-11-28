@@ -5684,7 +5684,8 @@
       /* #3941: the one field look (fill --alpha-faint, a --alpha-line border, --radius-md,
          16px text so a phone does not zoom on focus). */
       .stripe-onboarding-form input,
-      .stripe-onboarding-form select {
+      .stripe-onboarding-form select,
+      .settings-shipping-country {
         flex: 1 1 auto;
         min-width: 0;
         border: 1px solid rgb(var(--ink-rgb) / var(--alpha-line));
@@ -5694,6 +5695,7 @@
         background: rgb(var(--ink-rgb) / var(--alpha-faint));
         color: var(--pill-text);
       }
+      .settings-shipping-country { width: 100%; box-sizing: border-box; }
       #settings-modal-actions {
         display: flex;
         justify-content: flex-end;

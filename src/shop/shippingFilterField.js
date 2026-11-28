@@ -24,13 +24,16 @@ export async function renderShippingFilterField(host, { isCurrent = () => true }
 
   const field = el('div', 'settings-field');
   field.id = 'settings-shipping-filter';
+  field.appendChild(el('span', '', 'Shipping'));
+  const row = el('div', 'settings-radio-row');
   const label = el('label');
   const box = el('input');
   box.type = 'checkbox';
   box.id = 'settings-dim-unshippable';
   box.checked = facts.destination.dimUnshippable;
   label.append(box, document.createTextNode('Dim what cannot ship to me'));
-  field.appendChild(label);
+  row.appendChild(label);
+  field.appendChild(row);
   const status = el('div', 'settings-empty-note');
   status.setAttribute('role', 'status');
   field.appendChild(status);
@@ -45,7 +48,8 @@ export async function renderShippingFilterField(host, { isCurrent = () => true }
     for (const choice of facts.countries) select.appendChild(new Option(choice.name, choice.code));
     select.value = facts.destination.chosenCountry || '';
     select.addEventListener('change', () => save({ country: select.value || null }));
-    country.append(el('span', '', 'Country I ship to'), select,
+    select.className = 'settings-shipping-country';
+    country.append(el('div', 'settings-empty-note', 'Country I ship to'), select,
       el('div', 'settings-empty-note', 'Adding an address in Settings uses its country instead.'));
     field.appendChild(country);
   }
