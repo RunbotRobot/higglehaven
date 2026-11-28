@@ -69,6 +69,12 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
     shipTo.className = 'product-sale-row-ship-to';
     shipTo.textContent = `Ship to ${addressText}`;
     body.appendChild(shipTo);
+  } else if (!purchase.refundedAt && purchase.shippedAt && !purchase.isDigitalGood) {
+    // #4636: a shipped order's address is cleared once it is closed, so say so instead of showing nothing.
+    const gone = document.createElement('div');
+    gone.className = 'product-sale-row-ship-to';
+    gone.textContent = 'Address no longer kept';
+    body.appendChild(gone);
   }
   saleRow.appendChild(body);
 

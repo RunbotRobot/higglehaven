@@ -2796,7 +2796,9 @@ is marked shipped, `400` once refunded, same rate limit as Mark shipped; it send
 **Where to send it (#4600, shipping 3/8).** The same two seller reads, `GET /api/purchases?mine=seller` and
 `GET /api/purchases?templateId=`, carry each sale's `shippingAddress`: the order's own copy of the address the buyer gave
 at checkout (`{ name, line1, line2, city, region, postalCode, country }`), or `null` for a digital good or an order made
-before addresses were asked for. Like the carrier and tracking number it is deliberately not part of the shape the host's
+before addresses were asked for, or one whose address was cleared (#4636: a daily sweep in `scheduled()`,
+`worker/lib/order-address-retention.js`, clears the copy `ORDER_ADDRESS_KEEP_DAYS` = 30 days after an order is refunded, or
+shipped and paid out; the order, price and tracking stay). Like the carrier and tracking number it is deliberately not part of the shape the host's
 `GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
 shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
 

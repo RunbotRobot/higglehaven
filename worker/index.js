@@ -128,6 +128,7 @@ import { handlePurchases } from './lib/purchase-lifecycle.js';
 // mechanism. releaseDueCommissionHolds is this module's own cron sweep,
 // wired into scheduled() below the same way every other job there is.
 import { releaseDueCommissionHolds } from './lib/commission-caps.js';
+import { clearClosedOrderAddresses } from './lib/order-address-retention.js';
 // #2531: catalog-template CRUD/batch/search/thumbnail/concept-image route
 // handler, extracted into worker/lib/ -- see that module's own comment for
 // what deliberately stayed here instead (and why).
@@ -598,6 +599,11 @@ export default {
     // releases or revokes one.
     ctx.waitUntil(releaseDueCommissionHolds(env.DB).catch((error) => {
       console.error('releaseDueCommissionHolds failed', error);
+    }));
+    // #4636: an order's copy of its address is cleared once the order is closed (refunded, or shipped and paid out)
+    // and a grace has passed; the seller and the buyer have no further use for it.
+    ctx.waitUntil(clearClosedOrderAddresses(env.DB).catch((error) => {
+      console.error('clearClosedOrderAddresses failed', error);
     }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
