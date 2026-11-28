@@ -3563,7 +3563,7 @@ export async function cascadeDeleteAccount(db, userId, env = null) {
     // #4636: the address copies on this person's orders go too at once where the rule allows (a refunded order);
     // any other order keeps its copy for the seller to ship and to answer a card dispute, until the sweep's term ends.
     db.prepare(`
-      UPDATE purchases SET shipping_address_json = NULL
+      UPDATE purchases SET shipping_address_json = NULL, shipping_address_cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE buyer_user_id = ? AND shipping_address_json IS NOT NULL AND refunded_at IS NOT NULL AND last_dispute_event_at IS NULL
         AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, ...guardBinds),

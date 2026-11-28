@@ -19,6 +19,13 @@ export function basketHeadText(purchases) {
   return `One order · ${count} ${count === 1 ? 'product' : 'products'} · ${money(total)}`;
 }
 
+// #4636: what a view says where an order's address copy has been cleared; the date is when it was removed (older orders
+// have none, and then the line says only that it is gone).
+export function addressRemovedText(clearedAt) {
+  const d = clearedAt ? new Date(clearedAt) : null;
+  return d && !Number.isNaN(d.getTime()) ? `Address removed on ${d.toLocaleDateString()}` : 'Address no longer kept';
+}
+
 // #4599: the address an order was bought for, on one line, in the order it is read aloud. Null for a digital good or an
 // order made before addresses were asked for.
 export function shippingAddressLine(address) {
@@ -87,6 +94,11 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     ship.className = 'my-purchase-meta my-purchase-ship-to';
     ship.textContent = `Ships to ${addressText}`;
     row.appendChild(ship);
+  } else if (purchase.addressClearedAt) {
+    const gone = document.createElement('div');
+    gone.className = 'my-purchase-meta my-purchase-ship-to';
+    gone.textContent = addressRemovedText(purchase.addressClearedAt);
+    row.appendChild(gone);
   }
   // #4600: once shipped, the carrier and tracking number the seller gave, as plain selectable text.
   const trackingText = purchaseTrackingText(purchase);

@@ -9,7 +9,7 @@ import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { formatPriceCents } from '../main.js';
 import { sellerKeepsCents } from './saleEarnings.js';
-import { shippingAddressLine } from '../account/myPurchases.js';
+import { shippingAddressLine, addressRemovedText } from '../account/myPurchases.js';
 import { disputeSentence } from './saleDispute.js'; // #4651
 
 // #4600: the two optional boxes a seller can fill when they ship an order (and later correct): who carried it and the
@@ -74,7 +74,7 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
     // #4636: a shipped order's address is cleared once it has settled, so say so instead of showing nothing.
     const gone = document.createElement('div');
     gone.className = 'product-sale-row-ship-to';
-    gone.textContent = 'Address no longer kept';
+    gone.textContent = addressRemovedText(purchase.addressClearedAt);
     body.appendChild(gone);
   }
   // #4651: an order the buyer's bank has disputed says so, with the due date, as plain selectable text.

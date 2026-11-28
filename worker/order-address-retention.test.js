@@ -47,6 +47,11 @@ describe('clearSettledOrderAddresses (#4636)', () => {
       expect(await addressOf(id)).toBeNull();
       expect((await env.DB.prepare('SELECT total_cents FROM purchases WHERE purchase_id = ?').bind(id).first()).total_cents).toBe(500);
     }
+    // Each cleared order records when, and one still holding its address records nothing.
+    const cleared = async (id) => (await env.DB.prepare('SELECT shipping_address_cleared_at AS c FROM purchases WHERE purchase_id = ?').bind(id).first()).c;
+    expect(await cleared('ret-refunded')).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(await cleared('ret-old')).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(await cleared('ret-disputed')).toBeNull();
     // Running it again changes nothing.
     expect(await clearSettledOrderAddresses(env.DB, now)).toBe(0);
   });
