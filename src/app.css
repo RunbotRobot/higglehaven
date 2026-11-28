@@ -7029,8 +7029,12 @@
       #product-card-buy-btn:disabled {
         opacity: 0.6;
       }
+      /* #4612: on its own row under Buy and More, so neither is squeezed below a 44px hit square. */
       #product-card-basket-btn {
         display: none;
+        width: 100%;
+        min-height: 44px;
+        margin-top: var(--space-xs);
       }
       #product-card-basket-btn.visible {
         display: block;

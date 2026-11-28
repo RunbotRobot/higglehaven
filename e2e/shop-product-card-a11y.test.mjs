@@ -2,7 +2,7 @@
 // Seeds a claimed landlet with two products (as shop-product-card.test.mjs does), opens the nearest
 // card with the N key, and checks at 390x844: the card is a region named by its product and has focus;
 // Buy names what it buys and for how much; every control on it can be hit in a 44px square (small
-// controls carry an invisible area, so the card looks as it did); Tab reads Buy, More, Close in order;
+// controls carry an invisible area, so the card looks as it did); Tab reads Buy, More, Add to basket, Close in order;
 // More announces whether it is open; no text on the card is under 12px; Escape folds it.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -166,13 +166,13 @@ const smallAreas = () => page.evaluate(() => {
 const missed = await smallAreas();
 check(missed.length === 0, `every control on the card can be hit in a 44px square (${JSON.stringify(missed)})`);
 
-// Tab reads the card in order: Buy, More, Close.
+// Tab reads the card in order: Buy, More, Add to basket (#4612), Close.
 const order = [];
-for (let i = 0; i < 3; i++) {
+for (let i = 0; i < 4; i++) {
   await page.keyboard.press('Tab');
   order.push(await page.evaluate(() => (document.activeElement.closest('#product-card') ? document.activeElement.id : `OUT:${document.activeElement.id || document.activeElement.tagName}`)));
 }
-check(JSON.stringify(order) === JSON.stringify(['product-card-buy-btn', 'product-card-more-btn', 'product-card-close-btn']), `Tab reads Buy, More, Close (got ${JSON.stringify(order)})`);
+check(JSON.stringify(order) === JSON.stringify(['product-card-buy-btn', 'product-card-more-btn', 'product-card-basket-btn', 'product-card-close-btn']), `Tab reads Buy, More, Add to basket, Close (got ${JSON.stringify(order)})`);
 
 // More says whether it is open, and what it opens is reachable and 44px.
 await page.focus('#product-card-more-btn');
