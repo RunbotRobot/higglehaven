@@ -6099,9 +6099,9 @@ rate limit (60 per window).
 
 ### `GET /api/basket`
 
-`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName" }], "maxLines": 20,
-"maxQuantity": 1000 }`, oldest first. `templateId` and `productName` only name the line in a list; both are `null`
-when the item or its product is gone (the line is kept, never dropped silently).
+`{ "lines": [{ "instanceId", "quantity", "addedAt", "updatedAt", "templateId", "productName", "sellerId", "sellerName" }], "maxLines": 20,
+"maxQuantity": 1000 }`, oldest first. `templateId`, `productName`, `sellerId` and `sellerName` only name the line in a list (the leaf groups by seller);
+they are `null` when the item, its product or its seller is gone (the line is kept, never dropped silently).
 
 ### `POST /api/basket`
 
@@ -6157,6 +6157,25 @@ the first pays its "each additional item" amount when the seller set one; the fi
 per-item amount, so the order things were added never changes the price (`combinedShippingCents`, with the three worked
 examples of #4604's design as tests). Until a seller can set a cost per zone (#4603) every amount is zero, so
 `shippingCents` is `0` today.
+
+### `POST /api/basket/checkout` (#4614)
+
+Pays the signed-in person's whole basket with one card payment. **Off unless the environment variable
+`BASKET_CHECKOUT_ENABLED` is the string `true`** (answers 404 otherwise): a basket line is not yet handled by refunds,
+disputes and payout requests (#4616), and nothing in the app calls it yet (#4615).
+
+Body: `{ shippingAddress?, expected?: { "<instanceId>": <unitPriceCents> } }`. Every line is judged by the same function
+as the basket quote; if any line cannot be bought, or one cannot be paid by card, nothing is charged and the answer is
+`409` with `lines` (each with its own `status`). Otherwise one PaymentIntent is created on the platform's own account
+(`transfer_group` = the order id; its metadata is only `basketOrderId` and the address) and the answer is
+`{ requiresPayment, basketOrderId, totalCents, clientSecret, paymentIntentId, publishableKey }`.
+
+Finalize is the existing `POST /api/purchases/finalize` and the `payment_intent.succeeded` webhook (both reach
+`finalizeSucceededPaymentIntent`, which branches on `metadata.basketOrderId`). It records each line as an ordinary
+purchase (`purchases.basket_order_id`, `basket_line_no`), once per line however often it runs, then makes one Stripe
+Transfer per seller for the price minus the commission (`purchases.stripe_transfer_id`), then marks the order `paid`
+and removes the bought items from the basket. A basket line is not payout-eligible until its Transfer exists. A failure
+throws so the webhook is redelivered.
 
 ## Shipping destination (#4602)
 

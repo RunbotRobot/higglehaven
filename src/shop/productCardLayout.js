@@ -239,5 +239,7 @@ export function productCardState({ template, inRange, owned = false, hasUnratedO
   if (!reach) {
     return { canBuy: false, canReview: false, canReturnPolicy: false, stateText: 'Walk closer to buy this.' };
   }
-  return { canBuy: true, canReview: canRate, canReturnPolicy: true, stateText: '' };
+  // #4612: an avatar or an animation stays with its buyer, so it is never gathered in a basket by the dozen.
+  const canAddToBasket = template.category !== 'avatar' && template.category !== 'animation';
+  return { canBuy: true, canAddToBasket, canReview: canRate, canReturnPolicy: true, stateText: '' };
 }

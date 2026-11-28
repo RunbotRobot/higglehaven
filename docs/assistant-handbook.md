@@ -277,7 +277,7 @@ everything else.
 **You will see:** a petal for another place turns green at once and the petals stay out while that
 place loads; when it is on screen they fold back into the bud. With the petals out, the menu of the place
 you are in is open below them (Build's has "Add item", "Levels", "Tools" and so on; Sell's has "My
-products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Friends", "My purchases", "Chat" and "Nearby"). Each place has its own menu, and it is the same every time. The row along the top
+products", "Add a product", "Payouts", "Storefront" and "Orders"; Shop's has "Friends", "My purchases", "Basket", "Chat" and "Nearby"). Each place has its own menu, and it is the same every time. The row along the top
 (your name, Notices, Settings and "Help") is the same in all three places.
 
 **If something goes wrong:**
@@ -452,10 +452,34 @@ label:has(#verify-age-attest) | at least 18
 #verify-logout-btn | Log out instead
 ```
 
+### How do I gather several things in a basket?
+
+1. Open a product's card (see "How do I look at a product and read about it?") and tap "Add to basket".
+   Tapping it again for the same product adds one more.
+2. To see the basket, tap the round higglehaven logo at the top left ("Account menu"), make sure you are in Shop, and tap
+   "Basket" in the stem of leaves. Things are grouped by seller. Each has "+" and "−" to change how many, and
+   "Remove" to take it out.
+
+**You will see:** the card says "Added to your basket." A basket holds up to 20 different items.
+Someone who has added nothing sees "Your basket is empty. Tap a product in Shop mode and choose Add to basket to gather things here."
+
+**If something goes wrong:**
+- The card has no "Add to basket" button: it is only there when "Buy" is, so the card's own line says why
+  (walk closer, out of stock, or not for sale).
+- "A basket holds up to 20 different items. Remove one to add another." means the basket is full.
+- Paying for a whole basket at once is not available yet. To buy something now, open its card and tap "Buy".
+  Do not promise a date for it.
+
+```controls any
+#account-menu-toggle | Account menu
+#bud-petal-shop-basket | Basket
+#product-card-basket-btn | Add to basket
+```
+
 ### Where are the things I bought, and how do I rate a seller?
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once) ("Account menu"). A row of pictures opens along the top
-   with your name, "Notices", "Settings" and "Help", and (in Shop) a stem of leaves opens below the petals with "Friends", "My purchases", "Chat" and "Nearby".
+   with your name, "Notices", "Settings" and "Help", and (in Shop) a stem of leaves opens below the petals with "Friends", "My purchases", "Basket", "Chat" and "Nearby".
 2. Tap "My purchases".
 3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
    the seller or the product for that purchase. Once given, the rating shows under the purchase
