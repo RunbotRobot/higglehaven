@@ -2008,21 +2008,30 @@ These are two cheap queries, not a re-read of the backlog, so they do not
 conflict with "Claude usage is the binding constraint". Stand down only
 when both come back empty.
 
-**Pace for the week of 2026-11-23: a doubled week, and the first allowance is spent as
-fast as real work allows (owner, 2026-11-24).** At 13% on Tuesday morning the owner
-wrote: "I do want this to be a doubled usage week... Let's try to push through the first
-set of usage as quickly as possible since we struggled to get through it in the first
-half of last week, then we can return to pacing that we're more familiar with for the
-second half." So, until higglehaven1 replaces this paragraph (when the first allowance
-is spent and the owner has applied the free reset):
+**Pace from 2026-11-28 to the reset on 2026-11-30 21:00Z: the second allowance of the
+doubled week, and at the fleet's speed it does not run out (owner, 2026-11-24 and
+2026-11-28).** The first allowance was spent at about 03:20Z on 2026-11-28 and the owner
+applied the free reset at 03:51Z. It went at roughly one point an hour while the fleet was
+busy and 0.6 while it idled, and about 65 hours remain to the reset, so the second
+allowance will end near two thirds used. "Usage is paced to last the whole week" is met
+without slowing anyone. So, until higglehaven1 replaces this paragraph:
 
-- **Every coding session works** (higglehaven2 to 16), on hourly check-ins, one task at
-  a time, straight from one merge to the next. The two queries above apply to all of you.
-- **What limits us is work worth building, not sessions.** Last week most free cards
-  ended "left: a look by the owner", and sessions stood down beside them. A session that
-  finds no free card with real work in it does not stand down: it explores its own area
-  (below), files every real finding as its own issue with a card ("Backlog exploration"
-  and "Proposing big feature work" below), and builds them, smallest first.
+- **Every coding session keeps working** (higglehaven2 to 16), on hourly check-ins, one
+  task at a time. Nobody rests. If the owner's readings ever show the allowance on course
+  to run out before the reset, higglehaven1 slows the timers; a session never slows itself.
+- **What limits us is still work worth building, not sessions.** Three lessons from the
+  first half, each of which cost hours of an idle fleet: (1) A card whose note ends "left:
+  a look" reads as finished to the next session. When you stop, write the next slice as
+  one line that begins "Next:" and names the file or surface, or close the issue. (2) A
+  walk finds real bugs faster than reading code: one main path, on a seeded local world
+  at phone size, written down tap by tap as someone who has never seen the app (#3887 and
+  #4569 to #4576 are the models; one of them found a seller's sale row showing $0.24 on a
+  $24.00 sale). When your area has no free card with real work, walk a path in it, file
+  every real finding as its own issue with a card, and build them smallest first. (3) When
+  you merge a slice and time is left in the turn, take the next free card in the same
+  turn; do not wait for the next hourly check-in.
+- **The large build in hand is shipping** (#4394: leaves #4598 to #4605, and the basket,
+  #4611 to #4617). Its buying and paying pieces get the blast-radius review.
 - **Real work only.** Something a shopper, builder, seller or the owner would notice, or
   that removes a real risk: a gap against docs/SPEC.md, a bug, a slow or janky path with
   a measurement, a refusal that does not say why, a missing test for something that has
@@ -2054,8 +2063,9 @@ is spent and the owner has applied the free reset):
   the live look after a deploy and the conduct rules on the live site all stand. The
   speed comes from never idling, not from skipping a check.
 
-higglehaven1 watches for the limit, asks the owner for the reset, and then replaces this
-paragraph with a paced one. If it is still here after 2026-11-30 21:00Z, ignore it.
+After the reset on 2026-11-30 21:00Z an ordinary single week begins, paced to last
+("Usage is paced to last the whole week"); if this paragraph is still here then, its first
+bullet still holds until higglehaven1 writes the next one.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
