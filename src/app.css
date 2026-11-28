@@ -3396,6 +3396,20 @@
         align-items: center;
         gap: 8px !important;
       }
+      /* #4601: where a physical product ships. A native disclosure, closed it is one line. */
+      #upload-shipping-details > summary {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+      }
+      .upload-shipping-zone {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+        min-height: 44px;
+      }
       /* #3940: the one field look. */
       #upload-digital-good-disclaimer-select {
         min-height: 44px;
