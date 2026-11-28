@@ -243,6 +243,7 @@ describe('coverTable and the cover flags', () => {
 
   it('parses the cover step and the --cover-report flag', () => {
     expect(parseStep('cover')).toEqual({ command: 'cover', args: [] });
+    expect(parseStep('aria:#item-card')).toEqual({ command: 'aria', args: ['#item-card'] });
     expect(parseArgs(['--name', 'higglehaven3', '--cover-report'], {}).options.coverReport).toBe(true);
     expect(parseArgs(['--name', 'higglehaven3'], {}).options.coverReport).toBe(false);
   });
