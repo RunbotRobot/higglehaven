@@ -2818,6 +2818,17 @@ before addresses were asked for. Like the carrier and tracking number it is deli
 `GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
 shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
 
+**A dispute on the order (#4651, disputes 3/3).** The same two seller reads carry each sale's `dispute`: the newest of
+its `purchase_disputes` rows (#4648) as `{ disputeId, reason, amountCents, evidenceDueBy, outcome, evidenceSent,
+openedAt }` (`reason` is Stripe's reason code or `null`, `evidenceDueBy` an ISO time or `null`, `outcome` `open` or
+`won`, `evidenceSent` a boolean), or `null` for an order that was never disputed. Nothing internal reaches the seller
+(no evidence error text) and, like the tracking number, it is not part of the shape the host's
+`GET /api/purchases?builderId=` returns. The sale row shows it as one selectable sentence, "Disputed: ...", with the
+due date. When a dispute opens (`charge.dispute.funds_withdrawn`) the seller's notice says what it is and when
+evidence is due ("A dispute was opened over a sale of ..., so $X is held back from your earnings while it is decided.
+Evidence is due Dec 3, 2026. Open Orders to see it.") in place of the generic "refunded or disputed" sentence; a tap
+opens Orders. A refund keeps the generic sentence.
+
 ### Purchase delivery confirmation
 
 `POST /api/purchases/confirm-delivery`

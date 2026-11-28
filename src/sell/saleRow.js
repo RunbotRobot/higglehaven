@@ -10,6 +10,7 @@ import { confirmDestructive } from '../ui/confirmModal.js';
 import { formatPriceCents } from '../main.js';
 import { sellerKeepsCents } from './saleEarnings.js';
 import { shippingAddressLine } from '../account/myPurchases.js';
+import { disputeSentence } from './saleDispute.js'; // #4651
 
 // #4600: the two optional boxes a seller can fill when they ship an order (and later correct): who carried it and the
 // number the buyer can follow it by. Both start empty, with their words in the box and as the accessible name.
@@ -75,6 +76,15 @@ export function buildSaleRow(purchase, { onChanged, showProduct = false }) {
     gone.className = 'product-sale-row-ship-to';
     gone.textContent = 'Address no longer kept';
     body.appendChild(gone);
+  }
+  // #4651: an order the buyer's bank has disputed says so, with the due date, as plain selectable text.
+  if (purchase.dispute) {
+    const disputed = document.createElement('div');
+    disputed.className = 'product-sale-row-dispute';
+    disputed.textContent = disputeSentence(purchase.dispute, {
+      canAddTracking: !purchase.isDigitalGood && !purchase.trackingNumber && !!purchase.paymentIntentId,
+    });
+    body.appendChild(disputed);
   }
   saleRow.appendChild(body);
 

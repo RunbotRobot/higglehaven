@@ -52,3 +52,32 @@ export async function recordDisputeEvent(db, purchase, event) {
     console.error('Could not record a dispute (the purchase was handled regardless):', err);
   }
 }
+
+// #4651 (Disputes 3/3): what the seller sees of a dispute on one of their orders. The seller reads the reason (in words),
+// the amount, when Stripe stops taking evidence, whether any went, and how it stands; nothing internal (no error text).
+export function disputeFromRow(row) {
+  return {
+    disputeId: row.dispute_id,
+    reason: row.reason ?? null,
+    amountCents: row.amount_cents ?? null,
+    evidenceDueBy: row.evidence_due_by ?? null,
+    outcome: row.outcome,
+    evidenceSent: !!row.evidence_submitted_at,
+    openedAt: row.opened_at,
+  };
+}
+
+// The newest dispute of each of these purchases, as a Map keyed by purchase id (a purchase can go through more than one
+// cycle; the latest is the one that matters). Chunked under D1's bound-parameter limit.
+export async function latestDisputesByPurchase(db, purchaseIds) {
+  const latest = new Map();
+  const ids = [...new Set(purchaseIds)];
+  for (let at = 0; at < ids.length; at += 90) {
+    const chunk = ids.slice(at, at + 90);
+    const { results } = await db.prepare(
+      `SELECT * FROM purchase_disputes WHERE purchase_id IN (${chunk.map(() => '?').join(',')}) ORDER BY opened_at ASC, dispute_id ASC`,
+    ).bind(...chunk).all();
+    for (const row of results) latest.set(row.purchase_id, disputeFromRow(row));
+  }
+  return latest;
+}
