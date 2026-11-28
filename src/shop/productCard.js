@@ -32,6 +32,7 @@ import { turnViewToward } from './viewTurn.js';
 import { productCardState, sellerLine } from './productCardLayout.js';
 import { currentAuthUser, requireLogin } from '../account/auth.js';
 import { addInstanceToBasket } from './basketLeaf.js';
+import { basketCheckoutEnabled, onBasketConfig } from './basketConfig.js'; // #4664
 import { fetchSellerSummaries, fetchShippingDestination } from '../api.js';
 import { loadShippingDestination, doesNotShipToMe, onShippingDestinationChange } from './shippingDestination.js';
 import { loadOwnedProducts, isOwnedProduct } from './ownedProducts.js';
@@ -122,6 +123,8 @@ function refreshOwnedState(review, { force = false } = {}) {
 
 // #4602: the switch or the country changed in Settings; a card that is open says what is now true.
 onShippingDestinationChange(() => { if (openReview) syncProductCardActions(openReview, lastInRange); });
+// #4664: the answer about baskets arrived after a card was already open.
+onBasketConfig(() => { if (openReview) syncProductCardActions(openReview, lastInRange); });
 
 // Called by the Buy flow once a purchase has finished, so a card that is still
 // open says so for what was just bought.
@@ -169,7 +172,7 @@ export function syncProductCardActions(review, inRange) {
   if (!review || review !== openReview) return;
   lastInRange = inRange;
   const template = review.mesh.userData.template;
-  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId), unshippable: doesNotShipToMe(template) });
+  const state = productCardState({ template, inRange, owned: isOwnedProduct(template?.templateId), hasUnratedOrder: hasUnratedOrder(template?.templateId), unshippable: doesNotShipToMe(template), basketEnabled: basketCheckoutEnabled() });
   buyBtn.classList.toggle('visible', state.canBuy);
   basketBtn.classList.toggle('visible', !!state.canAddToBasket);
   reviewBtn.classList.toggle('visible', state.canReview);

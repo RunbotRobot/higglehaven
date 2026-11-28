@@ -212,7 +212,7 @@ export function sellerLine(label, rating = null) {
 // good (an avatar or an animation they bought, src/shop/ownedProducts.js): the
 // card says so and offers no Buy, but they can still rate it and read its return
 // policy, since it is theirs.
-export function productCardState({ template, inRange, owned = false, hasUnratedOrder = false, unshippable = false }) {
+export function productCardState({ template, inRange, owned = false, hasUnratedOrder = false, unshippable = false, basketEnabled = false }) {
   const reach = !!inRange;
   const canRate = reach && !!hasUnratedOrder;
   const priced = template?.priceCents != null;
@@ -240,6 +240,7 @@ export function productCardState({ template, inRange, owned = false, hasUnratedO
     return { canBuy: false, canReview: false, canReturnPolicy: false, stateText: 'Walk closer to buy this.' };
   }
   // #4612: an avatar or an animation stays with its buyer, so it is never gathered in a basket by the dozen.
-  const canAddToBasket = template.category !== 'avatar' && template.category !== 'animation';
+  // #4664: and only while a basket can be paid for (src/shop/basketConfig.js).
+  const canAddToBasket = basketEnabled && template.category !== 'avatar' && template.category !== 'animation';
   return { canBuy: true, canAddToBasket, canReview: canRate, canReturnPolicy: true, stateText: '' };
 }

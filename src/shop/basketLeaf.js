@@ -7,6 +7,7 @@ import { fetchBasket, addToBasket, setBasketQuantity, removeFromBasket } from '.
 import { emptyState, EMPTY_COPY } from '../ui/emptyState.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { groupBasketLines } from './basketGroups.js';
+import { loadBasketConfig } from './basketConfig.js';
 
 function button(label, ariaLabel, onClick) {
   const btn = document.createElement('button');
@@ -106,4 +107,8 @@ export async function addInstanceToBasket(instanceId) {
   return 'Added to your basket.';
 }
 
-addBudPetals('shop', [{ id: 'basket', label: 'Basket', run: openBasketLeaf }]);
+// #4664: the petal is added when the server says a basket can be paid for, not before; until then (and when the answer
+// cannot be read) the Shop stem is the one it always was.
+loadBasketConfig().then((enabled) => {
+  if (enabled) addBudPetals('shop', [{ id: 'basket', label: 'Basket', run: openBasketLeaf }]);
+});
