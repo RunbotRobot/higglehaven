@@ -22,6 +22,8 @@ import {
   purchaseFromRow,
 } from './purchase-creation.js';
 import { stripeConfigured, stripeRequest } from '../index.js';
+import { isUserSuspended } from './account-moderation.js';
+import { clawBackPurchaseCommission } from './purchase-lifecycle.js';
 
 const BASKET_CHECKOUT_RATE_LIMIT_MAX = 10;
 
@@ -156,26 +158,35 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
   return lineRecorded(db, paymentIntent.id, line.line_no);
 }
 
-// One Transfer per seller, out of this charge, for the sellers' share (price minus the commission) of their lines.
-// Idempotent in Stripe by key, and only the rows still without a transfer id are written, so a rerun is harmless.
-async function transferSellerShares(env, order, lines, paymentIntent) {
+// One Transfer per seller, out of this charge, for the sellers' share (price minus the commission) of their lines that
+// still stand. Idempotent in Stripe by key, and only the rows still without a transfer id are written, so a rerun is
+// harmless. A line already refunded is left out (its refund took the buyer's money back before the seller was paid).
+// A seller who was suspended or closed between the payment and now is not paid: their lines are refunded whole to the
+// buyer instead (#4616), so nobody pays a seller the platform has stopped.
+async function transferSellerShares(env, order, paymentIntent) {
   const db = env.DB;
+  const { results: standing } = await db.prepare(`
+    SELECT * FROM purchases
+    WHERE basket_order_id = ? AND seller_id IS NOT NULL AND stripe_transfer_id IS NULL AND refunded_at IS NULL
+  `).bind(order.basket_order_id).all();
   const bySeller = new Map();
-  for (const line of lines) {
-    if (!line.seller_id) continue; // no seller: the platform keeps it
-    bySeller.set(line.seller_id, (bySeller.get(line.seller_id) || 0) + line.total_cents - line.commission_cents);
+  for (const row of standing) {
+    if (!bySeller.has(row.seller_id)) bySeller.set(row.seller_id, []);
+    bySeller.get(row.seller_id).push(row);
   }
-  for (const [sellerId, amountCents] of bySeller) {
-    const seller = await db.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(sellerId).first();
-    if (!seller?.stripe_account_id) {
+  for (const [sellerId, rows] of bySeller) {
+    const seller = await db.prepare('SELECT stripe_account_id, user_id FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+    const closed = await db.prepare('SELECT 1 AS closed FROM closed_sellers WHERE seller_id = ?').bind(sellerId).first();
+    if (closed || !seller || await isUserSuspended(db, seller.user_id)) {
+      for (const row of rows) await refundLineWhole(env, row);
+      continue;
+    }
+    if (!seller.stripe_account_id) {
       console.error('basket: seller has no payout account, share stays on the platform', order.basket_order_id, sellerId);
       continue;
     }
+    const amountCents = rows.reduce((sum, r) => sum + r.total_cents - r.commission_cents, 0);
     if (amountCents <= 0) continue;
-    const pending = await db.prepare(
-      'SELECT COUNT(*) AS n FROM purchases WHERE basket_order_id = ? AND seller_id = ? AND stripe_transfer_id IS NULL',
-    ).bind(order.basket_order_id, sellerId).first();
-    if (!pending?.n) continue; // already transferred by an earlier run
     const transfer = await stripeRequest(env, 'POST', 'transfers', {
       amount: amountCents,
       currency: 'usd',
@@ -183,11 +194,33 @@ async function transferSellerShares(env, order, lines, paymentIntent) {
       transfer_group: order.basket_order_id,
       ...(typeof paymentIntent.latest_charge === 'string' ? { source_transaction: paymentIntent.latest_charge } : {}),
       metadata: { basketOrderId: order.basket_order_id, sellerId },
-    }, `basket-transfer:${order.basket_order_id}:${sellerId}`);
+    }, `basket-transfer:${order.basket_order_id}:${sellerId}:${rows.map((r) => r.basket_line_no).join('-')}`);
     await db.prepare(
-      'UPDATE purchases SET stripe_transfer_id = ? WHERE basket_order_id = ? AND seller_id = ? AND stripe_transfer_id IS NULL',
+      `UPDATE purchases SET stripe_transfer_id = ? WHERE basket_order_id = ? AND seller_id = ? AND stripe_transfer_id IS NULL AND refunded_at IS NULL`,
     ).bind(transfer.id, order.basket_order_id, sellerId).run();
   }
+}
+
+// The whole price back to the buyer for a line whose seller can no longer be paid: a Stripe refund of the full total
+// (no transfer exists to pull back, and the platform keeps no commission on a sale it did not complete), the line marked
+// refunded, and the builder's commission taken back the usual way. The guard is atomic; Stripe's own key makes a retry safe.
+async function refundLineWhole(env, row) {
+  const db = env.DB;
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), refunded_amount_cents = ?
+     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
+  ).bind(row.total_cents, row.purchase_id).run();
+  if (guard.meta.changes === 0) return;
+  try {
+    await stripeRequest(env, 'POST', 'refunds', {
+      payment_intent: row.payment_intent_id,
+      amount: row.total_cents,
+    }, `refund-seller-stopped:${row.purchase_id}`);
+  } catch (err) {
+    await db.prepare('UPDATE purchases SET refunded_at = NULL, refunded_amount_cents = 0 WHERE purchase_id = ?').bind(row.purchase_id).run();
+    throw err;
+  }
+  await clawBackPurchaseCommission(db, row, row.product_name || 'A product', { buyerRefundCents: row.total_cents });
 }
 
 export async function finalizeBasketPaymentIntent(env, paymentIntent) {
@@ -204,7 +237,7 @@ export async function finalizeBasketPaymentIntent(env, paymentIntent) {
   }
   const shippingAddressJson = paymentIntent.metadata?.shippingAddress || null;
   for (const line of lines) await recordBasketLine(env, order, line, paymentIntent, shippingAddressJson);
-  await transferSellerShares(env, order, lines, paymentIntent);
+  await transferSellerShares(env, order, paymentIntent);
   await markBasketOrderPaid(env, order.basket_order_id);
   // What was bought leaves the basket; anything added since stays.
   await db.prepare(`
