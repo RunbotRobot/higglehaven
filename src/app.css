@@ -6165,6 +6165,17 @@
       .my-purchase-row {
         overflow-wrap: anywhere;
       }
+      .my-purchase-basket {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding-left: var(--space-sm);
+        border-left: 2px solid var(--pill-text-soft);
+      }
+      .my-purchase-basket-head {
+        font-size: var(--text-2xs);
+        color: var(--pill-text-soft);
+      }
       .my-purchase-name {
         font-weight: var(--weight-semibold);
       }
@@ -7690,6 +7701,12 @@
         user-select: text;
       }
       .product-sale-row-ship-to {
+        user-select: text;
+      }
+      /* #4651: a disputed order, in full ink so it is read first; text only, selectable. */
+      .product-sale-row-dispute {
+        margin-top: var(--space-2xs);
+        font-weight: var(--weight-semibold);
         user-select: text;
       }
       .product-sale-row-tracking-line {

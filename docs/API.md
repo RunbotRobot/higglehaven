@@ -2418,6 +2418,22 @@ destructively deleted (the underlying `catalog_templates` row may not
 even exist anymore), or to un-revoke a `commission_holds` row — both
 remain a known, accepted residual gap tracked at #2235, since reinstating
 money is safe and mechanical while reinstating ownership isn't.
+**#4648** (Disputes 1/3): the same two events also keep the dispute itself, one row per Stripe dispute id in
+`purchase_disputes` (`migrations/0251_purchase_disputes.sql`: `dispute_id` UNIQUE, `purchase_id`, `reason`,
+`amount_cents`, `status`, `evidence_due_by`, `outcome` `open` or `won`, `last_event_at`, and `evidence_submitted_at` /
+`evidence_error` for the evidence piece, #4650). `data.object` is Stripe's Dispute, so no new event subscription is
+needed. A redelivered event is a no-op, an event older than the one the row holds changes nothing, and a stale event is
+dropped by the purchase's own `last_dispute_event_at` guard before it gets here. The write moves no money and a failure
+of it is logged and never stops the clawback or its reversal. A lost dispute needs no event: it is the withdrawal
+standing. (A basket order's lines share one PaymentIntent, #4614; this record points at the purchase the PaymentIntent
+id finds, and per-line disputes are #4616's.)
+**#4650** (Disputes 2/3): the cron (`scheduled()`, `worker/lib/dispute-evidence.js`) sends the evidence for each `open`
+dispute that has none yet and is still before `evidence_due_by`: `POST /v1/disputes/:id` with `submit: true`, built only
+from the order's own record (product name, the order's address copy, carrier, tracking number, shipped date, delivery
+confirmation; a digital good sends only the product and that the buyer owns it). The row is claimed first
+(`evidence_submitted_at`) so two runs never send twice; a failed send clears the claim and writes `evidence_error` for
+the next run; Stripe refusing a second submit counts as done; past the due date the row reads `due date passed...` and
+is left alone. It moves no money.
 **#2901**: a partial refund that happened *before* the dispute is a
 separate, already-settled event the buyer keeps permanently regardless of
 how the dispute resolves — `funds_withdrawn`'s own clawback already
@@ -2801,6 +2817,17 @@ at checkout (`{ name, line1, line2, city, region, postalCode, country }`), or `n
 before addresses were asked for. Like the carrier and tracking number it is deliberately not part of the shape the host's
 `GET /api/purchases?builderId=` returns, because the host of an instance is not the seller of the order. The sale row
 shows it as plain selectable text, "Ship to ...", and not once the order is refunded.
+
+**A dispute on the order (#4651, disputes 3/3).** The same two seller reads carry each sale's `dispute`: the newest of
+its `purchase_disputes` rows (#4648) as `{ disputeId, reason, amountCents, evidenceDueBy, outcome, evidenceSent,
+openedAt }` (`reason` is Stripe's reason code or `null`, `evidenceDueBy` an ISO time or `null`, `outcome` `open` or
+`won`, `evidenceSent` a boolean), or `null` for an order that was never disputed. Nothing internal reaches the seller
+(no evidence error text) and, like the tracking number, it is not part of the shape the host's
+`GET /api/purchases?builderId=` returns. The sale row shows it as one selectable sentence, "Disputed: ...", with the
+due date. When a dispute opens (`charge.dispute.funds_withdrawn`) the seller's notice says what it is and when
+evidence is due ("A dispute was opened over a sale of ..., so $X is held back from your earnings while it is decided.
+Evidence is due Dec 3, 2026. Open Orders to see it.") in place of the generic "refunded or disputed" sentence; a tap
+opens Orders. A refund keeps the generic sentence.
 
 ### Purchase delivery confirmation
 
@@ -6175,7 +6202,27 @@ Finalize is the existing `POST /api/purchases/finalize` and the `payment_intent.
 purchase (`purchases.basket_order_id`, `basket_line_no`), once per line however often it runs, then makes one Stripe
 Transfer per seller for the price minus the commission (`purchases.stripe_transfer_id`), then marks the order `paid`
 and removes the bought items from the basket. A basket line is not payout-eligible until its Transfer exists. A failure
-throws so the webhook is redelivered.
+throws so the webhook is redelivered. The call that marks the order `paid` (once, however often finalize runs) also sends
+the buyer one receipt email, a part per seller and the total, best effort: a mail failure never fails the payment (#4617).
+`GET /api/purchases/mine` carries `basketOrderId` on each line of a basket order (null otherwise), so My purchases shows
+the lines as one order.
+
+Refunds and disputes (#4616) work per line. `POST /api/purchases/:id/refund` on a basket line refunds the buyer's 99% from
+the shared payment and pulls that line's seller part (price minus commission) back out of the order's Transfer; the
+commission share is not reversed. A `charge.dispute.*` event on the shared charge applies to every line of the order; a
+`charge.refunded` event for a basket payment is only logged, because this app records each refund itself. A seller who is
+suspended or closed before the Transfer has their lines refunded whole to the buyer and receives no Transfer.
+
+**Sweeps on the cron (#4615, `worker/lib/basket-sweeps.js`).** Two jobs keep a paid basket from being lost; both only
+finish or close what Stripe already says and both are idempotent. (1) A `pending` order older than 15 minutes is looked up
+at Stripe: a succeeded payment is finalized now (a lost webhook, or a Transfer that failed and was never retried); a
+cancelled one closes the order; one nobody paid within a day is cancelled at Stripe and the order set to `cancelled`, as is
+an order whose payment was never created. A payment that succeeded is never cancelled, however old. A Stripe failure
+leaves the order pending for the next run, and one order's failure never stops the others (25 per run). (2) A paid
+order's line whose seller's share has no Transfer yet (the seller had no payout account when it was paid) is retried
+once the seller has one, and the seller gets the notice "The payment for one of your sales has now been sent to your
+payout account." once, for the lines whose Transfer it made. A refunded line does not trigger a retry, and a seller suspended or closed
+in the meantime has the line refunded whole by the same transfer step (#4616) and is not told it was sent.
 
 ## Shipping destination (#4602)
 

@@ -129,6 +129,7 @@ import { handlePurchases } from './lib/purchase-lifecycle.js';
 // mechanism. releaseDueCommissionHolds is this module's own cron sweep,
 // wired into scheduled() below the same way every other job there is.
 import { releaseDueCommissionHolds } from './lib/commission-caps.js';
+import { submitDueDisputeEvidence } from './lib/dispute-evidence.js';
 // #2531: catalog-template CRUD/batch/search/thumbnail/concept-image route
 // handler, extracted into worker/lib/ -- see that module's own comment for
 // what deliberately stayed here instead (and why).
@@ -178,6 +179,7 @@ import { handleBlocks } from './lib/blocks.js';
 import { handleAddresses, handleShippingDestination, addressFromRow } from './lib/addresses.js';
 import { handleBasket, basketLineFromRow } from './lib/basket.js';
 import { handleBasketQuote } from './lib/basket-quote.js'; // #4613
+import { sweepBaskets } from './lib/basket-sweeps.js'; // #4615
 import { handleBasketCheckout } from './lib/basket-checkout.js'; // #4614
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
@@ -573,6 +575,11 @@ export default {
     ctx.waitUntil(clearSettledOrderAddresses(env.DB).catch((error) => {
       console.error('clearSettledOrderAddresses failed', error);
     }));
+    // #4615: a basket whose payment succeeded but was never finished is finished; one nobody paid in a day is closed;
+    // a seller's share that could not be transferred is sent once they can be paid.
+    ctx.waitUntil(sweepBaskets(env).catch((error) => {
+      console.error('sweepBaskets failed', error);
+    }));
     // #3447: assistant conversations are kept no longer than nearby chat.
     ctx.waitUntil(pruneStaleAssistantChat(env.DB).catch((error) => {
       console.error('pruneStaleAssistantChat failed', error);
@@ -606,6 +613,12 @@ export default {
     ctx.waitUntil(releaseDueCommissionHolds(env.DB).catch((error) => {
       console.error('releaseDueCommissionHolds failed', error);
     }));
+    // #4650: the evidence for an open card dispute is sent to Stripe once, from the order's own record, before it is due.
+    if (stripeConfigured(env)) {
+      ctx.waitUntil(submitDueDisputeEvidence(env, env.DB, { stripeRequest }).catch((error) => {
+        console.error('submitDueDisputeEvidence failed', error);
+      }));
+    }
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
     // #4076: an orb hands out a free video-to-model credit, so none spawns while the provider is not connected

@@ -25,6 +25,7 @@
 //                                         `tap:text=Orders` works on a label too)
 //   type:<selector>:<text>                 tap a text box and type into it (the selector holds no ":"; send with a tap step) (#4572)
 //   item[:n]                              Build: tap the n-th placed item on screen, left to right (#3930)
+//   product[:n]                           Shop: tap the n-th loaded product on screen, left to right, with a real touch, so its card (and Buy) can be walked (#4575)
 //   dragitem:<n>:<dx>:<dy>                Build: select the n-th item, drag it dx,dy px, report where it stood before and after (#4198).
 //                                         n counts EVERY item on screen, other sessions' too: look first (a shot), and move only your own (#4489)
 //   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
@@ -682,6 +683,19 @@ async function runStepAction(step, index) {
       await page.waitForTimeout(400);
       return spot;
     }
+    case 'product': {
+      // #4575: the Shop twin of `item`: a real tap on the a-th loaded product that is on screen, left to right.
+      const n = typeof a === 'number' ? a : 1;
+      const spots = await page.evaluate(() => (window.__testShopProductScreenPositions?.() ?? [])
+        .filter((p) => p && p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight)
+        .map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })));
+      spots.sort((l, r) => l.x - r.x);
+      const spot = spots[n - 1];
+      if (!spot) throw new Error(`step "product:${n}": ${spots.length} loaded product(s) on screen in Shop (is this a lándlet with products, with the avatar standing near and looking at them?)`);
+      await (device.hasTouch ? page.touchscreen.tap(spot.x, spot.y) : page.mouse.click(spot.x, spot.y));
+      await page.waitForTimeout(400);
+      return spot;
+    }
     case 'dragitem': {
       // #4198: Build: select the n-th placed item on screen (left to right) with a real tap, then drag it by
       // dx, dy pixels with a real mouse and report where it stood before and after (lándlet-local metres), so
@@ -819,6 +833,12 @@ async function runStepAction(step, index) {
       await page.screenshot({ path: file, scale: 'css' });
       result.screenshots.push(file);
       return file;
+    }
+    case 'aria': {
+      // #4574: the accessibility tree of one part of the page as a screen reader gets it (role, name, state, in reading
+      // order), for the first element matching the selector (colons allowed: `aria:#item-card`). `aria` alone is the whole page.
+      const selector = step.args[0] || 'body';
+      return page.locator(selector).first().ariaSnapshot({ timeout: 10000 });
     }
     case 'stats':
       return frameStats();
@@ -965,7 +985,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'aria' ? { aria: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

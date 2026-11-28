@@ -125,9 +125,39 @@ describe('The seller is told when a sale they earned is reversed (#3072)', () =>
     await postStripeWebhook(dispute('charge.dispute.funds_reinstated', 'pi_notice_dispute', 2000));
     await postStripeWebhook(dispute('charge.dispute.funds_reinstated', 'pi_notice_dispute', 2000));
     expect(await sellerNotices(ctx.sellerBuilderId)).toEqual([
-      `A sale of "Product dispute" was refunded or disputed, so ${dollars(ctx.shareCents)} will no longer be part of your earnings from it.`,
+      `A dispute was opened over a sale of "Product dispute", so ${dollars(ctx.shareCents)} is held back from your earnings while it is decided. Open Orders to see it.`, // #4651
       `A dispute over a sale of "Product dispute" was resolved in your favor, so ${dollars(ctx.shareCents)} counts toward your earnings from it again.`,
     ]);
+  });
+
+  it('#4651: a dispute notice says when evidence is due, and the seller\'s order list carries the dispute', async () => {
+    const ctx = await createSellerPurchase('disputedue', 'pi_notice_disputedue');
+    const dueBy = Date.UTC(2026, 11, 3, 12) / 1000;
+    const object = { id: 'dp_due', payment_intent: 'pi_notice_disputedue', reason: 'product_not_received', amount: ctx.totalCents, status: 'needs_response', evidence_details: { due_by: dueBy } };
+    await postStripeWebhook({ id: 'evt_due', type: 'charge.dispute.funds_withdrawn', created: 1000, data: { object } });
+    expect(await sellerNotices(ctx.sellerBuilderId)).toEqual([
+      `A dispute was opened over a sale of "Product disputedue", so ${dollars(ctx.shareCents)} is held back from your earnings while it is decided. Evidence is due Dec 3, 2026. Open Orders to see it.`,
+    ]);
+    const orders = await api('/purchases?mine=seller', ctx.seller.session());
+    const order = orders.body.purchases.find((p) => p.purchaseId === ctx.purchaseId);
+    expect(order.dispute).toEqual({
+      disputeId: 'dp_due', reason: 'product_not_received', amountCents: ctx.totalCents,
+      evidenceDueBy: new Date(dueBy * 1000).toISOString(), outcome: 'open', evidenceSent: false, openedAt: expect.any(String),
+    });
+    // Won: the same dispute, reinstated.
+    await postStripeWebhook({ id: 'evt_won', type: 'charge.dispute.funds_reinstated', created: 2000, data: { object: { ...object, status: 'won' } } });
+    const after = await api('/purchases?mine=seller', ctx.seller.session());
+    expect(after.body.purchases.find((p) => p.purchaseId === ctx.purchaseId).dispute.outcome).toBe('won');
+    // The product's Sales list carries it too, and a purchase with no dispute reads null.
+    const sales = await api(`/purchases?templateId=${encodeURIComponent('disputedue-template')}`, ctx.seller.session());
+    expect(sales.body.purchases[0].dispute.disputeId).toBe('dp_due');
+    expect(JSON.stringify(sales.body)).not.toMatch(/evidence_error|evidenceError/);
+  });
+
+  it('#4651: an order that was never disputed has dispute null', async () => {
+    const ctx = await createSellerPurchase('nodispute', 'pi_notice_nodispute');
+    const orders = await api('/purchases?mine=seller', ctx.seller.session());
+    expect(orders.body.purchases.find((p) => p.purchaseId === ctx.purchaseId).dispute).toBeNull();
   });
 
   it('an in-app refund notifies the seller once', async () => {

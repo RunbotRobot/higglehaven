@@ -29,7 +29,8 @@ await page.route('**/api/purchases?mine=seller', async (route) => {
       totalCount: 3,
       nextCursor: 'c1',
       purchases: [
-        { purchaseId: 'p1', productName: 'Garden Gnome', buyerLabel: 'Ada', quantity: 1, totalCents: 1500, builderShareCents: 100, createdAt: '2026-11-18T12:00:00Z', refundedAt: null, paidOutAt: null, paymentIntentId: null, isDigitalGood: false },
+        { purchaseId: 'p1', productName: 'Garden Gnome', buyerLabel: 'Ada', quantity: 1, totalCents: 1500, builderShareCents: 100, createdAt: '2026-11-18T12:00:00Z', refundedAt: null, paidOutAt: null, paymentIntentId: null, isDigitalGood: false,
+          dispute: { disputeId: 'dp_e2e', reason: 'product_not_received', amountCents: 1500, evidenceDueBy: '2099-12-03T12:00:00.000Z', outcome: 'open', evidenceSent: false, openedAt: '2026-11-19T12:00:00Z' } },
         { purchaseId: 'p2', productName: 'Old Bench', buyerLabel: 'Grace', quantity: 2, totalCents: 4000, builderShareCents: 300, createdAt: '2026-11-17T12:00:00Z', refundedAt: '2026-11-18T01:00:00Z', paidOutAt: null, paymentIntentId: null, isDigitalGood: false },
       ],
     }),
@@ -60,6 +61,11 @@ const fits = await page.locator('#bud-leaf-orders').evaluate((el) => {
 });
 console.log('Rows (should be 2):', rows, '; product names:', names, '; refunded label (should be 1):', refunded, '; leaf fits the screen (should be true):', fits);
 
+// #4651: the disputed order says so, with the reason and the due date, as plain selectable text; the others say nothing.
+const disputeLines = await page.locator('#bud-leaf-orders .product-sale-row-dispute').allInnerTexts();
+const disputeSelectable = await page.locator('#bud-leaf-orders .product-sale-row-dispute').first().evaluate((el) => getComputedStyle(el).userSelect !== 'none');
+console.log('Dispute lines (should be one, naming the reason and the due date):', disputeLines, '; selectable (should be true):', disputeSelectable);
+
 const summaryBefore = await page.locator('#bud-leaf-orders .orders-note').first().innerText();
 await page.click('#bud-leaf-orders .orders-more');
 await page.waitForFunction(() => document.querySelectorAll('#bud-leaf-orders .product-sale-row').length === 3, null, { timeout: 10000 });
@@ -67,5 +73,5 @@ const moreHidden = await page.locator('#bud-leaf-orders .orders-more').isHidden(
 const summaryAfter = await page.locator('#bud-leaf-orders .orders-note').first().innerText();
 console.log('Summary before/after:', summaryBefore, '/', summaryAfter, '; button hidden once none are left (should be true):', moreHidden);
 
-const pass = /Showing newest 2 of 3/.test(summaryBefore) && /^3 orders/.test(summaryAfter) && moreHidden && rows === 2 && names.join('|') === 'Garden Gnome|Old Bench' && refunded === 1 && fits && errors.length === 0;
+const pass = /Showing newest 2 of 3/.test(summaryBefore) && /^3 orders/.test(summaryAfter) && moreHidden && rows === 2 && names.join('|') === 'Garden Gnome|Old Bench' && refunded === 1 && fits && disputeLines.length === 1 && /^Disputed: the buyer's bank says the item was not received\. Evidence is due Dec 3, 2099\./.test(disputeLines[0]) && disputeSelectable && errors.length === 0;
 await finish(browser, { pass, label: '#3704: the Orders leaf lists every sale with its product and fits the phone screen', errors });

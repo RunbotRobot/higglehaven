@@ -21,7 +21,8 @@ import {
   resolvePurchaseTarget, computePurchaseAmounts, resolveFinalizeBuilderId, writePurchaseRow, writeOrphanedPurchaseRow,
   purchaseFromRow,
 } from './purchase-creation.js';
-import { stripeConfigured, stripeRequest } from '../index.js';
+import { stripeConfigured, stripeRequest, sendEmail } from '../index.js';
+import { basketReceiptMessage } from './email-layout.js';
 import { isUserSuspended } from './account-moderation.js';
 import { clawBackPurchaseCommission } from './purchase-lifecycle.js';
 
@@ -163,7 +164,7 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
 // harmless. A line already refunded is left out (its refund took the buyer's money back before the seller was paid).
 // A seller who was suspended or closed between the payment and now is not paid: their lines are refunded whole to the
 // buyer instead (#4616), so nobody pays a seller the platform has stopped.
-async function transferSellerShares(env, order, paymentIntent) {
+export async function transferSellerShares(env, order, paymentIntent) {
   const db = env.DB;
   const { results: standing } = await db.prepare(`
     SELECT * FROM purchases
@@ -223,6 +224,20 @@ async function refundLineWhole(env, row) {
   await clawBackPurchaseCommission(db, row, row.product_name || 'A product', { buyerRefundCents: row.total_cents });
 }
 
+// One email to the buyer: a part per seller, then the total. Names and sellers are the orders' own records.
+async function sendBasketReceipt(env, order, purchases) {
+  const buyer = await env.DB.prepare('SELECT email FROM users WHERE user_id = ?').bind(order.user_id).first();
+  if (!buyer?.email || purchases.length === 0) return;
+  const bySeller = new Map();
+  for (const p of purchases) {
+    const seller = p.seller_name || 'the seller';
+    if (!bySeller.has(seller)) bySeller.set(seller, []);
+    bySeller.get(seller).push({ name: p.product_name || 'a product', quantity: p.quantity, totalCents: p.total_cents });
+  }
+  const sections = [...bySeller].map(([sellerName, lines]) => ({ sellerName, lines }));
+  await sendEmail(env, { to: buyer.email, ...basketReceiptMessage(sections, order.total_cents) });
+}
+
 export async function finalizeBasketPaymentIntent(env, paymentIntent) {
   const db = env.DB;
   const found = await getBasketOrder(env, paymentIntent.metadata?.basketOrderId);
@@ -238,11 +253,15 @@ export async function finalizeBasketPaymentIntent(env, paymentIntent) {
   const shippingAddressJson = paymentIntent.metadata?.shippingAddress || null;
   for (const line of lines) await recordBasketLine(env, order, line, paymentIntent, shippingAddressJson);
   await transferSellerShares(env, order, paymentIntent);
-  await markBasketOrderPaid(env, order.basket_order_id);
+  const firstFinalize = await markBasketOrderPaid(env, order.basket_order_id);
   // What was bought leaves the basket; anything added since stays.
   await db.prepare(`
     DELETE FROM basket_lines WHERE user_id = ? AND instance_id IN (SELECT instance_id FROM basket_order_lines WHERE basket_order_id = ?)
   `).bind(order.user_id, order.basket_order_id).run();
   const { results } = await db.prepare('SELECT * FROM purchases WHERE basket_order_id = ? ORDER BY basket_line_no').bind(order.basket_order_id).all();
+  // #4617: one receipt, once (only the call that made the basket paid sends it), never a reason to fail a payment.
+  if (firstFinalize) {
+    try { await sendBasketReceipt(env, order, results); } catch (error) { console.error('basket: receipt email failed', order.basket_order_id, error); }
+  }
   return json({ basketOrderId: order.basket_order_id, purchases: results.map(purchaseFromRow) });
 }

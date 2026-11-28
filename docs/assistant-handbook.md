@@ -428,10 +428,10 @@ shows under "My purchases".
   signed out; they sign in again from the menu and tap "Buy" again. "Verify your age and add a card before buying. You
   were not charged." means the adult check above is not finished.
 - "Where should it go?" says "Add a name." (or a street address, a city, a postal code, a state): the first line still
-  missing; they fill it in and tap "Continue". For a product a seller sends within the United States only, the window
-  says "The seller sends this within the United States only." and a purchase to another country is refused with
-  "The seller sends this product within the United States only, so it cannot be sent to that country. You were not
-  charged."
+  missing; they fill it in and tap "Continue". For a product the seller sends to some places only, the window
+  says "The seller sends this to" those places (for example "United States only"), offers only their countries, and
+  a purchase to another country is refused with "This product ships to United States only, so it cannot be sent to
+  that country. You were not charged." (with the seller's own places in place of "United States only").
 - "You already own this, so it was not bought again. You were not charged.": avatars and animations can only be bought
   once; it is in their purchases already.
 - "Your payment went through, but we couldn't finish your purchase yet. Tap "Finish purchase" to try again -- your card
@@ -1118,6 +1118,10 @@ lándlets are shown here.
    tap "Upload a model file I already have" under it, and choose the .glb or .fbx file with
    "Choose File" (up to 20MB). Tick "This is a digital good" only for things like an avatar or an
    art file that is delivered, not placed.
+   A product that is sent by post also has a row that reads "Ships worldwide". Tapping it opens one tick per
+   place (United States, Canada, Mexico, United Kingdom, European Union, Australia and New Zealand, Japan and
+   South Korea, Everywhere else) under "Untick any place you do not ship to."; at least one has to stay ticked
+   ("Choose at least one place this ships to."). A digital good has no such row.
 4. Tap "Generate model" for a video, or "Add product" for a file. The app shows a preview; this can
    take a moment, and a video takes a couple of minutes.
 5. The window is now called "Confirm dimensions". Set the product's real size with
@@ -1283,11 +1287,13 @@ nobody owns and nothing uses is removed completely.
 2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when. A physical product's row also says "Ship to" with the name and address the buyer gave for that order (plain text, so it can be copied onto a label). An order that has been refunded shows no address.
 3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. It has two optional boxes, "Carrier (optional)" and "Tracking number (optional)", which the buyer then sees under the order in "My purchases". After it, the row says "Shipped" with the date, and that the money is available 7 days after shipping if the buyer has not confirmed delivery sooner; once they have, it says "Delivery confirmed — available to cash out." A shipped row shows the carrier and tracking number, or "No carrier or tracking number given.", with "Add tracking" or "Edit tracking" to give or correct them ("Save tracking" keeps them).
 4. "Refund" on a row asks "Refund this order?" first, names the buyer and the amount, and says it cannot be undone. A sale that has been refunded says "Refunded". A product with returns turned off says "Returns are turned off for this product" instead of the button, and a sale already paid out says "Paid out — contact support for a refund".
+5. An order the buyer's bank has questioned says "Disputed:" with the reason in plain words, and "Evidence is due" with a date. They are told once when it opens, in a notice that opens Orders. If the order has no tracking number yet, the row says to add the carrier and tracking number; that is the one thing a seller can do. When the bank decides in their favour the row says "Won: the money counts toward your earnings again."
 
 **You will see:** "No orders yet. When someone buys one of your products, it will show up here." until something sells.
 
 **If something goes wrong:**
 - A refund, a missing payment or an amount that looks wrong is not for the assistant to answer: say so plainly and use the runbook's hand-off.
+- A dispute is a money question: explain what the row says, do not promise how it will end or that evidence will be sent for them, and use the runbook's hand-off.
 - The list looks different from what is described here: ask what they see, and offer to pass it to the team.
 
 ```controls sell

@@ -234,6 +234,12 @@ function parseStepWithoutBurst(token, command, args) {
       if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": item needs a whole number from 1 (which placed item, left to right)`);
       return { command, args: [n] };
     }
+    case 'product': {
+      // #4575: product[:n] taps the n-th loaded product that is on screen in Shop (left to right, 1 by default).
+      const n = args[0] === undefined || args[0] === '' ? 1 : Number(args[0]);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`step "${token}": product needs a whole number from 1 (which product, left to right)`);
+      return { command, args: [n] };
+    }
     case 'dragitem': {
       // #4198: dragitem:<n>:<dx>:<dy>: select the n-th placed item on screen in Build and drag it dx, dy pixels.
       need(3);
@@ -344,6 +350,9 @@ function parseStepWithoutBurst(token, command, args) {
       if (!/^[a-z0-9-]{3,80}$/.test(args[0])) throw new Error(`step "${token}": tp needs a lándlet id like central-mosaic-012`);
       return { command, args: [args[0]] };
     }
+    case 'aria':
+      // aria[:<selector>] (#4574): the accessibility tree of the first match, or of the whole page.
+      return { command, args: [args.join(':')] };
     case 'menu':
     case 'pushpeer':
     case 'land':
@@ -359,7 +368,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, aria, mem, others, pos, marks)`);
   }
 }
 
