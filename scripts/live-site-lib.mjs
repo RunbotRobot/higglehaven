@@ -261,6 +261,15 @@ function parseStepWithoutBurst(token, command, args) {
       }
       return { command, args: [x, y, dx, dy] };
     }
+    case 'place': {
+      // #4570: place:<tile>:<x>:<y>: in Build, open Add item, tap the n-th catalog tile, then tap the world at x, y.
+      need(3);
+      const [n, x, y] = args.map(Number);
+      if (args.length !== 3 || !Number.isInteger(n) || n < 1 || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+        throw new Error(`step "${token}": place needs a tile number from 1 and a screen point (place:1:195:600)`);
+      }
+      return { command, args: [n, x, y] };
+    }
     case 'nudge': {
       // #4570: nudge:<x|y|z>:<+|->: with an item selected in Build, tap that arrowhead of the movement axes.
       need(2);
@@ -368,7 +377,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, aria, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, place, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, aria, mem, others, pos, marks)`);
   }
 }
 
