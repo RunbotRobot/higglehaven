@@ -104,6 +104,35 @@ describe('Account deletion (#1146)', () => {
     });
   });
 
+  // #4636: the address copies on a deleted buyer's orders go once they have no job left; an order still to be shipped
+  // keeps its copy so the seller can send it.
+  it('clears the address on a deleted buyer\'s shipped and refunded orders, and keeps it on one still to be shipped', async () => {
+    const host = await signupBuilder('del-address-host');
+    const password = 'a fine long password here';
+    const email = `del-address-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, password, { username: `deladdr${crypto.randomUUID().slice(0, 8)}` });
+    const session = extractSessionCookie(signedUp.response);
+    const userId = (await api('/auth/me', withSession(session))).body.user.userId;
+    const address = JSON.stringify({ name: 'A', line1: '1 St', city: 'X', region: 'OR', postalCode: '97201', country: 'US' });
+    const stamp = new Date().toISOString();
+    const insert = (id, shipped, refunded) => env.DB.prepare(`
+      INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, buyer_user_id, unit_price_cents, quantity,
+        total_cents, commission_cents, builder_share_cents, platform_share_cents, shipping_address_json, shipped_at, refunded_at)
+      VALUES (?, 'i', 't', ?, ?, 500, 1, 500, 10, 5, 5, ?, ?, ?)
+    `).bind(id, host.builderId, userId, address, shipped, refunded).run();
+    await insert('del-addr-shipped', stamp, null);
+    await insert('del-addr-refunded', null, stamp);
+    await insert('del-addr-open', null, null);
+
+    const deletion = await api('/auth/delete-account', withSession(session, { method: 'POST', body: JSON.stringify({ password }) }));
+    expect(deletion.response.status).toBe(200);
+
+    const addressOf = async (id) => (await env.DB.prepare('SELECT shipping_address_json AS a FROM purchases WHERE purchase_id = ?').bind(id).first()).a;
+    expect(await addressOf('del-addr-shipped')).toBeNull();
+    expect(await addressOf('del-addr-refunded')).toBeNull();
+    expect(await addressOf('del-addr-open')).toBe(address);
+  });
+
   // #4266: bug reports outlive the account only as a description, with no
   // account link, device details or screenshot.
   it('detaches the person from their bug reports and deletes the screenshots', async () => {
