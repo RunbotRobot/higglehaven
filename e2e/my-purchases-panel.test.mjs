@@ -18,10 +18,17 @@ const purchase = (id, over = {}) => ({
 });
 
 let mode = 'two';
+// #4617: two lines of one basket payment, with one ordinary purchase between them in the list.
+const basketPage = [
+  purchase('line-a', { basketOrderId: 'b1', totalCents: 1000, sellerName: 'Shop A' }),
+  purchase('alone', { createdAt: '2026-02-01T00:00:00.000Z' }),
+  purchase('line-b', { basketOrderId: 'b1', totalCents: 2500, sellerName: 'Shop B' }),
+];
 let releaseLate = null;
 await page.route('**/api/purchases/mine*', async (route) => {
   const url = new URL(route.request().url());
   const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  if (mode === 'basket') return json({ purchases: basketPage, nextCursor: null });
   if (mode === 'empty') return json({ purchases: [], nextCursor: null });
   if (mode === 'late') {
     await new Promise((resolve) => { releaseLate = resolve; });
@@ -89,5 +96,15 @@ mode = 'two';
 releaseLate?.();
 await page.waitForTimeout(500);
 check((await page.locator('#my-purchases-list .my-purchase-row').count()) === 0, 'late response not painted after close');
+
+// #4617: the two lines of one basket sit together under one heading with the total; the ordinary purchase stays apart.
+mode = 'basket';
+await open();
+await page.waitForSelector('#my-purchases-list .my-purchase-basket', { timeout: 5000 });
+check((await page.locator('#my-purchases-list .my-purchase-basket').count()) === 1, 'one basket group');
+check((await page.locator('#my-purchases-list .my-purchase-basket .my-purchase-row').count()) === 2, 'both lines are inside it');
+check((await page.locator('#my-purchases-list .my-purchase-basket-head').innerText()) === 'One order · 2 products · $35.00', 'the heading counts and adds up');
+check((await page.locator('#my-purchases-list > .my-purchase-row').count()) === 1, 'the ordinary purchase stays outside it');
+await page.click('#my-purchases-close-btn');
 
 await finish(browser, { pass: pass && errors.length === 0, label: 'my-purchases-panel', errors });

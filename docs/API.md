@@ -6177,6 +6177,12 @@ Transfer per seller for the price minus the commission (`purchases.stripe_transf
 and removes the bought items from the basket. A basket line is not payout-eligible until its Transfer exists. A failure
 throws so the webhook is redelivered.
 
+Refunds and disputes (#4616) work per line. `POST /api/purchases/:id/refund` on a basket line refunds the buyer's 99% from
+the shared payment and pulls that line's seller part (price minus commission) back out of the order's Transfer; the
+commission share is not reversed. A `charge.dispute.*` event on the shared charge applies to every line of the order; a
+`charge.refunded` event for a basket payment is only logged, because this app records each refund itself. A seller who is
+suspended or closed before the Transfer has their lines refunded whole to the buyer and receives no Transfer.
+
 **Sweeps on the cron (#4615, `worker/lib/basket-sweeps.js`).** Two jobs keep a paid basket from being lost; both only
 finish or close what Stripe already says and both are idempotent. (1) A `pending` order older than 15 minutes is looked up
 at Stripe: a succeeded payment is finalized now (a lost webhook, or a Transfer that failed and was never retried); a
