@@ -133,8 +133,8 @@ touches one ends by sending the assistant to the runbook's hand-off.
 
 1. Tap the round higglehaven logo at the top left (the head of the flower; the word Menu sits beside it until it has been opened once), then "Settings".
 2. Tabs run across the top: "General", "Shop" and "Build".
-3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too, inside a closed row called "Account and tax".
-4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My avatars" and "My animations" once they own any.
+3. "General" holds "Units" (Meters or Feet), "Version", "Show tips while the app opens" (a tick box, on unless they turn it off; it applies on this device only), and "Notifications" (an option to be emailed when one of their placed products sells out). Someone who is signed in also has "Addresses" here, inside the closed row called "Account and tax" (see "How do I keep a shipping address?"); if they have started selling, the tax paperwork is in the same row.
+4. "Shop" holds "Controls", which reminds them how to walk, look and fly, then "Shipping" ("Dim what cannot ship to me", and "Country I ship to" for someone with no address yet; see "How do I keep a shipping address?"), and "My avatars" and "My animations" once they own any.
 5. "Build" holds the settings for building, including the person's username (with "Rename"). Selling has no tab here: the payout account and the shop name are petals in the Sell menu (see "Where do I set up payouts and tax forms?").
 6. At the bottom of every tab is "Send feedback".
 7. The "×" at the top right closes Settings.
@@ -373,7 +373,7 @@ ground.
    about it (for example that it ships to the United States only, or that it has no
    returns).
 3. When the product is for sale and you are standing near it, the card has a yellow
-   "Buy" button. "More" opens "Rate this product" and "Return policy".
+   "Buy" button. "More" opens "Rate this product" and "Return policy". If you have turned on "Dim what cannot ship to me" (see "How do I keep a shipping address?"), a product the seller does not send to your country is drawn pale, and its card has no "Buy" and says "This does not ship to your country. Choose a different address in Settings to change that."
 4. Tap anywhere else in the world, or the cross at the top right of the card, when
    you are done.
 5. Without tapping (on a keyboard, or with a screen reader): press N to open the card
@@ -406,9 +406,14 @@ behind it.
 ### How do I buy something?
 
 1. Open the product's card (see the entry above) and tap "Buy".
-2. A sheet titled "Checkout" shows what you are buying. Enter your card in the card
+2. A product that is sent by post (anything that is not an avatar, an animation or another
+   digital good) first opens a small window titled "Where should it go?" with "Name", "Street address",
+   "Apartment, suite, etc. (optional)", "City", "State or region", "Postal code" and "Country". Fill it
+   in and tap "Continue". Nothing is charged yet, and the order keeps its own copy of the address, so
+   changing or removing an address in Settings later does not change an order already made.
+3. A sheet titled "Checkout" shows what you are buying. Enter your card in the card
    box.
-3. Tap "Pay".
+4. Tap "Pay".
 
 **You will see:** the sheet closes when the payment goes through, and the product
 shows under "My purchases".
@@ -422,6 +427,11 @@ shows under "My purchases".
 - The sheet says "Your session ended, so nothing was bought. You were not charged. Sign in again to buy this.": they were
   signed out; they sign in again from the menu and tap "Buy" again. "Verify your age and add a card before buying. You
   were not charged." means the adult check above is not finished.
+- "Where should it go?" says "Add a name." (or a street address, a city, a postal code, a state): the first line still
+  missing; they fill it in and tap "Continue". For a product a seller sends within the United States only, the window
+  says "The seller sends this within the United States only." and a purchase to another country is refused with
+  "The seller sends this product within the United States only, so it cannot be sent to that country. You were not
+  charged."
 - "You already own this, so it was not bought again. You were not charged.": avatars and animations can only be bought
   once; it is in their purchases already.
 - "Your payment went through, but we couldn't finish your purchase yet. Tap "Finish purchase" to try again -- your card
@@ -450,6 +460,8 @@ label:has(#verify-age-attest) | at least 18
 3. Each purchase has a "Rate this seller" button and a "Rate this product" button. Tap one to rate
    the seller or the product for that purchase. Once given, the rating shows under the purchase
    with buttons to edit or delete it.
+4. When the seller has sent a physical order, its row says "Shipped" and, if the seller gave them, the carrier and
+   "Tracking" number as plain text you can select and copy.
 
 **You will see:** a list of what you bought. Someone who has bought nothing yet sees
 "You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here."
@@ -465,6 +477,27 @@ label:has(#verify-age-attest) | at least 18
 #account-menu-toggle | Account menu
 #my-purchases-btn | My purchases
 #my-purchases-empty | You haven't bought anything yet. Tap a product in Shop mode to buy it, and your orders will be listed here.
+```
+
+### How do I keep a shipping address?
+
+1. Tap the round higglehaven logo at the top left, then "Settings", then the "General" tab, and open the closed row "Account and tax". "Addresses" is inside it, and is there once you are signed in.
+2. "Add an address" opens a form with "Name", "Address", "Apartment, suite or unit (optional)", "City", "State or region", "Postal code" and "Country". Nothing in it is filled in to begin with. Tap "Add address" to keep it; the first one is the default.
+3. Each address shows a "Default" mark on the default one, and "Edit", "Make default" and "Remove". "Remove" asks "Remove this address?" first, in its own window, and the default passes to the oldest one left. You can keep up to ten.
+4. "Dim what cannot ship to me" is on the "Shop" tab of Settings, under "Shipping". It is off until you tick it. With it on, a product the seller does not send to your country is drawn pale in the world, and its card says so and has no "Buy". Your country is the one on your default address. With no address, choose one under "Country I ship to" on the same tab instead.
+
+**You will see:** the address under "Addresses" with "Default" on it; after you tick "Dim what cannot ship to me", products that do not ship to you look pale.
+
+**If something goes wrong:**
+- A line in the form is refused: it names the field and says what is wrong ("Country is required", a postal code that does not look right for the country, a state for the United States, Canada and Australia). Read it out and have them fix that field; what they typed stays.
+- "You can keep up to 10 addresses. Remove one to add another." they have the most; remove one first.
+- An address is never read by anyone but its owner, and by the buyer and the seller of the one order it was used for. Do not ask for one in the chat, and do not read one back.
+- A product is not dimmed when they expect it to be: it may ship to their country, or they have no address and no country chosen yet, or the tick box is off. Ask what they see before saying which.
+
+```controls any
+#settings-btn | Settings
+#settings-tabs [data-section="general"] | General
+#settings-tabs [data-section="shop"] | Shop
 ```
 
 ### How do I leave a review for a product?
@@ -1135,7 +1168,7 @@ price and stock. The original maker's listing is not changed.
 4. To change its price, tap "Edit price" on the product (it sits right under the price, or under
    "Not priced" for a product with no price yet), type the new price and tap "Save price". The
    other "Edit" lines (size, shipping, returns) are under "More settings" and work the same way:
-   open it, change it, tap its own Save button.
+   open it, change it, tap its own Save button. "Edit shipping" is one tick box for each place the product is sent to (United States, Canada, Mexico, United Kingdom, European Union, Australia and New Zealand, Japan and South Korea, Everywhere else); at least one has to stay ticked ("Choose at least one place this ships to."), and "Save shipping" keeps the choice. Buyers in a place that is not ticked see the product dimmed if they have turned on "Dim what cannot ship to me".
 5. To change how many are in stock, tap the product in your showroom. A small card opens
    beside it showing its price and its stock ("No limit on stock", "3 in stock" or "Sold out").
    Tap "Stock" on that card, type how many you have left (a whole number, 0 or more) and
@@ -1223,8 +1256,8 @@ nobody owns and nothing uses is removed completely.
 ### Where do I see what I have sold, and mark something shipped?
 
 1. Switch to Sell (tap the round logo at the top left, then the "Sell" petal), then tap the logo again and the "Sell" petal to open Sell's menu.
-2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when.
-3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. After it, the row says "Shipped" with the date, and that the money is available 7 days after shipping if the buyer has not confirmed delivery sooner; once they have, it says "Delivery confirmed — available to cash out."
+2. Tap "Orders". Every sale of every product they have for sale is one row, newest first: the product's name, who bought it, how many, the total, what they earned and when. A physical product's row also says "Ship to" with the name and address the buyer gave for that order (plain text, so it can be copied onto a label). An order that has been refunded shows no address.
+3. For a real-money sale of a physical product, "Mark shipped" starts the clock that lets the money be cashed out. It has two optional boxes, "Carrier (optional)" and "Tracking number (optional)", which the buyer then sees under the order in "My purchases". After it, the row says "Shipped" with the date, and that the money is available 7 days after shipping if the buyer has not confirmed delivery sooner; once they have, it says "Delivery confirmed — available to cash out." A shipped row shows the carrier and tracking number, or "No carrier or tracking number given.", with "Add tracking" or "Edit tracking" to give or correct them ("Save tracking" keeps them).
 4. "Refund" on a row asks "Refund this order?" first, names the buyer and the amount, and says it cannot be undone. A sale that has been refunded says "Refunded". A product with returns turned off says "Returns are turned off for this product" instead of the button, and a sale already paid out says "Paid out — contact support for a refund".
 
 **You will see:** "No orders yet. When someone buys one of your products, it will show up here." until something sells.
