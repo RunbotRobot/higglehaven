@@ -908,6 +908,8 @@
       <!-- #3691: while Selecting is on, the brush's size slider blooms here beside the selection
            (src/build/itemCard.js moves #multiselect-brush-control in and back out). Empty otherwise. -->
       <div id="item-card-brush"></div>
+      <!-- #4574: a field is named for a screen reader by what it is (Width, Depth, Height), not by the one-letter tag drawn
+           beside it ("W m" read aloud), and the unit is its description. -->
       <!-- #3575, #3689: Trim is the one tool left on the item's own card (Move and Rotate are the ring and the drag
            from the item); the angle readout and the refusal notice sit under it. -->
       <div id="gizmo-mode-controls">
@@ -915,15 +917,15 @@
         <div id="trim-length-control" class="gizmo-numeric-control">
           <label class="trim-axis-field" data-trim-axis="x">
             <span class="trim-axis-tag">W</span>
-            <input class="trim-length-input" data-trim-axis="x" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+            <input class="trim-length-input" data-trim-axis="x" type="number" step="0.01" min="0" aria-label="Width" aria-describedby="trim-unit-x" /><span class="trim-unit-label" id="trim-unit-x">m</span>
           </label>
           <label class="trim-axis-field" data-trim-axis="y">
             <span class="trim-axis-tag">D</span>
-            <input class="trim-length-input" data-trim-axis="y" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+            <input class="trim-length-input" data-trim-axis="y" type="number" step="0.01" min="0" aria-label="Depth" aria-describedby="trim-unit-y" /><span class="trim-unit-label" id="trim-unit-y">m</span>
           </label>
           <label class="trim-axis-field" data-trim-axis="z">
             <span class="trim-axis-tag">H</span>
-            <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+            <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" aria-label="Height" aria-describedby="trim-unit-z" /><span class="trim-unit-label" id="trim-unit-z">m</span>
           </label>
         </div>
       </div>
@@ -953,8 +955,8 @@
         <div id="item-card-angles" hidden>
           <div class="item-card-block-title">Angles</div>
           <label class="item-card-angle-field">Turn<input id="angle-turn" aria-label="Turn, in degrees" data-angle="turn" type="number" step="1" inputmode="decimal" /></label>
-          <label class="item-card-angle-field">Tilt red<input id="angle-tilt-red" aria-label="Tilt (red ring), in degrees" data-angle="tiltRed" type="number" step="1" inputmode="decimal" /></label>
-          <label class="item-card-angle-field">Tilt green<input id="angle-tilt-green" aria-label="Tilt (green ring), in degrees" data-angle="tiltGreen" type="number" step="1" inputmode="decimal" /></label>
+          <label class="item-card-angle-field">Tilt red<input id="angle-tilt-red" aria-label="Tilt red, in degrees" data-angle="tiltRed" type="number" step="1" inputmode="decimal" /></label>
+          <label class="item-card-angle-field">Tilt green<input id="angle-tilt-green" aria-label="Tilt green, in degrees" data-angle="tiltGreen" type="number" step="1" inputmode="decimal" /></label>
         </div>
         <!-- #3693 (Build in the bud 6/6): rare, and about one item, so they live in the card's More; ids and handlers unchanged. -->
         <button id="toggle-community-sign" type="button" data-width-sizer="Community sign">Community sign</button>

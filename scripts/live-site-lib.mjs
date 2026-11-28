@@ -344,6 +344,9 @@ function parseStepWithoutBurst(token, command, args) {
       if (!/^[a-z0-9-]{3,80}$/.test(args[0])) throw new Error(`step "${token}": tp needs a lándlet id like central-mosaic-012`);
       return { command, args: [args[0]] };
     }
+    case 'aria':
+      // aria[:<selector>] (#4574): the accessibility tree of the first match, or of the whole page.
+      return { command, args: [args.join(':')] };
     case 'menu':
     case 'pushpeer':
     case 'land':
@@ -359,7 +362,7 @@ function parseStepWithoutBurst(token, command, args) {
     case 'marks':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, mem, others, pos, marks)`);
+      throw new Error(`unknown step "${token}" (steps: peer, walk, fail, unfail, aim, rise, look, tap, item, dragitem, drag, nudge, key, slow, type, mode, menu, petal, leaf, fly, land, tp, pushpeer, settings, wait, shot, burst, idle, stats, lap, budget, cover, aria, mem, others, pos, marks)`);
   }
 }
 

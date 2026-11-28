@@ -820,6 +820,12 @@ async function runStepAction(step, index) {
       result.screenshots.push(file);
       return file;
     }
+    case 'aria': {
+      // #4574: the accessibility tree of one part of the page as a screen reader gets it (role, name, state, in reading
+      // order), for the first element matching the selector (colons allowed: `aria:#item-card`). `aria` alone is the whole page.
+      const selector = step.args[0] || 'body';
+      return page.locator(selector).first().ariaSnapshot({ timeout: 10000 });
+    }
     case 'stats':
       return frameStats();
     case 'lap': {
@@ -965,7 +971,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'aria' ? { aria: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;
