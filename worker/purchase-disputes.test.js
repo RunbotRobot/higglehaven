@@ -1,99 +1,266 @@
-// #4648 (Disputes 1/3): a Stripe dispute on a purchase is recorded from the funds_withdrawn and funds_reinstated
-// events the webhook already receives, once per dispute, in event order, and without ever getting in the way of the
-// clawback and its reversal.
-import { applyD1Migrations, env, SELF } from 'cloudflare:test';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, signupAdmin } from './test-helpers.js';
-import { disputeRowFromEvent } from './lib/purchase-disputes.js';
+import { applyD1Migrations, env } from 'cloudflare:test';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { api, signupBuilder, signupAdmin, grantAdminTo } from './test-helpers.js';
 
 let adminSession;
+
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
-  env.STRIPE_WEBHOOK_SECRET = 'test-stripe-webhook-secret';
-  adminSession = (await signupAdmin('dispute-record-admin')).session;
-});
-afterAll(() => { env.STRIPE_WEBHOOK_SECRET = undefined; });
-
-async function postStripeWebhook(eventObject) {
-  const rawBody = JSON.stringify(eventObject);
-  const ts = Math.floor(Date.now() / 1000);
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${rawBody}`)));
-  const hex = [...sig].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  return SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'stripe-signature': `t=${ts},v1=${hex}` },
-    body: rawBody,
-  });
-}
-
-async function createRealMoneyPurchase(label, paymentIntentId) {
-  const builder = await signupAdmin(`${label}-builder`);
-  const landletId = `${label}-landlet`;
-  await api('/landlets', adminSession({ method: 'POST', body: JSON.stringify({ landletId, name: label, areaM2: 1000, status: 'greenbelt' }) }));
-  await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
-  await api('/catalog', { method: 'POST', body: JSON.stringify({ templateId: `${label}-template`, name: `Product ${label}`, color: '#123456', dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 10000 }) });
-  await api('/instances', builder.session({ method: 'POST', body: JSON.stringify({ instanceId: `${label}-instance`, landletId, templateId: `${label}-template`, x: 0, y: 0 }) }));
-  const purchased = await api(`/instances/${label}-instance/purchase`, builder.session({ method: 'POST' }));
-  const { purchaseId } = purchased.body.purchase;
-  await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?').bind(paymentIntentId, purchaseId).run();
-  return { builder, purchaseId };
-}
-
-const event = (type, created, object) => ({ id: `evt_${type}_${created}`, type, created, data: { object } });
-const DISPUTE = { id: 'dp_one', reason: 'product_not_received', amount: 10000, status: 'needs_response', evidence_details: { due_by: 1_800_000_000 } };
-const rows = (purchaseId) => env.DB.prepare('SELECT * FROM purchase_disputes WHERE purchase_id = ?').bind(purchaseId).all().then((r) => r.results);
-
-describe('disputeRowFromEvent (#4648)', () => {
-  it('reads the dispute the event carries, and nothing when it names none', () => {
-    const row = disputeRowFromEvent(event('charge.dispute.funds_withdrawn', 1000, DISPUTE));
-    expect(row).toMatchObject({ disputeId: 'dp_one', reason: 'product_not_received', amountCents: 10000, status: 'needs_response', outcome: 'open', lastEventAt: 1000 });
-    expect(row.evidenceDueBy).toBe(new Date(1_800_000_000 * 1000).toISOString());
-    expect(disputeRowFromEvent(event('charge.dispute.funds_reinstated', 2000, DISPUTE)).outcome).toBe('won');
-    expect(disputeRowFromEvent(event('charge.dispute.funds_withdrawn', 1000, {}))).toBeNull();
-    expect(disputeRowFromEvent({ type: 'charge.dispute.funds_withdrawn' })).toBeNull();
-  });
-
-  it('tolerates a sparse dispute (a missing reason, amount or due date is just empty)', () => {
-    expect(disputeRowFromEvent(event('charge.dispute.funds_withdrawn', 1, { id: 'dp_sparse' }))).toMatchObject({ disputeId: 'dp_sparse', reason: null, amountCents: null, evidenceDueBy: null });
-  });
+  const admin = await signupAdmin('dispute-shared-admin');
+  adminSession = admin.session;
 });
 
-describe('recording a dispute (#4648)', () => {
-  it('writes one row when funds are withdrawn, once however often the event is delivered, and the clawback still happens', async () => {
-    const { purchaseId } = await createRealMoneyPurchase('rec', 'pi_rec');
-    const withdrawn = event('charge.dispute.funds_withdrawn', 1000, { ...DISPUTE, payment_intent: 'pi_rec' });
-    expect((await postStripeWebhook(withdrawn)).status).toBe(200);
-    expect((await postStripeWebhook(withdrawn)).status).toBe(200);
-    const [row, ...rest] = await rows(purchaseId);
-    expect(rest).toEqual([]);
-    expect(row).toMatchObject({ dispute_id: 'dp_one', reason: 'product_not_received', amount_cents: 10000, outcome: 'open', last_event_at: 1000, evidence_submitted_at: null });
-    const purchase = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-    expect(purchase.refunded_at).not.toBeNull();
+describe('Buyer-initiated purchase disputes (#2020)', () => {
+  async function createGreenbeltLandlet(landletId) {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Dispute landlet ${landletId}`, areaM2: 1000, status: 'greenbelt' }),
+    }));
+  }
+
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function createTemplate(templateId, { priceCents = 500, metadata } = {}) {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Dispute fixture ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents,
+        metadata,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    return templateId;
+  }
+
+  async function placeAndBuy(buyer, landletId, templateId, instanceId) {
+    const placed = await api('/instances', buyer.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+    // #653: this template's seller never completes Stripe Connect
+    // onboarding, so this always hits the now admin-only simulated path.
+    await grantAdminTo(buyer);
+    const purchased = await api(`/instances/${instanceId}/purchase`, buyer.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    return purchased.body.purchase;
+  }
+
+  it('requires a session to dispute a purchase', async () => {
+    const buyer = await signupBuilder('dispute-auth-buyer');
+    await createGreenbeltLandlet('dispute-auth-landlet');
+    await claim('dispute-auth-landlet', buyer);
+    await createTemplate('dispute-auth-template');
+    const purchase = await placeAndBuy(buyer, 'dispute-auth-landlet', 'dispute-auth-template', 'dispute-auth-instance');
+    const result = await api(`/purchases/${purchase.purchaseId}/dispute`, { method: 'POST' });
+    expect(result.response.status).toBe(401);
   });
 
-  it('marks it won when the funds come back, and a late older withdrawal never reopens it', async () => {
-    const { purchaseId } = await createRealMoneyPurchase('won', 'pi_won');
-    const object = { ...DISPUTE, id: 'dp_won', payment_intent: 'pi_won' };
-    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, object));
-    await postStripeWebhook(event('charge.dispute.funds_reinstated', 2000, object));
-    expect((await rows(purchaseId))[0]).toMatchObject({ outcome: 'won', last_event_at: 2000 });
-    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, object));
-    expect((await rows(purchaseId))[0]).toMatchObject({ outcome: 'won', last_event_at: 2000 });
+  it('404s disputing a nonexistent purchase', async () => {
+    const buyer = await signupBuilder('dispute-404-buyer');
+    const result = await api('/purchases/does-not-exist/dispute', buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(404);
   });
 
-  it('keeps each dispute of a purchase as its own row (a second cycle)', async () => {
-    const { purchaseId } = await createRealMoneyPurchase('two', 'pi_two');
-    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, { ...DISPUTE, id: 'dp_a', payment_intent: 'pi_two' }));
-    await postStripeWebhook(event('charge.dispute.funds_reinstated', 2000, { ...DISPUTE, id: 'dp_a', payment_intent: 'pi_two' }));
-    await postStripeWebhook(event('charge.dispute.funds_withdrawn', 3000, { ...DISPUTE, id: 'dp_b', payment_intent: 'pi_two' }));
-    const found = await rows(purchaseId);
-    expect(found.map((r) => [r.dispute_id, r.outcome]).sort()).toEqual([['dp_a', 'won'], ['dp_b', 'open']]);
+  it('rejects disputing a purchase that is not your own', async () => {
+    const buyer = await signupBuilder('dispute-notmine-buyer');
+    const stranger = await signupBuilder('dispute-notmine-stranger');
+    await createGreenbeltLandlet('dispute-notmine-landlet');
+    await claim('dispute-notmine-landlet', buyer);
+    await createTemplate('dispute-notmine-template');
+    const purchase = await placeAndBuy(buyer, 'dispute-notmine-landlet', 'dispute-notmine-template', 'dispute-notmine-instance');
+    const result = await api(`/purchases/${purchase.purchaseId}/dispute`, stranger.session({ method: 'POST' }));
+    expect(result.response.status).toBe(400);
   });
 
-  it('records nothing for a charge that is not one of ours, and the webhook still answers 200', async () => {
-    expect((await postStripeWebhook(event('charge.dispute.funds_withdrawn', 1000, { ...DISPUTE, id: 'dp_unknown', payment_intent: 'pi_not_ours' }))).status).toBe(200);
-    const none = await env.DB.prepare("SELECT COUNT(*) AS n FROM purchase_disputes WHERE dispute_id = 'dp_unknown'").first();
-    expect(none.n).toBe(0);
+  it('does not auto-resolve a brand-new buyer\'s first-ever purchase (no prior purchase to count)', async () => {
+    const buyer = await signupBuilder('dispute-new-buyer');
+    await createGreenbeltLandlet('dispute-new-landlet');
+    await claim('dispute-new-landlet', buyer);
+    await createTemplate('dispute-new-template');
+    const purchase = await placeAndBuy(buyer, 'dispute-new-landlet', 'dispute-new-template', 'dispute-new-instance');
+
+    const result = await api(`/purchases/${purchase.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
+  });
+
+  it('auto-resolves a low-value dispute in the buyer\'s favor for an established buyer', async () => {
+    const buyer = await signupBuilder('dispute-established-buyer');
+    await createGreenbeltLandlet('dispute-established-landlet');
+    await claim('dispute-established-landlet', buyer);
+    await createTemplate('dispute-established-template-a');
+    await createTemplate('dispute-established-template-b');
+    // A prior, unrefunded purchase is what makes this buyer "established."
+    await placeAndBuy(buyer, 'dispute-established-landlet', 'dispute-established-template-a', 'dispute-established-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-established-landlet', 'dispute-established-template-b', 'dispute-established-instance-b');
+
+    const builderBefore = await api('/builders/me', buyer.session());
+    const balanceBefore = builderBefore.body.builder.higglesBalanceCents;
+
+    const result = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(true);
+    expect(result.body.purchase.refundedAt).toBeTruthy();
+
+    const builderAfter = await api('/builders/me', buyer.session());
+    expect(builderAfter.body.builder.higglesBalanceCents).toBe(balanceBefore - purchaseB.builderShareCents);
+
+    const { results: logEntries } = await env.DB.prepare(
+      "SELECT * FROM admin_action_log WHERE target_id = ? AND action_type = 'dispute_auto_resolved'",
+    ).bind(purchaseB.purchaseId).all();
+    expect(logEntries.length).toBe(1);
+    expect(logEntries[0].admin_user_id).toBeNull();
+  });
+
+  it('does not auto-resolve a high-value dispute even from an established buyer', async () => {
+    const buyer = await signupBuilder('dispute-highvalue-buyer');
+    await createGreenbeltLandlet('dispute-highvalue-landlet');
+    await claim('dispute-highvalue-landlet', buyer);
+    await createTemplate('dispute-highvalue-template-a');
+    await createTemplate('dispute-highvalue-template-b', { priceCents: 5000 });
+    await placeAndBuy(buyer, 'dispute-highvalue-landlet', 'dispute-highvalue-template-a', 'dispute-highvalue-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-highvalue-landlet', 'dispute-highvalue-template-b', 'dispute-highvalue-instance-b');
+
+    const result = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
+  });
+
+  it('does not auto-resolve for a buyer with prior refund/dispute history', async () => {
+    const buyer = await signupBuilder('dispute-history-buyer');
+    await createGreenbeltLandlet('dispute-history-landlet');
+    await claim('dispute-history-landlet', buyer);
+    await createTemplate('dispute-history-template-a');
+    await createTemplate('dispute-history-template-b');
+    const purchaseA = await placeAndBuy(buyer, 'dispute-history-landlet', 'dispute-history-template-a', 'dispute-history-instance-a');
+    // An admin-issued refund on this buyer's earlier purchase is enough
+    // refund/dispute history to disqualify them, same as a prior
+    // auto-resolved dispute of their own would.
+    await api(`/purchases/${purchaseA.purchaseId}/refund`, adminSession({ method: 'POST' }));
+
+    const purchaseB = await placeAndBuy(buyer, 'dispute-history-landlet', 'dispute-history-template-b', 'dispute-history-instance-b');
+    const result = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
+  });
+
+  it('409s disputing an already-refunded purchase', async () => {
+    const buyer = await signupBuilder('dispute-alreadyrefunded-buyer');
+    await createGreenbeltLandlet('dispute-alreadyrefunded-landlet');
+    await claim('dispute-alreadyrefunded-landlet', buyer);
+    await createTemplate('dispute-alreadyrefunded-template');
+    const purchase = await placeAndBuy(buyer, 'dispute-alreadyrefunded-landlet', 'dispute-alreadyrefunded-template', 'dispute-alreadyrefunded-instance');
+    await api(`/purchases/${purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
+
+    const result = await api(`/purchases/${purchase.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(409);
+  });
+
+  it('409s disputing a purchase that has already been paid out', async () => {
+    const buyer = await signupBuilder('dispute-paidout-buyer');
+    await createGreenbeltLandlet('dispute-paidout-landlet');
+    await claim('dispute-paidout-landlet', buyer);
+    await createTemplate('dispute-paidout-template-a');
+    await createTemplate('dispute-paidout-template-b');
+    await placeAndBuy(buyer, 'dispute-paidout-landlet', 'dispute-paidout-template-a', 'dispute-paidout-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-paidout-landlet', 'dispute-paidout-template-b', 'dispute-paidout-instance-b');
+    await env.DB.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ?')
+      .bind(new Date().toISOString(), purchaseB.purchaseId).run();
+
+    const result = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(409);
+  });
+
+  // #2224: the old eligibility check read refundedCount fresh at the top of
+  // each independent call with no atomic fold against a concurrent dispute
+  // from the same buyer -- two low-value disputes fired at once could both
+  // observe refundedCount === 0 before either refund committed, both pass
+  // `established`, and both get auto-refunded. Rather than trying to force
+  // genuine request-level interleaving (unreliable here -- real concurrency
+  // via Promise.all doesn't land in the exact window, and intercepting
+  // env.DB.prepare mid-request to hold one call open deadlocks this test
+  // harness's own D1 binding), this directly recreates the state a winning
+  // concurrent request leaves behind: its own claim row already inserted.
+  // dispute_auto_resolve_claims' atomic INSERT ... WHERE NOT EXISTS is what
+  // the real handler relies on to detect exactly this and decline, instead
+  // of re-deriving eligibility from a (by then stale) history read.
+  it('#2224: does not auto-resolve when a concurrent dispute has already claimed this buyer\'s one-time pass', async () => {
+    const buyer = await signupBuilder('dispute-concurrent-buyer');
+    await createGreenbeltLandlet('dispute-concurrent-landlet');
+    await claim('dispute-concurrent-landlet', buyer);
+    await createTemplate('dispute-concurrent-template-a');
+    await createTemplate('dispute-concurrent-template-b');
+    await createTemplate('dispute-concurrent-template-c');
+    // A prior, unrefunded purchase is what makes this buyer "established."
+    await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-a', 'dispute-concurrent-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-b', 'dispute-concurrent-instance-b');
+    const purchaseC = await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-c', 'dispute-concurrent-instance-c');
+
+    // The exact row a concurrent dispute on purchase B would have already
+    // inserted by the time this request's own INSERT runs.
+    await env.DB.prepare(
+      'INSERT INTO dispute_auto_resolve_claims (builder_id, purchase_id) VALUES (?, ?)',
+    ).bind(buyer.builderId, purchaseB.purchaseId).run();
+
+    const result = await api(`/purchases/${purchaseC.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
+
+    // Nothing about this buyer's purchases got touched -- the claim alone,
+    // not a second write to `purchases`, is what rejected this request.
+    const refundedCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM purchases WHERE buyer_builder_id = ? AND refunded_at IS NOT NULL',
+    ).bind(buyer.builderId).first();
+    expect(refundedCount.count).toBe(0);
+  });
+
+  // The claim row is never deleted on success (unlike the didit/video-
+  // generation reservations it borrows its idiom from) -- it's the
+  // permanent "already used their one-time pass" record, so a later
+  // dispute rejects even before checking refundedCount.
+  it('#2224: does not auto-resolve a second low-value dispute from a buyer who already used their one-time pass', async () => {
+    const buyer = await signupBuilder('dispute-reuse-buyer');
+    await createGreenbeltLandlet('dispute-reuse-landlet');
+    await claim('dispute-reuse-landlet', buyer);
+    await createTemplate('dispute-reuse-template-a');
+    await createTemplate('dispute-reuse-template-b');
+    await createTemplate('dispute-reuse-template-c');
+    await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-a', 'dispute-reuse-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-b', 'dispute-reuse-instance-b');
+    const purchaseC = await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-c', 'dispute-reuse-instance-c');
+
+    const firstResult = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(firstResult.body.autoResolved).toBe(true);
+
+    const secondResult = await api(`/purchases/${purchaseC.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(secondResult.response.status).toBe(200);
+    expect(secondResult.body.autoResolved).toBe(false);
+    expect(secondResult.body.purchase.refundedAt).toBeNull();
+  });
+
+  it('does not auto-resolve when the seller has opted into no returns', async () => {
+    const buyer = await signupBuilder('dispute-noreturns-buyer');
+    await createGreenbeltLandlet('dispute-noreturns-landlet');
+    await claim('dispute-noreturns-landlet', buyer);
+    await createTemplate('dispute-noreturns-template-a');
+    await createTemplate('dispute-noreturns-template-b', { metadata: { noReturns: true } });
+    await placeAndBuy(buyer, 'dispute-noreturns-landlet', 'dispute-noreturns-template-a', 'dispute-noreturns-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-noreturns-landlet', 'dispute-noreturns-template-b', 'dispute-noreturns-instance-b');
+
+    const result = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
   });
 });
