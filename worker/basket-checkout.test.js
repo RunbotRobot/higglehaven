@@ -5,6 +5,7 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { api, signupAdmin, signupSeller, signupBuilder, TEST_SHIPPING_ADDRESS } from './test-helpers.js';
 import { finalizeSucceededPaymentIntent } from './lib/purchase-creation.js';
+import { SELF } from 'cloudflare:test';
 
 let adminSession;
 beforeAll(async () => {
@@ -131,6 +132,87 @@ describe('paying a basket (#4614)', () => {
       expect(started.response.status, JSON.stringify(started.body)).toBe(200);
       await expect(finalizeSucceededPaymentIntent(env, { id: started.body.paymentIntentId, status: 'succeeded', amount: 100, metadata: { basketOrderId: started.body.basketOrderId } })).rejects.toThrow();
       expect((await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE basket_order_id = ?').bind(started.body.basketOrderId).first()).n).toBe(0);
+    } finally { stripe.restore(); }
+  });
+});
+
+async function paid(tag) {
+  env.BASKET_CHECKOUT_ENABLED = 'true';
+  const w = await world(tag);
+  const stripe = mockStripe();
+  const started = await checkout(w.buyer);
+  const pi = { id: started.body.paymentIntentId, status: 'succeeded', amount: 3500, latest_charge: 'ch_bk', metadata: {
+    basketOrderId: started.body.basketOrderId, shippingAddress: JSON.stringify(TEST_SHIPPING_ADDRESS) } };
+  await finalizeSucceededPaymentIntent(env, pi);
+  return { ...w, stripe, pi, orderId: started.body.basketOrderId };
+}
+
+describe('refunds, disputes and a stopped seller for a basket line (#4616)', () => {
+  it('refunds one line against the shared payment and pulls back only that seller part of the Transfer', async () => {
+    const w = await paid('refund');
+    try {
+      const { results: rows } = await env.DB.prepare('SELECT * FROM purchases WHERE basket_order_id = ? ORDER BY basket_line_no').bind(w.orderId).all();
+      const done = await api(`/purchases/${rows[0].purchase_id}/refund`, w.sellers[0].session({ method: 'POST' }));
+      expect(done.response.status, JSON.stringify(done.body)).toBe(200);
+      const refund = w.stripe.calls.filter((c) => c.path === 'refunds');
+      expect(refund).toHaveLength(1);
+      expect(refund[0].body.get('payment_intent')).toBe(w.pi.id);
+      expect(refund[0].body.get('amount')).toBe(String(Math.floor(rows[0].total_cents * 0.99)));
+      expect(refund[0].body.get('reverse_transfer')).toBeNull();
+      const reversal = w.stripe.calls.find((c) => c.path === `transfers/${rows[0].stripe_transfer_id}/reversals`);
+      expect(reversal.body.get('amount')).toBe(String(rows[0].total_cents - rows[0].commission_cents));
+      const after = await env.DB.prepare('SELECT purchase_id, refunded_at FROM purchases WHERE basket_order_id = ? ORDER BY basket_line_no').bind(w.orderId).all();
+      expect(after.results.map((r) => !!r.refunded_at)).toEqual([true, false]);
+    } finally { w.stripe.restore(); }
+  });
+
+  it('does not let a refund event for the shared charge touch an arbitrary line', async () => {
+    const w = await paid('refundevent');
+    try {
+      env.STRIPE_WEBHOOK_SECRET = 'test-stripe-webhook-secret';
+      const body = JSON.stringify({ id: 'evt_bk', type: 'charge.refunded', created: 1, data: { object: { payment_intent: w.pi.id, refunded: true } } });
+      const ts = Math.floor(Date.now() / 1000);
+      const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      const sig = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${body}`)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const res = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': `t=${ts},v1=${sig}` }, body });
+      expect(res.status).toBe(200);
+      const { results } = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE basket_order_id = ?').bind(w.orderId).all();
+      expect(results.every((r) => r.refunded_at === null)).toBe(true);
+    } finally { w.stripe.restore(); env.STRIPE_WEBHOOK_SECRET = undefined; }
+  });
+
+  it('applies a dispute on the shared charge to every line of the order', async () => {
+    const w = await paid('dispute');
+    try {
+      env.STRIPE_WEBHOOK_SECRET = 'test-stripe-webhook-secret';
+      const body = JSON.stringify({ id: 'evt_bkd', type: 'charge.dispute.funds_withdrawn', created: 5, data: { object: { payment_intent: w.pi.id } } });
+      const ts = Math.floor(Date.now() / 1000);
+      const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      const sig = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${body}`)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const res = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': `t=${ts},v1=${sig}` }, body });
+      expect(res.status).toBe(200);
+      const { results } = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE basket_order_id = ?').bind(w.orderId).all();
+      expect(results).toHaveLength(2);
+      expect(results.every((r) => r.refunded_at !== null)).toBe(true);
+    } finally { w.stripe.restore(); env.STRIPE_WEBHOOK_SECRET = undefined; }
+  });
+
+  it('refunds a line whole, and pays no Transfer, when its seller was stopped before the payment was recorded', async () => {
+    env.BASKET_CHECKOUT_ENABLED = 'true';
+    const w = await world('stopped');
+    const stripe = mockStripe();
+    try {
+      const started = await checkout(w.buyer);
+      const sellerUser = (await env.DB.prepare('SELECT user_id FROM sellers WHERE seller_id = ?').bind(w.sellers[0].sellerId).first()).user_id;
+      await env.DB.prepare("INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at) VALUES ('sus-bk', ?, ?, 'x', '2099-01-01T00:00:00Z')").bind(sellerUser, sellerUser).run();
+      await finalizeSucceededPaymentIntent(env, { id: started.body.paymentIntentId, status: 'succeeded', amount: 3500, latest_charge: 'ch_bk', metadata: { basketOrderId: started.body.basketOrderId, shippingAddress: '' } });
+      const { results: rows } = await env.DB.prepare('SELECT * FROM purchases WHERE basket_order_id = ? ORDER BY basket_line_no').bind(started.body.basketOrderId).all();
+      expect(rows[0].refunded_at).not.toBeNull();
+      expect(rows[0].stripe_transfer_id).toBeNull();
+      expect(rows[1].stripe_transfer_id).not.toBeNull();
+      const refund = stripe.calls.find((c) => c.path === 'refunds');
+      expect(refund.body.get('amount')).toBe(String(rows[0].total_cents));
+      expect(stripe.calls.filter((c) => c.path === 'transfers')).toHaveLength(1);
     } finally { stripe.restore(); }
   });
 });
