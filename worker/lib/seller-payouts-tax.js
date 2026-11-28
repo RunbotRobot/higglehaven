@@ -522,6 +522,9 @@ export function purchaseSellerShareCents(purchase) {
 
 function isPurchaseEligibleForPayout(purchase) {
   if (!purchase.payment_intent_id) return false; // simulated — no real Stripe balance to release
+  // #4614: a line of a basket is paid by one charge on the platform's own account; the seller's share reaches their Stripe
+  // balance only when its Transfer exists, so nothing is released before that.
+  if (purchase.basket_order_id && !purchase.stripe_transfer_id) return false;
   if (purchase.is_digital_good) return true;
   if (purchase.delivery_confirmed_at) return true;
   if (!purchase.shipped_at) return false; // still not shipped — always held

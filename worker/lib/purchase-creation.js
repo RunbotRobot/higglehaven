@@ -995,7 +995,7 @@ function purchaseContentMatches(existingRow, templateId, amounts) {
     && existingRow.total_cents === amounts.totalCents;
 }
 
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false, shippingAddressJson = null) {
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false, shippingAddressJson = null, basket = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -1118,7 +1118,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id,
-         product_name, product_kind, seller_name, shipping_address_json)
+         product_name, product_kind, seller_name, shipping_address_json, basket_order_id, basket_line_no)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
       -- #3195: likewise the buyer's account id, so a buyer's purchase history
@@ -1132,12 +1132,15 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         (SELECT category FROM catalog_templates WHERE template_id = ?),
         (SELECT label FROM sellers WHERE seller_id = ?),
         -- #4599: the address this order was bought for, its own copy.
-        ?)
+        ?,
+        -- #4614: the basket order and line this purchase came from (NULL outside a basket).
+        ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash, template.seller_id, buyerBuilderStillExists ? buyerBuilderId : null,
-      template.template_id, template.template_id, template.seller_id, shippingAddressJson),
+      template.template_id, template.template_id, template.seller_id, shippingAddressJson,
+      basket?.basketOrderId ?? null, basket?.lineNo ?? null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- see writeOrphanedPurchaseRow's own identical block

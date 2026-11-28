@@ -158,6 +158,35 @@
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "user_id": "TEXT|1||1"
     },
+    "basket_order_lines": {
+      "basket_order_id": "TEXT|1||1",
+      "builder_share_cents": "INTEGER|1||0",
+      "buyer_label": "TEXT|0||0",
+      "commission_cents": "INTEGER|1||0",
+      "instance_id": "TEXT|1||0",
+      "is_animation_category": "INTEGER|1|0|0",
+      "is_avatar_category": "INTEGER|1|0|0",
+      "is_digital_good": "INTEGER|1|0|0",
+      "landlet_owner_builder_id": "TEXT|0||0",
+      "line_no": "INTEGER|1||2",
+      "platform_share_cents": "INTEGER|1||0",
+      "product_name": "TEXT|0||0",
+      "quantity": "INTEGER|1||0",
+      "seller_id": "TEXT|0||0",
+      "template_id": "TEXT|1||0",
+      "total_cents": "INTEGER|1||0",
+      "unit_price_cents": "INTEGER|1||0"
+    },
+    "basket_orders": {
+      "basket_order_id": "TEXT|0||1",
+      "buyer_builder_id": "TEXT|0||0",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "paid_at": "TEXT|0||0",
+      "payment_intent_id": "TEXT|0||0",
+      "status": "TEXT|1|'pending'|0",
+      "total_cents": "INTEGER|1||0",
+      "user_id": "TEXT|1||0"
+    },
     "bug_reports": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "description": "TEXT|0||0",
@@ -625,6 +654,8 @@
       "width_m": "REAL|1||0"
     },
     "purchases": {
+      "basket_line_no": "INTEGER|0||0",
+      "basket_order_id": "TEXT|0||0",
       "builder_id": "TEXT|0||0",
       "builder_share_cents": "INTEGER|1||0",
       "buyer_builder_id": "TEXT|0||0",
@@ -655,6 +686,7 @@
       "shipping_address_json": "TEXT|0||0",
       "shipping_carrier": "TEXT|0||0",
       "stripe_payout_id": "TEXT|0||0",
+      "stripe_transfer_id": "TEXT|0||0",
       "template_id": "TEXT|1||0",
       "total_cents": "INTEGER|1||0",
       "tracking_number": "TEXT|0||0",
@@ -1054,6 +1086,14 @@
       "tbl": "avatar_presence",
       "sql": "CREATE INDEX idx_avatar_presence_landlet_id ON avatar_presence(landlet_id, updated_at)"
     },
+    "index:idx_basket_orders_status": {
+      "tbl": "basket_orders",
+      "sql": "CREATE INDEX idx_basket_orders_status ON basket_orders(status, created_at)"
+    },
+    "index:idx_basket_orders_user": {
+      "tbl": "basket_orders",
+      "sql": "CREATE INDEX idx_basket_orders_user ON basket_orders(user_id, created_at)"
+    },
     "index:idx_bug_reports_created_at": {
       "tbl": "bug_reports",
       "sql": "CREATE INDEX idx_bug_reports_created_at ON bug_reports(created_at)"
@@ -1390,6 +1430,10 @@
       "tbl": "product_reviews",
       "sql": "CREATE INDEX idx_product_reviews_template_id ON product_reviews(template_id, created_at)"
     },
+    "index:idx_purchases_basket_order": {
+      "tbl": "purchases",
+      "sql": "CREATE INDEX idx_purchases_basket_order ON purchases(basket_order_id) WHERE basket_order_id IS NOT NULL"
+    },
     "index:idx_purchases_builder_id": {
       "tbl": "purchases",
       "sql": "CREATE INDEX idx_purchases_builder_id ON purchases(builder_id, created_at)"
@@ -1408,7 +1452,7 @@
     },
     "index:idx_purchases_payment_intent_id": {
       "tbl": "purchases",
-      "sql": "CREATE UNIQUE INDEX idx_purchases_payment_intent_id ON purchases(payment_intent_id) WHERE payment_intent_id IS NOT NULL"
+      "sql": "CREATE UNIQUE INDEX idx_purchases_payment_intent_id ON purchases(payment_intent_id, COALESCE(basket_line_no, 0)) WHERE payment_intent_id IS NOT NULL"
     },
     "index:idx_purchases_seller_payout": {
       "tbl": "purchases",
