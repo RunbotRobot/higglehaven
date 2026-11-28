@@ -67,6 +67,10 @@ await page.waitForTimeout(300);
 const digitalGoodRowText = await digitalRow().locator('.seller-row-digital-good').textContent();
 console.log('digital-good row text right after upload (should mention "Digital good" and "gift"):', digitalGoodRowText);
 
+// #4601: a digital good has no shipping settings at all.
+const shippingHiddenForDigital = await digitalRow().locator('.seller-domestic-only-toggle').evaluate((el) => el.hidden);
+console.log('a digital good row has no shipping control (should be true):', shippingHiddenForDigital);
+
 // Persisted server-side as the raw key, not the display text.
 const { templates } = await page.evaluate(async () => {
   const res = await fetch('/api/catalog?limit=100');
@@ -92,6 +96,8 @@ await page.waitForFunction(
 );
 const digitalGoodRowTextAfterClear = await digitalRow().locator('.seller-row-digital-good').textContent();
 console.log('digital-good row text after unchecking + saving (should be "Not a digital good"):', digitalGoodRowTextAfterClear);
+const shippingBackAfterClear = await digitalRow().locator('.seller-domestic-only-toggle').evaluate((el) => !el.hidden);
+console.log('and it returns once the product is not digital (should be true):', shippingBackAfterClear);
 
 // Cross-panel metadata-save race guard (issue #424): "Edit digital good"
 // and "Edit shipping" independently spread-and-replace the whole
@@ -108,25 +114,23 @@ await page.route('**/api/catalog/*', async (route) => {
   if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 800));
   await route.continue();
 });
-await digitalRow().locator('button', { hasText: 'Edit shipping' }).click();
+// #4601: a digital good has no shipping settings, so the second panel in this race is the returns policy.
+await digitalRow().locator('button', { hasText: 'Edit returns policy' }).click();
 await page.waitForTimeout(300);
-// #4601: shipping is one checkbox per zone now; leave only the United States ticked.
-for (const zoneId of ['ca', 'mx', 'gb', 'eu', 'anz', 'jpkr', 'rest']) {
-  await digitalRow().locator(`.seller-shipping-zone-label input[value="${zoneId}"]`).uncheck();
-}
+await digitalRow().locator('.seller-no-returns-checkbox-label input').check();
 // "Edit digital good" is still open from earlier in this test (its own
 // toggle click above never closed it) — clicking the toggle again here
 // would close it instead of opening it, so just use the panel directly.
 await digitalRow().locator('.seller-digital-good-checkbox-label input').check();
 await digitalRow().locator('.seller-digital-good-select').selectOption('gift-card');
-await digitalRow().locator('button', { hasText: 'Save shipping' }).click();
+await digitalRow().locator('button', { hasText: 'Save returns policy' }).click();
 const digitalGoodSaveDisabledMidFlight = await digitalRow().locator('button', { hasText: 'Save digital good' }).isDisabled();
-console.log('Save Digital Good disabled while Save Shipping request is in flight (should be true):', digitalGoodSaveDisabledMidFlight);
+console.log('Save Digital Good disabled while Save Returns request is in flight (should be true):', digitalGoodSaveDisabledMidFlight);
 // #2143: waitForFunction's signature is (pageFunction, arg, options) --
 // the explicit null reaches the options slot; without it the timeout
 // below silently fell back to Playwright's actual default (30000ms).
 await page.waitForFunction(
-  () => Array.from(document.querySelectorAll('.seller-domestic-only-status')).some((el) => el.textContent === 'Saved.'),
+  () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
   null,
   { timeout: 30000 },
 );
@@ -142,17 +146,17 @@ const afterRace = await page.evaluate(async () => {
   return res.json();
 });
 const raceTemplate = afterRace.templates.find((t) => t.name === DIGITAL_PRODUCT);
-console.log('after the cross-panel race, metadata.shippingZones (should be ["us"] — not silently reverted):', raceTemplate?.metadata?.shippingZones);
+console.log('after the cross-panel race, metadata.noReturns (should be true — not silently reverted):', raceTemplate?.metadata?.noReturns);
 console.log('after the cross-panel race, metadata.digitalGoodDisclaimer (should be "gift-card"):', raceTemplate?.metadata?.digitalGoodDisclaimer);
 
-const pass = !disclaimerLabelVisibleBeforeCheck &&
+const pass = shippingHiddenForDigital && shippingBackAfterClear && !disclaimerLabelVisibleBeforeCheck &&
   disclaimerLabelVisibleAfterCheck &&
   digitalGoodRowText.includes('Digital good') && digitalGoodRowText.toLowerCase().includes('gift') &&
   digitalTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   checkboxCheckedInPanel &&
   digitalGoodRowTextAfterClear.trim() === 'Not a digital good' &&
   digitalGoodSaveDisabledMidFlight &&
-  JSON.stringify(raceTemplate?.metadata?.shippingZones) === '["us"]' && raceTemplate?.metadata?.domesticOnly === undefined &&
+  raceTemplate?.metadata?.noReturns === true &&
   raceTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Digital-good upload/edit round-trip via the Seller modal', errors });

@@ -7,6 +7,7 @@
 // to that country. The client only shows.
 import { HttpError, ERROR_CODES } from './http.js';
 import { isKnownCountryCode } from './country-codes.js';
+import { COUNTRY_CODES, shippingZonesOf, shippingZoneOfCountry, shipsToCountry, shippingPlaces, shippingNote, SHIPPING_ZONE_IDS } from '../../shared/shipping-zones.js';
 
 // Stripe keeps one metadata value to 500 characters, and the card path carries this address there from checkout to
 // finalize, so every field has a cap that keeps the whole JSON well under it (about 360 characters at the caps).
@@ -31,8 +32,24 @@ export function requiresShippingAddress(template) {
   return template.category !== 'avatar' && template.category !== 'animation';
 }
 
-export function templateShipsDomesticOnly(template) {
-  try { return JSON.parse(template.metadata_json || '{}').domesticOnly === true; } catch { return false; }
+// The shipping facts of a template (metadata.shippingZones, or the old flag for a product not yet migrated), read by the
+// one set of functions in shared/shipping-zones.js that the client also uses (#4631: this used to look at the old flag
+// alone, so a product limited to some zones was not stopped at purchase).
+function templateMetadata(template) {
+  try { return JSON.parse(template.metadata_json || '{}'); } catch { return {}; }
+}
+
+// The country codes a shipped product goes to, or null when it goes everywhere (so the client has nothing to restrict).
+export function shippingCountriesOf(template) {
+  const metadata = templateMetadata(template);
+  const zones = shippingZonesOf(metadata);
+  if (zones.length === SHIPPING_ZONE_IDS.length) return null;
+  return COUNTRY_CODES.filter((code) => zones.includes(shippingZoneOfCountry(code)));
+}
+
+// Plain words for where a product goes, for the buyer's form ("United States only", "United States and Canada").
+export function shippingPlacesOf(template) {
+  return shippingPlaces(templateMetadata(template));
 }
 
 function clean(value) {
@@ -72,8 +89,9 @@ export function parseShippingAddress(input) {
 export function shippingAddressForPurchase(template, input) {
   if (!requiresShippingAddress(template)) return null;
   const address = parseShippingAddress(input?.shippingAddress);
-  if (templateShipsDomesticOnly(template) && address.country !== 'US') {
-    throw new HttpError('The seller sends this product within the United States only, so it cannot be sent to that country. You were not charged.', 409, { code: ERROR_CODES.NOT_SHIPPABLE_THERE });
+  const metadata = templateMetadata(template);
+  if (!shipsToCountry(metadata, address.country)) {
+    throw new HttpError(`This product ${shippingNote(metadata)}, so it cannot be sent to that country. You were not charged.`, 409, { code: ERROR_CODES.NOT_SHIPPABLE_THERE });
   }
   return address;
 }
