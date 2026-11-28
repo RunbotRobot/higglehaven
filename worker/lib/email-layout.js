@@ -6,6 +6,8 @@
 // Words: "lándlet" with the accent (never "land", "plot" or "lot"), no internals, no issue numbers.
 // Only the look and the words live here: every link, token, amount and recipient stays with the
 // code that sends the email.
+import { formatCents } from '../../shared/money.js'; // #4681
+
 const INK = '#16240a';
 const INK_SOFT = '#566249'; // ink at about 70% over the panel, as a flat colour
 const PALE_GREEN = '#d6e8be';
@@ -84,7 +86,7 @@ export function soldOutMessage(productName, count) {
   return { subject: `"${productName}" just sold out`, html: rendered.html, text: rendered.text, line };
 }
 
-const emailMoney = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+const emailMoney = formatCents; // #4681: the one formatter
 
 // #4617: one receipt for a basket that held products from several sellers: a line per seller naming what was bought
 // from them, then the total. `sections`: [{ sellerName, lines: [{ name, quantity, totalCents }] }].

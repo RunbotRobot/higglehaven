@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { formatCents } from '../shared/money.js'; // #4681
 import { loadShippingDestination } from './shop/shippingDestination.js';
 import { shipDimLevels } from './shop/shipDim.js';
 import { movementWorld } from './shop/movementWorld.js'; // #4391 (test hook)
@@ -755,7 +756,7 @@ export function daysInMonth(year, month) {
 // toLocaleString. A real amount like TAX_REPORTING_THRESHOLD_CENTS
 // ($20,000) rendered as "$20000.00".
 export function formatHiggles(cents) {
-  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  return formatCents(cents);
 }
 
 // A catalog template's own priceCents (docs/API.md's "Catalog templates")
@@ -768,7 +769,7 @@ export function formatHiggles(cents) {
 // handleUploadDimensionsStep needs this same formatter for its price-ceiling
 // error message.
 export function formatPriceCents(cents) {
-  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  return formatCents(cents);
 }
 
 // N50: the price fields (upload wizard + Seller "Edit price") let the

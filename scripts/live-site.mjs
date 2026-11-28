@@ -31,6 +31,8 @@
 //   drag:<x>:<y>:<dx>:<dy>                press at a point and drag dx,dy px with a real mouse (a ring, an arrow, an item's body); reports the selected item before and after (#4489)
 //   nudge:<x|y|z>:<+|->                   Build, with an item selected: tap that arrowhead of the movement axes (the nudge, #4414) at the screen point the page
 //                                         reports for it, and say where the item stood before and after (the sign is the end of the axis in the gizmo's own frame)
+//   place:<tile>:<x>:<y>                  Build: open Add item, tap the n-th catalog tile, then tap the world at x,y to put it there; reports the item count before and after (#4570).
+//                                         Adds an item: use the fleet's lándlet or a local world, and Undo after
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   double-tap the world: takes off or lands
 //   menu                                  open the flower: the petals, the current place's menu and the top row (does nothing if it is open)
@@ -722,6 +724,22 @@ async function runStepAction(step, index) {
       const stateAfter = await page.evaluate(() => window.__testSelectedItemState?.() ?? null);
       return { from: stateBefore, to: stateAfter, status: await page.evaluate(() => document.getElementById('selection-action-status-text')?.textContent ?? '') };
     }
+    case 'place': {
+      // #4570: the catalog flow a person uses: Add item, a tile (which arms placement), then a tap in the world.
+      const [tile, x, y] = step.args;
+      const count = () => page.evaluate(() => (window.__testProductScreenPositions?.() ?? []).length);
+      const before = await count();
+      await press(await controlOrFail('#add-item-btn', '"Add item"'));
+      const tiles = page.locator('#catalog-picker-grid .catalog-tile');
+      await tiles.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+      const n = await tiles.count();
+      if (n < tile) throw new Error(`step "place:${tile}": the catalog shows ${n} tile(s)`);
+      await tiles.nth(tile - 1).click();
+      await page.waitForTimeout(500);
+      await (device.hasTouch ? page.touchscreen.tap(x, y) : page.mouse.click(x, y));
+      await page.waitForTimeout(800);
+      return { itemsOnScreenBefore: before, itemsOnScreenAfter: await count() };
+    }
     case 'nudge': {
       // #4570: a person taps the small arrowhead at the end of a movement axis; a script has no way to know where it is
       // on screen, so it asks the page (the hook e2e/build-axis-arrow-tap-nudge uses). Changes where the selected item
@@ -985,7 +1003,7 @@ try {
         result.steps.push({ step: label, ok: value.within, endedAtMs, budget: value, ...(value.within ? {} : { error: value.line }) });
         continue;
       }
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'aria' ? { aria: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && (step.command === 'stats' || step.command === 'lap') ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}), ...(step.command === 'mem' ? { mem: value } : {}), ...(step.command === 'others' ? { others: value } : {}), ...(step.command === 'pos' ? { pos: value } : {}), ...(step.command === 'peer' && ['pos', 'join'].includes(step.args[0]) ? { pos: value } : {}), ...(step.command === 'marks' ? { marks: value } : {}), ...(step.command === 'aria' ? { aria: value } : {}), ...(step.command === 'dragitem' || step.command === 'drag' || step.command === 'nudge' || step.command === 'place' ? { drag: value } : {}), ...(step.command === 'pushpeer' ? { push: value } : {}) });
     } catch (error) {
       // #3817: one plain line naming the step, on the screen as well as in the report.
       const line = `step "${label}" failed: ${error.message.split('\n')[0]}`;

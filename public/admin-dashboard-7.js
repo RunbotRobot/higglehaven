@@ -5,9 +5,7 @@
     }[c]));
   }
 
-  function formatCents(cents) {
-    return '$' + (cents / 100).toFixed(2);
-  }
+  const formatCents = window.hhFormatCents; // #4681
 
   // #2402: endsAt is a raw ISO-8601 instant (worker/index.js's
   // activeAuctionConflict) -- format it the same way #2352's

@@ -225,7 +225,7 @@ export async function handleAdminDashboardPage(request, env) {
 // an unknown caller gets the same plain 404 any unknown path gets. The Control Room and Action Log files need
 // a full admin; the dashboard's files also let a look-only admin through. Returns null to let the request
 // go on to the static file, or the refusal.
-const ADMIN_STATIC_FILE = /^\/admin-(control-room|action-log|dashboard(?:-\d+)?|tables)(?:\.(?:html|js|css))?$/;
+const ADMIN_STATIC_FILE = /^\/admin-(control-room|action-log|dashboard(?:-\d+)?|tables|money)(?:\.(?:html|js|css))?$/;
 export async function gateAdminStaticFile(request, env, url) {
   const match = ADMIN_STATIC_FILE.exec(url.pathname);
   if (!match) return null;
