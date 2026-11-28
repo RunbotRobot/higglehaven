@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCard, createInstancesRemote, createVideoGenerationJob, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
   fetchBundles, fetchCatalog, fetchCreditOrbStanding, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, submitFeedbackBugReport,
-  setSessionEndedHandler, uploadModelFile, upsertInstancesRemote,
+  markPurchaseShipped, restoreArchivedVersion, setPurchaseTracking, setSessionEndedHandler, uploadModelFile, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -671,5 +671,38 @@ describe('a session that ended while the page was open (#4577)', () => {
     failWith(401, { error: 'Something else' });
     await fetchBundles().catch(() => {});
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+// #4673: the server reads a shipping body only when it says it is JSON (a bare POST from the admin dashboard means "no
+// details"), so a request without that header silently dropped the carrier and tracking number a seller typed.
+describe('shipping details and a version restore travel as JSON', () => {
+  function captureRequests() {
+    const seen = [];
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      seen.push({ url, options });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ purchase: { purchaseId: 'p1' } }) });
+    }));
+    return seen;
+  }
+
+  it('marks shipped with a JSON content type and both fields', async () => {
+    const seen = captureRequests();
+    await markPurchaseShipped('p1', { carrier: 'UPS', trackingNumber: '1Z999' });
+    expect(seen[0].options.headers['content-type']).toBe('application/json');
+    expect(JSON.parse(seen[0].options.body)).toEqual({ carrier: 'UPS', trackingNumber: '1Z999' });
+  });
+
+  it('corrects tracking with a JSON content type', async () => {
+    const seen = captureRequests();
+    await setPurchaseTracking('p1', { carrier: 'DHL', trackingNumber: '' });
+    expect(seen[0].options.method).toBe('PATCH');
+    expect(seen[0].options.headers['content-type']).toBe('application/json');
+  });
+
+  it('restores an archived version with a JSON content type (the route answers 415 otherwise)', async () => {
+    const seen = captureRequests();
+    await restoreArchivedVersion('v1', 'landlet-1');
+    expect(seen[0].options.headers['content-type']).toBe('application/json');
   });
 });

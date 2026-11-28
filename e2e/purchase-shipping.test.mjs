@@ -115,6 +115,10 @@ console.log('Mark shipped button present for this real-money, non-digital, unref
 const shipToText = await row().locator('.product-sale-row-ship-to').first().textContent().catch(() => '');
 console.log('sale row names where to send it (should read "Ship to E2E Buyer, 1 Test Street, Portland, OR 97201, US"):', shipToText);
 
+// #4673: the carrier and number typed beside Mark shipped must reach the order (they were silently dropped).
+const trackingInputs = row().locator('.product-sale-row-tracking-input');
+await trackingInputs.nth(0).fill('UPS');
+await trackingInputs.nth(1).fill('1Z999AA10123456784');
 await row().locator('.product-sale-row-ship-btn').click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.product-sale-row-shipping')).some((el) => el.textContent.includes('Shipped')),
@@ -157,7 +161,7 @@ const pass = !!template && purchased.status === 201 &&
   !!purchased.body.purchase?.paymentIntentId && !!deliveryConfirmUrl &&
   shipBtnCountBefore === 1 &&
   shipToText === 'Ship to E2E Buyer, 1 Test Street, Portland, OR 97201, US' &&
-  shippingTextAfterShip.includes('Shipped') && shipBtnCountAfter === 0 &&
+  shippingTextAfterShip.includes('Shipped') && shippingTextAfterShip.includes('UPS · Tracking 1Z999AA10123456784') && shipBtnCountAfter === 0 &&
   noticeMessages.filter((m) => m.includes('Delivery confirmed')).length === 2 &&
   dialogMessages.length === 0 &&
   shippingTextAfterConfirm.includes('Delivery confirmed') &&
