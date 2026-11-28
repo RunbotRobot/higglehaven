@@ -158,7 +158,7 @@ async function recordBasketLine(env, order, line, paymentIntent, shippingAddress
 
 // One Transfer per seller, out of this charge, for the sellers' share (price minus the commission) of their lines.
 // Idempotent in Stripe by key, and only the rows still without a transfer id are written, so a rerun is harmless.
-async function transferSellerShares(env, order, lines, paymentIntent) {
+export async function transferSellerShares(env, order, lines, paymentIntent) {
   const db = env.DB;
   const bySeller = new Map();
   for (const line of lines) {
