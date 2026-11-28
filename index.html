@@ -308,6 +308,8 @@
       <form id="shipping-address-form" novalidate>
         <button id="shipping-address-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="shipping-address-modal-title">Where should it go?</h2>
+        <!-- #4674: the addresses already kept on the account, offered when there are any. -->
+        <label id="shipping-address-saved-label" hidden>Saved addresses <select id="shipping-address-saved"></select></label>
         <label>Name <input id="shipping-address-name" name="name" type="text" maxlength="60" autocomplete="name" /></label>
         <label>Street address <input id="shipping-address-line1" name="line1" type="text" maxlength="80" autocomplete="address-line1" /></label>
         <label>Apartment, suite, etc. (optional) <input id="shipping-address-line2" name="line2" type="text" maxlength="60" autocomplete="address-line2" /></label>
@@ -316,6 +318,7 @@
         <label>Postal code <input id="shipping-address-postal" name="postalCode" type="text" maxlength="20" autocomplete="postal-code" /></label>
         <label>Country <select id="shipping-address-country" name="country" autocomplete="country"></select></label>
         <p id="shipping-address-note" hidden></p>
+        <label id="shipping-address-save-label" class="shipping-address-check" hidden><input id="shipping-address-save" type="checkbox" /> Keep this address in my account for next time</label>
         <p id="shipping-address-error" role="alert" hidden></p>
         <div id="shipping-address-actions">
           <button id="shipping-address-continue-btn" type="submit">Continue</button>
