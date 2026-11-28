@@ -209,7 +209,7 @@ export async function handleStripeWebhook(request, env, db) {
     // event object is the PaymentIntent itself and the signature above
     // already authenticated it. A failure throws so Stripe redelivers.
     const paymentIntent = event.data?.object;
-    if (paymentIntent?.id && paymentIntent.metadata?.instanceId && paymentIntent.metadata?.templateId) {
+    if (paymentIntent?.id && ((paymentIntent.metadata?.instanceId && paymentIntent.metadata?.templateId) || paymentIntent.metadata?.basketOrderId)) { // #4614: or a basket
       await finalizeSucceededPaymentIntent(env, paymentIntent);
     }
     return json({ received: true });
