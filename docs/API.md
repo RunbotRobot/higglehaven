@@ -6123,6 +6123,39 @@ Body: `{ "quantity" }`, the new quantity. `200 { "line": {...} }`; `404` when th
 Account deletion removes a person's basket lines (gated like the rest of the deletion), and the data export lists
 them as `communication.basketLines`.
 
+### `GET /api/basket/quote` (#4613)
+
+What paying the basket would do, without doing it: nothing is created and no card is touched. Needs a verified session
+(the same gate as `GET /api/instances/:id/purchase-quote`) and shares its `basket-quote` rate limit (60 per window).
+Every line is judged by the same function Buy uses (`resolvePurchaseTarget`), so a basket and a Buy cannot disagree,
+and each comes back with a `status` of its own; **no line is ever dropped silently**:
+
+```json
+{
+  "lines": [{ "instanceId", "quantity", "productName", "sellerId", "unitPriceCents", "lineTotalCents",
+              "commissionCents", "paysWithCard", "requiresShippingAddress", "status": "ok" }],
+  "sellers": [{ "sellerId", "goodsCents", "commissionCents", "shippingCents", "lineCount" }],
+  "totals": { "goodsCents", "shippingCents", "totalCents" },
+  "payable": true
+}
+```
+
+`status` is `ok`, `price_changed` (with `previousUnitPriceCents` and the new `unitPriceCents`), `sold_out`,
+`seller_not_selling` (the seller is suspended), `not_for_sale` (delisted, hidden pending review, no price, a test model,
+or its lándlet owner is suspended), `seller_not_ready` (the seller cannot be paid yet), `already_owned` (an avatar or an
+animation the person has), `item_gone` (no longer on a lándlet) or `cannot_buy`; a line that cannot be bought carries the
+refusal's `code` and `message` instead of prices. `?expected=<instanceId>:<unitPriceCents>` (repeatable, up to 20) says
+what price the person last saw, so a line whose live price differs is `price_changed`, as in Buy's own check (#4456).
+Totals, `sellers` and commission cover only the `ok` lines; `payable` is true when the basket has lines and every one is
+`ok`. Commission is the single purchase's own math (`computePurchaseAmounts`), per line, so a basket is the sum of the
+purchases it replaces.
+
+**Shipping** is per seller, never netted across sellers: each item pays its per-item amount, except that every item after
+the first pays its "each additional item" amount when the seller set one; the first item is the one with the largest
+per-item amount, so the order things were added never changes the price (`combinedShippingCents`, with the three worked
+examples of #4604's design as tests). Until a seller can set a cost per zone (#4603) every amount is zero, so
+`shippingCents` is `0` today.
+
 ## Shipping destination (#4602)
 
 `GET /api/shipping-destination` (session) answers `{ destination: { country, source, chosenCountry, dimUnshippable }, countries }`.
