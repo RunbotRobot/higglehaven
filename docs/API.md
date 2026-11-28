@@ -6195,13 +6195,27 @@ Finalize is the existing `POST /api/purchases/finalize` and the `payment_intent.
 purchase (`purchases.basket_order_id`, `basket_line_no`), once per line however often it runs, then makes one Stripe
 Transfer per seller for the price minus the commission (`purchases.stripe_transfer_id`), then marks the order `paid`
 and removes the bought items from the basket. A basket line is not payout-eligible until its Transfer exists. A failure
-throws so the webhook is redelivered.
+throws so the webhook is redelivered. The call that marks the order `paid` (once, however often finalize runs) also sends
+the buyer one receipt email, a part per seller and the total, best effort: a mail failure never fails the payment (#4617).
+`GET /api/purchases/mine` carries `basketOrderId` on each line of a basket order (null otherwise), so My purchases shows
+the lines as one order.
 
 Refunds and disputes (#4616) work per line. `POST /api/purchases/:id/refund` on a basket line refunds the buyer's 99% from
 the shared payment and pulls that line's seller part (price minus commission) back out of the order's Transfer; the
 commission share is not reversed. A `charge.dispute.*` event on the shared charge applies to every line of the order; a
 `charge.refunded` event for a basket payment is only logged, because this app records each refund itself. A seller who is
 suspended or closed before the Transfer has their lines refunded whole to the buyer and receives no Transfer.
+
+**Sweeps on the cron (#4615, `worker/lib/basket-sweeps.js`).** Two jobs keep a paid basket from being lost; both only
+finish or close what Stripe already says and both are idempotent. (1) A `pending` order older than 15 minutes is looked up
+at Stripe: a succeeded payment is finalized now (a lost webhook, or a Transfer that failed and was never retried); a
+cancelled one closes the order; one nobody paid within a day is cancelled at Stripe and the order set to `cancelled`, as is
+an order whose payment was never created. A payment that succeeded is never cancelled, however old. A Stripe failure
+leaves the order pending for the next run, and one order's failure never stops the others (25 per run). (2) A paid
+order's line whose seller's share has no Transfer yet (the seller had no payout account when it was paid) is retried
+once the seller has one, and the seller gets the notice "The payment for one of your sales has now been sent to your
+payout account." once, for the lines whose Transfer it made. A refunded line does not trigger a retry, and a seller suspended or closed
+in the meantime has the line refunded whole by the same transfer step (#4616) and is not told it was sent.
 
 ## Shipping destination (#4602)
 
